@@ -155,11 +155,6 @@
 		"configuration": {
 			"title": "dbt Studio",
 			"properties": {
-				"dbt-studio.pythonPath": {
-					"type": "string",
-					"default": "",
-					"description": "Path to Python executable. Leave empty to auto-detect from project environment."
-				},
 				"dbt-studio.profilesDir": {
 					"type": "string",
 					"default": "",
@@ -508,7 +503,7 @@
 				"name": "query_database",
 				"displayName": "Query Database via dbt",
 				"userDescription": "Execute a SQL query against the configured database using dbt show",
-				"modelDescription": "Execute a SQL query against the configured database using dbt show. Supports Jinja templating with ref() and source(). Use cte_name + model_name to extract and query a specific CTE from a model. Include LIMIT in your SQL to control row count.",
+				"modelDescription": "Execute a SQL query against the configured database using dbt show. Supports Jinja templating with ref() and source(). Include LIMIT in your SQL to control row count (e.g. LIMIT 10). Use cte_name + model_name to extract and query a specific CTE from a model.",
 				"canBeReferencedInPrompt": false,
 				"toolReferenceName": "query_database",
 				"icon": "$(database)",
@@ -520,7 +515,7 @@
 					"properties": {
 						"sql": {
 							"type": "string",
-							"description": "SQL query to execute (supports Jinja: {{ ref('model') }}, {{ source('src', 'table') }}). Include LIMIT clause to control row count."
+							"description": "SQL query to execute (supports Jinja: {{ ref('model') }}, {{ source('src', 'table') }}). Include LIMIT in your SQL to control row count."
 						},
 						"cte_name": {
 							"type": "string",
@@ -711,8 +706,8 @@
 		"test:watch": "vitest",
 		"typecheck": "tsc --noEmit",
 		"vscode:prepublish": "tsx .esbuild.ts",
-		"package:marketplace": "npm version patch && vsce package",
-		"publish:marketplace": "npm version patch && vsce publish"
+		"package:marketplace": "npm version patch && vsce package --allow-proposed-apis contribLanguageModelToolSets",
+		"publish:marketplace": "npm version patch && vsce publish --allow-proposed-apis contribLanguageModelToolSets"
 	},
 	"devDependencies": {
 		"@resvg/resvg-js": "^2.6.2",
