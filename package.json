@@ -3,8 +3,13 @@
 	"displayName": "dbt Studio",
 	"description": "dbt core development environment for VS Code — language support, model explorer, lineage graph, and Copilot tools",
 	"version": "0.1.0",
-	"publisher": "NiclasOlofsson",
-	"private": true,
+	"publisher": "nickeolofsson",
+	"license": "MIT",
+	"icon": "resources/icons/dbt-studio-128.png",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/NiclasOlofsson/dbt-studio-vscode"
+	},
 	"enabledApiProposals": [
 		"contribLanguageModelToolSets"
 	],
@@ -32,15 +37,13 @@
 		"languages": [
 			{
 				"id": "jinja-sql",
-				"aliases": ["dbt SQL", "Jinja SQL"],
-				"extensions": [".sql"],
-				"configuration": "./language-configuration.json"
-			},
-			{
-				"id": "dbt-yaml",
-				"aliases": ["dbt YAML"],
-				"filenames": ["dbt_project.yml", "profiles.yml", "packages.yml"],
-				"filenamePatterns": ["schema.yml", "sources.yml", "**/models/**/*.yml", "**/tests/**/*.yml"],
+				"aliases": [
+					"dbt SQL",
+					"Jinja SQL"
+				],
+				"extensions": [
+					".sql"
+				],
 				"configuration": "./language-configuration.json"
 			}
 		],
@@ -49,6 +52,13 @@
 				"language": "jinja-sql",
 				"scopeName": "source.jinja-sql",
 				"path": "./syntaxes/jinja-sql.tmLanguage.json"
+			},
+			{
+				"scopeName": "source.jinja-yaml.injection",
+				"path": "./syntaxes/jinja-yaml.tmLanguage.json",
+				"injectTo": [
+					"source.yaml"
+				]
 			}
 		],
 		"commands": [
@@ -98,7 +108,7 @@
 				{
 					"id": "dbt-studio",
 					"title": "dbt Studio",
-					"icon": "resources/icons/dbt.svg"
+					"icon": "resources/icons/dbt-studio-activitybar.svg"
 				}
 			]
 		},
@@ -158,7 +168,13 @@
 				"dbt-studio.logLevel": {
 					"type": "string",
 					"default": "info",
-					"enum": ["trace", "debug", "info", "warn", "error"],
+					"enum": [
+						"trace",
+						"debug",
+						"info",
+						"warn",
+						"error"
+					],
 					"description": "Log level for dbt Studio output channel."
 				}
 			}
@@ -172,7 +188,9 @@
 				"canBeReferencedInPrompt": false,
 				"toolReferenceName": "run_models",
 				"icon": "$(run)",
-				"tags": ["dbt"],
+				"tags": [
+					"dbt"
+				],
 				"inputSchema": {
 					"type": "object",
 					"properties": {
@@ -215,7 +233,9 @@
 				"canBeReferencedInPrompt": false,
 				"toolReferenceName": "test_models",
 				"icon": "$(beaker)",
-				"tags": ["dbt"],
+				"tags": [
+					"dbt"
+				],
 				"inputSchema": {
 					"type": "object",
 					"properties": {
@@ -244,7 +264,9 @@
 							"description": "Generate CTE test models before running tests"
 						}
 					},
-					"required": ["select"]
+					"required": [
+						"select"
+					]
 				}
 			},
 			{
@@ -255,7 +277,9 @@
 				"canBeReferencedInPrompt": false,
 				"toolReferenceName": "build_models",
 				"icon": "$(package)",
-				"tags": ["dbt"],
+				"tags": [
+					"dbt"
+				],
 				"inputSchema": {
 					"type": "object",
 					"properties": {
@@ -273,7 +297,9 @@
 						},
 						"resource_types": {
 							"type": "array",
-							"items": { "type": "string" },
+							"items": {
+								"type": "string"
+							},
 							"description": "Filter by resource types (e.g., ['model', 'test', 'seed'])"
 						},
 						"fail_fast": {
@@ -293,7 +319,9 @@
 							"description": "Also include downstream of modified models"
 						}
 					},
-					"required": ["select"]
+					"required": [
+						"select"
+					]
 				}
 			},
 			{
@@ -304,7 +332,9 @@
 				"canBeReferencedInPrompt": false,
 				"toolReferenceName": "compile_model",
 				"icon": "$(gear)",
-				"tags": ["dbt"],
+				"tags": [
+					"dbt"
+				],
 				"inputSchema": {
 					"type": "object",
 					"properties": {
@@ -313,7 +343,9 @@
 							"description": "Model name to compile"
 						}
 					},
-					"required": ["model"]
+					"required": [
+						"model"
+					]
 				}
 			},
 			{
@@ -324,7 +356,9 @@
 				"canBeReferencedInPrompt": false,
 				"toolReferenceName": "get_lineage",
 				"icon": "$(type-hierarchy)",
-				"tags": ["dbt"],
+				"tags": [
+					"dbt"
+				],
 				"inputSchema": {
 					"type": "object",
 					"properties": {
@@ -338,7 +372,11 @@
 						},
 						"direction": {
 							"type": "string",
-							"enum": ["both", "upstream", "downstream"],
+							"enum": [
+								"both",
+								"upstream",
+								"downstream"
+							],
 							"description": "Direction of lineage traversal (default: both)"
 						},
 						"depth": {
@@ -346,7 +384,9 @@
 							"description": "How many levels of lineage to traverse (omit for unlimited)"
 						}
 					},
-					"required": ["name"]
+					"required": [
+						"name"
+					]
 				}
 			},
 			{
@@ -357,7 +397,9 @@
 				"canBeReferencedInPrompt": false,
 				"toolReferenceName": "get_column_lineage",
 				"icon": "$(references)",
-				"tags": ["dbt"],
+				"tags": [
+					"dbt"
+				],
 				"inputSchema": {
 					"type": "object",
 					"properties": {
@@ -370,7 +412,9 @@
 							"description": "Column name (optional, returns all columns if omitted)"
 						}
 					},
-					"required": ["model"]
+					"required": [
+						"model"
+					]
 				}
 			},
 			{
@@ -381,7 +425,9 @@
 				"canBeReferencedInPrompt": false,
 				"toolReferenceName": "list_resources",
 				"icon": "$(list-tree)",
-				"tags": ["dbt"],
+				"tags": [
+					"dbt"
+				],
 				"inputSchema": {
 					"type": "object",
 					"properties": {
@@ -391,7 +437,15 @@
 						},
 						"resource_type": {
 							"type": "string",
-							"enum": ["model", "test", "source", "snapshot", "seed", "exposure", "metric"],
+							"enum": [
+								"model",
+								"test",
+								"source",
+								"snapshot",
+								"seed",
+								"exposure",
+								"metric"
+							],
 							"description": "Filter by resource type (optional)"
 						}
 					}
@@ -405,7 +459,9 @@
 				"canBeReferencedInPrompt": false,
 				"toolReferenceName": "get_resource_info",
 				"icon": "$(info)",
-				"tags": ["dbt"],
+				"tags": [
+					"dbt"
+				],
 				"inputSchema": {
 					"type": "object",
 					"properties": {
@@ -422,7 +478,9 @@
 							"description": "Include compiled SQL in output, triggering compilation if needed (default: true)"
 						}
 					},
-					"required": ["name"]
+					"required": [
+						"name"
+					]
 				}
 			},
 			{
@@ -433,7 +491,9 @@
 				"canBeReferencedInPrompt": false,
 				"toolReferenceName": "get_project_info",
 				"icon": "$(folder-opened)",
-				"tags": ["dbt"],
+				"tags": [
+					"dbt"
+				],
 				"inputSchema": {
 					"type": "object",
 					"properties": {
@@ -452,7 +512,9 @@
 				"canBeReferencedInPrompt": false,
 				"toolReferenceName": "query_database",
 				"icon": "$(database)",
-				"tags": ["dbt"],
+				"tags": [
+					"dbt"
+				],
 				"inputSchema": {
 					"type": "object",
 					"properties": {
@@ -469,7 +531,9 @@
 							"description": "Model that contains the CTE to extract (requires cte_name)"
 						}
 					},
-					"required": ["sql"]
+					"required": [
+						"sql"
+					]
 				}
 			},
 			{
@@ -480,7 +544,9 @@
 				"canBeReferencedInPrompt": false,
 				"toolReferenceName": "install_deps",
 				"icon": "$(cloud-download)",
-				"tags": ["dbt"],
+				"tags": [
+					"dbt"
+				],
 				"inputSchema": {
 					"type": "object",
 					"properties": {}
@@ -494,7 +560,9 @@
 				"canBeReferencedInPrompt": false,
 				"toolReferenceName": "analyze_impact",
 				"icon": "$(graph)",
-				"tags": ["dbt"],
+				"tags": [
+					"dbt"
+				],
 				"inputSchema": {
 					"type": "object",
 					"properties": {
@@ -507,7 +575,9 @@
 							"description": "Filter by resource type (model, source, seed, etc.)"
 						}
 					},
-					"required": ["name"]
+					"required": [
+						"name"
+					]
 				}
 			},
 			{
@@ -518,7 +588,9 @@
 				"canBeReferencedInPrompt": false,
 				"toolReferenceName": "load_seeds",
 				"icon": "$(symbol-array)",
-				"tags": ["dbt"],
+				"tags": [
+					"dbt"
+				],
 				"inputSchema": {
 					"type": "object",
 					"properties": {
@@ -557,7 +629,9 @@
 				"canBeReferencedInPrompt": false,
 				"toolReferenceName": "snapshot_models",
 				"icon": "$(history)",
-				"tags": ["dbt"],
+				"tags": [
+					"dbt"
+				],
 				"inputSchema": {
 					"type": "object",
 					"properties": {
@@ -636,9 +710,12 @@
 		"test:unit": "vitest run",
 		"test:watch": "vitest",
 		"typecheck": "tsc --noEmit",
-		"vscode:prepublish": "tsx .esbuild.ts"
+		"vscode:prepublish": "tsx .esbuild.ts",
+		"package:marketplace": "npm version patch && vsce package",
+		"publish:marketplace": "npm version patch && vsce publish"
 	},
 	"devDependencies": {
+		"@resvg/resvg-js": "^2.6.2",
 		"@stylistic/eslint-plugin": "^3.1.0",
 		"@types/node": "22.x",
 		"@types/vscode": "^1.102.0",

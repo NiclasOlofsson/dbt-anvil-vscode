@@ -4,6 +4,7 @@ out/
 *.vsix
 coverage/
 .vscode-test/
+temp_auto/
 
 # OS artifacts
 .DS_Store
