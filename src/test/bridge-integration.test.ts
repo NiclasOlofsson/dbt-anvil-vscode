@@ -12,7 +12,7 @@ import { BridgeRunner } from '../dbt/bridge-runner';
 import { detectPythonEnvironment } from '../dbt/env-detector';
 import { createMockLogger } from './helpers';
 
-const JAFFLE_SHOP = path.join(__dirname, '..', 'fixtures', 'jaffle_shop');
+const JAFFLE_SHOP = path.join(__dirname, '..', '..', 'samples', 'jaffle_shop');
 const BRIDGE_PY = path.join(__dirname, '..', '..', 'resources', 'bridge', 'bridge.py');
 
 describe('bridge integration', () => {

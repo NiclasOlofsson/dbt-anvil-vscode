@@ -12,7 +12,15 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Fixture runtime artifacts
+# Sample project runtime artifacts
+samples/**/.venv/
+samples/**/*.duckdb
+samples/**/dbt_packages/
+samples/**/logs/
+samples/**/.user.yml
+samples/**/target/
+
+# Fixture runtime artifacts (legacy path, keep for safety)
 src/fixtures/**/.venv/
 src/fixtures/**/*.duckdb
 src/fixtures/**/dbt_packages/

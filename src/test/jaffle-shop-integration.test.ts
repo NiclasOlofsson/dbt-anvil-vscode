@@ -4,7 +4,7 @@ import { ManifestLoader } from '../dbt/manifest-loader';
 import { ManifestIndexer } from '../indexing/manifest-indexer';
 import { createMockLogger } from './helpers';
 
-const JAFFLE_SHOP = path.join(__dirname, '..', 'fixtures', 'jaffle_shop');
+const JAFFLE_SHOP = path.join(__dirname, '..', '..', 'samples', 'jaffle_shop');
 const mockLogger = createMockLogger();
 
 describe('jaffle_shop integration', () => {
