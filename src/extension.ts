@@ -109,7 +109,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	context.subscriptions.push(
 		vscode.commands.registerCommand('dbt-studio.refreshManifest', () => {
 			manifestLoader.invalidate();
-			completionProvider.invalidateDescribeCache();
+			completionProvider.invalidateScopeCache();
 			try {
 				manifestIndexer.build(true);
 				modelExplorerProvider.refresh();

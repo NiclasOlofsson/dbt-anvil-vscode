@@ -6,10 +6,12 @@ import { ManifestIndexer } from './manifest-indexer';
 /**
  * Watches dbt target/manifest.json for changes and rebuilds the index.
  * Also watches dbt_project.yml for project-level changes.
+ * Watches SQL model files and invalidates column store entries on save.
  */
 export class ManifestWatcher {
 	private _manifestWatcher: vscode.FileSystemWatcher | null = null;
 	private _projectWatcher: vscode.FileSystemWatcher | null = null;
+	private _sqlSaveDisposable: vscode.Disposable | null = null;
 	private readonly _onIndexRebuild = new vscode.EventEmitter<ManifestIndexer>();
 
 	readonly onIndexRebuild = this._onIndexRebuild.event;
@@ -34,6 +36,18 @@ export class ManifestWatcher {
 			this._rebuild('dbt_project.yml changed');
 		});
 
+		// Invalidate column store entries when a SQL model file is saved
+		this._sqlSaveDisposable = vscode.workspace.onDidSaveTextDocument((doc) => {
+			if (doc.languageId !== 'jinja-sql' && !doc.fileName.endsWith('.sql')) return;
+			const uniqueId = this.indexer.findModelByFilePath(doc.fileName);
+			if (uniqueId) {
+				const evicted = this.indexer.invalidateModel(uniqueId);
+				if (evicted.size > 0) {
+					this.logger.info(`Model saved: ${uniqueId} — evicted ${evicted.size} column store entries`);
+				}
+			}
+		});
+
 		this.logger.info('ManifestWatcher started');
 	}
 
@@ -51,6 +65,7 @@ export class ManifestWatcher {
 	dispose(): void {
 		this._manifestWatcher?.dispose();
 		this._projectWatcher?.dispose();
+		this._sqlSaveDisposable?.dispose();
 		this._onIndexRebuild.dispose();
 	}
 }
