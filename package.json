@@ -1,0 +1,664 @@
+{
+	"name": "dbt-studio-vscode",
+	"displayName": "dbt Studio",
+	"description": "dbt core development environment for VS Code — language support, model explorer, lineage graph, and Copilot tools",
+	"version": "0.1.0",
+	"publisher": "NiclasOlofsson",
+	"private": true,
+	"enabledApiProposals": [
+		"contribLanguageModelToolSets"
+	],
+	"engines": {
+		"vscode": "^1.102.0"
+	},
+	"categories": [
+		"Programming Languages",
+		"Data Science",
+		"Other"
+	],
+	"keywords": [
+		"dbt",
+		"sql",
+		"jinja",
+		"analytics engineering",
+		"data transformation",
+		"data modeling"
+	],
+	"activationEvents": [
+		"workspaceContains:**/dbt_project.yml"
+	],
+	"main": "./dist/extension.js",
+	"contributes": {
+		"languages": [
+			{
+				"id": "jinja-sql",
+				"aliases": ["dbt SQL", "Jinja SQL"],
+				"extensions": [".sql"],
+				"configuration": "./language-configuration.json"
+			},
+			{
+				"id": "dbt-yaml",
+				"aliases": ["dbt YAML"],
+				"filenames": ["dbt_project.yml", "profiles.yml", "packages.yml"],
+				"filenamePatterns": ["schema.yml", "sources.yml", "**/models/**/*.yml", "**/tests/**/*.yml"],
+				"configuration": "./language-configuration.json"
+			}
+		],
+		"grammars": [
+			{
+				"language": "jinja-sql",
+				"scopeName": "source.jinja-sql",
+				"path": "./syntaxes/jinja-sql.tmLanguage.json"
+			}
+		],
+		"commands": [
+			{
+				"command": "dbt-studio.runModel",
+				"title": "dbt Studio: Run Model",
+				"icon": "$(run)"
+			},
+			{
+				"command": "dbt-studio.testModel",
+				"title": "dbt Studio: Test Model",
+				"icon": "$(beaker)"
+			},
+			{
+				"command": "dbt-studio.buildModel",
+				"title": "dbt Studio: Build Model",
+				"icon": "$(package)"
+			},
+			{
+				"command": "dbt-studio.compileModel",
+				"title": "dbt Studio: Compile Model",
+				"icon": "$(gear)"
+			},
+			{
+				"command": "dbt-studio.showLineage",
+				"title": "dbt Studio: Show Lineage Graph",
+				"icon": "$(type-hierarchy)"
+			},
+			{
+				"command": "dbt-studio.runDeps",
+				"title": "dbt Studio: Install Dependencies (dbt deps)",
+				"icon": "$(cloud-download)"
+			},
+			{
+				"command": "dbt-studio.parseProject",
+				"title": "dbt Studio: Parse Project",
+				"icon": "$(refresh)"
+			},
+			{
+				"command": "dbt-studio.refreshExplorer",
+				"title": "dbt Studio: Refresh Model Explorer",
+				"icon": "$(refresh)"
+			}
+		],
+		"viewsContainers": {
+			"activitybar": [
+				{
+					"id": "dbt-studio",
+					"title": "dbt Studio",
+					"icon": "resources/icons/dbt.svg"
+				}
+			]
+		},
+		"views": {
+			"dbt-studio": [
+				{
+					"id": "dbt-studio.modelExplorer",
+					"name": "Model Explorer",
+					"when": "workspaceHasDBT"
+				},
+				{
+					"id": "dbt-studio.testResults",
+					"name": "Test Results",
+					"when": "workspaceHasDBT"
+				}
+			]
+		},
+		"menus": {
+			"editor/title": [
+				{
+					"command": "dbt-studio.runModel",
+					"when": "resourceLangId == jinja-sql && workspaceHasDBT",
+					"group": "navigation@1"
+				},
+				{
+					"command": "dbt-studio.testModel",
+					"when": "resourceLangId == jinja-sql && workspaceHasDBT",
+					"group": "navigation@2"
+				},
+				{
+					"command": "dbt-studio.compileModel",
+					"when": "resourceLangId == jinja-sql && workspaceHasDBT",
+					"group": "navigation@3"
+				}
+			],
+			"view/title": [
+				{
+					"command": "dbt-studio.refreshExplorer",
+					"when": "view == dbt-studio.modelExplorer",
+					"group": "navigation"
+				}
+			]
+		},
+		"configuration": {
+			"title": "dbt Studio",
+			"properties": {
+				"dbt-studio.pythonPath": {
+					"type": "string",
+					"default": "",
+					"description": "Path to Python executable. Leave empty to auto-detect from project environment."
+				},
+				"dbt-studio.profilesDir": {
+					"type": "string",
+					"default": "",
+					"description": "Path to dbt profiles directory. Leave empty to use project directory or ~/.dbt."
+				},
+				"dbt-studio.logLevel": {
+					"type": "string",
+					"default": "info",
+					"enum": ["trace", "debug", "info", "warn", "error"],
+					"description": "Log level for dbt Studio output channel."
+				}
+			}
+		},
+		"languageModelTools": [
+			{
+				"name": "run_models",
+				"displayName": "Run dbt Models",
+				"userDescription": "Run dbt models using node selection syntax",
+				"modelDescription": "Run dbt models using node selection syntax (--select). Supports model names, tags, paths, and wildcards. Use select_state_modified to run only changed models since last run.",
+				"canBeReferencedInPrompt": false,
+				"toolReferenceName": "run_models",
+				"icon": "$(run)",
+				"tags": ["dbt"],
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"select": {
+							"type": "string",
+							"description": "Node selection expression (e.g., 'my_model', 'tag:marketing', 'path/to/models'). Optional when using state selection."
+						},
+						"exclude": {
+							"type": "string",
+							"description": "Nodes to exclude from selection"
+						},
+						"full_refresh": {
+							"type": "boolean",
+							"description": "Run with --full-refresh flag for incremental models"
+						},
+						"fail_fast": {
+							"type": "boolean",
+							"description": "Stop execution on first failure"
+						},
+						"cache_selected_only": {
+							"type": "boolean",
+							"description": "Only cache selected models (default: true when select is provided)"
+						},
+						"select_state_modified": {
+							"type": "boolean",
+							"description": "Select only models modified since last run (state:modified)"
+						},
+						"select_state_modified_plus_downstream": {
+							"type": "boolean",
+							"description": "When select_state_modified is true, also include downstream of modified models (state:modified+)"
+						}
+					}
+				}
+			},
+			{
+				"name": "test_models",
+				"displayName": "Test dbt Models",
+				"userDescription": "Run dbt tests using node selection syntax",
+				"modelDescription": "Run dbt tests using node selection syntax. Use fail_fast to stop on first failure. Use keep_cte_tests to generate CTE test models before running tests.",
+				"canBeReferencedInPrompt": false,
+				"toolReferenceName": "test_models",
+				"icon": "$(beaker)",
+				"tags": ["dbt"],
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"select": {
+							"type": "string",
+							"description": "Node selection expression"
+						},
+						"exclude": {
+							"type": "string",
+							"description": "Nodes to exclude"
+						},
+						"fail_fast": {
+							"type": "boolean",
+							"description": "Stop execution on first failure"
+						},
+						"select_state_modified": {
+							"type": "boolean",
+							"description": "Select only models modified since last run"
+						},
+						"select_state_modified_plus_downstream": {
+							"type": "boolean",
+							"description": "Also include downstream of modified models"
+						},
+						"keep_cte_tests": {
+							"type": "boolean",
+							"description": "Generate CTE test models before running tests"
+						}
+					},
+					"required": ["select"]
+				}
+			},
+			{
+				"name": "build_models",
+				"displayName": "Build dbt Models",
+				"userDescription": "Build dbt models (run + test) using node selection syntax",
+				"modelDescription": "Run dbt build (run + test) using node selection syntax. Supports resource type filtering, state-based selection, and fail fast.",
+				"canBeReferencedInPrompt": false,
+				"toolReferenceName": "build_models",
+				"icon": "$(package)",
+				"tags": ["dbt"],
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"select": {
+							"type": "string",
+							"description": "Node selection expression"
+						},
+						"exclude": {
+							"type": "string",
+							"description": "Nodes to exclude from selection"
+						},
+						"full_refresh": {
+							"type": "boolean",
+							"description": "Run with --full-refresh flag"
+						},
+						"resource_types": {
+							"type": "array",
+							"items": { "type": "string" },
+							"description": "Filter by resource types (e.g., ['model', 'test', 'seed'])"
+						},
+						"fail_fast": {
+							"type": "boolean",
+							"description": "Stop execution on first failure"
+						},
+						"cache_selected_only": {
+							"type": "boolean",
+							"description": "Only cache selected models (default: true when select is provided)"
+						},
+						"select_state_modified": {
+							"type": "boolean",
+							"description": "Select only models modified since last run"
+						},
+						"select_state_modified_plus_downstream": {
+							"type": "boolean",
+							"description": "Also include downstream of modified models"
+						}
+					},
+					"required": ["select"]
+				}
+			},
+			{
+				"name": "compile_model",
+				"displayName": "Compile dbt Model",
+				"userDescription": "Compile a dbt model to see generated SQL without executing it",
+				"modelDescription": "Compile a dbt model to see the generated SQL without executing it.",
+				"canBeReferencedInPrompt": false,
+				"toolReferenceName": "compile_model",
+				"icon": "$(gear)",
+				"tags": ["dbt"],
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"model": {
+							"type": "string",
+							"description": "Model name to compile"
+						}
+					},
+					"required": ["model"]
+				}
+			},
+			{
+				"name": "get_lineage",
+				"displayName": "Get Model Lineage",
+				"userDescription": "Get upstream and downstream lineage for a dbt resource",
+				"modelDescription": "Get upstream and downstream lineage for any dbt resource (model, source, seed, etc.). Specify direction to get only upstream or downstream. Works with models and sources.",
+				"canBeReferencedInPrompt": false,
+				"toolReferenceName": "get_lineage",
+				"icon": "$(type-hierarchy)",
+				"tags": ["dbt"],
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"name": {
+							"type": "string",
+							"description": "Resource name to get lineage for"
+						},
+						"resource_type": {
+							"type": "string",
+							"description": "Filter by resource type (model, source, seed, snapshot)"
+						},
+						"direction": {
+							"type": "string",
+							"enum": ["both", "upstream", "downstream"],
+							"description": "Direction of lineage traversal (default: both)"
+						},
+						"depth": {
+							"type": "number",
+							"description": "How many levels of lineage to traverse (omit for unlimited)"
+						}
+					},
+					"required": ["name"]
+				}
+			},
+			{
+				"name": "get_column_lineage",
+				"displayName": "Get Column Lineage",
+				"userDescription": "Get column-level lineage showing which sources feed which output columns",
+				"modelDescription": "Get column-level lineage showing which source columns contribute to which output columns.",
+				"canBeReferencedInPrompt": false,
+				"toolReferenceName": "get_column_lineage",
+				"icon": "$(references)",
+				"tags": ["dbt"],
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"model": {
+							"type": "string",
+							"description": "Model name"
+						},
+						"column": {
+							"type": "string",
+							"description": "Column name (optional, returns all columns if omitted)"
+						}
+					},
+					"required": ["model"]
+				}
+			},
+			{
+				"name": "list_resources",
+				"displayName": "List dbt Resources",
+				"userDescription": "List dbt project resources with optional filtering by type",
+				"modelDescription": "List dbt project resources (models, tests, sources, snapshots, seeds) with optional filtering.",
+				"canBeReferencedInPrompt": false,
+				"toolReferenceName": "list_resources",
+				"icon": "$(list-tree)",
+				"tags": ["dbt"],
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"select": {
+							"type": "string",
+							"description": "Node selection expression (optional)"
+						},
+						"resource_type": {
+							"type": "string",
+							"enum": ["model", "test", "source", "snapshot", "seed", "exposure", "metric"],
+							"description": "Filter by resource type (optional)"
+						}
+					}
+				}
+			},
+			{
+				"name": "get_resource_info",
+				"displayName": "Get Resource Info",
+				"userDescription": "Get detailed information about a dbt resource including columns, compiled SQL, and tests",
+				"modelDescription": "Get detailed information about a dbt resource (model, source, test, etc.) including columns, compiled SQL, raw SQL, and description. Set include_compiled_sql=true to trigger compilation if needed.",
+				"canBeReferencedInPrompt": false,
+				"toolReferenceName": "get_resource_info",
+				"icon": "$(info)",
+				"tags": ["dbt"],
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"name": {
+							"type": "string",
+							"description": "Resource name or unique ID"
+						},
+						"resource_type": {
+							"type": "string",
+							"description": "Filter by resource type (model, source, seed, etc.)"
+						},
+						"include_compiled_sql": {
+							"type": "boolean",
+							"description": "Include compiled SQL in output, triggering compilation if needed (default: true)"
+						}
+					},
+					"required": ["name"]
+				}
+			},
+			{
+				"name": "get_project_info",
+				"displayName": "Get Project Info",
+				"userDescription": "Get dbt project overview including name, adapter, model count, and connection status",
+				"modelDescription": "Get dbt project overview including model count, dbt version, and optionally run dbt debug to check connection status.",
+				"canBeReferencedInPrompt": false,
+				"toolReferenceName": "get_project_info",
+				"icon": "$(folder-opened)",
+				"tags": ["dbt"],
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"run_debug": {
+							"type": "boolean",
+							"description": "Run dbt debug to check connection status (default: true)"
+						}
+					}
+				}
+			},
+			{
+				"name": "query_database",
+				"displayName": "Query Database via dbt",
+				"userDescription": "Execute a SQL query against the configured database using dbt show",
+				"modelDescription": "Execute a SQL query against the configured database using dbt show. Supports Jinja templating with ref() and source(). Use cte_name + model_name to extract and query a specific CTE from a model. Include LIMIT in your SQL to control row count.",
+				"canBeReferencedInPrompt": false,
+				"toolReferenceName": "query_database",
+				"icon": "$(database)",
+				"tags": ["dbt"],
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"sql": {
+							"type": "string",
+							"description": "SQL query to execute (supports Jinja: {{ ref('model') }}, {{ source('src', 'table') }}). Include LIMIT clause to control row count."
+						},
+						"cte_name": {
+							"type": "string",
+							"description": "Name of a CTE to extract from the model (requires model_name)"
+						},
+						"model_name": {
+							"type": "string",
+							"description": "Model that contains the CTE to extract (requires cte_name)"
+						}
+					},
+					"required": ["sql"]
+				}
+			},
+			{
+				"name": "install_deps",
+				"displayName": "Install dbt Dependencies",
+				"userDescription": "Install dbt project package dependencies (dbt deps)",
+				"modelDescription": "Install dbt project dependencies (dbt deps).",
+				"canBeReferencedInPrompt": false,
+				"toolReferenceName": "install_deps",
+				"icon": "$(cloud-download)",
+				"tags": ["dbt"],
+				"inputSchema": {
+					"type": "object",
+					"properties": {}
+				}
+			},
+			{
+				"name": "analyze_impact",
+				"displayName": "Analyze Change Impact",
+				"userDescription": "Analyze which downstream models will be affected by changes to a resource",
+				"modelDescription": "Analyze the impact of changes to a dbt resource — which downstream models, seeds, and snapshots will be affected. Works with any resource type.",
+				"canBeReferencedInPrompt": false,
+				"toolReferenceName": "analyze_impact",
+				"icon": "$(graph)",
+				"tags": ["dbt"],
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"name": {
+							"type": "string",
+							"description": "Resource name to analyze impact for"
+						},
+						"resource_type": {
+							"type": "string",
+							"description": "Filter by resource type (model, source, seed, etc.)"
+						}
+					},
+					"required": ["name"]
+				}
+			},
+			{
+				"name": "load_seeds",
+				"displayName": "Load dbt Seeds",
+				"userDescription": "Load dbt seed CSV files into the database",
+				"modelDescription": "Load seed data files into the database (dbt seed). Use show to display loaded data. Supports state-based selection.",
+				"canBeReferencedInPrompt": false,
+				"toolReferenceName": "load_seeds",
+				"icon": "$(symbol-array)",
+				"tags": ["dbt"],
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"select": {
+							"type": "string",
+							"description": "Seed selection (optional, loads all if omitted)"
+						},
+						"exclude": {
+							"type": "string",
+							"description": "Seeds to exclude from selection"
+						},
+						"full_refresh": {
+							"type": "boolean",
+							"description": "Drop and recreate seed tables"
+						},
+						"show": {
+							"type": "boolean",
+							"description": "Show loaded seed data"
+						},
+						"select_state_modified": {
+							"type": "boolean",
+							"description": "Select only seeds modified since last run"
+						},
+						"select_state_modified_plus_downstream": {
+							"type": "boolean",
+							"description": "Also include downstream of modified seeds"
+						}
+					}
+				}
+			},
+			{
+				"name": "snapshot_models",
+				"displayName": "Run dbt Snapshots",
+				"userDescription": "Run dbt snapshot to capture point-in-time records",
+				"modelDescription": "Run dbt snapshot to capture slowly changing dimension records. Supports optional node selection and exclusion.",
+				"canBeReferencedInPrompt": false,
+				"toolReferenceName": "snapshot_models",
+				"icon": "$(history)",
+				"tags": ["dbt"],
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"select": {
+							"type": "string",
+							"description": "Snapshot selection (optional, runs all if omitted)"
+						},
+						"exclude": {
+							"type": "string",
+							"description": "Snapshots to exclude"
+						}
+					}
+				}
+			}
+		],
+		"languageModelToolSets": [
+			{
+				"name": "project",
+				"displayName": "Project & Resources",
+				"description": "Get project overview, list and inspect dbt resources — models, sources, seeds, snapshots, and tests with full metadata and compiled SQL",
+				"icon": "$(folder-opened)",
+				"tools": [
+					"get_project_info",
+					"list_resources",
+					"get_resource_info",
+					"install_deps"
+				]
+			},
+			{
+				"name": "lineage",
+				"displayName": "Lineage & Impact Analysis",
+				"description": "Trace dependencies, analyze change impact, and inspect column-level lineage across all resource types",
+				"icon": "$(type-hierarchy)",
+				"tools": [
+					"get_lineage",
+					"analyze_impact",
+					"get_column_lineage"
+				]
+			},
+			{
+				"name": "query",
+				"displayName": "Database Queries",
+				"description": "Execute SQL queries against your database using dbt show — supports Jinja templating and CTE extraction",
+				"icon": "$(database)",
+				"tools": [
+					"query_database"
+				]
+			},
+			{
+				"name": "execution",
+				"displayName": "Execution",
+				"description": "Run, test, build, seed, snapshot and compile dbt models — with state-based selection, fail-fast, and full-refresh support",
+				"icon": "$(run)",
+				"tools": [
+					"run_models",
+					"test_models",
+					"build_models",
+					"load_seeds",
+					"snapshot_models",
+					"compile_model"
+				]
+			}
+		]
+	},
+	"scripts": {
+		"clean": "rimraf dist out",
+		"build": "tsx .esbuild.ts",
+		"compile": "tsx .esbuild.ts --dev",
+		"watch": "npm-run-all --parallel watch:esbuild watch:types watch:lint",
+		"watch:esbuild": "tsx .esbuild.ts --dev --watch",
+		"watch:types": "tsc --noEmit --watch",
+		"watch:lint": "nodemon --watch src --ext ts --exec \"eslint src --max-warnings 0 --quiet\"",
+		"lint": "eslint src --max-warnings 0",
+		"lint:fix": "eslint src --max-warnings 0 --fix",
+		"test": "vitest run",
+		"test:unit": "vitest run",
+		"test:watch": "vitest",
+		"typecheck": "tsc --noEmit",
+		"vscode:prepublish": "tsx .esbuild.ts"
+	},
+	"devDependencies": {
+		"@stylistic/eslint-plugin": "^3.1.0",
+		"@types/node": "22.x",
+		"@types/vscode": "^1.102.0",
+		"@typescript-eslint/eslint-plugin": "^8.39.0",
+		"@typescript-eslint/parser": "^8.39.0",
+		"esbuild": "^0.25.8",
+		"eslint": "^9.32.0",
+		"eslint-import-resolver-typescript": "^4.4.4",
+		"eslint-plugin-import": "^2.32.0",
+		"eslint-plugin-jsdoc": "^51.4.1",
+		"husky": "^9.1.7",
+		"lint-staged": "^15.5.2",
+		"nodemon": "^3.1.10",
+		"npm-run-all": "^4.1.5",
+		"rimraf": "^6.0.1",
+		"tsx": "^4.20.3",
+		"typescript": "^5.9.2",
+		"vitest": "^4.0.18"
+	},
+	"dependencies": {
+		"node-sql-parser": "^5.3.6"
+	}
+}
