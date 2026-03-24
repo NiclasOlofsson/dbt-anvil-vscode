@@ -1,0 +1,12 @@
+jaffle_shop:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: jaffle_shop.duckdb
+      schema: main
+      threads: 4
+      # Allow concurrent access for tests while MCP server is running
+      access_mode: read_write
+      
+      

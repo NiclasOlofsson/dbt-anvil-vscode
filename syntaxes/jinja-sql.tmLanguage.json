@@ -1,0 +1,105 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "Jinja SQL",
+	"scopeName": "source.jinja-sql",
+	"patterns": [
+		{ "include": "#jinja-block" },
+		{ "include": "#jinja-expression" },
+		{ "include": "#jinja-comment" },
+		{ "include": "#sql" }
+	],
+	"repository": {
+		"jinja-block": {
+			"begin": "\\{%[-~]?",
+			"end": "[-~]?%\\}",
+			"beginCaptures": { "0": { "name": "punctuation.definition.tag.begin.jinja" } },
+			"endCaptures": { "0": { "name": "punctuation.definition.tag.end.jinja" } },
+			"name": "meta.block.jinja",
+			"patterns": [
+				{ "include": "#jinja-keywords" },
+				{ "include": "#jinja-string" },
+				{ "include": "#jinja-number" },
+				{ "include": "#jinja-function" }
+			]
+		},
+		"jinja-expression": {
+			"begin": "\\{\\{[-~]?",
+			"end": "[-~]?\\}\\}",
+			"beginCaptures": { "0": { "name": "punctuation.definition.expression.begin.jinja" } },
+			"endCaptures": { "0": { "name": "punctuation.definition.expression.end.jinja" } },
+			"name": "meta.expression.jinja",
+			"patterns": [
+				{ "include": "#jinja-string" },
+				{ "include": "#jinja-number" },
+				{ "include": "#jinja-function" }
+			]
+		},
+		"jinja-comment": {
+			"begin": "\\{#",
+			"end": "#\\}",
+			"name": "comment.block.jinja"
+		},
+		"jinja-keywords": {
+			"match": "\\b(if|elif|else|endif|for|endfor|block|endblock|macro|endmacro|call|endcall|filter|endfilter|set|endset|extends|include|import|from|as|with|without|context|and|or|not|in|is|do|raw|endraw|materialization|endmaterialization|snapshot|endsnapshot|test|endtest)\\b",
+			"name": "keyword.control.jinja"
+		},
+		"jinja-string": {
+			"patterns": [
+				{
+					"begin": "'",
+					"end": "'",
+					"name": "string.quoted.single.jinja"
+				},
+				{
+					"begin": "\"",
+					"end": "\"",
+					"name": "string.quoted.double.jinja"
+				}
+			]
+		},
+		"jinja-number": {
+			"match": "\\b\\d+(\\.\\d+)?\\b",
+			"name": "constant.numeric.jinja"
+		},
+		"jinja-function": {
+			"match": "\\b(ref|source|config|var|env_var|adapter|return|log|exceptions|run_query|statement|this|graph|flags|target|project_name|model|schema|database)\\b",
+			"name": "support.function.jinja.dbt"
+		},
+		"sql": {
+			"patterns": [
+				{ "include": "#sql-comment-line" },
+				{ "include": "#sql-comment-block" },
+				{ "include": "#sql-string" },
+				{ "include": "#sql-keywords" },
+				{ "include": "#sql-functions" },
+				{ "include": "#sql-number" }
+			]
+		},
+		"sql-comment-line": {
+			"match": "--.*$",
+			"name": "comment.line.double-dash.sql"
+		},
+		"sql-comment-block": {
+			"begin": "/\\*",
+			"end": "\\*/",
+			"name": "comment.block.sql"
+		},
+		"sql-string": {
+			"begin": "'",
+			"end": "'",
+			"name": "string.quoted.single.sql"
+		},
+		"sql-keywords": {
+			"match": "(?i)\\b(SELECT|FROM|WHERE|JOIN|INNER|LEFT|RIGHT|OUTER|FULL|CROSS|ON|AND|OR|NOT|IN|EXISTS|BETWEEN|LIKE|IS|NULL|AS|CASE|WHEN|THEN|ELSE|END|GROUP|BY|ORDER|HAVING|LIMIT|OFFSET|UNION|ALL|DISTINCT|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|ALTER|DROP|TABLE|VIEW|INDEX|WITH|RECURSIVE|OVER|PARTITION|ROWS|RANGE|UNBOUNDED|PRECEDING|FOLLOWING|CURRENT|ROW|EXCEPT|INTERSECT|QUALIFY|WINDOW|LATERAL|PIVOT|UNPIVOT|TABLESAMPLE|MERGE|USING|MATCHED)\\b",
+			"name": "keyword.other.sql"
+		},
+		"sql-functions": {
+			"match": "(?i)\\b(COUNT|SUM|AVG|MIN|MAX|COALESCE|NULLIF|CAST|CONVERT|IFNULL|NVL|CASE|TRIM|UPPER|LOWER|LENGTH|SUBSTRING|REPLACE|CONCAT|DATE|YEAR|MONTH|DAY|HOUR|MINUTE|SECOND|NOW|CURRENT_TIMESTAMP|CURRENT_DATE|ROW_NUMBER|RANK|DENSE_RANK|NTILE|LAG|LEAD|FIRST_VALUE|LAST_VALUE|LISTAGG|STRING_AGG|ARRAY_AGG|APPROX_COUNT_DISTINCT|DATEDIFF|DATEADD|DATE_TRUNC|EXTRACT|TO_DATE|TO_TIMESTAMP|TO_CHAR|TRY_CAST|IFF|DECODE|GREATEST|LEAST|ABS|ROUND|CEIL|FLOOR|MOD|POWER|SQRT|LN|LOG|EXP|SIGN|RANDOM|HASH|MD5|SHA2|BASE64_ENCODE|BASE64_DECODE|PARSE_JSON|TO_JSON|OBJECT_CONSTRUCT|ARRAY_CONSTRUCT|FLATTEN)\\b\\s*(?=\\()",
+			"name": "support.function.sql"
+		},
+		"sql-number": {
+			"match": "\\b\\d+(\\.\\d+)?\\b",
+			"name": "constant.numeric.sql"
+		}
+	}
+}

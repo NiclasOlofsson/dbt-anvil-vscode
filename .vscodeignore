@@ -1,0 +1,15 @@
+.vscode
+.github
+src/
+scripts/
+temp_auto/
+node_modules/
+.esbuild.ts
+tsconfig.json
+vitest.config.ts
+eslint.config.mjs
+**/*.test.ts
+**/__mocks__/**
+.gitignore
+plan-*.md
+PLAN.md

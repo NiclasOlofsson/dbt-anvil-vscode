@@ -1,0 +1,44 @@
+{
+	"version": "2.0.0",
+	"options": {
+		"shell": {
+			"executable": "bash.exe",
+			"args": [
+				"-l",
+				"-c"
+			]
+		}
+	},
+	"tasks": [
+		{
+			"label": "npm: compile",
+			"type": "shell",
+			"command": "npm run compile",
+			"group": "build",
+			"problemMatcher": []
+		},
+		{
+			"label": "watch",
+			"type": "shell",
+			"command": "npm run watch",
+			"isBackground": true,
+			"runOptions": {
+				"runOn": "folderOpen"
+			},
+			"group": "build",
+			"problemMatcher": {
+				"pattern": {
+					"regexp": "^ERROR",
+					"file": 1,
+					"location": 2,
+					"message": 3
+				},
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": "^\\[watch\\] build started",
+					"endsPattern": "^\\[watch\\] build finished"
+				}
+			}
+		}
+	]
+}

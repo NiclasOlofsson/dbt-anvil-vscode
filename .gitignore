@@ -1,0 +1,13 @@
+node_modules
+dist/
+out/
+*.vsix
+coverage/
+.vscode-test/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
