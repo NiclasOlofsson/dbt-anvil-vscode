@@ -169,6 +169,8 @@ export interface DbtManifestMetadata {
 	generated_at: string;
 	invocation_id: string;
 	env: Record<string, string>;
+	adapter_type?: string;
+	project_name?: string;
 }
 
 export interface DbtProjectConfig {

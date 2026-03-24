@@ -1,48 +1,204 @@
 import * as vscode from 'vscode';
+import type { BridgeRunner } from '../dbt/bridge-runner';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
+import { stripJinja } from './jinja-utils';
 
 /**
  * Completions for ref(), source(), macros, and columns inside Jinja SQL files.
  */
 export class DbtCompletionProvider implements vscode.CompletionItemProvider {
+	/**
+	 * Per-document cache of alias → column names from the bridge.
+	 * Keyed by document URI, invalidated when the document version changes.
+	 */
+	private _scopeCache = new Map<string, { version: number; aliases: Record<string, string[]> }>();
+
+	/**
+	 * Per-model describe cache. Keyed by unique node ID (e.g. "model.jaffle_shop.stg_customers").
+	 * Survives document edits — only cleared when the manifest reloads via invalidateDescribeCache().
+	 */
+	private _describeCache = new Map<string, string[]>();
+
+	/** Called by the extension when the manifest is reloaded. */
+	invalidateDescribeCache(): void {
+		this._describeCache.clear();
+		this._scopeCache.clear();
+		this.logger.debug('Describe cache invalidated (manifest reloaded)');
+	}
+
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
+		private readonly bridge?: BridgeRunner,
 	) {}
 
-	provideCompletionItems(
+	async provideCompletionItems(
 		document: vscode.TextDocument,
 		position: vscode.Position,
 		_token: vscode.CancellationToken,
 		_context: vscode.CompletionContext,
-	): vscode.CompletionItem[] | undefined {
+	): Promise<vscode.CompletionItem[] | undefined> {
 		const linePrefix = document.lineAt(position.line).text.substring(0, position.character);
 
 		// Inside ref('...')
 		if (/ref\(\s*['"][^'"]*$/.test(linePrefix)) {
-			return this._completeRef();
+			const items = this._completeRef();
+			this.logger.debug(`Completion: ref() → ${items.length} models`);
+			return items;
 		}
 
 		// Inside source('name', '...')  (second argument)
 		const sourceSecond = /source\(\s*['"]([^'"]+)['"]\s*,\s*['"][^'"]*$/;
 		const sourceSecondMatch = sourceSecond.exec(linePrefix);
 		if (sourceSecondMatch) {
-			return this._completeSourceTable(sourceSecondMatch[1]);
+			const items = this._completeSourceTable(sourceSecondMatch[1]);
+			this.logger.debug(`Completion: source('${sourceSecondMatch[1]}', ...) → ${items.length} tables`);
+			return items;
 		}
 
 		// Inside source('...')  (first argument)
 		if (/source\(\s*['"][^'"]*$/.test(linePrefix)) {
-			return this._completeSourceName();
+			const items = this._completeSourceName();
+			this.logger.debug(`Completion: source() → ${items.length} sources`);
+			return items;
 		}
 
 		// Inside {{ ... }} — complete macro names
 		if (/\{\{[^}]*$/.test(linePrefix) && !/(?:ref|source)\(\s*['"]/.test(linePrefix)) {
-			return this._completeMacros();
+			const items = this._completeMacros();
+			this.logger.debug(`Completion: macro → ${items.length} macros`);
+			return items;
+		}
+
+		// alias. — column completions (requires bridge)
+		const aliasMatch = /(\w+)\.\s*$/.exec(linePrefix);
+		if (aliasMatch && this.bridge) {
+			this.logger.debug(`Completion: column for alias '${aliasMatch[1]}'`);
+			return this._completeColumns(document, aliasMatch[1]);
 		}
 
 		return undefined;
 	}
+
+	// -----------------------------------------------------------------------
+	// Column completions (alias.column)
+	// -----------------------------------------------------------------------
+
+	private async _completeColumns(
+		document: vscode.TextDocument,
+		alias: string,
+	): Promise<vscode.CompletionItem[]> {
+		try {
+			const aliasMap = await this._getScopeAliases(document);
+			const aliasKeys = Object.keys(aliasMap);
+			this.logger.debug(`Column scope aliases: [${aliasKeys.join(', ')}]`);
+			const cols = aliasMap[alias] ?? aliasMap[alias.toLowerCase()];
+			if (!cols || cols.length === 0) {
+				this.logger.debug(`No columns found for alias '${alias}'`);
+				return [];
+			}
+
+			this.logger.debug(`Completion: ${cols.length} columns for '${alias}': [${cols.slice(0, 5).join(', ')}${cols.length > 5 ? ', ...' : ''}]`);
+			return cols.map((col, i) => {
+				const item = new vscode.CompletionItem(col, vscode.CompletionItemKind.Field);
+				item.detail = `column of ${alias}`;
+				item.sortText = String(i).padStart(4, '0');
+				return item;
+			});
+		} catch (err) {
+			this.logger.warn(`Column completion failed: ${err instanceof Error ? err.message : String(err)}`);
+			return [];
+		}
+	}
+
+	private async _getScopeAliases(document: vscode.TextDocument): Promise<Record<string, string[]>> {
+		const key = document.uri.toString();
+		const cached = this._scopeCache.get(key);
+		if (cached && cached.version === document.version) {
+			this.logger.debug('Column scope: using cached aliases');
+			return cached.aliases;
+		}
+
+		if (!this.bridge) return {};
+
+		const { sql, refs } = stripJinja(document.getText(), this.indexer);
+		if (!sql) return {};
+
+		const schemaMapping = this.indexer.buildSchemaMapping();
+		const adapterType = this.indexer.index?.adapterType ?? 'ansi';
+
+		// Build a map of upstream compiled SQL for refs that have no YAML columns
+		// in schema_mapping. The bridge uses this to derive column lists via
+		// sqlglot without needing a live DB connection.
+		// Prefer compiled_code (dbt compile), fall back to raw_code stripped of Jinja.
+		// For each upstream ref that has no documented columns in schema_mapping,
+		// call describe_table via the bridge (dbt show against the actual DB).
+		// This mirrors the dbt-core-mcp approach and works without compiled_code.
+		for (const [tableName, uniqueId] of refs) {
+			// Check if this table is already in schema_mapping
+			const alreadyMapped = Object.values(schemaMapping).some(db =>
+				Object.values(db).some(schema => tableName.toLowerCase() in schema),
+			);
+			if (alreadyMapped) continue;
+
+			// Determine if it's a source or model
+			const node = this.indexer.getRawNode(uniqueId);
+			const isSource = uniqueId.startsWith('source.');
+			const modelName = node && 'name' in node ? node.name : tableName;
+			const sourceName = node && 'source_name' in node ? node.source_name : undefined;
+
+			const cached = this._describeCache.get(uniqueId);
+			if (cached) {
+				this.logger.debug(`describe_table: ${tableName} (cached) → [${cached.join(', ')}]`);
+				const db = (schemaMapping['__described__'] ??= {});
+				const schema = (db['__described__'] ??= {});
+				schema[tableName.toLowerCase()] = Object.fromEntries(cached.map(c => [c, {}]));
+				continue;
+			}
+
+			this.logger.debug(`describe_table: ${tableName} (${uniqueId})`);
+			try {
+				const descResult = await this.bridge.invokeRaw(
+					isSource
+						? { describe_table: true, name: modelName, source_name: sourceName }
+						: { describe_table: true, name: modelName },
+				);
+				const descData = descResult.data as Record<string, unknown> | undefined;
+				const cols = descData?.columns as string[] | undefined;
+				if (cols && cols.length > 0) {
+					this.logger.debug(`describe_table: ${tableName} → [${cols.join(', ')}]`);
+					this._describeCache.set(uniqueId, cols);
+					const db = (schemaMapping['__described__'] ??= {});
+					const schema = (db['__described__'] ??= {});
+					schema[tableName.toLowerCase()] = Object.fromEntries(cols.map(c => [c, {}]));
+				} else {
+					this.logger.debug(`describe_table: ${tableName} → no columns returned`);
+				}
+			} catch (err) {
+				this.logger.debug(`describe_table: ${tableName} failed — ${err}`);
+			}
+		}
+
+		const payload: Record<string, unknown> = {
+			get_scope_columns: true,
+			sql,
+			dialect: adapterType,
+			schema_mapping: schemaMapping,
+		};
+
+		const result = await this.bridge.invokeRaw(payload);
+
+		const data = result.data as Record<string, unknown> | undefined;
+		const aliases: Record<string, string[]> = (data?.aliases as Record<string, string[]>) ?? {};
+
+		this._scopeCache.set(key, { version: document.version, aliases });
+		return aliases;
+	}
+
+	// -----------------------------------------------------------------------
+	// ref / source / macro completions
+	// -----------------------------------------------------------------------
 
 	private _completeRef(): vscode.CompletionItem[] {
 		const index = this.indexer.index;
