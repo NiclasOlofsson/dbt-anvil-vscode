@@ -1,0 +1,69 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "Jinja YAML",
+	"scopeName": "source.jinja-yaml.injection",
+	"injectionSelector": "L:source.yaml",
+	"patterns": [
+		{ "include": "#jinja-block" },
+		{ "include": "#jinja-expression" },
+		{ "include": "#jinja-comment" }
+	],
+	"repository": {
+		"jinja-block": {
+			"begin": "\\{%[-~]?",
+			"end": "[-~]?%\\}",
+			"beginCaptures": { "0": { "name": "punctuation.definition.tag.begin.jinja" } },
+			"endCaptures": { "0": { "name": "punctuation.definition.tag.end.jinja" } },
+			"name": "meta.block.jinja",
+			"patterns": [
+				{ "include": "#jinja-keywords" },
+				{ "include": "#jinja-string" },
+				{ "include": "#jinja-number" },
+				{ "include": "#jinja-function" }
+			]
+		},
+		"jinja-expression": {
+			"begin": "\\{\\{[-~]?",
+			"end": "[-~]?\\}\\}",
+			"beginCaptures": { "0": { "name": "punctuation.definition.expression.begin.jinja" } },
+			"endCaptures": { "0": { "name": "punctuation.definition.expression.end.jinja" } },
+			"name": "meta.expression.jinja",
+			"patterns": [
+				{ "include": "#jinja-string" },
+				{ "include": "#jinja-number" },
+				{ "include": "#jinja-function" }
+			]
+		},
+		"jinja-comment": {
+			"begin": "\\{#",
+			"end": "#\\}",
+			"name": "comment.block.jinja"
+		},
+		"jinja-keywords": {
+			"match": "\\b(if|elif|else|endif|for|endfor|block|endblock|macro|endmacro|call|endcall|filter|endfilter|set|endset|extends|include|import|from|as|with|without|context|and|or|not|in|is|do|raw|endraw|materialization|endmaterialization|snapshot|endsnapshot|test|endtest)\\b",
+			"name": "keyword.control.jinja"
+		},
+		"jinja-string": {
+			"patterns": [
+				{
+					"begin": "'",
+					"end": "'",
+					"name": "string.quoted.single.jinja"
+				},
+				{
+					"begin": "\"",
+					"end": "\"",
+					"name": "string.quoted.double.jinja"
+				}
+			]
+		},
+		"jinja-number": {
+			"match": "\\b\\d+(\\.\\d+)?\\b",
+			"name": "constant.numeric.jinja"
+		},
+		"jinja-function": {
+			"match": "\\b(ref|source|config|var|env_var|adapter|return|log|exceptions|run_query|statement|this|graph|flags|target|project_name|model|schema|database)\\b",
+			"name": "support.function.jinja.dbt"
+		}
+	}
+}
