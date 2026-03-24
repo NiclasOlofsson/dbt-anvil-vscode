@@ -238,4 +238,73 @@ describe('ManifestIndexer', () => {
 
 		expect(indexer.findMacrosByPrefix('zzz_')).toHaveLength(0);
 	});
+
+	// -----------------------------------------------------------------------
+	// Column store
+	// -----------------------------------------------------------------------
+
+	it('should store and retrieve columns', () => {
+		const loader = new ManifestLoader(TEST_DIR);
+		const indexer = new ManifestIndexer(loader, mockLogger);
+		indexer.build();
+
+		expect(indexer.getColumns('model.project.my_model')).toBeUndefined();
+		indexer.setColumns('model.project.my_model', ['id', 'name']);
+		expect(indexer.getColumns('model.project.my_model')).toEqual(['id', 'name']);
+	});
+
+	it('should clear column store on full rebuild', () => {
+		const loader = new ManifestLoader(TEST_DIR);
+		const indexer = new ManifestIndexer(loader, mockLogger);
+		indexer.build();
+
+		indexer.setColumns('model.project.my_model', ['id', 'name']);
+		indexer.build(true);
+		expect(indexer.getColumns('model.project.my_model')).toBeUndefined();
+	});
+
+	it('should invalidate model and all downstream dependents', () => {
+		const loader = new ManifestLoader(TEST_DIR);
+		const indexer = new ManifestIndexer(loader, mockLogger);
+		indexer.build();
+
+		indexer.setColumns('model.project.my_model', ['id', 'name']);
+		indexer.setColumns('model.project.downstream', ['id', 'total']);
+		indexer.setColumns('seed.project.my_seed', ['col1']);
+
+		const evicted = indexer.invalidateModel('model.project.my_model');
+		expect(evicted).toContain('model.project.my_model');
+		expect(evicted).toContain('model.project.downstream');
+		expect(evicted).not.toContain('seed.project.my_seed');
+
+		expect(indexer.getColumns('model.project.my_model')).toBeUndefined();
+		expect(indexer.getColumns('model.project.downstream')).toBeUndefined();
+		expect(indexer.getColumns('seed.project.my_seed')).toEqual(['col1']);
+	});
+
+	it('should not evict upstream when invalidating downstream', () => {
+		const loader = new ManifestLoader(TEST_DIR);
+		const indexer = new ManifestIndexer(loader, mockLogger);
+		indexer.build();
+
+		indexer.setColumns('model.project.my_model', ['id', 'name']);
+		indexer.setColumns('model.project.downstream', ['id', 'total']);
+
+		const evicted = indexer.invalidateModel('model.project.downstream');
+		expect(evicted).toContain('model.project.downstream');
+		expect(evicted).not.toContain('model.project.my_model');
+
+		expect(indexer.getColumns('model.project.my_model')).toEqual(['id', 'name']);
+		expect(indexer.getColumns('model.project.downstream')).toBeUndefined();
+	});
+
+	it('should find model by file path', () => {
+		const loader = new ManifestLoader(TEST_DIR);
+		const indexer = new ManifestIndexer(loader, mockLogger);
+		indexer.build();
+
+		const modelPath = path.join(TEST_DIR, 'models', 'my_model.sql');
+		expect(indexer.findModelByFilePath(modelPath)).toBe('model.project.my_model');
+		expect(indexer.findModelByFilePath('/nonexistent/file.sql')).toBeUndefined();
+	});
 });

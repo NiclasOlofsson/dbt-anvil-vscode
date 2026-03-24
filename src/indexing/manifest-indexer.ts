@@ -56,6 +56,13 @@ export interface ManifestIndex {
 export class ManifestIndexer {
 	private _index: ManifestIndex | null = null;
 
+	/**
+	 * Global column store. Keyed by unique node ID (e.g. "model.jaffle_shop.stg_customers").
+	 * Populated lazily by the completion provider via setColumns().
+	 * Cleared selectively when a model changes (model + all downstream dependents).
+	 */
+	private _columnStore = new Map<string, string[]>();
+
 	constructor(
 		private readonly loader: ManifestLoader,
 		private readonly logger: ILogger,
@@ -72,6 +79,7 @@ export class ManifestIndexer {
 		this.logger.info('Building manifest index...');
 		const { manifest } = this.loader.load(force);
 		this._index = this._buildIndex(manifest);
+		this.clearColumnStore();
 		this.logger.info(
 			`Manifest index built: ${this._index.models.size} models, ${this._index.sources.size} sources`,
 		);
@@ -335,6 +343,66 @@ export class ManifestIndexer {
 		}
 
 		return mapping;
+	}
+
+	// -----------------------------------------------------------------------
+	// Global column store — lazy-populated, DAG-aware invalidation
+	// -----------------------------------------------------------------------
+
+	getColumns(uniqueId: string): string[] | undefined {
+		return this._columnStore.get(uniqueId);
+	}
+
+	setColumns(uniqueId: string, columns: string[]): void {
+		this._columnStore.set(uniqueId, columns);
+	}
+
+	/**
+	 * Invalidate columns for a model and all its transitive downstream dependents.
+	 * Returns the set of unique IDs that were evicted.
+	 */
+	invalidateModel(uniqueId: string): Set<string> {
+		const evicted = new Set<string>();
+		this._evictDownstream(uniqueId, evicted);
+		if (evicted.size > 0) {
+			this.logger.debug(`Column store: evicted ${evicted.size} entries: [${[...evicted].join(', ')}]`);
+		}
+		return evicted;
+	}
+
+	/** Clear the entire column store (e.g. on full manifest rebuild). */
+	clearColumnStore(): void {
+		const size = this._columnStore.size;
+		this._columnStore.clear();
+		if (size > 0) {
+			this.logger.debug(`Column store: cleared all ${size} entries`);
+		}
+	}
+
+	/**
+	 * Find the unique ID of a model by its file path.
+	 * Returns undefined if no model matches.
+	 */
+	findModelByFilePath(filePath: string): string | undefined {
+		const index = this._index;
+		if (!index) return undefined;
+		const normalised = filePath.replace(/\\/g, '/').toLowerCase();
+		for (const model of index.models.values()) {
+			if (model.path.replace(/\\/g, '/').toLowerCase() === normalised) {
+				return model.uniqueId;
+			}
+		}
+		return undefined;
+	}
+
+	private _evictDownstream(uniqueId: string, visited: Set<string>): void {
+		if (visited.has(uniqueId)) return;
+		visited.add(uniqueId);
+		this._columnStore.delete(uniqueId);
+		const children = this._index?.childMap.get(uniqueId) ?? [];
+		for (const child of children) {
+			this._evictDownstream(child, visited);
+		}
 	}
 }
 

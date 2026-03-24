@@ -14,17 +14,10 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 	 */
 	private _scopeCache = new Map<string, { version: number; aliases: Record<string, string[]> }>();
 
-	/**
-	 * Per-model describe cache. Keyed by unique node ID (e.g. "model.jaffle_shop.stg_customers").
-	 * Survives document edits — only cleared when the manifest reloads via invalidateDescribeCache().
-	 */
-	private _describeCache = new Map<string, string[]>();
-
 	/** Called by the extension when the manifest is reloaded. */
-	invalidateDescribeCache(): void {
-		this._describeCache.clear();
+	invalidateScopeCache(): void {
 		this._scopeCache.clear();
-		this.logger.debug('Describe cache invalidated (manifest reloaded)');
+		this.logger.debug('Scope cache invalidated (manifest reloaded)');
 	}
 
 	constructor(
@@ -148,7 +141,7 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 			const modelName = node && 'name' in node ? node.name : tableName;
 			const sourceName = node && 'source_name' in node ? node.source_name : undefined;
 
-			const cached = this._describeCache.get(uniqueId);
+			const cached = this.indexer.getColumns(uniqueId);
 			if (cached) {
 				this.logger.debug(`describe_table: ${tableName} (cached) → [${cached.join(', ')}]`);
 				const db = (schemaMapping['__described__'] ??= {});
@@ -168,7 +161,7 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 				const cols = descData?.columns as string[] | undefined;
 				if (cols && cols.length > 0) {
 					this.logger.debug(`describe_table: ${tableName} → [${cols.join(', ')}]`);
-					this._describeCache.set(uniqueId, cols);
+					this.indexer.setColumns(uniqueId, cols);
 					const db = (schemaMapping['__described__'] ??= {});
 					const schema = (db['__described__'] ??= {});
 					schema[tableName.toLowerCase()] = Object.fromEntries(cols.map(c => [c, {}]));
