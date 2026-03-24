@@ -44,7 +44,8 @@ export class QueryDatabaseTool implements vscode.LanguageModelTool<QueryDatabase
 			sql = extracted;
 		}
 
-		const args = ['show', '--inline', sql];
+		// Pass --limit -1 to disable dbt show's default row cap; include LIMIT in the SQL to control output
+		const args = ['show', '--inline', sql, '--limit', '-1'];
 		const result = await this.bridge.invoke(args);
 		return toolResult(formatBridgeResult(result));
 	}
