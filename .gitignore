@@ -5,6 +5,26 @@ out/
 coverage/
 .vscode-test/
 temp_auto/
+.eslintcache
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+
+# Fixture runtime artifacts
+src/fixtures/**/.venv/
+src/fixtures/**/*.duckdb
+src/fixtures/**/dbt_packages/
+src/fixtures/**/logs/
+src/fixtures/**/.user.yml
+src/fixtures/**/target/compiled/
+src/fixtures/**/target/run/
+src/fixtures/**/target/graph.gpickle
+src/fixtures/**/target/graph_summary.json
+src/fixtures/**/target/partial_parse.msgpack
+src/fixtures/**/target/run_results.json
+src/fixtures/**/target/semantic_manifest.json
 
 # OS artifacts
 .DS_Store

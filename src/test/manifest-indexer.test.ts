@@ -131,6 +131,7 @@ describe('ManifestIndexer', () => {
 		expect(index.models.size).toBe(3); // 2 models + 1 seed
 		expect(index.sources.size).toBe(1);
 		expect(index.dbtVersion).toBe('1.8.0');
+		expect(index.adapterType).toBe('duckdb');
 	});
 
 	it('should find models by name', () => {

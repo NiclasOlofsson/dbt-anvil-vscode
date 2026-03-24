@@ -56,6 +56,7 @@ function createTestIndex(): ManifestIndex {
 		parentMap: new Map(),
 		childMap: new Map(),
 		dbtVersion: '1.8.0',
+		adapterType: 'ansi',
 		buildTime: new Date(),
 	};
 }

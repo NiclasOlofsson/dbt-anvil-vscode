@@ -10,6 +10,8 @@ export interface DbtCommandResult {
 	stdout: string;
 	stderr: string;
 	error?: Error;
+	/** Parsed JSON payload from the bridge response (for structured commands like get_columns). */
+	data?: Record<string, unknown>;
 }
 
 interface BridgeRequest {
@@ -48,6 +50,7 @@ export class BridgeRunner {
 	/** Serialise commands — only one dbt command at a time */
 	private _queue: (() => Promise<void>)[] = [];
 	private _running = false;
+	private _currentCommandLabel = '';
 
 	constructor(
 		private readonly bridgePyPath: string,
@@ -182,16 +185,22 @@ export class BridgeRunner {
 			// Check if this is a completion marker
 			if (line.startsWith('{"success":')) {
 				try {
-					const completion = JSON.parse(line) as BridgeCompletionMessage;
+					const completion = JSON.parse(line) as BridgeCompletionMessage & Record<string, unknown>;
 					this._stdoutLines.push(line);
 					if (this._pendingResolve) {
 						const resolve = this._pendingResolve;
 						this._pendingResolve = null;
-						resolve({
+						const result: DbtCommandResult = {
 							success: completion.success,
+							data: completion,
 							stdout: this._stdoutLines.join('\n'),
 							stderr: this._stderrLines.join('\n'),
-						});
+						};
+						const label = this._currentCommandLabel || 'bridge request';
+						const status = result.success ? 'succeeded' : 'failed';
+						this.logger.info(`${label} — ${status}`);
+						this._currentCommandLabel = '';
+						resolve(result);
 					}
 					return;
 				} catch {
@@ -200,7 +209,7 @@ export class BridgeRunner {
 			}
 
 			this._stdoutLines.push(line);
-			this.logger.trace(`[bridge] ${line}`);
+			this.logger.debug(`[bridge] ${line}`);
 		}
 	}
 
@@ -247,6 +256,9 @@ export class BridgeRunner {
 
 		const request: BridgeRequest = { command: args };
 		const line = JSON.stringify(request) + '\n';
+
+		this._currentCommandLabel = `dbt ${args.join(' ')}`;
+		this.logger.info(`Bridge command: ${this._currentCommandLabel}`);
 
 		return new Promise<DbtCommandResult>((resolve) => {
 			this._pendingResolve = resolve;
@@ -313,15 +325,16 @@ export class BridgeRunner {
 
 		const line = JSON.stringify(request) + '\n';
 
+		const reqKeys = Object.keys(request).filter(k => k !== 'schema_mapping' && k !== 'upstream_sql');
+		const upstreamCount = 'upstream_sql' in request ? ` upstream_sql[${Object.keys((request as Record<string, unknown>)['upstream_sql'] as object).length}]` : '';
+		this.logger.debug(`Bridge raw request: {${reqKeys.join(', ')}}${upstreamCount}`);
+
 		return new Promise<DbtCommandResult>((resolve) => {
 			this._pendingResolve = resolve;
 			this._process!.stdin.write(line, 'utf-8');
 		});
 	}
 
-	/**
-	 * Gracefully shut down the bridge process.
-	 */
 	async shutdown(): Promise<void> {
 		if (!this._process) return;
 

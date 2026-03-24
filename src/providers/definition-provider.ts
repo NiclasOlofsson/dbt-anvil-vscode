@@ -28,7 +28,9 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 			const start = match.index;
 			const end = start + match[0].length;
 			if (position.character >= start && position.character <= end) {
-				return this._resolveRef(match[1]);
+				const def = this._resolveRef(match[1]);
+				this.logger.debug(`Definition: ref('${match[1]}') → ${def ? 'resolved' : 'not found'}`);
+				return def;
 			}
 		}
 
@@ -38,7 +40,9 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 			const start = match.index;
 			const end = start + match[0].length;
 			if (position.character >= start && position.character <= end) {
-				return this._resolveSource(match[1], match[2]);
+				const def = this._resolveSource(match[1], match[2]);
+				this.logger.debug(`Definition: source('${match[1]}', '${match[2]}') → ${def ? 'resolved' : 'not found'}`);
+				return def;
 			}
 		}
 

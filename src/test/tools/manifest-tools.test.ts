@@ -3,6 +3,7 @@ import type { ManifestIndexer, ManifestIndex, IndexedModel, IndexedSource } from
 import { ListResourcesTool } from '../../tools/list-resources';
 import { AnalyzeImpactTool } from '../../tools/analyze-impact';
 import { GetProjectInfoTool } from '../../tools/get-project-info';
+import { GetColumnLineageTool } from '../../tools/get-column-lineage';
 import type { ManifestLoader } from '../../dbt/manifest-loader';
 import type { BridgeRunner } from '../../dbt/bridge-runner';
 import { createMockLogger } from '../helpers';
@@ -54,6 +55,7 @@ function createTestIndex(): ManifestIndex {
 			['model.p.orders', ['model.p.customers']],
 		]),
 		dbtVersion: '1.8.0',
+		adapterType: 'duckdb',
 		buildTime: new Date(),
 	};
 }
@@ -136,5 +138,91 @@ describe('AnalyzeImpactTool', () => {
 			token as never,
 		);
 		expect(result).toBeDefined();
+	});
+});
+
+describe('GetColumnLineageTool', () => {
+	const token = { isCancellationRequested: false, onCancellationRequested: vi.fn() };
+
+	it('returns SQL-derived columns when bridge succeeds', async () => {
+		const index = createTestIndex();
+		const indexer = createMockIndexer(index);
+		(indexer.getRawNode as ReturnType<typeof vi.fn>).mockReturnValue({
+			unique_id: 'model.p.customers',
+			name: 'customers',
+			schema: 'main',
+			database: 'dev',
+			compiled_code: 'SELECT customer_id, first_name FROM orders',
+			columns: {},
+		});
+
+		const mockBridge = {
+			invokeRaw: vi.fn().mockResolvedValue({
+				success: true,
+				data: { success: true, columns: ['customer_id', 'first_name'] },
+				stdout: '',
+				stderr: '',
+			}),
+		} as unknown as BridgeRunner;
+
+		const tool = new GetColumnLineageTool(indexer, mockBridge, mockLogger);
+		const result = await tool.invoke(
+			{ input: { model: 'customers' }, toolInvocationToken: undefined } as never,
+			token as never,
+		);
+
+		const text = result.content[0];
+		const parsed = JSON.parse((text as { value: string }).value);
+		expect(parsed.source).toBe('compiled_sql');
+		expect(parsed.columns).toEqual([{ name: 'customer_id' }, { name: 'first_name' }]);
+	});
+
+	it('falls back to manifest columns when bridge returns empty', async () => {
+		const index = createTestIndex();
+		const indexer = createMockIndexer(index);
+		(indexer.getRawNode as ReturnType<typeof vi.fn>).mockReturnValue({
+			unique_id: 'model.p.customers',
+			name: 'customers',
+			schema: 'main',
+			database: 'dev',
+			compiled_code: 'SELECT * FROM undocumented_table',
+			columns: { id: { data_type: 'varchar', description: 'Primary key' } },
+		});
+
+		const mockBridge = {
+			invokeRaw: vi.fn().mockResolvedValue({
+				success: true,
+				data: { success: true, columns: [] },
+				stdout: '',
+				stderr: '',
+			}),
+		} as unknown as BridgeRunner;
+
+		const tool = new GetColumnLineageTool(indexer, mockBridge, mockLogger);
+		const result = await tool.invoke(
+			{ input: { model: 'customers' }, toolInvocationToken: undefined } as never,
+			token as never,
+		);
+
+		const text = result.content[0];
+		const parsed = JSON.parse((text as { value: string }).value);
+		expect(parsed.source).toBe('manifest');
+		expect(parsed.columns[0].name).toBe('id');
+	});
+
+	it('returns error when model not found', async () => {
+		const index = createTestIndex();
+		const indexer = createMockIndexer(index);
+		const mockBridge = { invokeRaw: vi.fn() } as unknown as BridgeRunner;
+		const tool = new GetColumnLineageTool(indexer, mockBridge, mockLogger);
+
+		const result = await tool.invoke(
+			{ input: { model: 'nonexistent' }, toolInvocationToken: undefined } as never,
+			token as never,
+		);
+
+		const text = result.content[0];
+		const parsed = JSON.parse((text as { value: string }).value);
+		expect(parsed.error).toContain('not found');
 	});
 });

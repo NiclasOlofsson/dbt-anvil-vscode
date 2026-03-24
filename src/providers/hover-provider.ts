@@ -25,7 +25,9 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 			const start = match.index;
 			const end = start + match[0].length;
 			if (position.character >= start && position.character <= end) {
-				return this._hoverRef(match[1]);
+				const hover = this._hoverRef(match[1]);
+				this.logger.debug(`Hover: ref('${match[1]}') → ${hover ? 'found' : 'not found'}`);
+				return hover;
 			}
 		}
 
@@ -35,7 +37,9 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 			const start = match.index;
 			const end = start + match[0].length;
 			if (position.character >= start && position.character <= end) {
-				return this._hoverSource(match[1], match[2]);
+				const hover = this._hoverSource(match[1], match[2]);
+				this.logger.debug(`Hover: source('${match[1]}', '${match[2]}') → ${hover ? 'found' : 'not found'}`);
+				return hover;
 			}
 		}
 

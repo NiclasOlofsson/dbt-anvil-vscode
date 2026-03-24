@@ -33,7 +33,7 @@ export function registerLanguageModelTools(
 		['build_models', new BuildModelsTool(bridge, loader, logger)],
 		['compile_model', new CompileModelTool(bridge, loader, logger)],
 		['get_lineage', new GetLineageTool(indexer, logger)],
-		['get_column_lineage', new GetColumnLineageTool(indexer, logger)],
+		['get_column_lineage', new GetColumnLineageTool(indexer, bridge, logger)],
 		['list_resources', new ListResourcesTool(indexer, logger)],
 		['get_resource_info', new GetResourceInfoTool(indexer, bridge, loader, logger)],
 		['get_project_info', new GetProjectInfoTool(indexer, bridge, loader, logger)],
