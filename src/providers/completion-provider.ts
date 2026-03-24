@@ -3,7 +3,7 @@ import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
 
 /**
- * Completions for ref('...') and source('...', '...') inside Jinja SQL files.
+ * Completions for ref(), source(), macros, and columns inside Jinja SQL files.
  */
 export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 	constructor(
@@ -36,6 +36,11 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 			return this._completeSourceName();
 		}
 
+		// Inside {{ ... }} — complete macro names
+		if (/\{\{[^}]*$/.test(linePrefix) && !/(?:ref|source)\(\s*['"]/.test(linePrefix)) {
+			return this._completeMacros();
+		}
+
 		return undefined;
 	}
 
@@ -44,17 +49,33 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 		if (!index) return [];
 
 		const items: vscode.CompletionItem[] = [];
-		const seen = new Set<string>();
+		const byName = new Map<string, typeof items>();
+
 		for (const model of index.models.values()) {
-			if (seen.has(model.name)) continue;
-			seen.add(model.name);
+			if (!byName.has(model.name)) {
+				byName.set(model.name, []);
+			}
 			const item = new vscode.CompletionItem(model.name, vscode.CompletionItemKind.Reference);
 			item.detail = `${model.materialisation} — ${model.packageName}`;
 			if (model.description) {
 				item.documentation = new vscode.MarkdownString(model.description);
 			}
-			items.push(item);
+			byName.get(model.name)!.push(item);
 		}
+
+		// If a name exists in multiple packages, qualify them all
+		for (const [name, group] of byName) {
+			if (group.length === 1) {
+				items.push(group[0]);
+			} else {
+				for (const item of group) {
+					item.label = name;
+					item.sortText = `${name}__${item.detail}`;
+					items.push(item);
+				}
+			}
+		}
+
 		return items;
 	}
 
@@ -88,6 +109,32 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 				}
 				items.push(item);
 			}
+		}
+		return items;
+	}
+
+	private _completeMacros(): vscode.CompletionItem[] {
+		const index = this.indexer.index;
+		if (!index) return [];
+
+		const items: vscode.CompletionItem[] = [];
+		for (const macro of index.macros.values()) {
+			const item = new vscode.CompletionItem(macro.name, vscode.CompletionItemKind.Function);
+			item.detail = macro.packageName;
+
+			const args = macro.arguments;
+			if (args.length > 0) {
+				const sig = args.map(a => a.name).join(', ');
+				item.detail = `${macro.packageName} — (${sig})`;
+			}
+
+			if (macro.description) {
+				item.documentation = new vscode.MarkdownString(macro.description);
+			}
+
+			// Insert as function call with parentheses
+			item.insertText = new vscode.SnippetString(`${macro.name}($0)`);
+			items.push(item);
 		}
 		return items;
 	}

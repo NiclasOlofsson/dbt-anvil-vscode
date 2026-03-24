@@ -29,7 +29,10 @@ export class ManifestWatcher {
 
 		const projectPattern = new vscode.RelativePattern(projectDir, 'dbt_project.yml');
 		this._projectWatcher = vscode.workspace.createFileSystemWatcher(projectPattern);
-		this._projectWatcher.onDidChange(() => this._rebuild('dbt_project.yml changed'));
+		this._projectWatcher.onDidChange(() => {
+			this.loader.reloadProjectConfig();
+			this._rebuild('dbt_project.yml changed');
+		});
 
 		this.logger.info('ManifestWatcher started');
 	}

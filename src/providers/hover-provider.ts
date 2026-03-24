@@ -3,7 +3,7 @@ import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
 
 /**
- * Hover tooltips for ref('model') and source('src','table') references.
+ * Hover tooltips for ref('model'), source('src','table'), and macro references.
  */
 export class DbtHoverProvider implements vscode.HoverProvider {
 	constructor(
@@ -39,6 +39,16 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 			}
 		}
 
+		// Match macro-like calls inside {{ }}: some_macro(...)
+		const macroMatch = /\{\{[^}]*?\b([a-zA-Z_]\w*)\s*\(/g;
+		while ((match = macroMatch.exec(line)) !== null) {
+			const nameStart = match.index + match[0].length - match[1].length - 1;
+			const nameEnd = nameStart + match[1].length;
+			if (position.character >= nameStart && position.character <= nameEnd) {
+				return this._hoverMacro(match[1]);
+			}
+		}
+
 		return undefined;
 	}
 
@@ -56,6 +66,17 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		md.appendMarkdown(`- **Path:** ${model.path}\n`);
 		if (model.schema) md.appendMarkdown(`- **Schema:** ${model.schema}\n`);
 		if (model.tags.length > 0) md.appendMarkdown(`- **Tags:** ${model.tags.join(', ')}\n`);
+
+		// Show columns if available from manifest
+		const raw = this.indexer.getRawNode(model.uniqueId);
+		if (raw && raw.columns && Object.keys(raw.columns).length > 0) {
+			md.appendMarkdown('\n**Columns:**\n');
+			for (const col of Object.values(raw.columns)) {
+				const type = col.data_type ? ` \`${col.data_type}\`` : '';
+				const desc = col.description ? ` — ${col.description}` : '';
+				md.appendMarkdown(`- \`${col.name}\`${type}${desc}\n`);
+			}
+		}
 
 		return new vscode.Hover(md);
 	}
@@ -79,6 +100,56 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		if (source.database) md.appendMarkdown(`- **Database:** ${source.database}\n`);
 		if (source.tags.length > 0) md.appendMarkdown(`- **Tags:** ${source.tags.join(', ')}\n`);
 
+		// Show columns from manifest
+		const raw = this.indexer.getRawNode(uids[0]);
+		if (raw && raw.columns && Object.keys(raw.columns).length > 0) {
+			md.appendMarkdown('\n**Columns:**\n');
+			for (const col of Object.values(raw.columns)) {
+				const type = col.data_type ? ` \`${col.data_type}\`` : '';
+				const desc = col.description ? ` — ${col.description}` : '';
+				md.appendMarkdown(`- \`${col.name}\`${type}${desc}\n`);
+			}
+		}
+
 		return new vscode.Hover(md);
+	}
+
+	private _hoverMacro(macroName: string): vscode.Hover | undefined {
+		// Skip built-in Jinja/dbt functions
+		if (['ref', 'source', 'config', 'set', 'if', 'for', 'block', 'macro', 'call'].includes(macroName)) {
+			return undefined;
+		}
+
+		const index = this.indexer.index;
+		if (!index) return undefined;
+
+		// Find the macro by name
+		for (const macro of index.macros.values()) {
+			if (macro.name === macroName) {
+				const md = new vscode.MarkdownString();
+				const args = macro.arguments;
+				const sig = args.length > 0
+					? `(${args.map(a => a.name).join(', ')})`
+					: '()';
+				md.appendMarkdown(`**${macro.name}**${sig} — macro\n\n`);
+				if (macro.description) {
+					md.appendMarkdown(`${macro.description}\n\n`);
+				}
+				md.appendMarkdown(`- **Package:** ${macro.packageName}\n`);
+
+				if (args.length > 0) {
+					md.appendMarkdown('\n**Arguments:**\n');
+					for (const arg of args) {
+						const type = arg.type ? ` \`${arg.type}\`` : '';
+						const desc = arg.description ? ` — ${arg.description}` : '';
+						md.appendMarkdown(`- \`${arg.name}\`${type}${desc}\n`);
+					}
+				}
+
+				return new vscode.Hover(md);
+			}
+		}
+
+		return undefined;
 	}
 }
