@@ -1,5 +1,7 @@
+import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
+import type { ManifestLoader } from '../dbt/manifest-loader';
 import type { ILogger } from '../types/logger';
 
 /**
@@ -8,6 +10,7 @@ import type { ILogger } from '../types/logger';
 export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 	constructor(
 		private readonly indexer: ManifestIndexer,
+		private readonly loader: ManifestLoader,
 		private readonly logger: ILogger,
 	) {}
 
@@ -42,9 +45,17 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 		return undefined;
 	}
 
-	private _resolveRef(modelName: string): vscode.Location | undefined {
+	private _resolveRef(modelName: string): vscode.Definition | undefined {
 		const models = this.indexer.findModelsByName(modelName);
 		if (models.length === 0) return undefined;
+
+		// Multiple packages → return all locations so the editor shows a picker
+		if (models.length > 1) {
+			return models
+				.filter(m => m.path)
+				.map(m => new vscode.Location(vscode.Uri.file(m.path), new vscode.Position(0, 0)));
+		}
+
 		const model = models[0];
 		if (!model.path) return undefined;
 		try {
@@ -64,8 +75,17 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 		const source = index.sources.get(uids[0]);
 		if (!source) return undefined;
 
-		// Sources don't have a file path in the same way — could point to schema.yml
-		// For now, we can't resolve file location for sources
+		// Find the schema.yml that declares this source via its original_file_path
+		const raw = this.indexer.getRawNode(uids[0]);
+		if (raw && raw.original_file_path) {
+			const filePath = path.join(this.loader.projectDir, raw.original_file_path);
+			try {
+				return new vscode.Location(vscode.Uri.file(filePath), new vscode.Position(0, 0));
+			} catch {
+				// fall through
+			}
+		}
+
 		return undefined;
 	}
 }

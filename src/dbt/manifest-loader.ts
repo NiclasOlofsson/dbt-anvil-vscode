@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { DbtManifest } from './manifest-types';
+import type { DbtManifest, DbtProjectConfig } from './manifest-types';
+import { loadProjectConfig, resolveTargetPath } from './project-config';
 
 export interface ManifestLoadResult {
 	manifest: DbtManifest;
@@ -11,29 +12,37 @@ export interface ManifestLoadResult {
 export class ManifestLoader {
 	private _cached: ManifestLoadResult | null = null;
 	private _manifestPath: string;
+	private _projectConfig: DbtProjectConfig | undefined;
 
 	constructor(private readonly _projectDir: string) {
-		this._manifestPath = path.join(this._projectDir, 'target', 'manifest.json');
+		this._projectConfig = loadProjectConfig(_projectDir);
+		this._manifestPath = path.join(
+			resolveTargetPath(this._projectConfig, _projectDir),
+			'manifest.json',
+		);
 	}
 
 	/**
 	 * Resolve the actual manifest path based on dbt_project.yml target-path setting.
 	 */
 	static resolveManifestPath(projectDir: string): string {
-		const projectFile = path.join(projectDir, 'dbt_project.yml');
-		if (fs.existsSync(projectFile)) {
-			try {
-				const content = fs.readFileSync(projectFile, 'utf-8');
-				const targetMatch = /^target-path:\s*['"]?([^'"#\n]+)['"]?/m.exec(content);
-				if (targetMatch) {
-					const targetPath = targetMatch[1].trim();
-					return path.join(projectDir, targetPath, 'manifest.json');
-				}
-			} catch {
-				// Fall through to default
-			}
-		}
-		return path.join(projectDir, 'target', 'manifest.json');
+		const config = loadProjectConfig(projectDir);
+		return path.join(resolveTargetPath(config, projectDir), 'manifest.json');
+	}
+
+	/**
+	 * Reload the project config from disk and update the manifest path.
+	 */
+	reloadProjectConfig(): void {
+		this._projectConfig = loadProjectConfig(this._projectDir);
+		this._manifestPath = path.join(
+			resolveTargetPath(this._projectConfig, this._projectDir),
+			'manifest.json',
+		);
+	}
+
+	get projectConfig(): DbtProjectConfig | undefined {
+		return this._projectConfig;
 	}
 
 	get manifestPath(): string {

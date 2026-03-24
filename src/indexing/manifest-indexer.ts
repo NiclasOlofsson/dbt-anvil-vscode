@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import type { DbtManifest, DbtNode, DbtSource, ResourceType } from '../dbt/manifest-types';
+import type { DbtManifest, DbtMacroArgument, DbtNode, DbtSource, ResourceType } from '../dbt/manifest-types';
 import { ManifestLoader } from '../dbt/manifest-loader';
 import type { ILogger } from '../types/logger';
 
@@ -30,9 +30,18 @@ export interface IndexedSource {
 	tags: string[];
 }
 
+export interface IndexedMacro {
+	uniqueId: string;
+	name: string;
+	packageName: string;
+	description?: string;
+	arguments: DbtMacroArgument[];
+}
+
 export interface ManifestIndex {
 	models: Map<string, IndexedModel>;
 	sources: Map<string, IndexedSource>;
+	macros: Map<string, IndexedMacro>;
 	nodesByName: Map<string, string[]>; // name → unique_ids (can have duplicates across packages)
 	parentMap: Map<string, string[]>;
 	childMap: Map<string, string[]>;
@@ -75,6 +84,7 @@ export class ManifestIndexer {
 	private _buildIndex(manifest: DbtManifest): ManifestIndex {
 		const models = new Map<string, IndexedModel>();
 		const sources = new Map<string, IndexedSource>();
+		const macros = new Map<string, IndexedMacro>();
 		const nodesByName = new Map<string, string[]>();
 
 		// Index nodes (models, seeds, snapshots, analyses)
@@ -122,6 +132,18 @@ export class ManifestIndexer {
 			nodesByName.get(sourceKey)!.push(uid);
 		}
 
+		// Index macros (skip dbt core internal macros)
+		for (const [uid, macro] of Object.entries(manifest.macros)) {
+			if (macro.package_name === 'dbt') continue;
+			macros.set(uid, {
+				uniqueId: uid,
+				name: macro.name,
+				packageName: macro.package_name,
+				description: macro.description,
+				arguments: macro.arguments ?? [],
+			});
+		}
+
 		// Build parent/child maps
 		const parentMap = new Map<string, string[]>();
 		const childMap = new Map<string, string[]>();
@@ -136,6 +158,7 @@ export class ManifestIndexer {
 		return {
 			models,
 			sources,
+			macros,
 			nodesByName,
 			parentMap,
 			childMap,
@@ -263,6 +286,22 @@ export class ManifestIndexer {
 	getRawNode(uniqueId: string): DbtNode | DbtSource | undefined {
 		const { manifest } = this.loader.load();
 		return manifest.nodes[uniqueId] ?? manifest.sources[uniqueId];
+	}
+
+	/**
+	 * Find macros whose name starts with the given prefix (case-insensitive).
+	 */
+	findMacrosByPrefix(prefix: string): IndexedMacro[] {
+		const index = this._index;
+		if (!index) return [];
+		const lowerPrefix = prefix.toLowerCase();
+		const results: IndexedMacro[] = [];
+		for (const macro of index.macros.values()) {
+			if (macro.name.toLowerCase().startsWith(lowerPrefix)) {
+				results.push(macro);
+			}
+		}
+		return results;
 	}
 }
 

@@ -97,6 +97,42 @@ describe('ManifestLoader', () => {
 		expect(resolved).toBe(path.join(TEST_DIR, 'build', 'manifest.json'));
 	});
 
+	it('should use target-path from dbt_project.yml in constructor', () => {
+		fs.writeFileSync(
+			path.join(TEST_DIR, 'dbt_project.yml'),
+			'name: test\ntarget-path: custom_target\n',
+		);
+		const loader = new ManifestLoader(TEST_DIR);
+		expect(loader.manifestPath).toBe(path.join(TEST_DIR, 'custom_target', 'manifest.json'));
+	});
+
+	it('should expose parsed project config', () => {
+		fs.writeFileSync(
+			path.join(TEST_DIR, 'dbt_project.yml'),
+			'name: my_project\nversion: "1.0"\nmodel-paths: ["models", "extra"]\n',
+		);
+		const loader = new ManifestLoader(TEST_DIR);
+		expect(loader.projectConfig).toBeDefined();
+		expect(loader.projectConfig?.name).toBe('my_project');
+		expect(loader.projectConfig?.['model-paths']).toEqual(['models', 'extra']);
+	});
+
+	it('should reload project config and update manifest path', () => {
+		fs.writeFileSync(
+			path.join(TEST_DIR, 'dbt_project.yml'),
+			'name: test\ntarget-path: target\n',
+		);
+		const loader = new ManifestLoader(TEST_DIR);
+		expect(loader.manifestPath).toBe(path.join(TEST_DIR, 'target', 'manifest.json'));
+
+		fs.writeFileSync(
+			path.join(TEST_DIR, 'dbt_project.yml'),
+			'name: test\ntarget-path: new_target\n',
+		);
+		loader.reloadProjectConfig();
+		expect(loader.manifestPath).toBe(path.join(TEST_DIR, 'new_target', 'manifest.json'));
+	});
+
 	it('should return dbt version', () => {
 		const manifest = createMinimalManifest();
 		fs.writeFileSync(

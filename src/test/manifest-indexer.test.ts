@@ -72,7 +72,39 @@ function createTestManifest() {
 		},
 		exposures: {},
 		metrics: {},
-		macros: {},
+		macros: {
+			'macro.project.my_custom_macro': {
+				unique_id: 'macro.project.my_custom_macro',
+				name: 'my_custom_macro',
+				package_name: 'project',
+				description: 'A custom macro for testing',
+				arguments: [
+					{ name: 'relation', type: 'string', description: 'The relation to operate on' },
+					{ name: 'columns', description: 'List of columns' },
+				],
+			},
+			'macro.project.generate_schema_name': {
+				unique_id: 'macro.project.generate_schema_name',
+				name: 'generate_schema_name',
+				package_name: 'project',
+				description: 'Custom schema name generator',
+				arguments: [],
+			},
+			'macro.dbt.run_query': {
+				unique_id: 'macro.dbt.run_query',
+				name: 'run_query',
+				package_name: 'dbt',
+				description: 'Built-in dbt macro',
+				arguments: [],
+			},
+			'macro.dbt_utils.star': {
+				unique_id: 'macro.dbt_utils.star',
+				name: 'star',
+				package_name: 'dbt_utils',
+				description: 'Generates a star of columns',
+				arguments: [{ name: 'from' }],
+			},
+		},
 		child_map: {
 			'model.project.my_model': ['model.project.downstream'],
 		},
@@ -169,5 +201,40 @@ describe('ManifestIndexer', () => {
 
 		const forced = indexer.build(true);
 		expect(forced).not.toBe(first);
+	});
+
+	it('should index user macros and exclude dbt built-ins', () => {
+		const loader = new ManifestLoader(TEST_DIR);
+		const indexer = new ManifestIndexer(loader, mockLogger);
+		const index = indexer.build();
+
+		// Project macros should be indexed
+		expect(index.macros.has('macro.project.my_custom_macro')).toBe(true);
+		expect(index.macros.has('macro.project.generate_schema_name')).toBe(true);
+
+		// dbt built-in macros should be excluded
+		expect(index.macros.has('macro.dbt.run_query')).toBe(false);
+
+		// dbt_utils is a user package, should be included
+		expect(index.macros.has('macro.dbt_utils.star')).toBe(true);
+	});
+
+	it('should find macros by prefix', () => {
+		const loader = new ManifestLoader(TEST_DIR);
+		const indexer = new ManifestIndexer(loader, mockLogger);
+		indexer.build();
+
+		const myMacros = indexer.findMacrosByPrefix('my_');
+		expect(myMacros).toHaveLength(1);
+		expect(myMacros[0].name).toBe('my_custom_macro');
+		expect(myMacros[0].arguments).toHaveLength(2);
+	});
+
+	it('should return empty array for unknown macro prefix', () => {
+		const loader = new ManifestLoader(TEST_DIR);
+		const indexer = new ManifestIndexer(loader, mockLogger);
+		indexer.build();
+
+		expect(indexer.findMacrosByPrefix('zzz_')).toHaveLength(0);
 	});
 });
