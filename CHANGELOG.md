@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2
+
+- Exclude `samples/` directory from VSIX package (reduced install size)
+
 ## 0.1.1
 
 - Column completions (`alias.` → columns) now use warehouse-truth via `dbt show` with YAML as fallback
