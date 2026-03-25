@@ -209,7 +209,7 @@ export class BridgeRunner {
 			}
 
 			this._stdoutLines.push(line);
-			this.logger.debug(`[bridge] ${line}`);
+			this.logger.trace(`[bridge] ${line}`);
 		}
 	}
 

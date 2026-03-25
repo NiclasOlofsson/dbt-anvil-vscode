@@ -66,6 +66,9 @@ export class ManifestIndexer {
 	/** Checksums from the previous manifest build, used to diff on rebuild. */
 	private _nodeChecksums = new Map<string, string>();
 
+	/** The load result from the last successful build, used to detect no-change reloads. */
+	private _lastLoadResult: import('../dbt/manifest-loader').ManifestLoadResult | null = null;
+
 	constructor(
 		private readonly loader: ManifestLoader,
 		private readonly logger: ILogger,
@@ -80,9 +83,17 @@ export class ManifestIndexer {
 		}
 
 		this.logger.info('Building manifest index...');
-		const { manifest } = this.loader.load(force);
-		this._index = this._buildIndex(manifest);
-		this._diffAndInvalidate(manifest);
+		const loadResult = this.loader.load(force);
+
+		// If the loader returned the exact same result (mtime unchanged), skip everything
+		if (this._index && loadResult === this._lastLoadResult) {
+			this.logger.info('Manifest unchanged on disk, skipping rebuild');
+			return this._index;
+		}
+
+		this._lastLoadResult = loadResult;
+		this._index = this._buildIndex(loadResult.manifest);
+		this._diffAndInvalidate(loadResult.manifest);
 		this.logger.info(
 			`Manifest index built: ${this._index.models.size} models, ${this._index.sources.size} sources`,
 		);
@@ -365,8 +376,9 @@ export class ManifestIndexer {
 	 * Returns the set of unique IDs that were evicted.
 	 */
 	invalidateModel(uniqueId: string): Set<string> {
+		const visited = new Set<string>();
 		const evicted = new Set<string>();
-		this._evictDownstream(uniqueId, evicted);
+		this._evictDownstream(uniqueId, visited, evicted);
 		if (evicted.size > 0) {
 			this.logger.debug(`Column store: evicted ${evicted.size} entries: [${[...evicted].join(', ')}]`);
 		}
@@ -446,13 +458,15 @@ export class ManifestIndexer {
 		return undefined;
 	}
 
-	private _evictDownstream(uniqueId: string, visited: Set<string>): void {
+	private _evictDownstream(uniqueId: string, visited: Set<string>, evicted: Set<string>): void {
 		if (visited.has(uniqueId)) return;
 		visited.add(uniqueId);
-		this._columnStore.delete(uniqueId);
+		if (this._columnStore.delete(uniqueId)) {
+			evicted.add(uniqueId);
+		}
 		const children = this._index?.childMap.get(uniqueId) ?? [];
 		for (const child of children) {
-			this._evictDownstream(child, visited);
+			this._evictDownstream(child, visited, evicted);
 		}
 	}
 }

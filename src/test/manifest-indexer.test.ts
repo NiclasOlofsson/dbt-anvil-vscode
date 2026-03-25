@@ -200,6 +200,8 @@ describe('ManifestIndexer', () => {
 		const second = indexer.build();
 		expect(first).toBe(second);
 
+		// Invalidate loader so mtime cache is cleared, forcing a real re-read
+		loader.invalidate();
 		const forced = indexer.build(true);
 		expect(forced).not.toBe(first);
 	});
@@ -259,6 +261,8 @@ describe('ManifestIndexer', () => {
 		indexer.build();
 
 		indexer.setColumns('model.project.my_model', ['id', 'name']);
+		// Invalidate loader so mtime cache is cleared, forcing a real re-read
+		loader.invalidate();
 		indexer.build(true);
 		expect(indexer.getColumns('model.project.my_model')).toBeUndefined();
 	});
