@@ -7,21 +7,64 @@
  * for this repo. They will fail loudly if the environment is not set up.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import * as path from 'node:path';
 import { BridgeRunner } from '../dbt/bridge-runner';
-import { detectPythonEnvironment } from '../dbt/env-detector';
+import { detectPythonEnvironment, type PythonEnvironment } from '../dbt/env-detector';
 import { createMockLogger } from './helpers';
 
 const JAFFLE_SHOP = path.join(__dirname, '..', '..', 'samples', 'jaffle_shop');
 const BRIDGE_PY = path.join(__dirname, '..', '..', 'resources', 'bridge', 'bridge.py');
+
+/**
+ * Derive the dbt command array from the detected Python environment.
+ * Mirrors env-detector logic: replace the trailing python/python3/python.exe
+ * element with dbt, so uv/poetry/pipenv/conda wrappers are preserved.
+ */
+function getDbtCommand(env: PythonEnvironment): string[] {
+	const cmd = [...env.command];
+	const last = cmd[cmd.length - 1];
+	if (path.isAbsolute(last)) {
+		// Absolute python path — dbt sits alongside it in the same Scripts/bin dir
+		const dir = path.dirname(last);
+		const dbt = process.platform === 'win32' ? path.join(dir, 'dbt.exe') : path.join(dir, 'dbt');
+		return [dbt];
+	}
+	// Wrapper command (uv run python, poetry run python, …) — swap the last element
+	cmd[cmd.length - 1] = 'dbt';
+	return cmd;
+}
+
+/**
+ * Run a dbt command synchronously using the project's detected Python environment.
+ * Throws if the command fails so beforeAll surfaces a clear error rather than
+ * letting tests fail with opaque assertion messages.
+ */
+function runDbt(dbtCmd: string[], args: string[]): void {
+	const [bin, ...prefix] = dbtCmd;
+	const common = ['--project-dir', JAFFLE_SHOP, '--profiles-dir', JAFFLE_SHOP];
+	const result = spawnSync(bin, [...prefix, ...args, ...common], { encoding: 'utf-8', timeout: 120_000, cwd: JAFFLE_SHOP });
+	if (result.error) {
+		throw new Error(`dbt ${args.join(' ')} spawn failed: ${result.error.message}\nbin=${bin}`);
+	}
+	if (result.status !== 0) {
+		throw new Error(`dbt ${args.join(' ')} exited ${result.status}\nstderr: ${result.stderr}\nstdout: ${result.stdout}`);
+	}
+}
 
 describe('bridge integration', () => {
 	let bridge: BridgeRunner;
 
 	beforeAll(async () => {
 		const env = detectPythonEnvironment(JAFFLE_SHOP);
+		const dbt = getDbtCommand(env);
+		// Seed source tables (raw_customers, raw_orders) then materialize only the
+		// staging models that these tests exercise. This is the minimum setup needed
+		// for describe_table to work — no full dbt build required.
+		runDbt(dbt, ['seed']);
+		runDbt(dbt, ['run', '--select', 'stg_customers', 'stg_orders']);
 		bridge = new BridgeRunner(BRIDGE_PY, JAFFLE_SHOP, env, createMockLogger());
-	});
+	}, 180_000);
 
 	afterAll(async () => {
 		await bridge.shutdown();
