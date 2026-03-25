@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import type { ILogger } from '../types/logger';
-import type { BridgeRunner } from '../dbt/bridge-runner';
-import type { ManifestLoader } from '../dbt/manifest-loader';
+import { type DbtExecutionService, Priority } from '../dbt/execution-service';
 import { toolResult, formatBridgeResult, buildStateSelector } from './tool-helpers';
 
 interface BuildModelsInput {
@@ -17,8 +16,7 @@ interface BuildModelsInput {
 
 export class BuildModelsTool implements vscode.LanguageModelTool<BuildModelsInput> {
 	constructor(
-		private readonly bridge: BridgeRunner,
-		private readonly loader: ManifestLoader,
+		private readonly service: DbtExecutionService,
 		private readonly logger: ILogger,
 	) {}
 
@@ -57,12 +55,13 @@ export class BuildModelsTool implements vscode.LanguageModelTool<BuildModelsInpu
 			}
 		}
 
-		const result = await this.bridge.invoke(args);
-		this.loader.invalidate();
-
-		if (result.success) {
-			await this.bridge.saveRunState();
-		}
+		const result = await this.service.submit({
+			type: 'build',
+			args,
+			priority: Priority.Tool,
+			origin: 'copilot',
+			label: `build ${selector ?? 'all'}`,
+		});
 
 		return toolResult(formatBridgeResult(result));
 	}

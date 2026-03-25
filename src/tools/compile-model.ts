@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { ILogger } from '../types/logger';
-import type { BridgeRunner } from '../dbt/bridge-runner';
+import { type DbtExecutionService, Priority } from '../dbt/execution-service';
 import type { ManifestLoader } from '../dbt/manifest-loader';
 import { toolResult, formatBridgeResult } from './tool-helpers';
 
@@ -10,7 +10,7 @@ interface CompileModelInput {
 
 export class CompileModelTool implements vscode.LanguageModelTool<CompileModelInput> {
 	constructor(
-		private readonly bridge: BridgeRunner,
+		private readonly service: DbtExecutionService,
 		private readonly loader: ManifestLoader,
 		private readonly logger: ILogger,
 	) {}
@@ -22,8 +22,13 @@ export class CompileModelTool implements vscode.LanguageModelTool<CompileModelIn
 		const { model } = options.input;
 		this.logger.info(`LM Tool: compileModel model="${model}"`);
 
-		const result = await this.bridge.invoke(['compile', '-s', model]);
-		this.loader.invalidate();
+		const result = await this.service.submit({
+			type: 'compile',
+			args: ['compile', '-s', model],
+			priority: Priority.Tool,
+			origin: 'copilot',
+			label: `compile ${model}`,
+		});
 
 		if (result.success) {
 			try {

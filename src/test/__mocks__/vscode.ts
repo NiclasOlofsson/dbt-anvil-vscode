@@ -240,6 +240,11 @@ export enum ExtensionMode {
 	Test = 3,
 }
 
+export enum StatusBarAlignment {
+	Left = 1,
+	Right = 2,
+}
+
 export class EventEmitter<T = void> {
 	private listeners: Array<(e: T) => void> = [];
 	fire = (arg: T): void => {
@@ -308,6 +313,16 @@ export const window = {
 	createWebviewPanel: vi.fn(),
 	registerWebviewViewProvider: vi.fn(),
 	withProgress: vi.fn(),
+	createStatusBarItem: vi.fn(() => ({
+		text: '',
+		tooltip: '',
+		command: undefined as string | undefined,
+		alignment: StatusBarAlignment.Left,
+		priority: 0,
+		show: vi.fn(),
+		hide: vi.fn(),
+		dispose: vi.fn(),
+	})),
 };
 
 export const commands = {

@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import type { ILogger } from '../types/logger';
+import type { DbtExecutionService } from '../dbt/execution-service';
+import { Priority } from '../dbt/execution-service';
 import { ManifestLoader } from '../dbt/manifest-loader';
 import { ManifestIndexer } from './manifest-indexer';
 
@@ -14,6 +16,7 @@ export class ManifestWatcher {
 	private _sqlSaveDisposable: vscode.Disposable | null = null;
 	private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
 	private _suppressed = false;
+	private _executionService: DbtExecutionService | null = null;
 	private readonly _onIndexRebuild = new vscode.EventEmitter<ManifestIndexer>();
 
 	readonly onIndexRebuild = this._onIndexRebuild.event;
@@ -40,7 +43,8 @@ export class ManifestWatcher {
 
 		// Invalidate column store entries when a SQL model file is saved
 		this._sqlSaveDisposable = vscode.workspace.onDidSaveTextDocument((doc) => {
-			if (doc.languageId !== 'jinja-sql' && !doc.fileName.endsWith('.sql')) return;
+			if (doc.languageId !== 'jinja-sql' && !doc.fileName.endsWith('.sql')
+				&& !doc.fileName.endsWith('.yml') && !doc.fileName.endsWith('.yaml')) return;
 			const uniqueId = this.indexer.findModelByFilePath(doc.fileName);
 			if (uniqueId) {
 				const evicted = this.indexer.invalidateModel(uniqueId);
@@ -48,6 +52,7 @@ export class ManifestWatcher {
 					this.logger.info(`Model saved: ${uniqueId} — evicted ${evicted.size} column store entries`);
 				}
 			}
+			this._triggerBackgroundParse();
 		});
 
 		this.logger.info('ManifestWatcher started');
@@ -96,6 +101,23 @@ export class ManifestWatcher {
 	 */
 	resume(): void {
 		this._suppressed = false;
+	}
+
+	setExecutionService(service: DbtExecutionService): void {
+		this._executionService = service;
+	}
+
+	private _triggerBackgroundParse(): void {
+		if (!this._executionService) return;
+		this._executionService.submit({
+			type: 'parse',
+			args: ['parse'],
+			priority: Priority.Background,
+			origin: 'background',
+			label: 'parse (on save)',
+		}).catch(() => {
+			// Superseded or cancelled — that's fine
+		});
 	}
 
 	dispose(): void {

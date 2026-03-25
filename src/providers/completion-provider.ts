@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
-import type { BridgeRunner } from '../dbt/bridge-runner';
+import type { DbtExecutionService } from '../dbt/execution-service';
+import { Priority } from '../dbt/execution-service';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import type { ManifestWatcher } from '../indexing/manifest-watcher';
 import type { ILogger } from '../types/logger';
 import { stripJinja } from './jinja-utils';
 
@@ -26,8 +26,7 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
-		private readonly bridge?: BridgeRunner,
-		private readonly watcher?: ManifestWatcher,
+		private readonly service?: DbtExecutionService,
 	) {}
 
 	async provideCompletionItems(
@@ -70,14 +69,14 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 
 		// alias. — column completions (requires bridge)
 		const aliasMatch = /(\w+)\.\s*$/.exec(linePrefix);
-		if (aliasMatch && this.bridge) {
+		if (aliasMatch && this.service) {
 			this.logger.debug(`Completion: column for alias '${aliasMatch[1]}'`);
 			return this._completeColumns(document, aliasMatch[1], token);
 		}
 
 		// Bare word in SQL context — offer all in-scope columns merged from all aliases
 		// Match after whitespace/open-paren with zero or more word chars (covers empty trigger)
-		if (this.bridge && /(?:^|[\s,(])\w*$/.test(linePrefix)) {
+		if (this.service && /(?:^|[\s,(])\w*$/.test(linePrefix)) {
 			// Skip if inside an unclosed Jinja expression
 			const insideJinja = /\{\{[^}]*$/.test(linePrefix) || /\{%[^%]*$/.test(linePrefix);
 			// Skip if after a keyword where a table/relation name is expected
@@ -163,9 +162,7 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 			return cached.aliases;
 		}
 
-		if (!this.bridge) return {};
-
-		// Deduplicate concurrent calls for the same document version.
+		if (!this.service) return {};
 		// VS Code can call provideCompletionItems multiple times for a single trigger.
 		const inflightKey = `${key}@${document.version}`;
 		const inflight = this._scopeInFlight.get(inflightKey);
@@ -184,7 +181,7 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 	}
 
 	private async _resolveScopeAliases(document: vscode.TextDocument, key: string, token: vscode.CancellationToken): Promise<Record<string, string[]>> {
-		if (!this.bridge) return {};
+		if (!this.service) return {};
 
 		const { sql, refs } = stripJinja(document.getText(), this.indexer);
 		if (!sql) return {};
@@ -192,83 +189,80 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 		const schemaMapping = this.indexer.buildSchemaMapping();
 		const adapterType = this.indexer.index?.adapterType ?? 'ansi';
 
-		// Build a map of upstream compiled SQL for refs that have no YAML columns
-		// in schema_mapping. The bridge uses this to derive column lists via
-		// sqlglot without needing a live DB connection.
-		// Prefer compiled_code (dbt compile), fall back to raw_code stripped of Jinja.
-		// For each upstream ref, call describe_table via the bridge (dbt show against
-		// the actual DB) — warehouse is the source of truth. Column store cache
-		// short-circuits repeat calls. YAML columns in schemaMapping act as the
-		// implicit fallback: if describe returns nothing (model not yet materialized),
-		// sqlglot falls back to whatever YAML documented.
-		// Suppress the manifest watcher during bridge calls — dbt show rewrites
-		// manifest.json as a side effect but doesn't change model definitions.
-		this.watcher?.suppress();
-		try {
-			for (const [tableName, uniqueId] of refs) {
-				// Determine if it's a source or model
-				const node = this.indexer.getRawNode(uniqueId);
-				const isSource = uniqueId.startsWith('source.');
-				const modelName = node && 'name' in node ? node.name : tableName;
-				const sourceName = node && 'source_name' in node ? node.source_name : undefined;
+		// For each upstream ref, call describe_table via the execution service
+		// (dbt show against the actual DB) — warehouse is the source of truth.
+		// Column store cache short-circuits repeat calls. YAML columns in
+		// schemaMapping act as the implicit fallback.
+		for (const [tableName, uniqueId] of refs) {
+			const node = this.indexer.getRawNode(uniqueId);
+			const isSource = uniqueId.startsWith('source.');
+			const modelName = node && 'name' in node ? node.name : tableName;
+			const sourceName = node && 'source_name' in node ? node.source_name : undefined;
 
-				const cached = this.indexer.getColumns(uniqueId);
-				if (cached) {
-					this.logger.debug(`describe_table: ${tableName} (cached) → [${cached.join(', ')}]`);
-					const db = (schemaMapping['__described__'] ??= {});
-					const schema = (db['__described__'] ??= {});
-					schema[tableName.toLowerCase()] = Object.fromEntries(cached.map(c => [c, {}]));
-					continue;
-				}
-
-				if (token.isCancellationRequested) {
-					this.logger.debug('Column scope: cancelled before describe');
-					return {};
-				}
-				this.logger.debug(`describe_table: ${tableName} (${uniqueId})`);
-				try {
-					const descResult = await this.bridge.invokeRaw(
-						isSource
-							? { describe_table: true, name: modelName, source_name: sourceName }
-							: { describe_table: true, name: modelName },
-					);
-					const descData = descResult.data as Record<string, unknown> | undefined;
-					const cols = descData?.columns as string[] | undefined;
-					if (cols && cols.length > 0) {
-						this.logger.debug(`describe_table: ${tableName} → [${cols.join(', ')}]`);
-						this.indexer.setColumns(uniqueId, cols);
-						const db = (schemaMapping['__described__'] ??= {});
-						const schema = (db['__described__'] ??= {});
-						schema[tableName.toLowerCase()] = Object.fromEntries(cols.map(c => [c, {}]));
-						continue;  // columns resolved — YAML in schemaMapping is now the fallback for this ref only if describe had returned nothing
-					}
-					this.logger.debug(`describe_table: ${tableName} → no columns returned, falling back to YAML`);
-				} catch (err) {
-					this.logger.debug(`describe_table: ${tableName} failed — ${err}`);
-				}
+			const cached = this.indexer.getColumns(uniqueId);
+			if (cached) {
+				this.logger.debug(`describe_table: ${tableName} (cached) → [${cached.join(', ')}]`);
+				const db = (schemaMapping['__described__'] ??= {});
+				const schema = (db['__described__'] ??= {});
+				schema[tableName.toLowerCase()] = Object.fromEntries(cached.map(c => [c, {}]));
+				continue;
 			}
 
 			if (token.isCancellationRequested) {
-				this.logger.debug('Column scope: cancelled before get_scope_columns');
+				this.logger.debug('Column scope: cancelled before describe');
 				return {};
 			}
-			const payload: Record<string, unknown> = {
-				get_scope_columns: true,
-				sql,
-				dialect: adapterType,
-				schema_mapping: schemaMapping,
-			};
-
-			const result = await this.bridge.invokeRaw(payload);
-
-			const data = result.data as Record<string, unknown> | undefined;
-			const aliases: Record<string, string[]> = (data?.aliases as Record<string, string[]>) ?? {};
-
-			this._scopeCache.set(key, { version: document.version, aliases });
-			return aliases;
-		} finally {
-			this.watcher?.resume();
+			this.logger.debug(`describe_table: ${tableName} (${uniqueId})`);
+			try {
+				const descResult = await this.service.submit({
+					type: 'describe',
+					raw: isSource
+						? { describe_table: true, name: modelName, source_name: sourceName }
+						: { describe_table: true, name: modelName },
+					priority: Priority.Provider,
+					origin: 'provider',
+					label: `describe ${tableName}`,
+				});
+				const descData = descResult.data as Record<string, unknown> | undefined;
+				const cols = descData?.columns as string[] | undefined;
+				if (cols && cols.length > 0) {
+					this.logger.debug(`describe_table: ${tableName} → [${cols.join(', ')}]`);
+					this.indexer.setColumns(uniqueId, cols);
+					const db = (schemaMapping['__described__'] ??= {});
+					const schema = (db['__described__'] ??= {});
+					schema[tableName.toLowerCase()] = Object.fromEntries(cols.map(c => [c, {}]));
+					continue;
+				}
+				this.logger.debug(`describe_table: ${tableName} → no columns returned, falling back to YAML`);
+			} catch (err) {
+				this.logger.debug(`describe_table: ${tableName} failed — ${err}`);
+			}
 		}
+
+		if (token.isCancellationRequested) {
+			this.logger.debug('Column scope: cancelled before get_scope_columns');
+			return {};
+		}
+		const payload: Record<string, unknown> = {
+			get_scope_columns: true,
+			sql,
+			dialect: adapterType,
+			schema_mapping: schemaMapping,
+		};
+
+		const result = await this.service.submit({
+			type: 'scope_columns',
+			raw: payload,
+			priority: Priority.Provider,
+			origin: 'provider',
+			label: 'get scope columns',
+		});
+
+		const data = result.data as Record<string, unknown> | undefined;
+		const aliases: Record<string, string[]> = (data?.aliases as Record<string, string[]>) ?? {};
+
+		this._scopeCache.set(key, { version: document.version, aliases });
+		return aliases;
 	}
 
 	// -----------------------------------------------------------------------

@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import type { ILogger } from '../types/logger';
-import type { BridgeRunner } from '../dbt/bridge-runner';
-import type { ManifestLoader } from '../dbt/manifest-loader';
+import { type DbtExecutionService, Priority } from '../dbt/execution-service';
 import { toolResult, formatBridgeResult, buildStateSelector } from './tool-helpers';
 
 interface TestModelsInput {
@@ -15,8 +14,7 @@ interface TestModelsInput {
 
 export class TestModelsTool implements vscode.LanguageModelTool<TestModelsInput> {
 	constructor(
-		private readonly bridge: BridgeRunner,
-		private readonly loader: ManifestLoader,
+		private readonly service: DbtExecutionService,
 		private readonly logger: ILogger,
 	) {}
 
@@ -33,7 +31,13 @@ export class TestModelsTool implements vscode.LanguageModelTool<TestModelsInput>
 		// Generate CTE tests before running dbt test if requested
 		if (keep_cte_tests) {
 			try {
-				const genResult = await this.bridge.invokeRaw({ generate_cte_tests: true });
+				const genResult = await this.service.submit({
+					type: 'generate_cte_tests',
+					raw: { generate_cte_tests: true },
+					priority: Priority.Tool,
+					origin: 'copilot',
+					label: 'generate CTE tests',
+				});
 				if (genResult.success) {
 					this.logger.info('CTE tests generated before test run');
 				}
@@ -56,7 +60,13 @@ export class TestModelsTool implements vscode.LanguageModelTool<TestModelsInput>
 		if (exclude) args.push('--exclude', exclude);
 		if (fail_fast) args.push('--fail-fast');
 
-		const result = await this.bridge.invoke(args);
+		const result = await this.service.submit({
+			type: 'test',
+			args,
+			priority: Priority.Tool,
+			origin: 'copilot',
+			label: `test ${selector ?? 'all'}`,
+		});
 		return toolResult(formatBridgeResult(result));
 	}
 

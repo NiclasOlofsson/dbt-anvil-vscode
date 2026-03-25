@@ -6,6 +6,7 @@ import { ManifestIndexer } from './indexing/manifest-indexer';
 import { ManifestWatcher } from './indexing/manifest-watcher';
 import { detectPythonEnvironment } from './dbt/env-detector';
 import { BridgeRunner } from './dbt/bridge-runner';
+import { DbtExecutionService, Priority } from './dbt/execution-service';
 import { registerLanguageModelTools } from './tools';
 import { ModelExplorerProvider } from './views/model-explorer-provider';
 import { TestResultsProvider } from './views/test-results-provider';
@@ -14,6 +15,8 @@ import { DbtHoverProvider } from './providers/hover-provider';
 import { DbtCompletionProvider } from './providers/completion-provider';
 import { YamlCompletionProvider } from './providers/yaml-completion-provider';
 import { YamlHoverProvider } from './providers/yaml-hover-provider';
+import { StatusBarManager } from './views/status-bar';
+import { DbtDiagnosticsProvider } from './providers/diagnostics-provider';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
 	// -------- Bootstrap logging & service container --------
@@ -75,11 +78,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	container.setBridgeRunner(bridgeRunner);
 	context.subscriptions.push({ dispose: () => void bridgeRunner.shutdown() });
 
+	// -------- Execution service (priority queue around bridge) --------
+	const executionService = new DbtExecutionService(bridgeRunner, manifestLoader, manifestWatcher, logger);
+	container.setExecutionService(executionService);
+	context.subscriptions.push({ dispose: () => executionService.dispose() });
+
+	// Connect manifest watcher to execution service for background parse-on-save
+	manifestWatcher.setExecutionService(executionService);
+
+	// -------- Status bar --------
+	const statusBar = new StatusBarManager(executionService, logger);
+	context.subscriptions.push(statusBar);
+
+	// -------- Diagnostics provider --------
+	const diagnosticsProvider = new DbtDiagnosticsProvider(executionService, statusBar, projectDir, logger);
+	context.subscriptions.push(diagnosticsProvider);
+
 	// -------- Set workspaceHasDBT context --------
 	void vscode.commands.executeCommand('setContext', 'workspaceHasDBT', manifestLoader.manifestExists());
 
 	// -------- Register Copilot language model tools --------
-	registerLanguageModelTools(context, manifestIndexer, bridgeRunner, manifestLoader, logger);
+	registerLanguageModelTools(context, manifestIndexer, executionService, manifestLoader, logger);
 
 	// -------- Register tree views --------
 	const modelExplorerProvider = new ModelExplorerProvider(manifestIndexer, logger);
@@ -94,7 +113,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const yamlSelector: vscode.DocumentSelector = { language: 'yaml', pattern: '**/{schema,sources,models}.yml' };
 	const definitionProvider = new DbtDefinitionProvider(manifestIndexer, manifestLoader, logger);
 	const hoverProvider = new DbtHoverProvider(manifestIndexer, logger);
-	const completionProvider = new DbtCompletionProvider(manifestIndexer, logger, bridgeRunner, manifestWatcher);
+	const completionProvider = new DbtCompletionProvider(manifestIndexer, logger, executionService);
 	const yamlCompletionProvider = new YamlCompletionProvider(manifestIndexer, logger);
 	const yamlHoverProvider = new YamlHoverProvider(manifestIndexer, logger);
 
@@ -104,6 +123,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.languages.registerCompletionItemProvider(sqlSelector, completionProvider, '\'', '"', '.'),
 		vscode.languages.registerCompletionItemProvider(yamlSelector, yamlCompletionProvider),
 		vscode.languages.registerHoverProvider(yamlSelector, yamlHoverProvider),
+		// Formatting and diagnostics for jinja-sql are delegated to the SQLFluff extension.
+		// See src/providers/formatting-provider.ts and src/providers/diagnostics-provider.ts
+		// for details and instructions on implementing them here if ever needed.
 	);
 
 	// -------- Register commands --------
@@ -127,20 +149,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.commands.registerCommand('dbt-studio.runModel', async () => {
 			const model = getActiveModelName();
 			if (!model) return;
-			const result = await bridgeRunner.invoke(['run', '-s', model]);
+			const result = await executionService.submit({
+				type: 'run', args: ['run', '-s', model],
+				priority: Priority.User, origin: 'user', label: `run ${model}`,
+			});
 			if (result.success) {
 				void vscode.window.showInformationMessage(`dbt run ${model}: success`);
 			} else {
 				void vscode.window.showErrorMessage(`dbt run ${model}: failed — ${result.stderr}`);
 			}
-			manifestLoader.invalidate();
 			modelExplorerProvider.refresh();
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.testModel', async () => {
 			const model = getActiveModelName();
 			if (!model) return;
-			const result = await bridgeRunner.invoke(['test', '-s', model]);
+			const result = await executionService.submit({
+				type: 'test', args: ['test', '-s', model],
+				priority: Priority.User, origin: 'user', label: `test ${model}`,
+			});
 			if (result.success) {
 				void vscode.window.showInformationMessage(`dbt test ${model}: success`);
 			} else {
@@ -151,22 +178,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.commands.registerCommand('dbt-studio.buildModel', async () => {
 			const model = getActiveModelName();
 			if (!model) return;
-			const result = await bridgeRunner.invoke(['build', '-s', model]);
+			const result = await executionService.submit({
+				type: 'build', args: ['build', '-s', model],
+				priority: Priority.User, origin: 'user', label: `build ${model}`,
+			});
 			if (result.success) {
 				void vscode.window.showInformationMessage(`dbt build ${model}: success`);
 			} else {
 				void vscode.window.showErrorMessage(`dbt build ${model}: failed — ${result.stderr}`);
 			}
-			manifestLoader.invalidate();
 			modelExplorerProvider.refresh();
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.compileModel', async () => {
 			const model = getActiveModelName();
 			if (!model) return;
-			const result = await bridgeRunner.invoke(['compile', '-s', model]);
+			const result = await executionService.submit({
+				type: 'compile', args: ['compile', '-s', model],
+				priority: Priority.User, origin: 'user', label: `compile ${model}`,
+			});
 			if (result.success) {
-				manifestLoader.invalidate();
 				try {
 					const { manifest } = manifestLoader.load(true);
 					for (const node of Object.values(manifest.nodes)) {
@@ -213,19 +244,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.runDeps', async () => {
-			const result = await bridgeRunner.invoke(['deps']);
+			const result = await executionService.submit({
+				type: 'deps', args: ['deps'],
+				priority: Priority.User, origin: 'user', label: 'install deps',
+			});
 			if (result.success) {
 				void vscode.window.showInformationMessage('dbt deps: success');
 			} else {
 				void vscode.window.showErrorMessage(`dbt deps: failed — ${result.stderr}`);
 			}
-			manifestLoader.invalidate();
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.parseProject', async () => {
-			const result = await bridgeRunner.invoke(['parse']);
+			const result = await executionService.submit({
+				type: 'parse', args: ['parse'],
+				priority: Priority.User, origin: 'user', label: 'parse project',
+			});
 			if (result.success) {
-				manifestLoader.invalidate();
 				try {
 					manifestIndexer.build(true);
 					modelExplorerProvider.refresh();

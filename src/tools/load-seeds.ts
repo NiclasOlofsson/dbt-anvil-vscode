@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import type { ILogger } from '../types/logger';
-import type { BridgeRunner } from '../dbt/bridge-runner';
-import type { ManifestLoader } from '../dbt/manifest-loader';
+import { type DbtExecutionService, Priority } from '../dbt/execution-service';
 import { toolResult, formatBridgeResult, buildStateSelector } from './tool-helpers';
 
 interface LoadSeedsInput {
@@ -15,8 +14,7 @@ interface LoadSeedsInput {
 
 export class LoadSeedsTool implements vscode.LanguageModelTool<LoadSeedsInput> {
 	constructor(
-		private readonly bridge: BridgeRunner,
-		private readonly loader: ManifestLoader,
+		private readonly service: DbtExecutionService,
 		private readonly logger: ILogger,
 	) {}
 
@@ -44,8 +42,13 @@ export class LoadSeedsTool implements vscode.LanguageModelTool<LoadSeedsInput> {
 		if (full_refresh) args.push('--full-refresh');
 		if (show) args.push('--show');
 
-		const result = await this.bridge.invoke(args);
-		this.loader.invalidate();
+		const result = await this.service.submit({
+			type: 'seed',
+			args,
+			priority: Priority.Tool,
+			origin: 'copilot',
+			label: `seed ${selector ?? 'all'}`,
+		});
 		return toolResult(formatBridgeResult(result));
 	}
 

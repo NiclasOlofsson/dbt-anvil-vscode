@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { ILogger } from '../types/logger';
-import type { BridgeRunner } from '../dbt/bridge-runner';
+import { type DbtExecutionService, Priority } from '../dbt/execution-service';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import { toolResult, formatBridgeResult } from './tool-helpers';
 import { extractCteSql } from './cte-extractor';
@@ -13,7 +13,7 @@ interface QueryDatabaseInput {
 
 export class QueryDatabaseTool implements vscode.LanguageModelTool<QueryDatabaseInput> {
 	constructor(
-		private readonly bridge: BridgeRunner,
+		private readonly service: DbtExecutionService,
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
 	) {}
@@ -44,9 +44,14 @@ export class QueryDatabaseTool implements vscode.LanguageModelTool<QueryDatabase
 			sql = extracted;
 		}
 
-		// Pass --limit -1 to disable dbt show's default row cap; include LIMIT in the SQL to control output
 		const args = ['show', '--inline', sql, '--limit', '-1'];
-		const result = await this.bridge.invoke(args);
+		const result = await this.service.submit({
+			type: 'show',
+			args,
+			priority: Priority.Tool,
+			origin: 'copilot',
+			label: 'query database',
+		});
 		return toolResult(formatBridgeResult(result));
 	}
 
