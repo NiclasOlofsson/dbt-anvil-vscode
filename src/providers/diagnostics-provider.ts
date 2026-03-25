@@ -1,12 +1,17 @@
 // SQL linting diagnostics (style/syntax) are delegated to SQLFluff.
-// This provider surfaces dbt-specific semantic errors: unknown refs, parse
-// failures, and compilation errors detected by `dbt parse`.
+// This provider surfaces dbt-specific semantic errors:
+// 1. Real-time: unknown ref() / source() calls validated against the manifest index
+// 2. Post-parse: compilation errors detected by `dbt parse`
 
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { DbtExecutionService } from '../dbt/execution-service';
+import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { StatusBarManager } from '../views/status-bar';
 import type { ILogger } from '../types/logger';
+import type { ColumnResolver } from './column-resolver';
+import { computeCommentRanges, isOffsetInComment } from './comment-utils';
+import type { CommentRange } from './comment-utils';
 
 interface DbtErrorLocation {
 	filePath: string;
@@ -15,40 +20,250 @@ interface DbtErrorLocation {
 }
 
 export class DbtDiagnosticsProvider implements vscode.Disposable {
-	private readonly _collection: vscode.DiagnosticCollection;
+	private readonly _parseCollection: vscode.DiagnosticCollection;
+	private readonly _refCollection: vscode.DiagnosticCollection;
+	private readonly _columnCollection: vscode.DiagnosticCollection;
 	private readonly _disposables: vscode.Disposable[] = [];
+	private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
+	private _columnDebounceTimer: ReturnType<typeof setTimeout> | undefined;
+	private _columnCts: vscode.CancellationTokenSource | undefined;
 
 	constructor(
 		service: DbtExecutionService,
+		private readonly indexer: ManifestIndexer,
 		private readonly statusBar: StatusBarManager,
 		private readonly projectDir: string,
 		private readonly logger: ILogger,
+		private readonly columnResolver?: ColumnResolver,
 	) {
-		this._collection = vscode.languages.createDiagnosticCollection('dbt-studio');
+		this._parseCollection = vscode.languages.createDiagnosticCollection('dbt-studio');
+		this._refCollection = vscode.languages.createDiagnosticCollection('dbt-studio-refs');
+		this._columnCollection = vscode.languages.createDiagnosticCollection('dbt-studio-columns');
 
+		// Parse-based diagnostics
 		this._disposables.push(
 			service.onJobCompleted(({ job, result }) => {
 				if (job.type === 'parse') {
-					if (result.success) {
-						this._collection.clear();
-						this.statusBar.setErrorCount(0);
-						this.logger.debug('Parse succeeded — diagnostics cleared');
-					} else {
-						this._handleParseFailure(result.stderr);
-					}
+					// Always scan stderr — dbt parse can return success=true
+					// even when there are compilation/syntax errors in models.
+					// Also scan stdout — dbt often writes error details there too.
+					const combined = [result.stderr, result.stdout].filter(Boolean).join('\n');
+					this._handleParseOutput(combined, result.success);
 				}
 			}),
 			service.onJobFailed(({ job, error }) => {
 				if (job.type === 'parse') {
-					this._handleParseFailure(error.message);
+					this._handleParseOutput(error.message, false);
 				}
 			}),
 		);
+
+		// Real-time ref/source validation
+		this._disposables.push(
+			vscode.workspace.onDidOpenTextDocument((doc) => {
+				this._validateDocument(doc);
+			}),
+			vscode.workspace.onDidChangeTextDocument((e) => {
+				this._validateDocumentDebounced(e.document);
+			}),
+			vscode.workspace.onDidCloseTextDocument((doc) => {
+				this._refCollection.delete(doc.uri);
+				this._columnCollection.delete(doc.uri);
+			}),
+		);
+
+		// Validate all currently open editors
+		for (const editor of vscode.window.visibleTextEditors) {
+			this._validateDocument(editor.document);
+		}
 	}
 
-	private _handleParseFailure(output: string): void {
-		this._collection.clear();
+	// ---- Real-time ref/source validation ----
+
+	private _validateDocumentDebounced(document: vscode.TextDocument): void {
+		if (this._debounceTimer) clearTimeout(this._debounceTimer);
+		this._debounceTimer = setTimeout(() => this._validateDocument(document), 250);
+	}
+
+	private _validateDocument(document: vscode.TextDocument): void {
+		if (document.languageId !== 'jinja-sql') return;
+		if (!this.indexer.index) return;
+
+		const text = document.getText();
+		const commentRanges = computeCommentRanges(text);
+		const diagnostics: vscode.Diagnostic[] = [];
+
+		this._validateRefs(document, text, commentRanges, diagnostics);
+		this._validateSources(document, text, commentRanges, diagnostics);
+
+		this._refCollection.set(document.uri, diagnostics);
+		this._updateStatusBar();
+
+		// Async column validation (longer debounce, separate collection)
+		if (this.columnResolver) {
+			this._validateColumnsDebounced(document);
+		}
+	}
+
+	private _validateRefs(
+		document: vscode.TextDocument,
+		text: string,
+		commentRanges: CommentRange[],
+		diagnostics: vscode.Diagnostic[],
+	): void {
+		const refRe = /ref\(\s*['"]([^'"]+)['"]\s*\)/g;
+		let match;
+		while ((match = refRe.exec(text)) !== null) {
+			if (isOffsetInComment(match.index, commentRanges)) continue;
+			const modelName = match[1];
+			const models = this.indexer.findModelsByName(modelName);
+			if (models.length === 0) {
+				const nameStart = match.index + match[0].indexOf(modelName);
+				const range = new vscode.Range(
+					document.positionAt(nameStart),
+					document.positionAt(nameStart + modelName.length),
+				);
+				const diag = new vscode.Diagnostic(
+					range,
+					`Model '${modelName}' not found in dbt manifest`,
+					vscode.DiagnosticSeverity.Error,
+				);
+				diag.source = 'dbt';
+				diag.code = 'unknown-ref';
+				diagnostics.push(diag);
+			}
+		}
+	}
+
+	private _validateSources(
+		document: vscode.TextDocument,
+		text: string,
+		commentRanges: CommentRange[],
+		diagnostics: vscode.Diagnostic[],
+	): void {
+		const index = this.indexer.index;
+		if (!index) return;
+
+		const sourceRe = /source\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*\)/g;
+		let match;
+		while ((match = sourceRe.exec(text)) !== null) {
+			if (isOffsetInComment(match.index, commentRanges)) continue;
+			const sourceName = match[1];
+			const tableName = match[2];
+
+			// Check all source entries for a match on sourceName + tableName
+			let found = false;
+			for (const src of index.sources.values()) {
+				if (src.sourceName === sourceName && src.name === tableName) {
+					found = true;
+					break;
+				}
+			}
+
+			if (!found) {
+				const matchStart = match.index + match[0].indexOf(sourceName);
+				const matchEnd = match.index + match[0].lastIndexOf(tableName) + tableName.length;
+				const range = new vscode.Range(
+					document.positionAt(matchStart),
+					document.positionAt(matchEnd),
+				);
+				const diag = new vscode.Diagnostic(
+					range,
+					`Source '${sourceName}.${tableName}' not found in dbt manifest`,
+					vscode.DiagnosticSeverity.Warning,
+				);
+				diag.source = 'dbt';
+				diag.code = 'unknown-source';
+				diagnostics.push(diag);
+			}
+		}
+	}
+
+	// ---- Column validation (async) ----
+
+	private _validateColumnsDebounced(document: vscode.TextDocument): void {
+		if (this._columnDebounceTimer) clearTimeout(this._columnDebounceTimer);
+		this._columnCts?.cancel();
+		this._columnDebounceTimer = setTimeout(() => {
+			this._validateColumnsAsync(document).catch(err => {
+				this.logger.debug(`Column validation error: ${err}`);
+			});
+		}, 500);
+	}
+
+	private async _validateColumnsAsync(document: vscode.TextDocument): Promise<void> {
+		if (!this.columnResolver) return;
+
+		this._columnCts?.cancel();
+		this._columnCts = new vscode.CancellationTokenSource();
+		const token = this._columnCts.token;
+
+		const aliases = await this.columnResolver.getScopeAliases(document, token);
+		if (token.isCancellationRequested) return;
+		if (Object.keys(aliases).length === 0) {
+			this._columnCollection.delete(document.uri);
+			this._updateStatusBar();
+			return;
+		}
+
+		const text = document.getText();
+		const commentRanges = computeCommentRanges(text);
+		const diagnostics: vscode.Diagnostic[] = [];
+
+		// Find alias.column patterns and validate the column exists
+		const pattern = /\b(\w+)\.(\w+)\b/g;
+		let match;
+		while ((match = pattern.exec(text)) !== null) {
+			if (isOffsetInComment(match.index, commentRanges)) continue;
+			const alias = match[1];
+			const column = match[2];
+
+			// Skip non-alias patterns (e.g. schema.table, module.function)
+			if (COLUMN_DIAG_SKIP_ALIASES.has(alias.toUpperCase())) continue;
+
+			const cols = aliases[alias] ?? aliases[alias.toLowerCase()];
+			if (!cols) continue; // Unknown alias — not a column reference or unresolvable
+
+			if (!cols.some(c => c.toLowerCase() === column.toLowerCase())) {
+				const colStart = match.index + alias.length + 1;
+				const range = new vscode.Range(
+					document.positionAt(colStart),
+					document.positionAt(colStart + column.length),
+				);
+
+				// Skip Jinja blocks
+				const lineText = document.lineAt(document.positionAt(colStart).line).text;
+				const beforePos = lineText.substring(0, document.positionAt(colStart).character);
+				if (/\{\{[^}]*$/.test(beforePos) || /\{%[^%]*$/.test(beforePos)) continue;
+
+				const diag = new vscode.Diagnostic(
+					range,
+					`Column '${column}' not found in '${alias}' (known columns: ${cols.slice(0, 5).join(', ')}${cols.length > 5 ? ', ...' : ''})`,
+					vscode.DiagnosticSeverity.Warning,
+				);
+				diag.source = 'dbt';
+				diag.code = 'unknown-column';
+				diagnostics.push(diag);
+			}
+		}
+
+		this._columnCollection.set(document.uri, diagnostics);
+		this._updateStatusBar();
+	}
+
+	// ---- Parse-based diagnostics ----
+
+	private _handleParseOutput(output: string, success: boolean): void {
+		this._parseCollection.clear();
 		const errors = this._parseErrors(output);
+
+		if (errors.length === 0) {
+			this._updateStatusBar();
+			this.logger.debug(success
+				? 'Parse succeeded — no parse diagnostics'
+				: 'Parse failed but no extractable diagnostics');
+			return;
+		}
 
 		const byFile = new Map<string, vscode.Diagnostic[]>();
 		for (const err of errors) {
@@ -68,10 +283,10 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		}
 
 		for (const [uriStr, diags] of byFile) {
-			this._collection.set(vscode.Uri.parse(uriStr), diags);
+			this._parseCollection.set(vscode.Uri.parse(uriStr), diags);
 		}
 
-		this.statusBar.setErrorCount(errors.length);
+		this._updateStatusBar();
 		this.logger.info(`Parse failed — ${errors.length} diagnostic(s) created`);
 	}
 
@@ -100,13 +315,34 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		return errors;
 	}
 
+	private _updateStatusBar(): void {
+		let count = 0;
+		this._parseCollection.forEach((_, diags) => { count += diags.length; });
+		this._refCollection.forEach((_, diags) => { count += diags.length; });
+		this._columnCollection.forEach((_, diags) => { count += diags.length; });
+		this.statusBar.setErrorCount(count);
+	}
+
 	clearAll(): void {
-		this._collection.clear();
+		this._parseCollection.clear();
+		this._refCollection.clear();
+		this._columnCollection.clear();
 		this.statusBar.setErrorCount(0);
 	}
 
 	dispose(): void {
+		if (this._debounceTimer) clearTimeout(this._debounceTimer);
+		if (this._columnDebounceTimer) clearTimeout(this._columnDebounceTimer);
+		this._columnCts?.cancel();
 		for (const d of this._disposables) d.dispose();
-		this._collection.dispose();
+		this._parseCollection.dispose();
+		this._refCollection.dispose();
+		this._columnCollection.dispose();
 	}
 }
+
+const COLUMN_DIAG_SKIP_ALIASES = new Set([
+	'DBT', 'REF', 'SOURCE', 'CONFIG', 'VAR', 'ENV_VAR',
+	'THIS', 'MODEL', 'SCHEMA', 'DATABASE', 'TARGET',
+	'IS', 'AS', 'ON', 'IN', 'BY', 'OR', 'AND', 'NOT',
+]);

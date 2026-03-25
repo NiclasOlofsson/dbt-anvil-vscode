@@ -387,8 +387,8 @@
 			{
 				"name": "get_column_lineage",
 				"displayName": "Get Column Lineage",
-				"userDescription": "Get column-level lineage showing which sources feed which output columns",
-				"modelDescription": "Get column-level lineage showing which source columns contribute to which output columns.",
+				"userDescription": "Trace column-level lineage through SQL transformations showing upstream/downstream dependencies",
+				"modelDescription": "Trace column-level lineage through SQL transformations. Uses sqlglot to parse compiled SQL and track how columns flow through CTEs, JOINs, aggregations, and transformations. Requires a specific column name.",
 				"canBeReferencedInPrompt": false,
 				"toolReferenceName": "get_column_lineage",
 				"icon": "$(references)",
@@ -400,15 +400,25 @@
 					"properties": {
 						"model": {
 							"type": "string",
-							"description": "Model name"
+							"description": "Model name to analyze"
 						},
 						"column": {
 							"type": "string",
-							"description": "Column name (optional, returns all columns if omitted)"
+							"description": "Column name to trace lineage for"
+						},
+						"direction": {
+							"type": "string",
+							"enum": ["upstream", "downstream", "both"],
+							"description": "Direction to trace lineage (default: upstream)"
+						},
+						"depth": {
+							"type": "number",
+							"description": "Maximum recursion depth (default: 10)"
 						}
 					},
 					"required": [
-						"model"
+						"model",
+						"column"
 					]
 				}
 			},

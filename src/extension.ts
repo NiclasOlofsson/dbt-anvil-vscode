@@ -24,6 +24,7 @@ import { DbtSignatureHelpProvider } from './providers/signature-help-provider';
 import { DbtCodeActionProvider } from './providers/code-action-provider';
 import { StatusBarManager } from './views/status-bar';
 import { DbtDiagnosticsProvider } from './providers/diagnostics-provider';
+import { ColumnResolver } from './providers/column-resolver';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
 	// -------- Bootstrap logging & service container --------
@@ -98,7 +99,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	context.subscriptions.push(statusBar);
 
 	// -------- Diagnostics provider --------
-	const diagnosticsProvider = new DbtDiagnosticsProvider(executionService, statusBar, projectDir, logger);
+	const columnResolver = new ColumnResolver(manifestIndexer, logger, executionService);
+	const diagnosticsProvider = new DbtDiagnosticsProvider(executionService, manifestIndexer, statusBar, projectDir, logger, columnResolver);
 	context.subscriptions.push(diagnosticsProvider);
 
 	// -------- Set workspaceHasDBT context --------
@@ -118,12 +120,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// -------- Register language providers --------
 	const sqlSelector: vscode.DocumentSelector = { language: 'jinja-sql' };
 	const yamlSelector: vscode.DocumentSelector = { language: 'yaml', pattern: '**/{schema,sources,models}.yml' };
-	const definitionProvider = new DbtDefinitionProvider(manifestIndexer, manifestLoader, logger);
-	const hoverProvider = new DbtHoverProvider(manifestIndexer, logger);
-	const completionProvider = new DbtCompletionProvider(manifestIndexer, logger, executionService);
+	const definitionProvider = new DbtDefinitionProvider(manifestIndexer, manifestLoader, logger, columnResolver);
+	const hoverProvider = new DbtHoverProvider(manifestIndexer, logger, columnResolver);
+	const completionProvider = new DbtCompletionProvider(manifestIndexer, logger, columnResolver);
 	const yamlCompletionProvider = new YamlCompletionProvider(manifestIndexer, logger);
 	const yamlHoverProvider = new YamlHoverProvider(manifestIndexer, logger);
-	const referenceProvider = new DbtReferenceProvider(manifestIndexer, logger);
+	const referenceProvider = new DbtReferenceProvider(manifestIndexer, logger, columnResolver);
 	const renameProvider = new DbtRenameProvider(manifestIndexer, manifestLoader, logger);
 	const codeLensProvider = new DbtCodeLensProvider(manifestIndexer, logger);
 	const documentSymbolProvider = new DbtDocumentSymbolProvider(manifestIndexer, logger);
@@ -154,7 +156,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	context.subscriptions.push(
 		vscode.commands.registerCommand('dbt-studio.refreshManifest', () => {
 			manifestLoader.invalidate();
-			completionProvider.invalidateScopeCache();
+			columnResolver.invalidateCache();
 			try {
 				manifestIndexer.build(true);
 				modelExplorerProvider.refresh();

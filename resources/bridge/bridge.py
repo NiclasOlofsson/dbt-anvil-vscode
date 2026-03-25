@@ -357,6 +357,179 @@ def handle_describe_table(
     print(json.dumps({"success": True, "columns": columns}), flush=True)
 
 
+def _wrap_final_select(
+    compiled_sql: str,
+    column_name: str,
+    dialect: str,
+) -> Any:
+    """Wrap the final SELECT in a CTE to enable lineage tracing through SELECT *.
+
+    Transforms:
+        SELECT * FROM final
+    Into:
+        WITH __lineage_final__ AS (SELECT * FROM final)
+        SELECT column_name FROM __lineage_final__
+
+    Ported from dbt-core-mcp get_column_lineage._wrap_final_select.
+    """
+    from sqlglot import exp, parse_one  # type: ignore[import-not-found]
+
+    ast = parse_one(compiled_sql, dialect=dialect)
+
+    root_select = ast if isinstance(ast, exp.Select) else ast.find(exp.Select)
+    if not root_select:
+        return ast
+
+    with_clause = root_select.args.get("with_")
+
+    wrapper_select = root_select.copy()
+    wrapper_select.set("with_", None)
+
+    wrapper_cte = exp.CTE(
+        this=wrapper_select,
+        alias=exp.TableAlias(this=exp.Identifier(this="__lineage_final__")),
+    )
+
+    for key in list(root_select.args.keys()):
+        root_select.set(key, None)
+
+    if with_clause:
+        with_clause.expressions.append(wrapper_cte)
+    else:
+        with_clause = exp.With(expressions=[wrapper_cte])
+
+    root_select.set("with_", with_clause)
+    root_select.set(
+        "expressions",
+        [exp.Column(this=exp.Identifier(this=column_name))],
+    )
+    root_select.set(
+        "from_",
+        exp.From(this=exp.Table(this=exp.Identifier(this="__lineage_final__"))),
+    )
+
+    return ast
+
+
+def _trace_column_lineage(
+    compiled_sql: str,
+    column_name: str,
+    schema_mapping: dict[str, Any],
+    dialect: str,
+) -> dict[str, Any]:
+    """Trace column lineage using sqlglot.lineage().
+
+    Returns upstream dependencies with CTE paths and transformations.
+
+    Ported from dbt-core-mcp get_column_lineage._analyze_column_lineage
+    and _extract_dependencies_from_lineage.
+    """
+    from sqlglot.lineage import lineage  # type: ignore[import-not-found]
+
+    wrapped_ast = _wrap_final_select(compiled_sql, column_name, dialect)
+
+    result = lineage(
+        column=column_name,
+        sql=wrapped_ast,
+        schema=schema_mapping,
+        dialect=dialect,
+    )
+
+    dependencies: list[dict[str, Any]] = []
+    via_ctes: list[str] = []
+    transformations: list[dict[str, str]] = []
+
+    for node in result.walk():
+        if not hasattr(node, "name") or not node.name:
+            continue
+
+        name = node.name
+        if "." in name:
+            parts = name.split(".", 1)
+            table_or_cte = parts[0]
+            col = parts[1]
+        else:
+            table_or_cte = None
+            col = name
+
+        # Check if this is a source table (has database/schema/catalog on source)
+        is_table = False
+        if hasattr(node, "source"):
+            source = node.source
+            is_table = (
+                hasattr(source, "catalog") or getattr(source, "db", None) is not None
+            )
+
+        if is_table and table_or_cte:
+            # Extract database/schema from the source expression
+            dep: dict[str, Any] = {"column": col, "table": table_or_cte}
+            if hasattr(node.source, "db") and node.source.db:
+                dep["schema"] = str(node.source.db).strip('"')
+            if hasattr(node.source, "catalog") and node.source.catalog:
+                dep["database"] = str(node.source.catalog).strip('"')
+            dependencies.append(dep)
+        elif table_or_cte and table_or_cte != "__lineage_final__":
+            # CTE step
+            if table_or_cte not in via_ctes:
+                via_ctes.append(table_or_cte)
+            transform: dict[str, str] = {"cte": table_or_cte, "column": col}
+            if hasattr(node, "expression") and node.expression is not None:
+                expr_sql = str(node.expression)
+                if expr_sql and expr_sql.strip() != col:
+                    if len(expr_sql) > 200:
+                        expr_sql = expr_sql[:197] + "..."
+                    transform["expression"] = expr_sql
+            transformations.append(transform)
+
+    return {
+        "dependencies": dependencies,
+        "via_ctes": via_ctes,
+        "transformations": transformations,
+    }
+
+
+def handle_get_column_lineage(request: dict[str, Any]) -> None:
+    """Handle a get_column_lineage request and print the JSON response."""
+    compiled_sql: str = request.get("compiled_sql", "")
+    column_name: str = request.get("column_name", "")
+    schema_mapping: dict[str, Any] = request.get("schema_mapping", {})
+    dialect: str = request.get("dialect", "ansi")
+
+    if not compiled_sql or not column_name:
+        print(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": "compiled_sql and column_name are required",
+                }
+            ),
+            flush=True,
+        )
+        return
+
+    try:
+        result = _trace_column_lineage(
+            compiled_sql, column_name, schema_mapping, dialect
+        )
+        print(
+            json.dumps({"success": True, **result}),
+            flush=True,
+        )
+    except Exception as exc:
+        print(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": str(exc),
+                    "dependencies": [],
+                    "via_ctes": [],
+                    "transformations": [],
+                }
+            ),
+            flush=True,
+        )
+
+
 def handle_get_columns(request: dict[str, Any]) -> None:
     """Handle a get_columns request and print the JSON response."""
     compiled_sql: str = request.get("compiled_sql", "")
@@ -440,7 +613,9 @@ def main() -> None:
             break
 
         # Dispatch by request type
-        if "get_scope_columns" in request:
+        if "get_column_lineage" in request:
+            handle_get_column_lineage(request)
+        elif "get_scope_columns" in request:
             handle_get_scope_columns(request)
         elif "describe_table" in request:
             handle_describe_table(request, dbt, project_dir, profiles_dir)

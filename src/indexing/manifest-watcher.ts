@@ -15,8 +15,10 @@ export class ManifestWatcher {
 	private _projectWatcher: vscode.FileSystemWatcher | null = null;
 	private _sqlSaveDisposable: vscode.Disposable | null = null;
 	private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
+	private _parseDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 	private _suppressed = false;
 	private _executionService: DbtExecutionService | null = null;
+	private readonly _contentHashes = new Map<string, string>();
 	private readonly _onIndexRebuild = new vscode.EventEmitter<ManifestIndexer>();
 
 	readonly onIndexRebuild = this._onIndexRebuild.event;
@@ -45,6 +47,17 @@ export class ManifestWatcher {
 		this._sqlSaveDisposable = vscode.workspace.onDidSaveTextDocument((doc) => {
 			if (doc.languageId !== 'jinja-sql' && !doc.fileName.endsWith('.sql')
 				&& !doc.fileName.endsWith('.yml') && !doc.fileName.endsWith('.yaml')) return;
+
+			// Skip if content hasn't changed since last save
+			const content = doc.getText();
+			const prevHash = this._contentHashes.get(doc.fileName);
+			const currentHash = this._simpleHash(content);
+			if (prevHash === currentHash) {
+				this.logger.debug(`Save without content change, skipping parse: ${doc.fileName}`);
+				return;
+			}
+			this._contentHashes.set(doc.fileName, currentHash);
+
 			const uniqueId = this.indexer.findModelByFilePath(doc.fileName);
 			if (uniqueId) {
 				const evicted = this.indexer.invalidateModel(uniqueId);
@@ -52,7 +65,7 @@ export class ManifestWatcher {
 					this.logger.info(`Model saved: ${uniqueId} — evicted ${evicted.size} column store entries`);
 				}
 			}
-			this._triggerBackgroundParse();
+			this._debouncedParse();
 		});
 
 		this.logger.info('ManifestWatcher started');
@@ -107,6 +120,14 @@ export class ManifestWatcher {
 		this._executionService = service;
 	}
 
+	private _debouncedParse(): void {
+		if (this._parseDebounceTimer) clearTimeout(this._parseDebounceTimer);
+		this._parseDebounceTimer = setTimeout(() => {
+			this._parseDebounceTimer = null;
+			this._triggerBackgroundParse();
+		}, 1000);
+	}
+
 	private _triggerBackgroundParse(): void {
 		if (!this._executionService) return;
 		this._executionService.submit({
@@ -120,9 +141,21 @@ export class ManifestWatcher {
 		});
 	}
 
+	/** Fast non-cryptographic hash for content-change detection. */
+	private _simpleHash(s: string): string {
+		let h = 0;
+		for (let i = 0; i < s.length; i++) {
+			h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+		}
+		return h.toString(36);
+	}
+
 	dispose(): void {
 		if (this._debounceTimer) {
 			clearTimeout(this._debounceTimer);
+		}
+		if (this._parseDebounceTimer) {
+			clearTimeout(this._parseDebounceTimer);
 		}
 		this._manifestWatcher?.dispose();
 		this._projectWatcher?.dispose();
