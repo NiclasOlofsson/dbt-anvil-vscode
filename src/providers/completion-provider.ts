@@ -75,6 +75,19 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 			return this._completeColumns(document, aliasMatch[1], token);
 		}
 
+		// Bare word in SQL context — offer all in-scope columns merged from all aliases
+		// Match after whitespace/open-paren with zero or more word chars (covers empty trigger)
+		if (this.bridge && /(?:^|[\s,(])\w*$/.test(linePrefix)) {
+			// Skip if inside an unclosed Jinja expression
+			const insideJinja = /\{\{[^}]*$/.test(linePrefix) || /\{%[^%]*$/.test(linePrefix);
+			// Skip if after a keyword where a table/relation name is expected
+			const afterTableKeyword = /\b(?:from|join|into|update|table)\s+\w*$/i.test(linePrefix);
+			if (!insideJinja && !afterTableKeyword) {
+				this.logger.debug('Completion: bare column word');
+				return this._completeAllColumns(document, token);
+			}
+		}
+
 		return undefined;
 	}
 
@@ -106,6 +119,38 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 			});
 		} catch (err) {
 			this.logger.warn(`Column completion failed: ${err instanceof Error ? err.message : String(err)}`);
+			return [];
+		}
+	}
+
+	private async _completeAllColumns(
+		document: vscode.TextDocument,
+		token: vscode.CancellationToken,
+	): Promise<vscode.CompletionItem[]> {
+		try {
+			const aliasMap = await this._getScopeAliases(document, token);
+			if (Object.keys(aliasMap).length === 0) return [];
+
+			// Invert alias→cols to col→[alias,...] for deduplication across tables
+			const colSources = new Map<string, string[]>();
+			for (const [alias, cols] of Object.entries(aliasMap)) {
+				for (const col of cols) {
+					if (!colSources.has(col)) colSources.set(col, []);
+					colSources.get(col)!.push(alias);
+				}
+			}
+
+			this.logger.debug(`Bare column completions: ${colSources.size} unique columns from ${Object.keys(aliasMap).length} aliases`);
+
+			let i = 0;
+			return Array.from(colSources.entries()).map(([col, sources]) => {
+				const item = new vscode.CompletionItem(col, vscode.CompletionItemKind.Field);
+				item.detail = sources.length === 1 ? `column of ${sources[0]}` : sources.join(', ');
+				item.sortText = String(i++).padStart(4, '0');
+				return item;
+			});
+		} catch (err) {
+			this.logger.warn(`Bare column completion failed: ${err instanceof Error ? err.message : String(err)}`);
 			return [];
 		}
 	}
