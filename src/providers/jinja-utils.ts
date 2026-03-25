@@ -1,4 +1,5 @@
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
+import { computeCommentRanges, isOffsetInComment } from './comment-utils';
 
 export interface StrippedSql {
 	/** SQL with Jinja expressions replaced by table names. */
@@ -16,11 +17,13 @@ export interface StrippedSql {
  */
 export function stripJinja(text: string, indexer: ManifestIndexer): StrippedSql {
 	const refs = new Map<string, string>();
+	const commentRanges = computeCommentRanges(text);
 
 	// Replace {{ ref('model') }} and {{ ref('package', 'model') }}
 	let sql = text.replace(
 		/\{\{\s*ref\(\s*(?:'([^']+)'\s*,\s*)?'([^']+)'\s*\)\s*\}\}/g,
-		(_match, _pkg: string | undefined, modelName: string) => {
+		(fullMatch, _pkg: string | undefined, modelName: string, offset: number) => {
+			if (isOffsetInComment(offset, commentRanges)) return fullMatch;
 			const models = indexer.findModelsByName(modelName);
 			if (models.length > 0) {
 				const raw = indexer.getRawNode(models[0].uniqueId);
@@ -40,7 +43,8 @@ export function stripJinja(text: string, indexer: ManifestIndexer): StrippedSql 
 	// Replace {{ source('source_name', 'table_name') }}
 	sql = sql.replace(
 		/\{\{\s*source\(\s*'([^']+)'\s*,\s*'([^']+)'\s*\)\s*\}\}/g,
-		(_match, sourceName: string, tableName: string) => {
+		(fullMatch, sourceName: string, tableName: string, offset: number) => {
+			if (isOffsetInComment(offset, commentRanges)) return fullMatch;
 			const index = indexer.index;
 			if (index) {
 				for (const source of index.sources.values()) {

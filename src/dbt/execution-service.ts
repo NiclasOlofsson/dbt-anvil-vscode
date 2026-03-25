@@ -9,7 +9,7 @@ export type { DbtCommandResult } from './bridge-runner';
 export type DbtJobType =
 	| 'parse' | 'compile' | 'run' | 'test' | 'build'
 	| 'seed' | 'snapshot' | 'deps' | 'show' | 'debug'
-	| 'describe' | 'scope_columns' | 'get_columns'
+	| 'describe' | 'scope_columns' | 'get_columns' | 'column_lineage'
 	| 'generate_cte_tests';
 
 export type DbtJobOrigin = 'user' | 'copilot' | 'provider' | 'background';
@@ -50,11 +50,11 @@ interface DbtJob extends DbtJobInfo {
 }
 
 const CANCELLABLE_TYPES = new Set<DbtJobType>([
-	'parse', 'compile', 'describe', 'scope_columns', 'get_columns', 'generate_cte_tests', 'debug',
+	'parse', 'compile', 'describe', 'scope_columns', 'get_columns', 'column_lineage', 'generate_cte_tests', 'debug',
 ]);
 
 const SUPPRESS_WATCHER_TYPES = new Set<DbtJobType>([
-	'describe', 'scope_columns', 'get_columns', 'show',
+	'describe', 'scope_columns', 'get_columns', 'column_lineage', 'show',
 ]);
 
 const SAVE_STATE_TYPES = new Set<DbtJobType>(['run', 'build', 'seed']);

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import type { DbtExecutionService } from '../dbt/execution-service';
+import type { ColumnResolver } from '../providers/column-resolver';
 
 import { DbtCompletionProvider } from '../providers/completion-provider';
 import { createMockLogger } from './helpers';
@@ -27,15 +27,12 @@ function makeIndexer(): ManifestIndexer {
 	} as unknown as ManifestIndexer;
 }
 
-function makeService(aliases: Record<string, string[]>): DbtExecutionService {
+function makeColumnResolver(aliases: Record<string, string[]>): ColumnResolver {
 	return {
-		submit: vi.fn(async (request: Record<string, unknown>) => {
-			const raw = request['raw'] as Record<string, unknown> | undefined;
-			if (raw?.['get_scope_columns']) return { data: { aliases } };
-			if (raw?.['describe_table']) return { data: { columns: [] } };
-			return { data: {} };
-		}),
-	} as unknown as DbtExecutionService;
+		getScopeAliases: vi.fn().mockResolvedValue(aliases),
+		getCachedAliases: vi.fn().mockReturnValue(aliases),
+		invalidateCache: vi.fn(),
+	} as unknown as ColumnResolver;
 }
 
 
@@ -53,7 +50,7 @@ describe('DbtCompletionProvider — bare column completions', () => {
 	};
 
 	beforeEach(() => {
-		provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), makeService(aliases));
+		provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), makeColumnResolver(aliases));
 	});
 
 	it('returns merged column list when typing a bare word in SELECT', async () => {
@@ -123,8 +120,8 @@ describe('DbtCompletionProvider — bare column completions', () => {
 	});
 
 	it('returns [] (not undefined) when no aliases resolved', async () => {
-		const emptyService = makeService({});
-		const p = new DbtCompletionProvider(makeIndexer(), createMockLogger(), emptyService);
+		const emptyResolver = makeColumnResolver({});
+		const p = new DbtCompletionProvider(makeIndexer(), createMockLogger(), emptyResolver);
 
 		const linePrefix = 'SELECT na';
 		const doc = mockDocument([linePrefix]);
@@ -140,7 +137,7 @@ describe('DbtCompletionProvider — bare column completions', () => {
 describe('DbtCompletionProvider — alias.column completions (existing)', () => {
 	it('still works for alias. prefix', async () => {
 		const aliases = { c: ['id', 'name'] };
-		const provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), makeService(aliases));
+		const provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), makeColumnResolver(aliases));
 
 		const linePrefix = 'SELECT c.';
 		const doc = mockDocument([linePrefix]);

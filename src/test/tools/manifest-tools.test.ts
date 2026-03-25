@@ -146,55 +146,78 @@ describe('AnalyzeImpactTool', () => {
 describe('GetColumnLineageTool', () => {
 	const token = { isCancellationRequested: false, onCancellationRequested: vi.fn() };
 
-	it('returns SQL-derived columns when bridge succeeds', async () => {
+	it('traces upstream column lineage through the bridge', async () => {
 		const index = createTestIndex();
 		const indexer = createMockIndexer(index);
 		(indexer.getRawNode as ReturnType<typeof vi.fn>).mockReturnValue({
 			unique_id: 'model.p.customers',
 			name: 'customers',
+			resource_type: 'model',
 			schema: 'main',
 			database: 'dev',
 			compiled_code: 'SELECT customer_id, first_name FROM orders',
 			columns: {},
 		});
 
+		let callCount = 0;
 		const mockService = {
-			submit: vi.fn().mockResolvedValue({
-				success: true,
-				data: { success: true, columns: ['customer_id', 'first_name'] },
-				stdout: '',
-				stderr: '',
+			submit: vi.fn().mockImplementation((req: { type: string }) => {
+				callCount++;
+				if (req.type === 'get_columns') {
+					return Promise.resolve({
+						success: true,
+						data: { success: true, columns: ['customer_id', 'first_name'] },
+						stdout: '',
+						stderr: '',
+					});
+				}
+				// column_lineage request
+				return Promise.resolve({
+					success: true,
+					data: {
+						success: true,
+						dependencies: [{ column: 'customer_id', table: 'orders' }],
+						via_ctes: [],
+						transformations: [],
+					},
+					stdout: '',
+					stderr: '',
+				});
 			}),
 		} as unknown as DbtExecutionService;
 
 		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger);
 		const result = await tool.invoke(
-			{ input: { model: 'customers' }, toolInvocationToken: undefined } as never,
+			{ input: { model: 'customers', column: 'customer_id' }, toolInvocationToken: undefined } as never,
 			token as never,
 		);
 
 		const text = result.content[0];
 		const parsed = JSON.parse((text as { value: string }).value);
-		expect(parsed.source).toBe('compiled_sql');
-		expect(parsed.columns).toEqual([{ name: 'customer_id' }, { name: 'first_name' }]);
+		expect(parsed.column).toBe('customer_id');
+		expect(parsed.direction).toBe('upstream');
+		expect(parsed.dependencies).toBeDefined();
+		expect(parsed.dependencies.length).toBeGreaterThanOrEqual(1);
+		expect(parsed.dependencies[0].table).toBe('orders');
 	});
 
-	it('falls back to manifest columns when bridge returns empty', async () => {
+	it('returns error when column not found in output', async () => {
 		const index = createTestIndex();
 		const indexer = createMockIndexer(index);
 		(indexer.getRawNode as ReturnType<typeof vi.fn>).mockReturnValue({
 			unique_id: 'model.p.customers',
 			name: 'customers',
+			resource_type: 'model',
 			schema: 'main',
 			database: 'dev',
-			compiled_code: 'SELECT * FROM undocumented_table',
-			columns: { id: { data_type: 'varchar', description: 'Primary key' } },
+			compiled_code: 'SELECT customer_id FROM orders',
+			columns: {},
 		});
 
 		const mockService = {
 			submit: vi.fn().mockResolvedValue({
 				success: true,
-				data: { success: true, columns: [] },
+				data: { success: true, columns: ['customer_id'] },
 				stdout: '',
 				stderr: '',
 			}),
@@ -202,14 +225,13 @@ describe('GetColumnLineageTool', () => {
 
 		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger);
 		const result = await tool.invoke(
-			{ input: { model: 'customers' }, toolInvocationToken: undefined } as never,
+			{ input: { model: 'customers', column: 'nonexistent' }, toolInvocationToken: undefined } as never,
 			token as never,
 		);
 
 		const text = result.content[0];
 		const parsed = JSON.parse((text as { value: string }).value);
-		expect(parsed.source).toBe('manifest');
-		expect(parsed.columns[0].name).toBe('id');
+		expect(parsed.error).toContain('not found in output');
 	});
 
 	it('returns error when model not found', async () => {
@@ -219,13 +241,84 @@ describe('GetColumnLineageTool', () => {
 		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger);
 
 		const result = await tool.invoke(
-			{ input: { model: 'nonexistent' }, toolInvocationToken: undefined } as never,
+			{ input: { model: 'nonexistent', column: 'id' }, toolInvocationToken: undefined } as never,
 			token as never,
 		);
 
 		const text = result.content[0];
 		const parsed = JSON.parse((text as { value: string }).value);
 		expect(parsed.error).toContain('not found');
+	});
+
+	it('returns error when no compiled SQL available', async () => {
+		const index = createTestIndex();
+		const indexer = createMockIndexer(index);
+		(indexer.getRawNode as ReturnType<typeof vi.fn>).mockReturnValue({
+			unique_id: 'model.p.customers',
+			name: 'customers',
+			resource_type: 'model',
+			columns: {},
+		});
+
+		const mockService = { submit: vi.fn() } as unknown as DbtExecutionService;
+		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger);
+
+		const result = await tool.invoke(
+			{ input: { model: 'customers', column: 'id' }, toolInvocationToken: undefined } as never,
+			token as never,
+		);
+
+		const text = result.content[0];
+		const parsed = JSON.parse((text as { value: string }).value);
+		expect(parsed.error).toContain('compiled SQL');
+	});
+
+	it('handles bridge failure gracefully', async () => {
+		const index = createTestIndex();
+		const indexer = createMockIndexer(index);
+		(indexer.getRawNode as ReturnType<typeof vi.fn>).mockReturnValue({
+			unique_id: 'model.p.customers',
+			name: 'customers',
+			resource_type: 'model',
+			schema: 'main',
+			database: 'dev',
+			compiled_code: 'SELECT customer_id FROM orders',
+			columns: {},
+		});
+
+		let callCount = 0;
+		const mockService = {
+			submit: vi.fn().mockImplementation((req: { type: string }) => {
+				callCount++;
+				if (req.type === 'get_columns') {
+					return Promise.resolve({
+						success: true,
+						data: { success: true, columns: ['customer_id'] },
+						stdout: '',
+						stderr: '',
+					});
+				}
+				// column_lineage fails
+				return Promise.resolve({
+					success: true,
+					data: { success: false, error: 'parse error' },
+					stdout: '',
+					stderr: '',
+				});
+			}),
+		} as unknown as DbtExecutionService;
+
+		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger);
+		const result = await tool.invoke(
+			{ input: { model: 'customers', column: 'customer_id' }, toolInvocationToken: undefined } as never,
+			token as never,
+		);
+
+		const text = result.content[0];
+		const parsed = JSON.parse((text as { value: string }).value);
+		// Should still return a result structure, just with empty dependencies
+		expect(parsed.model).toBe('customers');
+		expect(parsed.dependencies).toEqual([]);
 	});
 });
 
