@@ -15,6 +15,13 @@ import { DbtHoverProvider } from './providers/hover-provider';
 import { DbtCompletionProvider } from './providers/completion-provider';
 import { YamlCompletionProvider } from './providers/yaml-completion-provider';
 import { YamlHoverProvider } from './providers/yaml-hover-provider';
+import { DbtReferenceProvider } from './providers/reference-provider';
+import { DbtRenameProvider } from './providers/rename-provider';
+import { DbtCodeLensProvider } from './providers/codelens-provider';
+import { DbtDocumentSymbolProvider } from './providers/document-symbol-provider';
+import { DbtWorkspaceSymbolProvider } from './providers/workspace-symbol-provider';
+import { DbtSignatureHelpProvider } from './providers/signature-help-provider';
+import { DbtCodeActionProvider } from './providers/code-action-provider';
 import { StatusBarManager } from './views/status-bar';
 import { DbtDiagnosticsProvider } from './providers/diagnostics-provider';
 
@@ -116,6 +123,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const completionProvider = new DbtCompletionProvider(manifestIndexer, logger, executionService);
 	const yamlCompletionProvider = new YamlCompletionProvider(manifestIndexer, logger);
 	const yamlHoverProvider = new YamlHoverProvider(manifestIndexer, logger);
+	const referenceProvider = new DbtReferenceProvider(manifestIndexer, logger);
+	const renameProvider = new DbtRenameProvider(manifestIndexer, manifestLoader, logger);
+	const codeLensProvider = new DbtCodeLensProvider(manifestIndexer, logger);
+	const documentSymbolProvider = new DbtDocumentSymbolProvider(manifestIndexer, logger);
+	const workspaceSymbolProvider = new DbtWorkspaceSymbolProvider(manifestIndexer, logger);
+	const signatureHelpProvider = new DbtSignatureHelpProvider(manifestIndexer, logger);
+	const codeActionProvider = new DbtCodeActionProvider(manifestIndexer, logger);
 
 	context.subscriptions.push(
 		vscode.languages.registerDefinitionProvider(sqlSelector, definitionProvider),
@@ -123,9 +137,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.languages.registerCompletionItemProvider(sqlSelector, completionProvider, '\'', '"', '.'),
 		vscode.languages.registerCompletionItemProvider(yamlSelector, yamlCompletionProvider),
 		vscode.languages.registerHoverProvider(yamlSelector, yamlHoverProvider),
-		// Formatting and diagnostics for jinja-sql are delegated to the SQLFluff extension.
-		// See src/providers/formatting-provider.ts and src/providers/diagnostics-provider.ts
-		// for details and instructions on implementing them here if ever needed.
+		vscode.languages.registerReferenceProvider(sqlSelector, referenceProvider),
+		vscode.languages.registerRenameProvider(sqlSelector, renameProvider),
+		vscode.languages.registerCodeLensProvider(sqlSelector, codeLensProvider),
+		vscode.languages.registerCodeLensProvider(yamlSelector, codeLensProvider),
+		vscode.languages.registerDocumentSymbolProvider(sqlSelector, documentSymbolProvider),
+		vscode.languages.registerDocumentSymbolProvider(yamlSelector, documentSymbolProvider),
+		vscode.languages.registerWorkspaceSymbolProvider(workspaceSymbolProvider),
+		vscode.languages.registerSignatureHelpProvider(sqlSelector, signatureHelpProvider, '(', ','),
+		vscode.languages.registerCodeActionsProvider(sqlSelector, codeActionProvider, {
+			providedCodeActionKinds: DbtCodeActionProvider.providedCodeActionKinds,
+		}),
 	);
 
 	// -------- Register commands --------
@@ -271,6 +293,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			} else {
 				void vscode.window.showErrorMessage(`dbt parse: failed — ${result.stderr}`);
 			}
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.createModelFile', async (modelName: string) => {
+			const folders = vscode.workspace.workspaceFolders;
+			if (!folders) return;
+			const modelsDir = vscode.Uri.joinPath(folders[0].uri, 'models');
+			const fileUri = vscode.Uri.joinPath(modelsDir, `${modelName}.sql`);
+			const content = new TextEncoder().encode(`-- ${modelName}\nselect\n    1 as id\n`);
+			await vscode.workspace.fs.writeFile(fileUri, content);
+			const doc = await vscode.workspace.openTextDocument(fileUri);
+			await vscode.window.showTextDocument(doc);
 		}),
 	);
 
