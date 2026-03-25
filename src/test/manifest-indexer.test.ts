@@ -307,4 +307,85 @@ describe('ManifestIndexer', () => {
 		expect(indexer.findModelByFilePath(modelPath)).toBe('model.project.my_model');
 		expect(indexer.findModelByFilePath('/nonexistent/file.sql')).toBeUndefined();
 	});
+
+	describe('checksum-based invalidation', () => {
+		function manifestWithChecksums(checksums: Record<string, string>) {
+			const base = createTestManifest();
+			for (const [uid, hash] of Object.entries(checksums)) {
+				const node = (base.nodes as Record<string, Record<string, unknown>>)[uid];
+				if (node) {
+					node.checksum = { name: 'sha256', checksum: hash };
+				}
+			}
+			return base;
+		}
+
+		it('should clear column store on first build (no previous checksums)', () => {
+			const manifest = manifestWithChecksums({
+				'model.project.my_model': 'aaa',
+				'model.project.downstream': 'bbb',
+			});
+			writeManifest(manifest);
+			const loader = new ManifestLoader(TEST_DIR);
+			const indexer = new ManifestIndexer(loader, mockLogger);
+
+			indexer.build();
+			indexer.setColumns('model.project.my_model', ['id', 'name']);
+			indexer.setColumns('model.project.downstream', ['id', 'amount']);
+
+			// Force rebuild with same checksums — column store should be preserved
+			writeManifest(manifest);
+			indexer.build(true);
+
+			expect(indexer.getColumns('model.project.my_model')).toEqual(['id', 'name']);
+			expect(indexer.getColumns('model.project.downstream')).toEqual(['id', 'amount']);
+		});
+
+		it('should only invalidate changed nodes and their downstream on rebuild', () => {
+			const manifest1 = manifestWithChecksums({
+				'model.project.my_model': 'aaa',
+				'model.project.downstream': 'bbb',
+			});
+			writeManifest(manifest1);
+			const loader = new ManifestLoader(TEST_DIR);
+			const indexer = new ManifestIndexer(loader, mockLogger);
+
+			indexer.build();
+			indexer.setColumns('model.project.my_model', ['id', 'name']);
+			indexer.setColumns('model.project.downstream', ['id', 'amount']);
+			indexer.setColumns('seed.project.my_seed', ['col1']);
+
+			// Change my_model's checksum — should evict my_model + downstream, preserve seed
+			const manifest2 = manifestWithChecksums({
+				'model.project.my_model': 'ccc',
+				'model.project.downstream': 'bbb',
+			});
+			writeManifest(manifest2);
+			indexer.build(true);
+
+			expect(indexer.getColumns('model.project.my_model')).toBeUndefined();
+			expect(indexer.getColumns('model.project.downstream')).toBeUndefined();
+			expect(indexer.getColumns('seed.project.my_seed')).toEqual(['col1']);
+		});
+
+		it('should preserve column store when only manifest metadata changes', () => {
+			const manifest = manifestWithChecksums({
+				'model.project.my_model': 'aaa',
+				'model.project.downstream': 'bbb',
+			});
+			writeManifest(manifest);
+			const loader = new ManifestLoader(TEST_DIR);
+			const indexer = new ManifestIndexer(loader, mockLogger);
+
+			indexer.build();
+			indexer.setColumns('model.project.my_model', ['id', 'name']);
+
+			// Change only metadata (simulates dbt show rewriting manifest)
+			const manifest2 = { ...manifest, metadata: { ...manifest.metadata, invocation_id: 'new-id' } };
+			writeManifest(manifest2);
+			indexer.build(true);
+
+			expect(indexer.getColumns('model.project.my_model')).toEqual(['id', 'name']);
+		});
+	});
 });
