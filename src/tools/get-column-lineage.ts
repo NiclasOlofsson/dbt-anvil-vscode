@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { ILogger } from '../types/logger';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import type { BridgeRunner } from '../dbt/bridge-runner';
+import { type DbtExecutionService, Priority } from '../dbt/execution-service';
 import { toolResult } from './tool-helpers';
 
 interface GetColumnLineageInput {
@@ -15,7 +15,7 @@ type SchemaMapping = Record<string, Record<string, Record<string, Record<string,
 export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnLineageInput> {
 	constructor(
 		private readonly indexer: ManifestIndexer,
-		private readonly bridge: BridgeRunner,
+		private readonly service: DbtExecutionService,
 		private readonly logger: ILogger,
 	) {}
 
@@ -64,11 +64,17 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 				const lineage = this.indexer.getLineage(models[0].uniqueId, 5, 'upstream');
 				const schemaMapping = this._buildSchemaMapping(lineage.upstream);
 
-				const result = await this.bridge.invokeRaw({
-					get_columns: true,
-					compiled_sql: compiledCode,
-					dialect: adapterType,
-					schema_mapping: schemaMapping,
+				const result = await this.service.submit({
+					type: 'get_columns',
+					raw: {
+						get_columns: true,
+						compiled_sql: compiledCode,
+						dialect: adapterType,
+						schema_mapping: schemaMapping,
+					},
+					priority: Priority.Tool,
+					origin: 'copilot',
+					label: `get columns for ${model}`,
 				});
 
 				const cols = result.data && Array.isArray((result.data as Record<string, unknown>)['columns'])

@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import type { ILogger } from '../types/logger';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ManifestLoader } from '../dbt/manifest-loader';
-import type { BridgeRunner } from '../dbt/bridge-runner';
+import { type DbtExecutionService, Priority } from '../dbt/execution-service';
 import { toolResult, formatBridgeResult } from './tool-helpers';
 
 interface GetProjectInfoInput {
@@ -12,7 +12,7 @@ interface GetProjectInfoInput {
 export class GetProjectInfoTool implements vscode.LanguageModelTool<GetProjectInfoInput> {
 	constructor(
 		private readonly indexer: ManifestIndexer,
-		private readonly bridge: BridgeRunner,
+		private readonly service: DbtExecutionService,
 		private readonly loader: ManifestLoader,
 		private readonly logger: ILogger,
 	) {}
@@ -41,7 +41,13 @@ export class GetProjectInfoTool implements vscode.LanguageModelTool<GetProjectIn
 
 		if (run_debug) {
 			try {
-				const debugResult = await this.bridge.invoke(['debug']);
+				const debugResult = await this.service.submit({
+					type: 'debug',
+					args: ['debug'],
+					priority: Priority.Tool,
+					origin: 'copilot',
+					label: 'debug',
+				});
 				info.debug = formatBridgeResult(debugResult);
 			} catch (err) {
 				info.debug = { error: `dbt debug failed: ${err instanceof Error ? err.message : String(err)}` };

@@ -5,7 +5,7 @@ import { AnalyzeImpactTool } from '../../tools/analyze-impact';
 import { GetProjectInfoTool } from '../../tools/get-project-info';
 import { GetColumnLineageTool } from '../../tools/get-column-lineage';
 import type { ManifestLoader } from '../../dbt/manifest-loader';
-import type { BridgeRunner } from '../../dbt/bridge-runner';
+import type { DbtExecutionService } from '../../dbt/execution-service';
 import { createMockLogger } from '../helpers';
 
 const mockLogger = createMockLogger();
@@ -114,8 +114,8 @@ describe('GetProjectInfoTool', () => {
 		const index = createTestIndex();
 		const indexer = createMockIndexer(index);
 		const loader = createMockLoader();
-		const mockBridge = { invoke: vi.fn(), invokeRaw: vi.fn() } as unknown as BridgeRunner;
-		const tool = new GetProjectInfoTool(indexer, mockBridge, loader, mockLogger);
+		const mockService = { submit: vi.fn() } as unknown as DbtExecutionService;
+		const tool = new GetProjectInfoTool(indexer, mockService, loader, mockLogger);
 
 		const token = { isCancellationRequested: false, onCancellationRequested: vi.fn() };
 		const result = await tool.invoke(
@@ -156,16 +156,16 @@ describe('GetColumnLineageTool', () => {
 			columns: {},
 		});
 
-		const mockBridge = {
-			invokeRaw: vi.fn().mockResolvedValue({
+		const mockService = {
+			submit: vi.fn().mockResolvedValue({
 				success: true,
 				data: { success: true, columns: ['customer_id', 'first_name'] },
 				stdout: '',
 				stderr: '',
 			}),
-		} as unknown as BridgeRunner;
+		} as unknown as DbtExecutionService;
 
-		const tool = new GetColumnLineageTool(indexer, mockBridge, mockLogger);
+		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger);
 		const result = await tool.invoke(
 			{ input: { model: 'customers' }, toolInvocationToken: undefined } as never,
 			token as never,
@@ -189,16 +189,16 @@ describe('GetColumnLineageTool', () => {
 			columns: { id: { data_type: 'varchar', description: 'Primary key' } },
 		});
 
-		const mockBridge = {
-			invokeRaw: vi.fn().mockResolvedValue({
+		const mockService = {
+			submit: vi.fn().mockResolvedValue({
 				success: true,
 				data: { success: true, columns: [] },
 				stdout: '',
 				stderr: '',
 			}),
-		} as unknown as BridgeRunner;
+		} as unknown as DbtExecutionService;
 
-		const tool = new GetColumnLineageTool(indexer, mockBridge, mockLogger);
+		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger);
 		const result = await tool.invoke(
 			{ input: { model: 'customers' }, toolInvocationToken: undefined } as never,
 			token as never,
@@ -213,8 +213,8 @@ describe('GetColumnLineageTool', () => {
 	it('returns error when model not found', async () => {
 		const index = createTestIndex();
 		const indexer = createMockIndexer(index);
-		const mockBridge = { invokeRaw: vi.fn() } as unknown as BridgeRunner;
-		const tool = new GetColumnLineageTool(indexer, mockBridge, mockLogger);
+		const mockService = { submit: vi.fn() } as unknown as DbtExecutionService;
+		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger);
 
 		const result = await tool.invoke(
 			{ input: { model: 'nonexistent' }, toolInvocationToken: undefined } as never,

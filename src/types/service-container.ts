@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { ILogger } from './logger';
 import type { BridgeRunner } from '../dbt/bridge-runner';
+import type { DbtExecutionService } from '../dbt/execution-service';
 import type { ManifestLoader } from '../dbt/manifest-loader';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ManifestWatcher } from '../indexing/manifest-watcher';
@@ -30,6 +31,7 @@ export class ServiceContainer {
 	private _manifestLoader: ManifestLoader | null = null;
 	private _manifestIndexer: ManifestIndexer | null = null;
 	private _manifestWatcher: ManifestWatcher | null = null;
+	private _executionService: DbtExecutionService | null = null;
 
 	private constructor(options: ServiceContainerOptions) {
 		this._context = options.extensionContext;
@@ -120,5 +122,16 @@ export class ServiceContainer {
 
 	getManifestWatcher(): ManifestWatcher | null {
 		return this._manifestWatcher;
+	}
+
+	setExecutionService(service: DbtExecutionService): void {
+		this._executionService = service;
+	}
+
+	getExecutionService(): DbtExecutionService {
+		if (!this._executionService) {
+			throw new Error('DbtExecutionService is not yet initialized.');
+		}
+		return this._executionService;
 	}
 }

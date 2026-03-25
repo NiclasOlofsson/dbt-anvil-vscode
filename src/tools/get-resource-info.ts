@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { ILogger } from '../types/logger';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import type { BridgeRunner } from '../dbt/bridge-runner';
+import { type DbtExecutionService, Priority } from '../dbt/execution-service';
 import type { ManifestLoader } from '../dbt/manifest-loader';
 import { toolResult } from './tool-helpers';
 
@@ -14,7 +14,7 @@ interface GetResourceInfoInput {
 export class GetResourceInfoTool implements vscode.LanguageModelTool<GetResourceInfoInput> {
 	constructor(
 		private readonly indexer: ManifestIndexer,
-		private readonly bridge: BridgeRunner,
+		private readonly service: DbtExecutionService,
 		private readonly loader: ManifestLoader,
 		private readonly logger: ILogger,
 	) {}
@@ -45,9 +45,14 @@ export class GetResourceInfoTool implements vscode.LanguageModelTool<GetResource
 		const hasCompiledSql = 'compiled_code' in rawNode && rawNode.compiled_code;
 		if (include_compiled_sql && !hasCompiledSql && rawNode.resource_type === 'model') {
 			try {
-				const compileResult = await this.bridge.invoke(['compile', '-s', rawNode.name]);
+				const compileResult = await this.service.submit({
+					type: 'compile',
+					args: ['compile', '-s', rawNode.name],
+					priority: Priority.Tool,
+					origin: 'copilot',
+					label: `compile ${rawNode.name}`,
+				});
 				if (compileResult.success) {
-					this.loader.invalidate();
 					const reloaded = this.indexer.getRawNode(rawNode.unique_id);
 					if (reloaded) {
 						rawNode = reloaded;

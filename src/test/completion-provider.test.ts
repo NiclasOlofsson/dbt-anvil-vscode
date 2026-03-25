@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import type { BridgeRunner } from '../dbt/bridge-runner';
-import type { ManifestWatcher } from '../indexing/manifest-watcher';
+import type { DbtExecutionService } from '../dbt/execution-service';
+
 import { DbtCompletionProvider } from '../providers/completion-provider';
 import { createMockLogger } from './helpers';
 
@@ -27,17 +27,18 @@ function makeIndexer(): ManifestIndexer {
 	} as unknown as ManifestIndexer;
 }
 
-function makeBridge(aliases: Record<string, string[]>): BridgeRunner {
+function makeService(aliases: Record<string, string[]>): DbtExecutionService {
 	return {
-		invokeRaw: vi.fn(async (payload: Record<string, unknown>) => {
-			if (payload['get_scope_columns']) return { data: { aliases } };
-			if (payload['describe_table']) return { data: { columns: [] } };
+		submit: vi.fn(async (request: Record<string, unknown>) => {
+			const raw = request['raw'] as Record<string, unknown> | undefined;
+			if (raw?.['get_scope_columns']) return { data: { aliases } };
+			if (raw?.['describe_table']) return { data: { columns: [] } };
 			return { data: {} };
 		}),
-	} as unknown as BridgeRunner;
+	} as unknown as DbtExecutionService;
 }
 
-const WATCHER = { suppress: vi.fn(), resume: vi.fn() } as unknown as ManifestWatcher;
+
 const TOKEN = { isCancellationRequested: false };
 const CTX = {};
 
@@ -52,7 +53,7 @@ describe('DbtCompletionProvider — bare column completions', () => {
 	};
 
 	beforeEach(() => {
-		provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), makeBridge(aliases), WATCHER);
+		provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), makeService(aliases));
 	});
 
 	it('returns merged column list when typing a bare word in SELECT', async () => {
@@ -122,8 +123,8 @@ describe('DbtCompletionProvider — bare column completions', () => {
 	});
 
 	it('returns [] (not undefined) when no aliases resolved', async () => {
-		const emptyBridge = makeBridge({});
-		const p = new DbtCompletionProvider(makeIndexer(), createMockLogger(), emptyBridge, WATCHER);
+		const emptyService = makeService({});
+		const p = new DbtCompletionProvider(makeIndexer(), createMockLogger(), emptyService);
 
 		const linePrefix = 'SELECT na';
 		const doc = mockDocument([linePrefix]);
@@ -139,7 +140,7 @@ describe('DbtCompletionProvider — bare column completions', () => {
 describe('DbtCompletionProvider — alias.column completions (existing)', () => {
 	it('still works for alias. prefix', async () => {
 		const aliases = { c: ['id', 'name'] };
-		const provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), makeBridge(aliases), WATCHER);
+		const provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), makeService(aliases));
 
 		const linePrefix = 'SELECT c.';
 		const doc = mockDocument([linePrefix]);
