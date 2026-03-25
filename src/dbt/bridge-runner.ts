@@ -107,7 +107,7 @@ export class BridgeRunner {
 			this._stderrBuffer = lines.pop() ?? '';
 			for (const line of lines) {
 				if (line) {
-					this.logger.debug(`[bridge stderr] ${line}`);
+					this.logger.trace(`[bridge stderr] ${line}`);
 					this._stderrLines.push(line);
 				}
 			}

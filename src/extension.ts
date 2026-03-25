@@ -18,15 +18,16 @@ import { YamlHoverProvider } from './providers/yaml-hover-provider';
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
 	// -------- Bootstrap logging & service container --------
 	const outputChannel = vscode.window.createOutputChannel('dbt Studio', { log: true });
+
+	if (context.extensionMode === vscode.ExtensionMode.Development) {
+		outputChannel.show(true);
+	}
+
 	const logger = new VSCodeLogger(outputChannel, context.extensionMode);
 
 	const version = (context.extension.packageJSON as { version: string }).version;
 	ServiceContainer.initialize({ extensionContext: context, logger, extensionVersion: version });
 	context.subscriptions.push(outputChannel);
-
-	if (context.extensionMode === vscode.ExtensionMode.Development) {
-		outputChannel.show(true);
-	}
 
 	logger.info(`dbt Studio v${version} activating...`);
 

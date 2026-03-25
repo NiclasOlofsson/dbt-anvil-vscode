@@ -63,6 +63,9 @@ export class ManifestIndexer {
 	 */
 	private _columnStore = new Map<string, string[]>();
 
+	/** Checksums from the previous manifest build, used to diff on rebuild. */
+	private _nodeChecksums = new Map<string, string>();
+
 	constructor(
 		private readonly loader: ManifestLoader,
 		private readonly logger: ILogger,
@@ -79,7 +82,7 @@ export class ManifestIndexer {
 		this.logger.info('Building manifest index...');
 		const { manifest } = this.loader.load(force);
 		this._index = this._buildIndex(manifest);
-		this.clearColumnStore();
+		this._diffAndInvalidate(manifest);
 		this.logger.info(
 			`Manifest index built: ${this._index.models.size} models, ${this._index.sources.size} sources`,
 		);
@@ -368,6 +371,54 @@ export class ManifestIndexer {
 			this.logger.debug(`Column store: evicted ${evicted.size} entries: [${[...evicted].join(', ')}]`);
 		}
 		return evicted;
+	}
+
+	/**
+	 * Compare node checksums from the new manifest against the previous build.
+	 * Only invalidate column store entries for nodes that actually changed.
+	 * On first build (no previous checksums), clears everything.
+	 */
+	private _diffAndInvalidate(manifest: DbtManifest): void {
+		const newChecksums = new Map<string, string>();
+		for (const [uid, node] of Object.entries(manifest.nodes)) {
+			if (node.checksum?.checksum) {
+				newChecksums.set(uid, node.checksum.checksum);
+			}
+		}
+
+		const oldChecksums = this._nodeChecksums;
+		this._nodeChecksums = newChecksums;
+
+		// First build — no previous state to compare against
+		if (oldChecksums.size === 0) {
+			this.clearColumnStore();
+			return;
+		}
+
+		// Find nodes that changed, were added, or were removed
+		const changed = new Set<string>();
+		for (const [uid, checksum] of newChecksums) {
+			const prev = oldChecksums.get(uid);
+			if (prev !== checksum) {
+				changed.add(uid);
+			}
+		}
+		// Removed nodes
+		for (const uid of oldChecksums.keys()) {
+			if (!newChecksums.has(uid)) {
+				changed.add(uid);
+			}
+		}
+
+		if (changed.size === 0) {
+			this.logger.info('Manifest rebuilt — no node changes detected, column store preserved');
+			return;
+		}
+
+		this.logger.info(`Manifest rebuilt — ${changed.size} node(s) changed: [${[...changed].join(', ')}]`);
+		for (const uid of changed) {
+			this.invalidateModel(uid);
+		}
 	}
 
 	/** Clear the entire column store (e.g. on full manifest rebuild). */

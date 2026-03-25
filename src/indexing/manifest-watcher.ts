@@ -54,7 +54,6 @@ export class ManifestWatcher {
 	private _rebuild(reason: string): void {
 		this.logger.info(`Rebuilding manifest index (${reason})`);
 		try {
-			this.loader.invalidate();
 			this.indexer.build(true);
 			this._onIndexRebuild.fire(this.indexer);
 		} catch (err) {
