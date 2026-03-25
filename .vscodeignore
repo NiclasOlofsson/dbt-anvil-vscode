@@ -3,6 +3,7 @@
 src/
 scripts/
 temp_auto/
+samples/
 node_modules/
 .esbuild.ts
 tsconfig.json
