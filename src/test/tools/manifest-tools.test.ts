@@ -4,6 +4,7 @@ import { ListResourcesTool } from '../../tools/list-resources';
 import { AnalyzeImpactTool } from '../../tools/analyze-impact';
 import { GetProjectInfoTool } from '../../tools/get-project-info';
 import { GetColumnLineageTool } from '../../tools/get-column-lineage';
+import { QueryDatabaseTool } from '../../tools/query-database';
 import type { ManifestLoader } from '../../dbt/manifest-loader';
 import type { DbtExecutionService } from '../../dbt/execution-service';
 import { createMockLogger } from '../helpers';
@@ -44,6 +45,7 @@ function createTestIndex(): ManifestIndex {
 	return {
 		models,
 		sources,
+		macros: new Map(),
 		nodesByName: new Map([
 			['orders', ['model.p.orders']],
 			['customers', ['model.p.customers']],
@@ -224,5 +226,100 @@ describe('GetColumnLineageTool', () => {
 		const text = result.content[0];
 		const parsed = JSON.parse((text as { value: string }).value);
 		expect(parsed.error).toContain('not found');
+	});
+});
+
+describe('QueryDatabaseTool', () => {
+	const token = { isCancellationRequested: false, onCancellationRequested: vi.fn() };
+
+	it('parses JSON rows from dbt show --output json stdout', async () => {
+		const index = createTestIndex();
+		const indexer = createMockIndexer(index);
+		const rows = [{ id: 1, name: 'Alice' }, { id: 2, name: 'Bob' }];
+		const showJson = JSON.stringify({ show: rows });
+		const mockService = {
+			submit: vi.fn().mockResolvedValue({
+				success: true,
+				stdout: `09:00:00  Running with dbt=1.8.0\n${showJson}\n{"success": true}`,
+				stderr: '',
+			}),
+		} as unknown as DbtExecutionService;
+
+		const tool = new QueryDatabaseTool(mockService, indexer, mockLogger);
+		const result = await tool.invoke(
+			{ input: { sql: 'SELECT 1' }, toolInvocationToken: undefined } as never,
+			token as never,
+		);
+
+		const parsed = JSON.parse((result.content[0] as { value: string }).value);
+		expect(parsed.success).toBe(true);
+		expect(parsed.row_count).toBe(2);
+		expect(parsed.rows).toEqual(rows);
+	});
+
+	it('passes --output json and --no-populate-cache flags to the service', async () => {
+		const index = createTestIndex();
+		const indexer = createMockIndexer(index);
+		const submit = vi.fn().mockResolvedValue({
+			success: true,
+			stdout: '{"show": []}',
+			stderr: '',
+		});
+		const mockService = { submit } as unknown as DbtExecutionService;
+
+		const tool = new QueryDatabaseTool(mockService, indexer, mockLogger);
+		await tool.invoke(
+			{ input: { sql: 'SELECT 42 AS n' }, toolInvocationToken: undefined } as never,
+			token as never,
+		);
+
+		const submittedArgs: string[] = submit.mock.calls[0][0].args;
+		expect(submittedArgs).toContain('--output');
+		expect(submittedArgs).toContain('json');
+		expect(submittedArgs).toContain('--no-populate-cache');
+	});
+
+	it('falls back to raw output when no show JSON line found', async () => {
+		const index = createTestIndex();
+		const indexer = createMockIndexer(index);
+		const mockService = {
+			submit: vi.fn().mockResolvedValue({
+				success: true,
+				stdout: '09:00:00  Some log line\n{"success": true}',
+				stderr: '',
+			}),
+		} as unknown as DbtExecutionService;
+
+		const tool = new QueryDatabaseTool(mockService, indexer, mockLogger);
+		const result = await tool.invoke(
+			{ input: { sql: 'SELECT 1' }, toolInvocationToken: undefined } as never,
+			token as never,
+		);
+
+		const parsed = JSON.parse((result.content[0] as { value: string }).value);
+		// formatBridgeResult shape — success present, raw output passed through
+		expect(parsed.success).toBe(true);
+		expect(typeof parsed.output).toBe('string');
+	});
+
+	it('returns error result when dbt show fails', async () => {
+		const index = createTestIndex();
+		const indexer = createMockIndexer(index);
+		const mockService = {
+			submit: vi.fn().mockResolvedValue({
+				success: false,
+				stdout: '',
+				stderr: 'Compilation error',
+			}),
+		} as unknown as DbtExecutionService;
+
+		const tool = new QueryDatabaseTool(mockService, indexer, mockLogger);
+		const result = await tool.invoke(
+			{ input: { sql: 'SELECT bad_column FROM missing_table' }, toolInvocationToken: undefined } as never,
+			token as never,
+		);
+
+		const parsed = JSON.parse((result.content[0] as { value: string }).value);
+		expect(parsed.success).toBe(false);
 	});
 });
