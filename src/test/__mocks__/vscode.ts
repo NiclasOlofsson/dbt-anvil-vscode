@@ -67,10 +67,18 @@ export class Position {
 }
 
 export class Range {
-	constructor(
-		public readonly start: Position,
-		public readonly end: Position,
-	) {}
+	public readonly start: Position;
+	public readonly end: Position;
+
+	constructor(startOrStartLine: Position | number, endOrStartChar: Position | number, endLine?: number, endChar?: number) {
+		if (typeof startOrStartLine === 'number') {
+			this.start = new Position(startOrStartLine, endOrStartChar as number);
+			this.end = new Position(endLine!, endChar!);
+		} else {
+			this.start = startOrStartLine;
+			this.end = endOrStartChar as Position;
+		}
+	}
 
 	get isEmpty(): boolean {
 		return this.start.isEqual(this.end);
@@ -284,6 +292,7 @@ export const workspace = {
 	},
 	onDidChangeTextDocument: vi.fn(),
 	onDidSaveTextDocument: vi.fn(),
+	applyEdit: vi.fn().mockResolvedValue(true),
 };
 
 export const window = {
@@ -339,6 +348,9 @@ export const languages = {
 	registerDocumentSymbolProvider: vi.fn(),
 	registerCodeActionsProvider: vi.fn(),
 	registerDocumentFormattingEditProvider: vi.fn(),
+	registerCodeLensProvider: vi.fn(),
+	registerWorkspaceSymbolProvider: vi.fn(),
+	registerSignatureHelpProvider: vi.fn(),
 	createDiagnosticCollection: vi.fn(() => ({
 		set: vi.fn(),
 		delete: vi.fn(),
@@ -420,4 +432,131 @@ export class CancellationTokenSource {
 	};
 	cancel = vi.fn();
 	dispose = vi.fn();
+}
+
+export enum SymbolKind {
+	File = 0,
+	Module = 1,
+	Namespace = 2,
+	Package = 3,
+	Class = 4,
+	Method = 5,
+	Property = 6,
+	Field = 7,
+	Constructor = 8,
+	Enum = 9,
+	Interface = 10,
+	Function = 11,
+	Variable = 12,
+	Constant = 13,
+	String = 14,
+	Number = 15,
+	Boolean = 16,
+	Array = 17,
+	Object = 18,
+	Key = 19,
+	Null = 20,
+	EnumMember = 21,
+	Struct = 22,
+	Event = 23,
+	Operator = 24,
+	TypeParameter = 25,
+}
+
+export class DocumentSymbol {
+	children: DocumentSymbol[] = [];
+	constructor(
+		public name: string,
+		public detail: string,
+		public kind: SymbolKind,
+		public range: Range,
+		public selectionRange: Range,
+	) {}
+}
+
+export class SymbolInformation {
+	constructor(
+		public name: string,
+		public kind: SymbolKind,
+		public containerName: string,
+		public location: Location,
+	) {}
+}
+
+export class CodeLens {
+	command?: Command;
+	constructor(
+		public range: Range,
+		command?: Command,
+	) {
+		this.command = command;
+	}
+}
+
+export enum CodeActionKind {
+	Empty = '',
+	QuickFix = 'quickfix',
+	Refactor = 'refactor',
+	RefactorExtract = 'refactor.extract',
+	RefactorInline = 'refactor.inline',
+	RefactorRewrite = 'refactor.rewrite',
+	Source = 'source',
+	SourceOrganizeImports = 'source.organizeImports',
+}
+
+export class CodeAction {
+	command?: Command;
+	isPreferred?: boolean;
+	constructor(
+		public title: string,
+		public kind?: CodeActionKind,
+	) {}
+}
+
+export class WorkspaceEdit {
+	private _edits: Array<{ uri: Uri; range: Range; newText: string }> = [];
+	private _fileOps: Array<{ type: string; oldUri?: Uri; newUri?: Uri }> = [];
+
+	replace(uri: Uri, range: Range, newText: string): void {
+		this._edits.push({ uri, range, newText });
+	}
+
+	renameFile(oldUri: Uri, newUri: Uri): void {
+		this._fileOps.push({ type: 'rename', oldUri, newUri });
+	}
+
+	entries(): Array<[Uri, Array<{ range: Range; newText: string }>]> {
+		const map = new Map<string, { uri: Uri; edits: Array<{ range: Range; newText: string }> }>();
+		for (const edit of this._edits) {
+			const key = edit.uri.toString();
+			if (!map.has(key)) map.set(key, { uri: edit.uri, edits: [] });
+			map.get(key)!.edits.push({ range: edit.range, newText: edit.newText });
+		}
+		return [...map.values()].map(v => [v.uri, v.edits]);
+	}
+}
+
+export class SignatureInformation {
+	parameters: ParameterInformation[] = [];
+	constructor(
+		public label: string,
+		public documentation?: string,
+	) {}
+}
+
+export class ParameterInformation {
+	constructor(
+		public label: string,
+		public documentation?: string,
+	) {}
+}
+
+export class SignatureHelp {
+	signatures: SignatureInformation[] = [];
+	activeSignature = 0;
+	activeParameter = 0;
+}
+
+export class SnippetString {
+	constructor(public value: string) {}
 }
