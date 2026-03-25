@@ -65,8 +65,13 @@ function createMockIndexer(overrides?: Partial<ManifestIndex>): ManifestIndexer 
 			['customers', ['model.project.customers']],
 			['orders', ['model.project.orders']],
 		]),
-		parentMap: overrides?.parentMap ?? new Map(),
-		childMap: overrides?.childMap ?? new Map(),
+		parentMap: overrides?.parentMap ?? new Map([
+			['model.project.orders', ['model.project.customers', 'source.project.raw.payments']],
+		]),
+		childMap: overrides?.childMap ?? new Map([
+			['model.project.customers', ['model.project.orders']],
+			['source.project.raw.payments', ['model.project.orders']],
+		]),
 		dbtVersion: '1.8.0',
 		adapterType: 'duckdb',
 		buildTime: new Date(),
@@ -149,36 +154,33 @@ describe('DbtReferenceProvider', () => {
 		expect(result).toEqual([]);
 	});
 
-	it('finds ref usages across workspace files', async () => {
+	it('finds ref usages via manifest childMap', async () => {
 		const doc = createMockDocument('select * from {{ ref(\'customers\') }}');
 		const pos = new vscode.Position(0, 25); // cursor on 'customers'
 
-		// Mock findFiles to return a SQL file
-		const sqlUri = vscode.Uri.file('/project/models/orders.sql');
-		vi.mocked(vscode.workspace.findFiles)
-			.mockResolvedValueOnce([sqlUri])  // SQL files
-			.mockResolvedValueOnce([]);       // YAML files
-
-		// Mock the found file content
+		// Mock the downstream file content (orders.sql depends on customers)
 		const matchDoc = createMockDocument('select * from {{ ref(\'customers\') }}', { fileName: '/project/models/orders.sql' });
 		vi.mocked(vscode.workspace.openTextDocument).mockResolvedValue(matchDoc);
 
 		const result = await provider.provideReferences(doc, pos, { includeDeclaration: true }, mockToken);
 
-		// Should include the model definition file + the ref usage
-		expect(result.length).toBeGreaterThanOrEqual(1);
+		// Should include the model definition + downstream ref in orders.sql
+		expect(result.length).toBe(2);
+		expect(result[0].uri.fsPath).toContain('customers.sql');
+		expect(result[1].uri.fsPath).toContain('orders.sql');
 	});
 
-	it('finds source usages', async () => {
+	it('finds source usages via manifest childMap', async () => {
 		const doc = createMockDocument('select * from {{ source(\'raw\', \'payments\') }}');
 		const pos = new vscode.Position(0, 30);
 
-		vi.mocked(vscode.workspace.findFiles)
-			.mockResolvedValueOnce([])
-			.mockResolvedValueOnce([]);
+		// orders.sql depends on source.project.raw.payments per childMap
+		const matchDoc = createMockDocument('select * from {{ source(\'raw\', \'payments\') }}', { fileName: '/project/models/orders.sql' });
+		vi.mocked(vscode.workspace.openTextDocument).mockResolvedValue(matchDoc);
 
 		const result = await provider.provideReferences(doc, pos, { includeDeclaration: true }, mockToken);
-		expect(result).toEqual([]);
+		expect(result.length).toBe(1);
+		expect(result[0].uri.fsPath).toContain('orders.sql');
 	});
 });
 
@@ -214,11 +216,7 @@ describe('DbtRenameProvider', () => {
 		const doc = createMockDocument('select * from {{ ref(\'customers\') }}');
 		const pos = new vscode.Position(0, 26);
 
-		const sqlUri = vscode.Uri.file('/project/models/orders.sql');
-		vi.mocked(vscode.workspace.findFiles)
-			.mockResolvedValueOnce([sqlUri])   // SQL files
-			.mockResolvedValueOnce([]);        // YAML files
-
+		// downstream file (orders.sql) contains ref('customers')
 		const matchDoc = createMockDocument('select * from {{ ref(\'customers\') }}', { fileName: '/project/models/orders.sql' });
 		vi.mocked(vscode.workspace.openTextDocument).mockResolvedValue(matchDoc);
 
