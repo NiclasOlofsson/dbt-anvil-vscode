@@ -13,6 +13,7 @@ export class ManifestLoader {
 	private _cached: ManifestLoadResult | null = null;
 	private _manifestPath: string;
 	private _projectConfig: DbtProjectConfig | undefined;
+	private _lastMtimeMs: number | null = null;
 
 	constructor(private readonly _projectDir: string) {
 		this._projectConfig = loadProjectConfig(_projectDir);
@@ -71,9 +72,16 @@ export class ManifestLoader {
 			);
 		}
 
+		// Skip expensive re-read if the file hasn't actually been modified
+		const stat = fs.statSync(this._manifestPath);
+		if (this._cached && this._lastMtimeMs === stat.mtimeMs) {
+			return this._cached;
+		}
+
 		const raw = fs.readFileSync(this._manifestPath, 'utf-8');
 		const manifest = JSON.parse(raw) as DbtManifest;
 
+		this._lastMtimeMs = stat.mtimeMs;
 		this._cached = {
 			manifest,
 			manifestPath: this._manifestPath,
@@ -88,6 +96,7 @@ export class ManifestLoader {
 	 */
 	invalidate(): void {
 		this._cached = null;
+		this._lastMtimeMs = null;
 	}
 
 	/**

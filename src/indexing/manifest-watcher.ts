@@ -12,6 +12,8 @@ export class ManifestWatcher {
 	private _manifestWatcher: vscode.FileSystemWatcher | null = null;
 	private _projectWatcher: vscode.FileSystemWatcher | null = null;
 	private _sqlSaveDisposable: vscode.Disposable | null = null;
+	private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
+	private _suppressed = false;
 	private readonly _onIndexRebuild = new vscode.EventEmitter<ManifestIndexer>();
 
 	readonly onIndexRebuild = this._onIndexRebuild.event;
@@ -26,8 +28,8 @@ export class ManifestWatcher {
 		const manifestPattern = new vscode.RelativePattern(projectDir, '**/target/manifest.json');
 		this._manifestWatcher = vscode.workspace.createFileSystemWatcher(manifestPattern);
 
-		this._manifestWatcher.onDidChange(() => this._rebuild('manifest changed'));
-		this._manifestWatcher.onDidCreate(() => this._rebuild('manifest created'));
+		this._manifestWatcher.onDidChange(() => this._debouncedRebuild('manifest changed'));
+		this._manifestWatcher.onDidCreate(() => this._debouncedRebuild('manifest created'));
 
 		const projectPattern = new vscode.RelativePattern(projectDir, 'dbt_project.yml');
 		this._projectWatcher = vscode.workspace.createFileSystemWatcher(projectPattern);
@@ -51,6 +53,20 @@ export class ManifestWatcher {
 		this.logger.info('ManifestWatcher started');
 	}
 
+	private _debouncedRebuild(reason: string): void {
+		if (this._suppressed) {
+			this.logger.debug(`Manifest watcher suppressed, ignoring: ${reason}`);
+			return;
+		}
+		if (this._debounceTimer) {
+			clearTimeout(this._debounceTimer);
+		}
+		this._debounceTimer = setTimeout(() => {
+			this._debounceTimer = null;
+			this._rebuild(reason);
+		}, 500);
+	}
+
 	private _rebuild(reason: string): void {
 		this.logger.info(`Rebuilding manifest index (${reason})`);
 		try {
@@ -61,7 +77,31 @@ export class ManifestWatcher {
 		}
 	}
 
+	/**
+	 * Suppress manifest change handling. Use when running bridge commands
+	 * (like describe_table) that rewrite manifest.json as a side effect
+	 * but don't actually change model definitions.
+	 */
+	suppress(): void {
+		this._suppressed = true;
+		if (this._debounceTimer) {
+			clearTimeout(this._debounceTimer);
+			this._debounceTimer = null;
+		}
+	}
+
+	/**
+	 * Resume manifest change handling after a suppressed operation.
+	 * Does NOT trigger a rebuild — the suppressed changes are discarded.
+	 */
+	resume(): void {
+		this._suppressed = false;
+	}
+
 	dispose(): void {
+		if (this._debounceTimer) {
+			clearTimeout(this._debounceTimer);
+		}
 		this._manifestWatcher?.dispose();
 		this._projectWatcher?.dispose();
 		this._sqlSaveDisposable?.dispose();

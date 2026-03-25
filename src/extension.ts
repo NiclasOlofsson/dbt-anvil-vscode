@@ -94,7 +94,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const yamlSelector: vscode.DocumentSelector = { language: 'yaml', pattern: '**/{schema,sources,models}.yml' };
 	const definitionProvider = new DbtDefinitionProvider(manifestIndexer, manifestLoader, logger);
 	const hoverProvider = new DbtHoverProvider(manifestIndexer, logger);
-	const completionProvider = new DbtCompletionProvider(manifestIndexer, logger, bridgeRunner);
+	const completionProvider = new DbtCompletionProvider(manifestIndexer, logger, bridgeRunner, manifestWatcher);
 	const yamlCompletionProvider = new YamlCompletionProvider(manifestIndexer, logger);
 	const yamlHoverProvider = new YamlHoverProvider(manifestIndexer, logger);
 
