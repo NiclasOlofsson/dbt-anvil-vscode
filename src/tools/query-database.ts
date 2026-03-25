@@ -44,7 +44,7 @@ export class QueryDatabaseTool implements vscode.LanguageModelTool<QueryDatabase
 			sql = extracted;
 		}
 
-		const args = ['show', '--inline', sql, '--limit', '-1'];
+		const args = ['show', '--inline', sql, '--limit', '-1', '--output', 'json', '--no-populate-cache'];
 		const result = await this.service.submit({
 			type: 'show',
 			args,
@@ -52,6 +52,26 @@ export class QueryDatabaseTool implements vscode.LanguageModelTool<QueryDatabase
 			origin: 'copilot',
 			label: 'query database',
 		});
+
+		if (!result.success) {
+			return toolResult(formatBridgeResult(result));
+		}
+
+		// dbt show --output json emits a single line: {"show": [...rows...]}
+		// mixed in with log lines — find and parse it
+		const showLine = result.stdout.split('\n').find(line => line.trimStart().startsWith('{"show"'));
+		if (showLine) {
+			try {
+				const data = JSON.parse(showLine.trim()) as Record<string, unknown>;
+				const rows = data['show'];
+				if (Array.isArray(rows)) {
+					return toolResult({ success: true, row_count: rows.length, rows });
+				}
+			} catch {
+				// fall through to raw output
+			}
+		}
+
 		return toolResult(formatBridgeResult(result));
 	}
 
