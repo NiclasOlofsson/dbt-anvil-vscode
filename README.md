@@ -1,61 +1,54 @@
 # dbt Studio for VS Code
 
-**dbt Studio** brings your dbt project to life inside VS Code. A full-featured development environment *and* an AI-powered assistant — the best of both worlds for analytics engineering.
+**dbt Studio** goes beyond the basics. Where most dbt extensions stop at model and source completions, dbt Studio adds the things that actually make you faster — column intelligence, interactive lineage, test results, and deep Copilot integration.
 
-No configuration required. Open a workspace with a `dbt_project.yml` and it just works.
+No configuration required. Open a project and it just works.
 
 ---
 
-## A Real Developer Experience
+## What Makes It Different
 
-Everything you expect from a first-class language extension — purpose-built for dbt.
+### Column Intelligence
 
-### Language Support
+Most extensions know about your models. dbt Studio knows about your *columns*.
 
-- **Jinja SQL syntax highlighting** for `.sql` files with full Jinja2 template support
-- **Jinja in YAML** — syntax highlighting for Jinja expressions in `schema.yml` and other dbt config files
-- **Go to Definition** — click through `ref('model_name')` or `source('src', 'table')` to jump straight to the file
-- **Hover Information** — model details and metadata at your fingertips
-- **Auto-completion** for `ref()`, `source()`, and Jinja built-in functions
-
-### Model Explorer
-
-A sidebar tree view showing all your dbt resources organised by type and materialisation — models, sources, seeds, snapshots, and tests at a glance.
+Get completions for column names as you type — drawn from the actual shape of the model you're in. Trace any column all the way back through your lineage to where it originally comes from.
 
 ### Lineage Graph
 
-An interactive lineage panel that visualises upstream and downstream dependencies. Follows the active editor so the graph updates as you navigate between models.
+See the full upstream and downstream picture for any model in an interactive graph. It follows wherever you are in the editor, so the view always matches what you're working on.
 
-### Test Explorer & Results
+### Test Explorer
 
-Browse, run, and inspect unit tests, data tests, and CTE tests from a dedicated sidebar. Run individual tests, groups, or everything at once — with pass/fail results in a dedicated panel.
+Run dbt tests and see results right in the sidebar — no switching to a terminal, no scrolling through logs.
 
-### Editor Actions
+### Ask Copilot About Your Project
 
-Run, test, build, or compile the current model directly from the editor title bar — no terminal needed.
+dbt Studio gives GitHub Copilot real understanding of your project — and the ability to act on it.
+
+> *"What would break if I changed stg_orders?"*
+> *"Trace the revenue column back to its source"*
+> *"Run the staging models and show me what failed"*
+> *"Query the top 10 customers by lifetime value"*
 
 ---
 
-## AI-Powered Development with Copilot
+## Everything Else You'd Expect
 
-dbt Studio provides a rich set of tools to GitHub Copilot, giving it deep understanding of your dbt project. Ask questions, run commands, explore lineage, and analyse impact — all through natural conversation.
-
-> *"List all models in my project"*
-> *"Show me the lineage for the customers model"*
-> *"Run the staging models"*
-> *"What would break if I changed stg_orders?"*
-> *"Query the database for the top 10 customers by revenue"*
-
-Copilot can run and build models, inspect resources, trace column-level lineage, analyse downstream impact of changes, query your database, and more — all without leaving the chat.
+- Syntax highlighting for Jinja SQL and Jinja in YAML
+- Jump to definition for models and sources
+- Hover to see model details
+- Completions for `ref()`, `source()`, and Jinja
+- Model explorer in the sidebar
+- Run, test, build, or compile from the editor title bar
 
 ---
 
 ## Getting Started
 
 1. **Install** — search for **dbt Studio** in the VS Code Extensions panel
-2. **Open a dbt project** — any folder containing a `dbt_project.yml` activates the extension automatically
-3. **Start coding** — language features work immediately
-4. **Talk to Copilot** — open Copilot Chat to use the AI tools (requires GitHub Copilot)
+2. **Open a dbt project** — the extension activates automatically
+3. **Talk to Copilot** — open Copilot Chat to use the AI tools (requires GitHub Copilot)
 
 ### Requirements
 

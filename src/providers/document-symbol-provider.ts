@@ -1,22 +1,26 @@
 import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
+import type { ParseService } from '../services/parse-service';
 import type { ILogger } from '../types/logger';
 
 /**
  * Document symbols for the Outline panel.
- * SQL files: CTEs shown as named symbols.
+ * SQL files: CTEs shown as named symbols, backed by bridge-parsed DocumentModel
+ *            with accurate line ranges and column children (falls back to regex
+ *            if the bridge hasn't started yet or parsing fails).
  * YAML files: model → columns → tests hierarchy.
  */
 export class DbtDocumentSymbolProvider implements vscode.DocumentSymbolProvider {
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
+		private readonly parseService: ParseService | null = null,
 	) {}
 
 	provideDocumentSymbols(
 		document: vscode.TextDocument,
 		_token: vscode.CancellationToken,
-	): vscode.DocumentSymbol[] {
+	): vscode.ProviderResult<vscode.DocumentSymbol[]> {
 		if (document.languageId === 'jinja-sql') {
 			return this._sqlSymbols(document);
 		}
@@ -28,7 +32,94 @@ export class DbtDocumentSymbolProvider implements vscode.DocumentSymbolProvider 
 		return [];
 	}
 
-	private _sqlSymbols(document: vscode.TextDocument): vscode.DocumentSymbol[] {
+	private async _sqlSymbols(document: vscode.TextDocument): Promise<vscode.DocumentSymbol[]> {
+		if (this.parseService) {
+			const dialect = this.indexer.index?.adapterType ?? 'ansi';
+			const model = await this.parseService.getDocumentModel(document, dialect);
+			if (model) {
+				return this._symbolsFromModel(document, model);
+			}
+		}
+
+		// Fallback: regex-based extraction
+		return this._sqlSymbolsRegex(document);
+	}
+
+	private _symbolsFromModel(
+		document: vscode.TextDocument,
+		model: import('../services/parse-service').DocumentModel,
+	): vscode.DocumentSymbol[] {
+		if (model.ctes.length === 0) return [];
+
+		const symbols: vscode.DocumentSymbol[] = [];
+		const lineCount = document.lineCount;
+
+		for (const cte of model.ctes) {
+			const startLine = Math.min(cte.line, lineCount - 1);
+			const endLine = Math.min(cte.endLine, lineCount - 1);
+			const startPos = new vscode.Position(startLine, 0);
+			const endPos = document.lineAt(endLine).range.end;
+			const range = new vscode.Range(startPos, endPos);
+			const selectionRange = document.lineAt(startLine).range;
+
+			const sym = new vscode.DocumentSymbol(
+				cte.name,
+				'CTE',
+				vscode.SymbolKind.Function,
+				range,
+				selectionRange,
+			);
+
+			// Add columns as children, navigating to the actual column line
+			for (const col of cte.columns) {
+				const colLine = Math.min(col.line, lineCount - 1);
+				const colRange = document.lineAt(colLine).range;
+				const childSym = new vscode.DocumentSymbol(
+					col.name,
+					'column',
+					vscode.SymbolKind.Field,
+					colRange,
+					colRange,
+				);
+				sym.children.push(childSym);
+			}
+
+			symbols.push(sym);
+		}
+
+		// Final SELECT symbol
+		const modelName = this._getModelName(document);
+		if (modelName && model.finalColumns.length > 0) {
+			const lastLine = lineCount - 1;
+			const range = new vscode.Range(lastLine, 0, lastLine, 0);
+			const finalSym = new vscode.DocumentSymbol(
+				modelName,
+				'final query',
+				vscode.SymbolKind.Class,
+				range,
+				range,
+			);
+			for (const col of model.finalColumns) {
+				const childSym = new vscode.DocumentSymbol(
+					col,
+					'output column',
+					vscode.SymbolKind.Field,
+					range,
+					range,
+				);
+				finalSym.children.push(childSym);
+			}
+			symbols.push(finalSym);
+		}
+
+		this.logger.debug(
+			'[parse-service] DocumentSymbol: '
+			+ symbols.length + ' symbols from DocumentModel in ' + document.fileName,
+		);
+		return symbols;
+	}
+
+	private _sqlSymbolsRegex(document: vscode.TextDocument): vscode.DocumentSymbol[] {
 		const text = document.getText();
 		const symbols: vscode.DocumentSymbol[] = [];
 
@@ -83,7 +174,7 @@ export class DbtDocumentSymbolProvider implements vscode.DocumentSymbolProvider 
 			}
 		}
 
-		this.logger.debug(`DocumentSymbol: ${symbols.length} SQL symbols in ${document.fileName}`);
+		this.logger.debug('DocumentSymbol: ' + symbols.length + ' SQL symbols (regex) in ' + document.fileName);
 		return symbols;
 	}
 
