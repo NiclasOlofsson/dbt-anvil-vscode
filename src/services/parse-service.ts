@@ -1,5 +1,10 @@
 import type * as vscode from 'vscode';
 import type { BridgeRunner } from '../dbt/bridge-runner';
+import type { DescribeCache } from '../dbt/describe-cache';
+import type { DbtExecutionService } from '../dbt/execution-service';
+import { Priority } from '../dbt/execution-service';
+import type { ManifestIndexer } from '../indexing/manifest-indexer';
+import { stripJinja } from '../providers/jinja-utils';
 import type { ILogger } from '../types/logger';
 
 export interface ColumnInfo {
@@ -15,12 +20,16 @@ export interface CteInfo {
 	/** 0-based line of the closing paren of the CTE body */
 	endLine: number;
 	columns: ColumnInfo[];
+	/** SQL alias used in FROM/JOIN, e.g. `addr` in `FROM address_with_country addr` */
+	alias?: string;
 }
 
 export interface RefInfo {
 	model: string;
 	/** 0-based line */
 	line: number;
+	/** Table alias used in FROM/JOIN, e.g. `ss` in `{{ ref('model') }} ss` */
+	alias?: string;
 }
 
 export interface SourceInfo {
@@ -28,19 +37,39 @@ export interface SourceInfo {
 	tableName: string;
 	/** 0-based line */
 	line: number;
+	/** Table alias used in FROM/JOIN, e.g. `s` in `{{ source('x','y') }} s` */
+	alias?: string;
 }
 
 export interface DocumentModel {
 	ctes: CteInfo[];
 	refs: RefInfo[];
 	sources: SourceInfo[];
-	finalColumns: string[];
+	finalColumns: ColumnInfo[];
 	timing: { parseMs: number; totalMs: number };
+	/**
+	 * Alias → column-name map populated asynchronously after the initial parse.
+	 * `undefined` while enrichment is pending or not configured.
+	 */
+	aliases?: Record<string, string[]>;
+}
+
+/**
+ * Optional enrichment dependencies that enable Tier-2 alias resolution.
+ * When provided, ParseService will asynchronously describe upstream tables
+ * and resolve alias → column mappings after the fast structural parse.
+ */
+export interface EnrichmentConfig {
+	service: DbtExecutionService;
+	describeCache: DescribeCache;
+	indexer: ManifestIndexer;
 }
 
 interface CacheEntry {
 	version: number;
 	model: DocumentModel;
+	/** Dialect used for this parse — needed for re-use during enrichment. */
+	dialect: string;
 }
 
 /**
@@ -57,15 +86,21 @@ interface CacheEntry {
 export class ParseService {
 	private readonly _cache = new Map<string, CacheEntry>();
 	private readonly _inflight = new Map<string, Promise<DocumentModel | null>>();
+	private readonly _enrichInflight = new Map<string, Promise<void>>();
 
 	constructor(
 		private readonly _bridge: BridgeRunner,
 		private readonly _logger: ILogger,
+		private readonly _enrichment?: EnrichmentConfig,
 	) {}
 
 	/**
 	 * Return the DocumentModel for the given document.
 	 * Re-parses via the bridge only when the version has changed.
+	 *
+	 * Returns immediately with `model.aliases === undefined` while Tier-2
+	 * enrichment runs in the background. Callers that need aliases should use
+	 * `getAliases()` to await the enriched result.
 	 */
 	async getDocumentModel(
 		document: vscode.TextDocument,
@@ -74,6 +109,7 @@ export class ParseService {
 		const key = document.uri.toString();
 		const cached = this._cache.get(key);
 		if (cached && cached.version === document.version) {
+			this._triggerEnrichment(document, key, cached);
 			return cached.model;
 		}
 
@@ -91,6 +127,78 @@ export class ParseService {
 		} finally {
 			this._inflight.delete(inflightKey);
 		}
+	}
+
+	/**
+	 * Return the alias → column-name map for the given document.
+	 * Awaits Tier-2 enrichment if it is in progress; triggers it if not yet started.
+	 * Returns `{}` when enrichment is not configured or yields no results.
+	 */
+	async getAliases(
+		document: vscode.TextDocument,
+		dialect: string,
+		token: vscode.CancellationToken,
+	): Promise<Record<string, string[]>> {
+		const model = await this.getDocumentModel(document, dialect);
+		if (!model) return {};
+		// Always include CTE columns (by CTE name and alias) so alias.column works
+		// without waiting for async enrichment.
+		const cteAliases: Record<string, string[]> = {};
+		for (const cte of model.ctes) {
+			const cols = cte.columns.map(c => c.name);
+			cteAliases[cte.name] = cols;
+			if (cte.alias) cteAliases[cte.alias] = cols;
+		}
+		if (model.aliases !== undefined) return { ...cteAliases, ...model.aliases };
+		if (!this._enrichment) return cteAliases;
+		if (token.isCancellationRequested) return cteAliases;
+
+		const key = document.uri.toString();
+		const enrichKey = `${key}@${document.version}`;
+
+		// If background enrichment was already triggered, await it.
+		const inflight = this._enrichInflight.get(enrichKey);
+		if (inflight) {
+			await inflight;
+			return model.aliases ?? {};
+		}
+
+		// Trigger enrichment ourselves (with cancellation support).
+		const cached = this._cache.get(key);
+		if (!cached) return {};
+
+		const promise = this._enrich(document, key, cached, token);
+		this._enrichInflight.set(enrichKey, promise);
+		try {
+			await promise;
+		} finally {
+			this._enrichInflight.delete(enrichKey);
+		}
+		return { ...cteAliases, ...(model.aliases ?? {}) };
+	}
+
+	/**
+	 * Return cached aliases synchronously without triggering resolution.
+	 * Returns `null` when the model is not parsed yet or aliases are still pending.
+	 */
+	getCachedAliases(document: vscode.TextDocument): Record<string, string[]> | null {
+		const cached = this._cache.get(document.uri.toString());
+		if (cached && cached.version === document.version) {
+			return cached.model.aliases ?? null;
+		}
+		return null;
+	}
+
+	/**
+	 * Clear enriched alias caches for all documents.
+	 * Call after manifest reload — table schemas may have changed but
+	 * structural positions (CTEs, refs) remain valid.
+	 */
+	invalidateEnrichment(): void {
+		for (const entry of this._cache.values()) {
+			entry.model.aliases = undefined;
+		}
+		this._logger.debug('[parse-service] enrichment cache invalidated');
 	}
 
 	private async _parse(
@@ -119,13 +227,95 @@ export class ParseService {
 			timing: data.timing ?? { parseMs: 0, totalMs: 0 },
 		};
 
-		this._cache.set(key, { version: document.version, model });
+		const entry: CacheEntry = { version: document.version, model, dialect: dialect || 'ansi' };
+		this._cache.set(key, entry);
 		this._logger.debug(
 			`[parse-service] parsed ${document.fileName} — ${model.ctes.length} CTEs, `
 			+ `${model.refs.length} refs in ${model.timing.totalMs}ms (sqlglot: ${model.timing.parseMs}ms)`,
 		);
 
+		// Kick off background enrichment immediately after parsing.
+		this._triggerEnrichment(document, key, entry);
+
 		return model;
+	}
+
+	/** Fire-and-forget background enrichment. No-op if already running or done. */
+	private _triggerEnrichment(
+		document: vscode.TextDocument,
+		key: string,
+		entry: CacheEntry,
+	): void {
+		if (entry.model.aliases !== undefined) return;
+		if (!this._enrichment) return;
+
+		const enrichKey = `${key}@${entry.version}`;
+		if (this._enrichInflight.has(enrichKey)) return;
+
+		const promise = this._enrich(document, key, entry);
+		this._enrichInflight.set(enrichKey, promise);
+		void promise.finally(() => {
+			this._enrichInflight.delete(enrichKey);
+		});
+	}
+
+	private async _enrich(
+		document: vscode.TextDocument,
+		_key: string,
+		entry: CacheEntry,
+		token?: vscode.CancellationToken,
+	): Promise<void> {
+		if (!this._enrichment) return;
+		const { service, describeCache, indexer } = this._enrichment;
+
+		try {
+			const { sql, refs } = stripJinja(document.getText(), indexer);
+			if (!sql.trim()) {
+				entry.model.aliases = {};
+				return;
+			}
+
+			const schemaMapping = indexer.buildSchemaMapping();
+			const dialect = entry.dialect;
+
+			for (const [tableName, uniqueId] of refs) {
+				if (token?.isCancellationRequested) return;
+
+				const node = indexer.getRawNode(uniqueId);
+				const isSource = uniqueId.startsWith('source.');
+				const modelName = node && 'name' in node ? String(node.name) : tableName;
+				const sourceName = isSource && node && 'source_name' in node ? String(node.source_name) : undefined;
+
+				const cols = await describeCache.describeTable(uniqueId, modelName, sourceName);
+				if (cols && cols.length > 0) {
+					const db = (schemaMapping['__described__'] ??= {});
+					const schema = (db['__described__'] ??= {});
+					schema[tableName.toLowerCase()] = Object.fromEntries(cols.map(c => [c, {}]));
+				}
+			}
+
+			if (token?.isCancellationRequested) return;
+
+			const result = await service.submit({
+				type: 'scope_columns',
+				raw: { get_scope_columns: true, sql, dialect, schema_mapping: schemaMapping },
+				priority: Priority.Provider,
+				origin: 'provider',
+				label: 'get scope columns',
+			});
+
+			const data = result.data as Record<string, unknown> | undefined;
+			// Update the model in-place — all existing references see the enriched result.
+			entry.model.aliases = (data?.aliases as Record<string, string[]>) ?? {};
+
+			this._logger.debug(
+				`[parse-service] enriched ${document.fileName} — `
+				+ `${Object.keys(entry.model.aliases).length} aliases`,
+			);
+		} catch (err) {
+			this._logger.debug(`[parse-service] enrichment failed for ${document.fileName}: ${err}`);
+			// Leave aliases as undefined — next call will retry enrichment.
+		}
 	}
 
 	/** Remove cached entry when a document is closed. */

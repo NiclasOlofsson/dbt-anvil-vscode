@@ -29,7 +29,9 @@ export class GetLineageTool implements vscode.LanguageModelTool<GetLineageInput>
 		}
 
 		const target = resources[0];
-		const lineage = this.indexer.getLineage(target.uniqueId, depth, direction);
+		const upstreamDepth = direction === 'downstream' ? 0 : (depth ?? 10);
+		const downstreamDepth = direction === 'upstream' ? 0 : (depth ?? 10);
+		const lineage = this.indexer.getLineage(target.uniqueId, upstreamDepth, downstreamDepth);
 
 		const mapNode = (n: { uniqueId: string; name: string; type: string; distance: number }) => ({
 			unique_id: n.uniqueId,

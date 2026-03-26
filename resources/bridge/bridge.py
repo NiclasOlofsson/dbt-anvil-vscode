@@ -804,6 +804,163 @@ def _blank_jinja(sql: str) -> str:
     return "".join(buf)
 
 
+# ---------------------------------------------------------------------------
+# Jinja2 stub rendering — fallback when _blank_jinja produces un-parseable SQL
+# ---------------------------------------------------------------------------
+
+_SQL_STUB = "__jinja__"  # valid SQL identifier returned for unknown macro calls
+_JINJA_STUB_ENV: Any = None  # lazily initialised, module-level cache
+
+
+def _get_jinja_stub_env() -> Any:
+    """Return a cached Jinja2 Environment with dbt stub implementations.
+
+    All unknown variables and callables return ``_SQL_STUB`` so macro calls like
+    ``{{ generic_is_deleted(col) }}`` produce a valid SQL token instead of
+    raising.  Known dbt globals (``ref``, ``source``, ``config``, ``var``, …)
+    are implemented with sensible defaults.
+
+    Raises ``RuntimeError`` if jinja2 is not importable.
+    """
+    global _JINJA_STUB_ENV
+    if _JINJA_STUB_ENV is not None:
+        return _JINJA_STUB_ENV
+
+    try:
+        import jinja2  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise RuntimeError(
+            "jinja2 is not installed in this Python environment"
+        ) from exc
+
+    class _StubUndefined(jinja2.Undefined):
+        """Unknown variable or macro → stub value; usable as callable/iterable."""
+
+        def __getattr__(self, name: str) -> "_StubUndefined":
+            # jinja2.Undefined.__getattr__ raises UndefinedError for attribute
+            # access (e.g. wh.is_deleted where wh is undefined).  Override to
+            # return self so attribute chains stay as stubs instead of raising.
+            if name[:2] == "__":
+                raise AttributeError(name)
+            return self
+
+        def __call__(self, *args: Any, **kwargs: Any) -> str:
+            return _SQL_STUB
+
+        def __str__(self) -> str:
+            return _SQL_STUB
+
+        def __iter__(self):  # type: ignore[override]
+            return iter([])
+
+        def __bool__(self) -> bool:
+            return False
+
+        def __add__(self, other: Any) -> str:
+            return _SQL_STUB
+
+        def __radd__(self, other: Any) -> str:
+            return _SQL_STUB
+
+    env = jinja2.Environment(undefined=_StubUndefined, keep_trailing_newline=True)
+    env.globals.update(
+        {
+            "ref": lambda *args: args[-1] if args else _SQL_STUB,
+            "source": lambda *args: args[-1] if args else _SQL_STUB,
+            "config": lambda *args, **kwargs: "",
+            "var": lambda name, default="": default,
+            "env_var": lambda name, default="": default,
+            "is_incremental": lambda: False,
+            "execute": False,
+            "run_started_at": "",
+            "invocation_id": "",
+        }
+    )
+    _JINJA_STUB_ENV = env
+    return env
+
+
+def _render_jinja_for_parse(
+    raw_sql: str,
+) -> tuple[str, list[tuple[int, int]]]:
+    """Render dbt Jinja SQL via stub env; return ``(rendered, line_map)``.
+
+    ``line_map`` is a sorted list of ``(ren_line, raw_line)`` breakpoints
+    (both 0-based).  To convert a rendered line number *R* to the corresponding
+    raw line number, find the largest entry where ``ren_line <= R``, then::
+
+        raw_line = bp.raw_line + (R - bp.ren_line)
+
+    **Accuracy**
+
+    - ``{{ expr }}`` expression tags: the stub env returns a single-line string,
+      so no newlines are introduced or removed.  The mapping is **exact** for
+      these (the common case: ``{{ my_macro(col) }}``, ``{{ ref('t') }}``, …).
+    - ``{% if/for/… %}`` block tags whose inner content is *dropped* during
+      rendering (e.g. ``{% if is_incremental() %}…{% endif %}`` with the stub
+      returning ``False``): the dropped literal newlines are counted in *ren_line*
+      when they should not be, so the mapping is **approximate** after that region.
+      In practice this only affects ``{% if is_incremental() %}`` blocks which
+      appear at the *end* of models — after all CTE definitions — so CTE line
+      numbers remain correct.
+
+    Raises ``RuntimeError`` if jinja2 is unavailable or the template fails to
+    render even with stubs.
+    """
+    env = _get_jinja_stub_env()
+    try:
+        rendered = env.from_string(raw_sql).render()
+    except Exception as exc:
+        raise RuntimeError(f"Jinja2 render failed: {exc}") from exc
+
+    # Build (ren_line, raw_line) breakpoints by walking every Jinja tag.
+    # For each tag:
+    #   • Literal section before the tag: both raw_line and ren_line advance by
+    #     the same newline count (assumption: the literal is present in rendered;
+    #     see docstring for the approximation caveat with {% if False %} blocks).
+    #   • Expression tag {{ … }}: raw_line advances by the tag's newline count;
+    #     ren_line does NOT (the stub value is always a single-line identifier).
+    #   • Block/comment tag {% … %} / {# … #}: same as expression — raw_line
+    #     may advance, ren_line stays put.
+    # Whenever raw_line and ren_line diverge we emit a new breakpoint.
+    raw_line = 0
+    ren_line = 0
+    raw_pos = 0
+    breakpoints: list[tuple[int, int]] = [(0, 0)]
+
+    for m in _JINJA_TAG_RE.finditer(raw_sql):
+        # Literal section before this tag (assumed kept in rendered).
+        lit_newlines = raw_sql[raw_pos : m.start()].count("\n")
+        raw_line += lit_newlines
+        ren_line += lit_newlines
+
+        # The tag itself: raw may span multiple lines; rendered produces ≤0 newlines.
+        tag_raw_newlines = m.group(0).count("\n")
+        raw_line += tag_raw_newlines
+        # ren_line does NOT advance (stub value has no newlines).
+        if tag_raw_newlines > 0:
+            breakpoints.append((ren_line, raw_line))
+
+        raw_pos = m.end()
+
+    return rendered, breakpoints
+
+
+def _ren_to_raw_line(ren_line: int, line_map: list[tuple[int, int]]) -> int:
+    """Map a 0-based rendered line number to the corresponding raw line number.
+
+    Uses binary search on ``line_map`` (sorted by rendered line).  Returns
+    ``ren_line`` unchanged when ``line_map`` is empty (identity mapping).
+    """
+    if not line_map:
+        return ren_line
+    import bisect
+
+    idx = max(0, bisect.bisect_right(line_map, (ren_line, 10**9)) - 1)
+    ren_bp, raw_bp = line_map[idx]
+    return raw_bp + (ren_line - ren_bp)
+
+
 def _projection_line(proj: Any) -> int:  # type: ignore[return]
     """Return the 0-based line number for a SELECT projection expression.
 
@@ -845,17 +1002,26 @@ def handle_parse_document(request: dict[str, Any]) -> None:
     """Parse a SQL document and return a structured DocumentModel as JSON.
 
     Extracts CTEs (with column lists and line ranges), ref/source calls, and
-    final output columns from the raw Jinja-SQL source. Jinja tags are blanked
-    (replaced with spaces) rather than removed so that every character offset
-    and line number in the parsed AST maps directly back to the original source.
+    final output columns from the raw Jinja-SQL source.
+
+    Two-pass strategy:
+      Pass 1 (fast) — ``_blank_jinja``: replaces Jinja tags with space-padded
+        placeholders, preserving all character offsets.  Works for the vast
+        majority of dbt files.
+      Pass 2 (fallback) — Jinja2 stub rendering: if pass 1 produces SQL that
+        sqlglot cannot parse (e.g. a macro that emits a SQL fragment ends up as
+        a bare identifier in an invalid position), we render the template with a
+        stub Jinja2 environment.  All unknown macros return ``'__jinja__'`` — a
+        valid SQL token.  A line-number map is built alongside so that reported
+        line numbers refer back to the *raw* (unrendered) source.
 
     Response shape:
       {
         "success": true,
-        "ctes": [{"name": str, "line": int, "endLine": int, "columns": [str]}],
+        "ctes": [{"name": str, "line": int, "endLine": int, "columns": [{"name": str, "line": int}]}],
         "refs": [{"model": str, "line": int}],
         "sources": [{"sourceName": str, "tableName": str, "line": int}],
-        "finalColumns": [str],
+        "finalColumns": [{"name": str, "line": int}],
         "timing": {"parseMs": float, "totalMs": float}
       }
     """
@@ -871,7 +1037,7 @@ def handle_parse_document(request: dict[str, Any]) -> None:
         print(json.dumps({"success": False, "error": "sql is required"}), flush=True)
         return
 
-    # Build a character-offset → 0-based line number lookup.
+    # Build a character-offset → 0-based line number lookup for *raw* SQL.
     # bisect_right on line_starts gives O(log n) per lookup.
     line_starts: list[int] = [0]
     for i, ch in enumerate(raw_sql):
@@ -881,17 +1047,17 @@ def handle_parse_document(request: dict[str, Any]) -> None:
     def offset_to_line(offset: int) -> int:
         return max(0, bisect.bisect_right(line_starts, offset) - 1)
 
-    # Extract refs/sources from raw Jinja SQL before blanking (they live inside
-    # Jinja tags and would disappear from the blanked version).
+    # Extract refs/sources from raw Jinja SQL (they live inside Jinja tags and
+    # would disappear from any preprocessed version).
     ref_re = re.compile(r"ref\(\s*['\"]([^'\"]+)['\"]\s*\)")
     source_re = re.compile(
         r"source\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"]([^'\"]+)['\"]\s*\)"
     )
-    refs = [
+    refs: list[dict[str, Any]] = [
         {"model": m.group(1), "line": offset_to_line(m.start())}
         for m in ref_re.finditer(raw_sql)
     ]
-    sources = [
+    sources: list[dict[str, Any]] = [
         {
             "sourceName": m.group(1),
             "tableName": m.group(2),
@@ -899,9 +1065,6 @@ def handle_parse_document(request: dict[str, Any]) -> None:
         }
         for m in source_re.finditer(raw_sql)
     ]
-
-    # Blank Jinja tags — preserves all offsets so AST positions align with raw_sql.
-    blanked = _blank_jinja(raw_sql)
 
     try:
         from sqlglot import exp, parse_one  # type: ignore[import-not-found]
@@ -914,21 +1077,73 @@ def handle_parse_document(request: dict[str, Any]) -> None:
         )
         return
 
-    # "ansi" is not a valid sqlglot dialect name; use None for generic SQL parsing.
     sqlglot_dialect: str | None = dialect if dialect not in ("ansi", "", None) else None
+
+    # ------------------------------------------------------------------
+    # Pass 1: _blank_jinja — fast, exact offsets, works for most files.
+    # ------------------------------------------------------------------
     parse_t0 = time.perf_counter()
+    parse_sql = _blank_jinja(raw_sql)
+    # line_map is None → AST line numbers are in raw space (no remapping needed).
+    line_map: list[tuple[int, int]] | None = None
+
+    ast = None
     try:
-        ast = parse_one(blanked, dialect=sqlglot_dialect, error_level=None)
-    except Exception as exc:
+        ast = parse_one(parse_sql, dialect=sqlglot_dialect, error_level=None)
+    except Exception:
+        pass
+
+    # ------------------------------------------------------------------
+    # Pass 2: Jinja2 stub rendering — handles macros emitting SQL fragments.
+    # ------------------------------------------------------------------
+    if ast is None:
+        try:
+            rendered, line_map = _render_jinja_for_parse(raw_sql)
+            parse_sql = rendered
+            # Try strict parse first; fall back to ErrorLevel.IGNORE when the
+            # stub value (__jinja__) still ends up in a syntactically invalid
+            # position (e.g. a macro that emits a WHERE fragment, landing
+            # between a JOIN condition and a UNION ALL).
+            try:
+                ast = parse_one(rendered, dialect=sqlglot_dialect, error_level=None)
+            except Exception:
+                from sqlglot.errors import ErrorLevel  # type: ignore[import-not-found]
+
+                ast = parse_one(
+                    rendered, dialect=sqlglot_dialect, error_level=ErrorLevel.IGNORE
+                )
+        except Exception as exc:
+            print(
+                json.dumps({"success": False, "error": f"parse error: {exc}"}),
+                flush=True,
+            )
+            return
+
+    if ast is None:
         print(
-            json.dumps({"success": False, "error": f"parse error: {exc}"}), flush=True
+            json.dumps({"success": False, "error": "parse returned no result"}),
+            flush=True,
         )
         return
+
     parse_ms = (time.perf_counter() - parse_t0) * 1000
 
-    # Extract CTE info — sqlglot's line numbers now align with raw_sql because
-    # blanking preserves character positions.  We only need a forward paren scan
-    # for end_line (sqlglot tracks start but not end of the CTE body).
+    def to_raw_line(ren_line: int) -> int:
+        """Convert an AST line number to the raw-source line number."""
+        if line_map is None:
+            return ren_line
+        return _ren_to_raw_line(ren_line, line_map)
+
+    # Build a line_starts equivalent for parse_sql (needed for endLine paren scan).
+    parse_line_starts: list[int] = [0]
+    for i, ch in enumerate(parse_sql):
+        if ch == "\n":
+            parse_line_starts.append(i + 1)
+
+    def parse_offset_to_line(offset: int) -> int:
+        return max(0, bisect.bisect_right(parse_line_starts, offset) - 1)
+
+    # Extract CTE info.
     ctes: list[dict[str, Any]] = []
     seen_cte_names: set[str] = set()
     for cte_node in ast.find_all(exp.CTE):
@@ -948,22 +1163,25 @@ def handle_parse_document(request: dict[str, Any]) -> None:
             if isinstance(_alias_id, exp.Identifier)
             else None
         )
-        start_line = max(0, (_raw_line or 1) - 1)
+        # sqlglot line numbers are 1-based; convert to 0-based, then map to raw.
+        start_line = to_raw_line(max(0, (_raw_line or 1) - 1))
 
-        # Walk blanked SQL from start of the CTE's line to find the opening '('
+        # Walk parse_sql from start of the CTE's line to find the opening '('
         # then scan for its matching ')' to determine end_line.
         end_line = start_line
-        search_from = line_starts[start_line]
-        open_idx = blanked.find("(", search_from)
+        # Use parse_line_starts for the paren scan (parse_sql may differ from raw).
+        ren_start_line = max(0, (_raw_line or 1) - 1)
+        search_from = parse_line_starts[min(ren_start_line, len(parse_line_starts) - 1)]
+        open_idx = parse_sql.find("(", search_from)
         if open_idx >= 0:
             depth = 0
-            for idx in range(open_idx, len(blanked)):
-                if blanked[idx] == "(":
+            for idx in range(open_idx, len(parse_sql)):
+                if parse_sql[idx] == "(":
                     depth += 1
-                elif blanked[idx] == ")":
+                elif parse_sql[idx] == ")":
                     depth -= 1
                     if depth == 0:
-                        end_line = offset_to_line(idx)
+                        end_line = to_raw_line(parse_offset_to_line(idx))
                         break
 
         columns: list[dict[str, Any]] = []
@@ -972,7 +1190,7 @@ def handle_parse_document(request: dict[str, Any]) -> None:
             for proj in select_node.expressions:
                 col = getattr(proj, "alias_or_name", None)
                 if col:
-                    col_line = _projection_line(proj)
+                    col_line = to_raw_line(_projection_line(proj))
                     columns.append({"name": col, "line": col_line})
 
         ctes.append(
@@ -985,7 +1203,7 @@ def handle_parse_document(request: dict[str, Any]) -> None:
         )
 
     # Final output columns from the root SELECT (outside any CTE).
-    final_columns: list[str] = []
+    final_columns: list[dict[str, Any]] = []
     try:
         root_scope = build_scope(ast)
         if root_scope:
@@ -998,9 +1216,33 @@ def handle_parse_document(request: dict[str, Any]) -> None:
                 for proj in sel.expressions:
                     col = getattr(proj, "alias_or_name", None)
                     if col:
-                        final_columns.append(col)
+                        final_columns.append(
+                            {"name": col, "line": to_raw_line(_projection_line(proj))}
+                        )
     except Exception:
         pass
+
+    # Annotate refs/sources with table aliases from the sqlglot AST.
+    # _blank_jinja maps {{ ref('model') }} → the model name as an identifier,
+    # so sqlglot sees a real Table node with an optional alias (e.g. `orders o`).
+    # Build a table-name → alias map from every Table node in the AST and use
+    # it to populate the alias field on refs and sources.
+    table_alias_map: dict[str, str] = {}
+    for tbl in ast.find_all(exp.Table):
+        if tbl.alias:
+            table_alias_map[tbl.name.lower()] = tbl.alias
+    for cte in ctes:
+        ast_alias = table_alias_map.get(cte["name"].lower())
+        if ast_alias:
+            cte["alias"] = ast_alias
+    for ref in refs:
+        ast_alias = table_alias_map.get(ref["model"].lower())
+        if ast_alias:
+            ref["alias"] = ast_alias
+    for src in sources:
+        ast_alias = table_alias_map.get(src["tableName"].lower())
+        if ast_alias:
+            src["alias"] = ast_alias
 
     total_ms = (time.perf_counter() - t0) * 1000
 

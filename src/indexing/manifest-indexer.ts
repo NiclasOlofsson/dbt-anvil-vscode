@@ -273,19 +273,19 @@ export class ManifestIndexer {
 	}
 
 	/**
-	 * Get lineage for a node (up to depth levels).
+	 * Get lineage for a node with independent upstream/downstream depth.
 	 */
-	getLineage(uniqueId: string, depth = 3, direction: 'both' | 'upstream' | 'downstream' = 'both'): ModelLineage {
+	getLineage(uniqueId: string, upstreamDepth = 2, downstreamDepth = 2): ModelLineage {
 		const index = this._index;
 		const empty = { upstream: [], downstream: [], stats: { upstream_count: 0, downstream_count: 0, total_dependencies: 0 } };
 		if (!index) return empty;
 
-		const upstream = direction === 'downstream'
-			? []
-			: this._traverse(index.parentMap, uniqueId, depth, index);
-		const downstream = direction === 'upstream'
-			? []
-			: this._traverse(index.childMap, uniqueId, depth, index);
+		const upstream = upstreamDepth > 0
+			? this._traverse(index.parentMap, uniqueId, upstreamDepth, index)
+			: [];
+		const downstream = downstreamDepth > 0
+			? this._traverse(index.childMap, uniqueId, downstreamDepth, index)
+			: [];
 
 		return {
 			upstream,

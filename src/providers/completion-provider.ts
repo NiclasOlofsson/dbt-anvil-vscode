@@ -1,17 +1,20 @@
 import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
+import type { ParseService } from '../services/parse-service';
 import type { ColumnResolver } from './column-resolver';
 import { isLinePositionInComment } from './comment-utils';
 
 /**
- * Completions for ref(), source(), macros, and columns inside Jinja SQL files.
+ * Completions for ref(), source(), macros, columns, and CTE/table names
+ * after FROM/JOIN inside Jinja SQL files.
  */
 export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
 		private readonly columnResolver?: ColumnResolver,
+		private readonly parseService?: ParseService,
 	) {}
 
 	async provideCompletionItems(
@@ -67,9 +70,13 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 		if (this.columnResolver && /(?:^|[\s,(])\w*$/.test(linePrefix)) {
 			// Skip if inside an unclosed Jinja expression
 			const insideJinja = /\{\{[^}]*$/.test(linePrefix) || /\{%[^%]*$/.test(linePrefix);
-			// Skip if after a keyword where a table/relation name is expected
+			// After a table keyword — offer CTE names and model names
 			const afterTableKeyword = /\b(?:from|join|into|update|table)\s+\w*$/i.test(linePrefix);
-			if (!insideJinja && !afterTableKeyword) {
+			if (!insideJinja && afterTableKeyword) {
+				this.logger.debug('Completion: table/CTE after FROM/JOIN');
+				return this._completeTables(document, token);
+			}
+			if (!insideJinja) {
 				this.logger.debug('Completion: bare column word');
 				return this._completeAllColumns(document, token);
 			}
@@ -145,6 +152,43 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 	private async _getScopeAliases(document: vscode.TextDocument, token: vscode.CancellationToken): Promise<Record<string, string[]>> {
 		if (!this.columnResolver) return {};
 		return this.columnResolver.getScopeAliases(document, token);
+	}
+
+	// -----------------------------------------------------------------------
+	// Table / CTE completions (after FROM / JOIN)
+	// -----------------------------------------------------------------------
+
+	private async _completeTables(
+		document: vscode.TextDocument,
+		token: vscode.CancellationToken,
+	): Promise<vscode.CompletionItem[]> {
+		const items: vscode.CompletionItem[] = [];
+		let sortIndex = 0;
+
+		// CTE names from ParseService (highest priority)
+		if (this.parseService) {
+			const dialect = this.indexer.index?.adapterType ?? 'ansi';
+			const model = await this.parseService.getDocumentModel(document, dialect);
+			if (token.isCancellationRequested) return [];
+			if (model) {
+				for (const cte of model.ctes) {
+					const item = new vscode.CompletionItem(cte.name, vscode.CompletionItemKind.Struct);
+					item.detail = `CTE (${cte.columns.length} columns)`;
+					item.sortText = String(sortIndex++).padStart(4, '0');
+					items.push(item);
+				}
+			}
+		}
+
+		// Model names from manifest (lower priority)
+		const refItems = this._completeRef();
+		for (const item of refItems) {
+			item.sortText = String(sortIndex++).padStart(4, '0');
+			items.push(item);
+		}
+
+		this.logger.debug(`Completion: ${items.length} tables/CTEs after FROM/JOIN`);
+		return items;
 	}
 
 	// -----------------------------------------------------------------------
