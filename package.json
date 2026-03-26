@@ -852,6 +852,7 @@
 	"dependencies": {
 		"dagre": "^0.8.5",
 		"js-yaml": "^4.1.1",
-		"node-sql-parser": "^5.3.6"
+		"node-sql-parser": "^5.3.6",
+		"yaml": "^2.8.3"
 	}
 }

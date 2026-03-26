@@ -102,6 +102,34 @@ export class CompileCache {
 	}
 
 	/**
+	 * Run a full `dbt compile` in the background to pre-populate the cache for
+	 * all models at once. This is much faster than compiling models individually
+	 * on first request, since there is only one subprocess startup overhead.
+	 *
+	 * Safe to call fire-and-forget — errors are logged, not thrown.
+	 */
+	async warmAll(projectDir: string): Promise<void> {
+		this.logger.info('CompileCache: starting background full compile to warm cache');
+		try {
+			const result = await this.service.submit({
+				type: 'compile',
+				args: ['compile'],
+				priority: Priority.User,
+				origin: 'extension',
+				label: 'compile (warm cache)',
+			});
+			if (!result.success) {
+				this.logger.warn('CompileCache: background full compile failed — cache not warmed');
+				return;
+			}
+			this._populateCacheFromManifest(projectDir);
+			this.logger.info('CompileCache: background full compile complete — cache warmed');
+		} catch (err) {
+			this.logger.warn(`CompileCache: background full compile error: ${err}`);
+		}
+	}
+
+	/**
 	 * Explicitly invalidate the cache entry for a model (e.g. on SQL file save).
 	 * Accepts either a unique_id or a short model name.
 	 */

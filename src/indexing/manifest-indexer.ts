@@ -407,6 +407,32 @@ export class ManifestIndexer {
 	}
 
 	/**
+	 * Pre-populate the column store and node checksums from persisted cache data.
+	 * Must be called BEFORE the first build() so _diffAndInvalidate sees non-zero
+	 * checksums and only evicts nodes that actually changed, rather than clearing
+	 * the entire store.
+	 */
+	seedFromCache(data: { columns: Record<string, string[]>; checksums: Record<string, string> }): void {
+		for (const [uid, cols] of Object.entries(data.columns)) {
+			this._columnStore.set(uid, cols);
+		}
+		for (const [uid, checksum] of Object.entries(data.checksums)) {
+			this._nodeChecksums.set(uid, checksum);
+		}
+		this.logger.debug(`Column store: seeded ${this._columnStore.size} entries from cache`);
+	}
+
+	/**
+	 * Export the current column store and node checksums for persistence.
+	 */
+	exportForCache(): { columns: Record<string, string[]>; checksums: Record<string, string> } {
+		return {
+			columns: Object.fromEntries(this._columnStore),
+			checksums: Object.fromEntries(this._nodeChecksums),
+		};
+	}
+
+	/**
 	 * Invalidate columns for a model and all its transitive downstream dependents.
 	 * Returns the set of unique IDs that were evicted.
 	 */
