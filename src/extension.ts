@@ -206,7 +206,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		{ language: 'yaml', pattern: '**/*.{yml,yaml}' },
 		{ language: 'jinja-yaml', pattern: '**/*.{yml,yaml}' },
 	];
-	const definitionProvider = new DbtDefinitionProvider(manifestIndexer, manifestLoader, logger, columnResolver, parseService);
+	const definitionProvider = new DbtDefinitionProvider(manifestIndexer, manifestLoader, logger, parseService);
 	const hoverProvider = new DbtHoverProvider(manifestIndexer, logger, columnResolver, parseService);
 	const completionProvider = new DbtCompletionProvider(manifestIndexer, logger, columnResolver, parseService);
 	const yamlCompletionProvider = new YamlCompletionProvider(manifestIndexer, logger);

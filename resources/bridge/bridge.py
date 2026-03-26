@@ -1252,7 +1252,21 @@ def handle_parse_document(request: dict[str, Any]) -> None:
     # sqlglot meta["line"] is 1-based; meta["col"] is the 1-based
     # exclusive-end character offset.  We convert both to 0-based
     # for the extension (line is start, col/endCol are char offsets).
+    #
+    # Run qualify_columns first so that bare columns (e.g. `name` in
+    # `SELECT name FROM base`) get their table qualifier resolved by
+    # sqlglot's scope analyser.  This is best-effort: if qualify fails
+    # (rare on malformed SQL) we proceed with the unqualified AST.
     # ------------------------------------------------------------------
+    try:
+        from sqlglot.optimizer.qualify import (  # type: ignore[import-not-found]
+            qualify,
+        )
+
+        ast = qualify(ast, schema={}, infer_schema=True, dialect=sqlglot_dialect)
+    except Exception:
+        pass  # best-effort — fall back to unqualified columns
+
     tokens: list[dict[str, Any]] = []
 
     for col_node in ast.find_all(exp.Column):
