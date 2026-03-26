@@ -1244,6 +1244,84 @@ def handle_parse_document(request: dict[str, Any]) -> None:
         if ast_alias:
             src["alias"] = ast_alias
 
+    # ------------------------------------------------------------------
+    # Token extraction — emit every Column and Table reference with
+    # precise line/col positions so the extension can resolve cursor
+    # positions directly from the AST without text pattern matching.
+    #
+    # sqlglot meta["line"] is 1-based; meta["col"] is the 1-based
+    # exclusive-end character offset.  We convert both to 0-based
+    # for the extension (line is start, col/endCol are char offsets).
+    # ------------------------------------------------------------------
+    tokens: list[dict[str, Any]] = []
+
+    for col_node in ast.find_all(exp.Column):
+        col_id = col_node.this
+        if not isinstance(col_id, exp.Identifier):
+            continue
+        raw_line_1 = col_id.meta.get("line")
+        raw_col_1 = col_id.meta.get("col")
+        if not raw_line_1 or not raw_col_1:
+            continue
+        col_name = col_id.this
+        end_col_0 = raw_col_1 - 1  # 0-based exclusive end
+        start_col_0 = end_col_0 - len(col_name)
+        token_entry: dict[str, Any] = {
+            "type": "column_ref",
+            "name": col_name,
+            "line": to_raw_line(raw_line_1 - 1),
+            "col": start_col_0,
+            "endCol": end_col_0,
+        }
+        # Add table/alias qualifier if present (e.g. the `o` in `o.order_id`)
+        tbl_id = col_node.args.get("table")
+        if isinstance(tbl_id, exp.Identifier):
+            token_entry["table"] = tbl_id.this
+            tbl_line_1 = tbl_id.meta.get("line")
+            tbl_col_1 = tbl_id.meta.get("col")
+            if tbl_line_1 and tbl_col_1:
+                tbl_name = tbl_id.this
+                tbl_end_0 = tbl_col_1 - 1
+                tbl_start_0 = tbl_end_0 - len(tbl_name)
+                token_entry["tableLine"] = to_raw_line(tbl_line_1 - 1)
+                token_entry["tableCol"] = tbl_start_0
+                token_entry["tableEndCol"] = tbl_end_0
+        tokens.append(token_entry)
+
+    for tbl_node in ast.find_all(exp.Table):
+        tbl_id = tbl_node.this
+        if not isinstance(tbl_id, exp.Identifier):
+            continue
+        raw_line_1 = tbl_id.meta.get("line")
+        raw_col_1 = tbl_id.meta.get("col")
+        if not raw_line_1 or not raw_col_1:
+            continue
+        tbl_name = tbl_id.this
+        end_col_0 = raw_col_1 - 1
+        start_col_0 = end_col_0 - len(tbl_name)
+        token_entry = {
+            "type": "table_ref",
+            "name": tbl_name,
+            "line": to_raw_line(raw_line_1 - 1),
+            "col": start_col_0,
+            "endCol": end_col_0,
+        }
+        alias_node = tbl_node.args.get("alias")
+        if isinstance(alias_node, exp.TableAlias):
+            alias_id = alias_node.this
+            if isinstance(alias_id, exp.Identifier):
+                token_entry["alias"] = alias_id.this
+                a_line_1 = alias_id.meta.get("line")
+                a_col_1 = alias_id.meta.get("col")
+                if a_line_1 and a_col_1:
+                    a_name = alias_id.this
+                    a_end_0 = a_col_1 - 1
+                    a_start_0 = a_end_0 - len(a_name)
+                    token_entry["aliasLine"] = to_raw_line(a_line_1 - 1)
+                    token_entry["aliasCol"] = a_start_0
+                    token_entry["aliasEndCol"] = a_end_0
+        tokens.append(token_entry)
+
     total_ms = (time.perf_counter() - t0) * 1000
 
     print(
@@ -1254,6 +1332,7 @@ def handle_parse_document(request: dict[str, Any]) -> None:
                 "refs": refs,
                 "sources": sources,
                 "finalColumns": final_columns,
+                "tokens": tokens,
                 "timing": {
                     "parseMs": round(parse_ms, 2),
                     "totalMs": round(total_ms, 2),
