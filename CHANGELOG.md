@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.3
+
+- Interactive lineage graph — visualize upstream/downstream model dependencies
+- Test results explorer — run and browse dbt test outcomes in the sidebar
+- Column intelligence — bare-word column completions, comment-aware parsing, column lineage rewrite
+- Describe column cache persisted across restarts — no re-DESCRIBE on reload
+- Compile cache persisted across restarts — startup is instant after first warm run
+
 ## 0.1.2
 
 - Exclude `samples/` directory from VSIX package (reduced install size)

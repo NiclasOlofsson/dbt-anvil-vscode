@@ -70,6 +70,15 @@ All three must pass with no errors.
 
 ## Release Process
 
+### Before Publishing
+
+1. **Update `CHANGELOG.md`** — add a new section for the upcoming version with a summary of changes. Review `git log --oneline` since the last release for reference. This is a manual step; there is no script for it.
+
+2. **Run pre-flight checks:**
+   ```bash
+   npm run lint && npm run typecheck && npm test
+   ```
+
 ### Package (without publishing)
 
 ```bash
@@ -90,10 +99,10 @@ This bumps the patch version and publishes directly to the VS Code Marketplace. 
 
 > **Note:** Both commands pass `--allow-proposed-apis contribLanguageModelToolSets` because the toolset feature is still a proposed VS Code API. This means the toolset grouping only works in VS Code Insiders; core features (syntax highlighting, model explorer, individual tools) work in stable VS Code.
 
-After publishing, commit the version bump:
+After publishing, commit the version bump and changelog:
 
 ```bash
-git add package.json package-lock.json
+git add package.json package-lock.json CHANGELOG.md
 git commit -m "chore: bump version to x.x.x"
 git push
 ```
