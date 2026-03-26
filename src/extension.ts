@@ -9,6 +9,7 @@ import { BridgeRunner } from './dbt/bridge-runner';
 import { DbtExecutionService, Priority } from './dbt/execution-service';
 import { CompileCache } from './dbt/compile-cache';
 import { DescribeCache } from './dbt/describe-cache';
+import { ColumnStorePersistence } from './indexing/column-store-persistence';
 import { registerLanguageModelTools } from './tools';
 import { GetColumnLineageTool } from './tools/get-column-lineage';
 import { ModelExplorerProvider } from './views/model-explorer-provider';
@@ -69,6 +70,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	container.setManifestLoader(manifestLoader);
 	container.setManifestIndexer(manifestIndexer);
 
+	// -------- Column store persistence --------
+	const columnStorePersistence = new ColumnStorePersistence(context, logger);
+	// Restore before first build so _diffAndInvalidate only evicts changed nodes
+	columnStorePersistence.restore(manifestIndexer);
+
 	// Try to build index on activation if manifest exists
 	if (manifestLoader.manifestExists()) {
 		try {
@@ -85,6 +91,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	manifestWatcher.start(projectDir);
 	container.setManifestWatcher(manifestWatcher);
 	context.subscriptions.push({ dispose: () => manifestWatcher.dispose() });
+	context.subscriptions.push({ dispose: () => columnStorePersistence.save(manifestIndexer) });
 
 	// -------- Python bridge (lazy-started on first use) --------
 	const bridgePyPath = vscode.Uri.joinPath(context.extensionUri, 'resources', 'bridge', 'bridge.py').fsPath;
@@ -109,6 +116,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// -------- Status bar --------
 	const statusBar = new StatusBarManager(executionService, logger);
 	context.subscriptions.push(statusBar);
+
+	// Kick off a full compile to warm the cache. Runs after the status bar is
+	// subscribed so the "compiling" indicator is visible. Once started it cannot
+	// be interrupted — user actions queue behind it and get instant cache hits.
+	void compileCache.warmAll(projectDir);
 
 	// -------- Diagnostics provider --------
 	const columnResolver = new ColumnResolver(manifestIndexer, logger, executionService, describeCache);
@@ -151,6 +163,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		manifestWatcher.onIndexRebuild(() => {
 			testExplorerProvider.refresh();
 			lineageGraphProvider.refreshGraph();
+			columnStorePersistence.save(manifestIndexer);
 		}),
 	);
 

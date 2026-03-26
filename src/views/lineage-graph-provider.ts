@@ -588,6 +588,7 @@ svg.edges polygon {
 	let panX = 0, panY = 0, scale = 1;
 	let isPanning = false, startX = 0, startY = 0;
 	let graphData = null;
+	let lastFocusId = null;
 	const expandedCards = new Set();
 	const nodeInitialTops = new Map();
 
@@ -687,7 +688,12 @@ svg.edges polygon {
 		}
 
 		drawEdges(data);
-		fitToView(data);
+
+		/* Only fit to view when switching to a different model; preserve zoom/pan
+		 * when the same model re-renders (e.g. column enrichment completing). */
+		const focusChanged = data.focusId !== lastFocusId;
+		lastFocusId = data.focusId;
+		if (focusChanged) fitToView(data);
 
 		depthInput.value = data.depth;
 		dirSelect.value = data.direction;

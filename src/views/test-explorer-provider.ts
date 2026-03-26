@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import * as yaml from 'js-yaml';
+import { parseDocument, isMap, isSeq, isScalar } from 'yaml';
 import type { ManifestIndexer, ManifestIndex } from '../indexing/manifest-indexer';
 import type { ManifestLoader } from '../dbt/manifest-loader';
 import type { DbtNode, DbtUnitTest } from '../dbt/manifest-types';
@@ -51,11 +52,42 @@ export interface TestRunResult {
 	executionTime?: number;
 }
 
-function findTestLine(content: string, testName: string): number | undefined {
-	const escaped = testName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-	const pattern = new RegExp(`^\\s*-?\\s*name:\\s*['"]?${escaped}['"]?\\s*$`);
-	const idx = content.split('\n').findIndex(l => pattern.test(l));
-	return idx >= 0 ? idx : undefined;
+/**
+ * Parse a YAML schema file and return a map of test name to 0-based line number
+ * for all entries under the given top-level key (e.g. 'unit_tests').
+ * Uses the yaml package's CST so colon-containing names, quoted strings, and
+ * multi-line values all resolve correctly.
+ */
+function findTestLines(content: string, topKey: string): Map<string, number> {
+	const lineNumbers = new Map<string, number>();
+	try {
+		const doc = parseDocument(content);
+		if (!isMap(doc.contents)) return lineNumbers;
+
+		for (const pair of doc.contents.items) {
+			if (!isScalar(pair.key) || pair.key.value !== topKey) continue;
+			if (!isSeq(pair.value)) break;
+
+			for (const item of pair.value.items) {
+				if (!isMap(item)) continue;
+				for (const p of item.items) {
+					if (!isScalar(p.key) || p.key.value !== 'name') continue;
+					if (!isScalar(p.value) || p.value.value == null) continue;
+					const testName = String(p.value.value);
+					const range = p.value.range;
+					if (range) {
+						const line = content.slice(0, range[0]).split('\n').length - 1;
+						lineNumbers.set(testName, line);
+					}
+					break;
+				}
+			}
+			break;
+		}
+	} catch {
+		// Ignore parse errors — callers handle missing line numbers gracefully
+	}
+	return lineNumbers;
 }
 
 export class TestNodeItem extends vscode.TreeItem {
@@ -270,6 +302,7 @@ export class TestExplorerProvider implements vscode.TreeDataProvider<TestItem> {
 		const byModel = new Map<string, TestNodeItem[]>();
 		const ungrouped: TestNodeItem[] = [];
 		const fileCache = new Map<string, string>();
+		const lineMapCache = new Map<string, Map<string, number>>();
 
 		for (const [uid, ut] of Object.entries(unitTests)) {
 			const modelDep = (ut.depends_on?.nodes ?? []).find(d => d.startsWith('model.'));
@@ -288,12 +321,20 @@ export class TestExplorerProvider implements vscode.TreeDataProvider<TestItem> {
 					try { fileCache.set(filePath, fs.readFileSync(filePath, 'utf8')); } catch { /* skip */ }
 				}
 				const content = fileCache.get(filePath);
-				if (content) lineNumber = findTestLine(content, ut.name);
+				if (content) {
+					if (!lineMapCache.has(filePath)) {
+						lineMapCache.set(filePath, findTestLines(content, 'unit_tests'));
+					}
+					lineNumber = lineMapCache.get(filePath)!.get(ut.name);
+				}
 			}
 
+			const descFull = ut.description?.trim() ?? '';
+			const firstLine = descFull.split('\n')[0].trim();
+			const descShort = firstLine.length > 60 ? firstLine.slice(0, 57).replace(/\s+\S*$/, '') + '…' : firstLine || undefined;
 			const item = new TestNodeItem(uid, 'unit_test', ut.name, {
-				description: ut.description || undefined,
-				tooltip: `${uid}\n${ut.description ?? ''}`.trim(),
+				description: descShort || undefined,
+				tooltip: `${uid}\n${descFull}`.trim(),
 				filePath,
 				testName: ut.name,
 				lineNumber,
@@ -419,17 +460,18 @@ export class TestExplorerProvider implements vscode.TreeDataProvider<TestItem> {
 						const unitTests = content['unit_tests'] as Array<Record<string, unknown>> | undefined;
 						if (!Array.isArray(unitTests)) continue;
 
-						for (const test of unitTests) {
-							const config = test['config'] as Record<string, unknown> | undefined;
-							if (config?.['cte_test'] !== true) continue;
+					const lineMap = findTestLines(raw, 'unit_tests');
 
-							const testName = test['name'] as string | undefined;
-							const modelSpec = test['model'] as string | undefined;
-							if (!testName || !modelSpec || !modelSpec.includes('::')) continue;
+					for (const test of unitTests) {
+						const config = test['config'] as Record<string, unknown> | undefined;
+						if (config?.['cte_test'] !== true) continue;
 
-							const baseModel = modelSpec.split('::')[0];
-							const lineNumber = findTestLine(raw, testName);
+						const testName = test['name'] as string | undefined;
+						const modelSpec = test['model'] as string | undefined;
+						if (!testName || !modelSpec || !modelSpec.includes('::')) continue;
 
+						const baseModel = modelSpec.split('::')[0];
+						const lineNumber = lineMap.get(testName);
 							const item = new TestNodeItem(
 								`cte_test.${baseModel}.${testName}`,
 								'cte_test',
