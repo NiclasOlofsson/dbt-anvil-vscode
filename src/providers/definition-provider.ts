@@ -5,7 +5,6 @@ import type { ManifestLoader } from '../dbt/manifest-loader';
 import type { ILogger } from '../types/logger';
 import { ParseService } from '../services/parse-service';
 import type { DocumentModel } from '../services/parse-service';
-import type { ColumnResolver } from './column-resolver';
 import { isLinePositionInComment } from './comment-utils';
 
 /**
@@ -17,7 +16,6 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 		private readonly indexer: ManifestIndexer,
 		private readonly loader: ManifestLoader,
 		private readonly logger: ILogger,
-		private readonly columnResolver?: ColumnResolver,
 		private readonly parseService?: ParseService,
 	) {}
 
@@ -58,13 +56,7 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 
 		// Token-based resolution: CTE navigation + column definitions
 		if (this.parseService) {
-			const tokenDef = await this._resolveToken(document, position, token);
-			if (tokenDef) return tokenDef;
-		}
-
-		// Fallback: bare column search via alias resolution
-		if (this.columnResolver) {
-			return this._resolveColumnFallback(document, position, line, token);
+			return this._resolveToken(document, position, token);
 		}
 
 		return undefined;
@@ -148,16 +140,6 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 				if (colToken.table) {
 					return this._jumpToCte(document, model, colToken.table, colToken.name);
 				}
-				// Bare column — find first alias that provides it
-				if (this.columnResolver) {
-					const aliases = await this.columnResolver.getScopeAliases(document, token);
-					if (token.isCancellationRequested) return undefined;
-					for (const [alias, cols] of Object.entries(aliases)) {
-						if (cols.some(c => c.toLowerCase() === colToken.name.toLowerCase())) {
-							return this._jumpToCte(document, model, alias, colToken.name);
-						}
-					}
-				}
 				return undefined;
 			}
 		}
@@ -201,45 +183,5 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 		return undefined;
 	}
 
-	// ---- Fallback: bare column without token match ----
-
-	private async _resolveColumnFallback(
-		document: vscode.TextDocument,
-		position: vscode.Position,
-		line: string,
-		token: vscode.CancellationToken,
-	): Promise<vscode.Definition | undefined> {
-		const prefix = line.substring(0, position.character);
-		if (/\{\{[^}]*$/.test(prefix) || /\{%[^%]*$/.test(prefix)) return undefined;
-
-		const wordRange = document.getWordRangeAtPosition(position, /[a-zA-Z_]\w*/);
-		if (!wordRange) return undefined;
-		const word = document.getText(wordRange);
-		if (DEFINITION_SQL_KEYWORDS.has(word.toUpperCase())) return undefined;
-
-		const aliases = await this.columnResolver!.getScopeAliases(document, token);
-		if (token.isCancellationRequested) return undefined;
-
-		// Find first alias that provides this column, then jump to CTE
-		for (const [alias, cols] of Object.entries(aliases)) {
-			if (cols.some(c => c.toLowerCase() === word.toLowerCase())) {
-				if (this.parseService) {
-					const dialect = this.indexer.index?.adapterType ?? 'ansi';
-					const model = await this.parseService.getDocumentModel(document, dialect);
-					if (model) return this._jumpToCte(document, model, alias, word);
-				}
-			}
-		}
-
-		return undefined;
-	}
-
 }
 
-const DEFINITION_SQL_KEYWORDS = new Set([
-	'SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'NOT', 'IN', 'ON', 'AS',
-	'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'FULL', 'CROSS',
-	'GROUP', 'BY', 'ORDER', 'HAVING', 'LIMIT', 'OFFSET', 'UNION',
-	'WITH', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'BETWEEN',
-	'LIKE', 'IS', 'NULL', 'TRUE', 'FALSE', 'DISTINCT', 'ALL',
-]);

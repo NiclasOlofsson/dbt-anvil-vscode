@@ -3,7 +3,6 @@ import * as vscode from 'vscode';
 import { DbtDefinitionProvider } from '../providers/definition-provider';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ManifestLoader } from '../dbt/manifest-loader';
-import type { ColumnResolver } from '../providers/column-resolver';
 import type { ParseService, DocumentModel, TokenInfo } from '../services/parse-service';
 import { createMockLogger } from './helpers';
 
@@ -73,14 +72,6 @@ function createMockLoader(): ManifestLoader {
 	} as unknown as ManifestLoader;
 }
 
-function createMockColumnResolver(aliases: Record<string, string[]>): ColumnResolver {
-	return {
-		getScopeAliases: vi.fn().mockResolvedValue(aliases),
-		getCachedAliases: vi.fn().mockReturnValue(aliases),
-		invalidateCache: vi.fn(),
-	} as unknown as ColumnResolver;
-}
-
 function createMockParseService(model: DocumentModel | undefined): ParseService {
 	return {
 		getDocumentModel: vi.fn().mockResolvedValue(model),
@@ -128,7 +119,7 @@ describe('DbtDefinitionProvider — CTE navigation via ParseService', () => {
 		const parseService = createMockParseService(model);
 		const provider = new DbtDefinitionProvider(
 			createMockIndexer(), createMockLoader(), createMockLogger(),
-			undefined, parseService,
+			parseService,
 		);
 		const doc = createMockDocument(sql);
 		// Line 6: "  FROM base" — cursor on 'base' at character 7
@@ -146,7 +137,7 @@ describe('DbtDefinitionProvider — CTE navigation via ParseService', () => {
 		const parseService = createMockParseService(model);
 		const provider = new DbtDefinitionProvider(
 			createMockIndexer(), createMockLoader(), createMockLogger(),
-			undefined, parseService,
+			parseService,
 		);
 		const doc = createMockDocument(sql);
 		// Line 8: "SELECT * FROM enriched" — cursor on 'enriched'
@@ -164,7 +155,7 @@ describe('DbtDefinitionProvider — CTE navigation via ParseService', () => {
 		const parseService = createMockParseService(model);
 		const provider = new DbtDefinitionProvider(
 			createMockIndexer(), createMockLoader(), createMockLogger(),
-			undefined, parseService,
+			parseService,
 		);
 		const doc = createMockDocument(sql);
 		// Line 1: "  SELECT id, name" — cursor on 'id' (not after FROM/JOIN)
@@ -216,10 +207,9 @@ describe('DbtDefinitionProvider — column go-to-definition via ParseService', (
 
 	it('F12 on alias.column jumps to column line in CTE via ParseService', async () => {
 		const parseService = createMockParseService(model);
-		const columnResolver = createMockColumnResolver({ base: ['id', 'name', 'email'] });
 		const provider = new DbtDefinitionProvider(
 			createMockIndexer(), createMockLoader(), createMockLogger(),
-			columnResolver, parseService,
+			parseService,
 		);
 		const doc = createMockDocument(sql);
 		// Line 7: "SELECT base.name FROM base" — cursor on 'name' (the column part)
@@ -235,10 +225,9 @@ describe('DbtDefinitionProvider — column go-to-definition via ParseService', (
 
 	it('F12 on alias name jumps to CTE definition via ParseService', async () => {
 		const parseService = createMockParseService(model);
-		const columnResolver = createMockColumnResolver({ base: ['id', 'name', 'email'] });
 		const provider = new DbtDefinitionProvider(
 			createMockIndexer(), createMockLoader(), createMockLogger(),
-			columnResolver, parseService,
+			parseService,
 		);
 		const doc = createMockDocument(sql);
 		// Line 7: "SELECT base.name FROM base" — cursor on 'base' (the alias part)

@@ -186,6 +186,21 @@ select order_id, amount from orders`);
 		expect(ctes[0]['name']).toBe('orders');
 	}, 30_000);
 
+	it('qualify_columns resolves bare column table ownership', async () => {
+		// `select order_id from orders` — bare column with no qualifier.
+		// After qualify_columns, sqlglot should resolve `order_id` → table: 'orders'.
+		const result = await parseSql(`with orders as (
+    select order_id, amount from raw_orders
+)
+select order_id, amount from orders`);
+		expect(result.success).toBe(true);
+		const data = result.data as Record<string, unknown>;
+		type ColToken = { type: string; name: string; table?: string };
+		const tokens = data['tokens'] as ColToken[];
+		const finalOrderId = tokens.find(t => t.type === 'column_ref' && t.name === 'order_id' && t.table === 'orders');
+		expect(finalOrderId?.table).toBe('orders');
+	}, 30_000);
+
 	it('column line numbers point to their source line', async () => {
 		// Regression: proj.meta was always empty; must drill into the inner
 		// Identifier node to get the actual line number.
