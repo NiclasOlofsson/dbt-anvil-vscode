@@ -48,7 +48,13 @@ def configure_dbt_env() -> None:
 
 
 def import_dbt_runner():  # type: ignore[return]
-    """Import dbtRunner, or exit with a structured error if dbt is not installed."""
+    """Import dbtRunner, or return None if dbt is not installed.
+
+    Returns None instead of exiting so the bridge can still serve
+    parse_document / get_column_lineage requests in environments where dbt
+    is not installed (e.g. a plain Python env used only for SQL parsing).
+    Callers that need dbt must handle the None return themselves.
+    """
     try:
         from dbt.cli.main import dbtRunner  # type: ignore[import-not-found]
 
@@ -59,7 +65,7 @@ def import_dbt_runner():  # type: ignore[return]
             "error": f"dbt is not installed in this Python environment: {exc}",
         }
         print(json.dumps(error), flush=True)
-        sys.exit(1)
+        return None
 
 
 def resolve_profiles_dir(project_dir: str) -> str:
@@ -708,6 +714,314 @@ def _trace_column_lineage(
     }
 
 
+_JINJA_TAG_RE = re.compile(r"\{%-?[\s\S]*?-?%\}|\{\{[\s\S]*?\}\}|\{#-?[\s\S]*?-?#\}")
+# Matches {{ ref('model') }} and {{ ref("model") }}
+_REF_TAG_RE = re.compile(r"\{\{[^}]*ref\(\s*['\"]([^'\"]+)['\"]\s*\)[^}]*\}\}")
+# Matches {{ source('name', 'table') }} and double-quote variants
+_SOURCE_TAG_RE = re.compile(
+    r"\{\{[^}]*source\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"]([^'\"]+)['\"]\s*\)[^}]*\}\}"
+)
+# Matches any {{ callable(...) }} or {{ ns.callable(...) }} — captures the last
+# component of the name (e.g. "generate_schema_name" from "dbt_utils.generate_schema_name()")
+_MACRO_TAG_RE = re.compile(r"\{\{\s*(?:[a-zA-Z_]\w*\.)*([a-zA-Z_]\w*)\s*\(")
+# dbt macros that produce NO SQL output — blanking them to spaces is correct.
+_STATEMENT_MACROS = frozenset(
+    {"config", "docs", "print", "log", "return", "exceptions"}
+)
+
+
+def _blank_jinja(sql: str) -> str:
+    """Replace Jinja tags with space-padded SQL-safe placeholders.
+
+    Preserves ``len(result) == len(sql)`` so every character offset and line
+    number from the sqlglot AST maps directly back to the original source.
+
+    Strategy (in priority order for ``{{ }}`` expression tags):
+    - ``{{ ref('model') }}``               → ``model              `` (real model name)
+    - ``{{ source('ns','tbl') }}``         → ``tbl                `` (real table name)
+    - ``{{ config(...) }}`` / known no-SQL → all spaces (produces no SQL output)
+    - ``{{ my_macro('arg') }}``            → ``my_macro            `` (macro name as identifier)
+    - ``{{ ns.macro('arg') }}``            → ``macro               `` (last name component)
+    - ``{{ arbitrary_expr }}``             → ``_                   `` (safe fallback identifier)
+    - ``{% ... %}`` block/statement tags   → all spaces (never expression values)
+    - ``{# ... #}`` comment tags           → all spaces
+
+    Newlines inside tags are always preserved so line numbers stay correct.
+    """
+    buf = list(sql)
+
+    for m in _JINJA_TAG_RE.finditer(sql):
+        tag = m.group(0)
+        start, end = m.start(), m.end()
+
+        # Determine replacement: an identifier string, or blank_to_spaces=True,
+        # or neither (falls back to ``_`` anchor for unknown expression tags).
+        identifier: str | None = None
+        blank_to_spaces = not tag.startswith("{{")  # {# #} and {% %} always spaces
+
+        if tag.startswith("{{"):
+            ref_m = _REF_TAG_RE.fullmatch(tag)
+            if ref_m:
+                identifier = ref_m.group(1)
+            else:
+                src_m = _SOURCE_TAG_RE.fullmatch(tag)
+                if src_m:
+                    identifier = src_m.group(2)
+                else:
+                    macro_m = _MACRO_TAG_RE.match(tag)
+                    if macro_m:
+                        name = macro_m.group(1)
+                        if name in _STATEMENT_MACROS:
+                            # Known no-output macros: blank completely to spaces.
+                            # Do NOT fall through to the ``_`` fallback — a bare
+                            # ``_`` before e.g. ``WITH`` causes a parse error.
+                            blank_to_spaces = True
+                        else:
+                            identifier = name
+
+        # Blank the tag character-by-character, skipping newlines.
+        non_nl_positions = [i for i in range(start, end) if sql[i] != "\n"]
+
+        if identifier and non_nl_positions:
+            # Write identifier chars into the first N positions, spaces for the rest.
+            for j, pos in enumerate(non_nl_positions):
+                buf[pos] = identifier[j] if j < len(identifier) else " "
+        elif blank_to_spaces:
+            # Comment/block tags, statement macros → all spaces.
+            for i in range(start, end):
+                if sql[i] != "\n":
+                    buf[i] = " "
+        else:
+            # Unknown {{ expr }} with no callable name — ``_`` as first char so
+            # it remains a valid identifier if it appears in an expression position.
+            first = True
+            for i in range(start, end):
+                if sql[i] == "\n":
+                    continue
+                buf[i] = "_" if first else " "
+                first = False
+
+    return "".join(buf)
+
+
+def _projection_line(proj: Any) -> int:  # type: ignore[return]
+    """Return the 0-based line number for a SELECT projection expression.
+
+    sqlglot only populates ``meta["line"]`` on leaf ``Identifier`` nodes, not on
+    the wrapper ``Column`` / ``Alias`` nodes.  We drill into the most relevant
+    identifier: the alias name for ``Alias`` expressions, the column identifier
+    for ``Column`` expressions, or the first identifier found anywhere in the
+    projection tree as a fallback.
+
+    Requires that sqlglot has been imported (called only from handle_parse_document
+    where ``from sqlglot import exp`` has already been executed).
+    """
+    from sqlglot import exp  # type: ignore[import-not-found]
+
+    # Alias: prefer the alias-name identifier (e.g. "doubled" in "total*2 as doubled")
+    if isinstance(proj, exp.Alias):
+        alias_id = proj.args.get("alias")
+        if isinstance(alias_id, exp.Identifier):
+            line = alias_id.meta.get("line")
+            if line:
+                return max(0, line - 1)
+    # Column / bare Identifier: use .this
+    this = getattr(proj, "this", None)
+    if isinstance(this, exp.Identifier) and this is not None:
+        line = this.meta.get("line")  # type: ignore[union-attr]
+        if line:
+            return max(0, line - 1)
+    # Fallback: first token node with a line anywhere in the subtree.
+    # sqlglot sets meta only on leaf/terminal nodes (Star, Number, Identifier,
+    # string literals, etc.) — so we walk and accept the first hit of any type.
+    for node in proj.walk():
+        line = node.meta.get("line")
+        if line:
+            return max(0, line - 1)
+    return 0
+
+
+def handle_parse_document(request: dict[str, Any]) -> None:
+    """Parse a SQL document and return a structured DocumentModel as JSON.
+
+    Extracts CTEs (with column lists and line ranges), ref/source calls, and
+    final output columns from the raw Jinja-SQL source. Jinja tags are blanked
+    (replaced with spaces) rather than removed so that every character offset
+    and line number in the parsed AST maps directly back to the original source.
+
+    Response shape:
+      {
+        "success": true,
+        "ctes": [{"name": str, "line": int, "endLine": int, "columns": [str]}],
+        "refs": [{"model": str, "line": int}],
+        "sources": [{"sourceName": str, "tableName": str, "line": int}],
+        "finalColumns": [str],
+        "timing": {"parseMs": float, "totalMs": float}
+      }
+    """
+    import bisect
+    import time
+
+    t0 = time.perf_counter()
+
+    raw_sql: str = request.get("sql", "")
+    dialect: str = request.get("dialect", "ansi")
+
+    if not raw_sql:
+        print(json.dumps({"success": False, "error": "sql is required"}), flush=True)
+        return
+
+    # Build a character-offset → 0-based line number lookup.
+    # bisect_right on line_starts gives O(log n) per lookup.
+    line_starts: list[int] = [0]
+    for i, ch in enumerate(raw_sql):
+        if ch == "\n":
+            line_starts.append(i + 1)
+
+    def offset_to_line(offset: int) -> int:
+        return max(0, bisect.bisect_right(line_starts, offset) - 1)
+
+    # Extract refs/sources from raw Jinja SQL before blanking (they live inside
+    # Jinja tags and would disappear from the blanked version).
+    ref_re = re.compile(r"ref\(\s*['\"]([^'\"]+)['\"]\s*\)")
+    source_re = re.compile(
+        r"source\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"]([^'\"]+)['\"]\s*\)"
+    )
+    refs = [
+        {"model": m.group(1), "line": offset_to_line(m.start())}
+        for m in ref_re.finditer(raw_sql)
+    ]
+    sources = [
+        {
+            "sourceName": m.group(1),
+            "tableName": m.group(2),
+            "line": offset_to_line(m.start()),
+        }
+        for m in source_re.finditer(raw_sql)
+    ]
+
+    # Blank Jinja tags — preserves all offsets so AST positions align with raw_sql.
+    blanked = _blank_jinja(raw_sql)
+
+    try:
+        from sqlglot import exp, parse_one  # type: ignore[import-not-found]
+        from sqlglot.optimizer.scope import (
+            build_scope,  # type: ignore[import-not-found]
+        )
+    except ImportError:
+        print(
+            json.dumps({"success": False, "error": "sqlglot not available"}), flush=True
+        )
+        return
+
+    # "ansi" is not a valid sqlglot dialect name; use None for generic SQL parsing.
+    sqlglot_dialect: str | None = dialect if dialect not in ("ansi", "", None) else None
+    parse_t0 = time.perf_counter()
+    try:
+        ast = parse_one(blanked, dialect=sqlglot_dialect, error_level=None)
+    except Exception as exc:
+        print(
+            json.dumps({"success": False, "error": f"parse error: {exc}"}), flush=True
+        )
+        return
+    parse_ms = (time.perf_counter() - parse_t0) * 1000
+
+    # Extract CTE info — sqlglot's line numbers now align with raw_sql because
+    # blanking preserves character positions.  We only need a forward paren scan
+    # for end_line (sqlglot tracks start but not end of the CTE body).
+    ctes: list[dict[str, Any]] = []
+    seen_cte_names: set[str] = set()
+    for cte_node in ast.find_all(exp.CTE):
+        cte_name: str = cte_node.alias or ""
+        if not cte_name or cte_name in seen_cte_names:
+            continue
+        seen_cte_names.add(cte_name)
+
+        # sqlglot only populates meta["line"] on leaf Identifier nodes.
+        # CTE alias is a TableAlias whose .this is the name Identifier.
+        _alias_node = cte_node.args.get("alias")
+        _alias_id = (
+            getattr(_alias_node, "this", None) if _alias_node is not None else None
+        )
+        _raw_line: int | None = (
+            _alias_id.meta.get("line")  # type: ignore[union-attr]
+            if isinstance(_alias_id, exp.Identifier)
+            else None
+        )
+        start_line = max(0, (_raw_line or 1) - 1)
+
+        # Walk blanked SQL from start of the CTE's line to find the opening '('
+        # then scan for its matching ')' to determine end_line.
+        end_line = start_line
+        search_from = line_starts[start_line]
+        open_idx = blanked.find("(", search_from)
+        if open_idx >= 0:
+            depth = 0
+            for idx in range(open_idx, len(blanked)):
+                if blanked[idx] == "(":
+                    depth += 1
+                elif blanked[idx] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        end_line = offset_to_line(idx)
+                        break
+
+        columns: list[dict[str, Any]] = []
+        select_node = cte_node.find(exp.Select)
+        if select_node:
+            for proj in select_node.expressions:
+                col = getattr(proj, "alias_or_name", None)
+                if col:
+                    col_line = _projection_line(proj)
+                    columns.append({"name": col, "line": col_line})
+
+        ctes.append(
+            {
+                "name": cte_name,
+                "line": start_line,
+                "endLine": end_line,
+                "columns": columns,
+            }
+        )
+
+    # Final output columns from the root SELECT (outside any CTE).
+    final_columns: list[str] = []
+    try:
+        root_scope = build_scope(ast)
+        if root_scope:
+            sel = (
+                root_scope.expression
+                if isinstance(root_scope.expression, exp.Select)
+                else root_scope.expression.find(exp.Select)
+            )
+            if sel:
+                for proj in sel.expressions:
+                    col = getattr(proj, "alias_or_name", None)
+                    if col:
+                        final_columns.append(col)
+    except Exception:
+        pass
+
+    total_ms = (time.perf_counter() - t0) * 1000
+
+    print(
+        json.dumps(
+            {
+                "success": True,
+                "ctes": ctes,
+                "refs": refs,
+                "sources": sources,
+                "finalColumns": final_columns,
+                "timing": {
+                    "parseMs": round(parse_ms, 2),
+                    "totalMs": round(total_ms, 2),
+                },
+            }
+        ),
+        flush=True,
+    )
+
+
 def handle_get_column_lineage(request: dict[str, Any]) -> None:
     """Handle a get_column_lineage request and print the JSON response."""
     compiled_sql: str = request.get("compiled_sql", "")
@@ -1353,14 +1667,29 @@ def main() -> None:
     configure_stdio()
     configure_dbt_env()
 
-    dbtRunner = import_dbt_runner()
-
     # Determine project directory (passed via env var set by the extension)
     project_dir = os.environ.get("DBT_PROJECT_DIR", os.getcwd())
     profiles_dir = resolve_profiles_dir(project_dir)
 
-    # Initialize dbtRunner once — expensive, so we keep it alive
-    dbt = dbtRunner()
+    # dbt is lazy-loaded — only imported/instantiated when a request that
+    # actually needs it arrives (command, describe_table, run_cte_test).
+    # This lets the bridge start and serve parse_document / get_column_lineage
+    # requests even in Python environments without dbt installed.
+    dbt: Any = None
+
+    _dbt_unavailable = False
+
+    def get_dbt() -> Any:
+        nonlocal dbt, _dbt_unavailable
+        if _dbt_unavailable:
+            return None
+        if dbt is None:
+            runner_class = import_dbt_runner()
+            if runner_class is None:
+                _dbt_unavailable = True
+                return None
+            dbt = runner_class()
+        return dbt
 
     # Signal ready
     print(json.dumps({"type": "ready"}), flush=True)
@@ -1392,16 +1721,32 @@ def main() -> None:
             break
 
         # Dispatch by request type
-        if "get_column_lineage" in request:
+        if "parse_document" in request:
+            handle_parse_document(request)
+        elif "get_column_lineage" in request:
             handle_get_column_lineage(request)
         elif "get_scope_columns" in request:
             handle_get_scope_columns(request)
         elif "describe_table" in request:
-            handle_describe_table(request, dbt, project_dir, profiles_dir)
+            d = get_dbt()
+            if d is None:
+                print(
+                    json.dumps({"success": False, "error": "dbt not available"}),
+                    flush=True,
+                )
+                continue
+            handle_describe_table(request, d, project_dir, profiles_dir)
         elif "get_columns" in request:
             handle_get_columns(request)
         elif "run_cte_test" in request:
-            handle_run_cte_test(request, project_dir, profiles_dir, dbt)
+            d = get_dbt()
+            if d is None:
+                print(
+                    json.dumps({"success": False, "error": "dbt not available"}),
+                    flush=True,
+                )
+                continue
+            handle_run_cte_test(request, project_dir, profiles_dir, d)
         elif "command" in request:
             command_args: list = request["command"]
             if not command_args:
@@ -1409,7 +1754,14 @@ def main() -> None:
                     json.dumps({"success": False, "error": "Empty command"}), flush=True
                 )
                 continue
-            success = run_command(dbt, list(command_args), project_dir, profiles_dir)
+            d = get_dbt()
+            if d is None:
+                print(
+                    json.dumps({"success": False, "error": "dbt not available"}),
+                    flush=True,
+                )
+                continue
+            success = run_command(d, list(command_args), project_dir, profiles_dir)
             print(json.dumps({"success": success}), flush=True)
         else:
             print(

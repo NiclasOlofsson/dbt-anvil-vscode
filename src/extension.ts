@@ -29,6 +29,7 @@ import { DbtDocumentSymbolProvider } from './providers/document-symbol-provider'
 import { DbtWorkspaceSymbolProvider } from './providers/workspace-symbol-provider';
 import { DbtSignatureHelpProvider } from './providers/signature-help-provider';
 import { DbtCodeActionProvider } from './providers/code-action-provider';
+import { ParseService } from './services/parse-service';
 import { StatusBarManager } from './views/status-bar';
 import { DbtDiagnosticsProvider } from './providers/diagnostics-provider';
 import { ColumnResolver } from './providers/column-resolver';
@@ -207,7 +208,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const referenceProvider = new DbtReferenceProvider(manifestIndexer, logger, columnResolver);
 	const renameProvider = new DbtRenameProvider(manifestIndexer, manifestLoader, logger);
 	const codeLensProvider = new DbtCodeLensProvider(manifestIndexer, logger);
-	const documentSymbolProvider = new DbtDocumentSymbolProvider(manifestIndexer, logger);
+	const parseService = new ParseService(bridgeRunner, logger);
+	const documentSymbolProvider = new DbtDocumentSymbolProvider(manifestIndexer, logger, parseService);
 	const workspaceSymbolProvider = new DbtWorkspaceSymbolProvider(manifestIndexer, logger);
 	const signatureHelpProvider = new DbtSignatureHelpProvider(manifestIndexer, logger);
 	const codeActionProvider = new DbtCodeActionProvider(manifestIndexer, logger);

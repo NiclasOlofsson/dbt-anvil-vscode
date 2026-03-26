@@ -299,7 +299,7 @@ describe('DbtDocumentSymbolProvider', () => {
 		provider = new DbtDocumentSymbolProvider(createMockIndexer(), createMockLogger());
 	});
 
-	it('extracts CTE names from SQL file', () => {
+	it('extracts CTE names from SQL file', async () => {
 		const sql = [
 			'with',
 			'cte_orders as (',
@@ -312,14 +312,14 @@ describe('DbtDocumentSymbolProvider', () => {
 		].join('\n');
 
 		const doc = createMockDocument(sql);
-		const symbols = provider.provideDocumentSymbols(doc, mockToken);
+		const symbols = await provider.provideDocumentSymbols(doc, mockToken);
 
 		const names = symbols.map(s => s.name);
 		expect(names).toContain('cte_orders');
 		expect(names).toContain('cte_customers');
 	});
 
-	it('adds final SELECT symbol with model name', () => {
+	it('adds final SELECT symbol with model name', async () => {
 		const sql = [
 			'with',
 			'my_cte as (',
@@ -329,16 +329,16 @@ describe('DbtDocumentSymbolProvider', () => {
 		].join('\n');
 
 		const doc = createMockDocument(sql, { fileName: '/project/models/customers.sql' });
-		const symbols = provider.provideDocumentSymbols(doc, mockToken);
+		const symbols = await provider.provideDocumentSymbols(doc, mockToken);
 
 		const modelSymbol = symbols.find(s => s.name === 'customers');
 		expect(modelSymbol).toBeDefined();
 		expect(modelSymbol?.detail).toBe('final query');
 	});
 
-	it('returns empty for SQL without WITH keyword', () => {
+	it('returns empty for SQL without WITH keyword', async () => {
 		const doc = createMockDocument('select * from orders');
-		const symbols = provider.provideDocumentSymbols(doc, mockToken);
+		const symbols = await provider.provideDocumentSymbols(doc, mockToken);
 		expect(symbols).toEqual([]);
 	});
 

@@ -154,3 +154,115 @@ select * from final
 		expect(aliases['customers']).toContain('first_name');
 	}, 60_000);
 });
+
+describe('bridge parse_document', () => {
+	let bridge: BridgeRunner;
+
+	beforeAll(async () => {
+		// Use the same JAFFLE_SHOP path so detectPythonEnvironment finds the
+		// .venv that has dbt — parse_document itself doesn't need dbt but the
+		// bridge needs a Python env that at minimum has sqlglot available.
+		const env = detectPythonEnvironment(JAFFLE_SHOP);
+		bridge = new BridgeRunner(BRIDGE_PY, JAFFLE_SHOP, env, createMockLogger());
+	}, 30_000);
+
+	afterAll(async () => {
+		await bridge.shutdown();
+	});
+
+	function parseSql(sql: string) {
+		return bridge.invokeRaw({ parse_document: true, sql, dialect: 'ansi' });
+	}
+
+	it('parses plain SQL with CTEs', async () => {
+		const result = await parseSql(`with orders as (
+    select order_id, amount from raw_orders
+)
+select order_id, amount from orders`);
+		expect(result.success).toBe(true);
+		const data = result.data as Record<string, unknown>;
+		const ctes = data['ctes'] as Array<Record<string, unknown>>;
+		expect(ctes).toHaveLength(1);
+		expect(ctes[0]['name']).toBe('orders');
+	}, 30_000);
+
+	it('column line numbers point to their source line', async () => {
+		// Regression: proj.meta was always empty; must drill into the inner
+		// Identifier node to get the actual line number.
+		const result = await parseSql(`with orders as (
+    select
+        order_id,
+        amount,
+        customer_id
+    from raw_orders
+)
+select * from orders`);
+		expect(result.success).toBe(true);
+		const data = result.data as Record<string, unknown>;
+		const ctes = data['ctes'] as Array<Record<string, unknown>>;
+		expect(ctes).toHaveLength(1);
+		const cols = ctes[0]['columns'] as Array<{ name: string; line: number }>;
+		// Lines are 0-based. order_id is on line 2, amount on 3, customer_id on 4.
+		expect(cols.find(c => c.name === 'order_id')?.line).toBe(2);
+		expect(cols.find(c => c.name === 'amount')?.line).toBe(3);
+		expect(cols.find(c => c.name === 'customer_id')?.line).toBe(4);
+	}, 30_000);
+
+	it('parses SQL containing Jinja block comments {# ... #}', async () => {
+		// Regression: _blank_jinja did not handle {# #} — sqlglot would fail to parse
+		// the literal text "{#" and return success: false.
+		const result = await parseSql(`{# This is a Jinja comment #}
+with orders as (
+    {#- another comment -#}
+    select order_id, amount from raw_orders
+)
+select order_id, amount from orders`);
+		expect(result.success).toBe(true);
+		const data = result.data as Record<string, unknown>;
+		const ctes = data['ctes'] as Array<Record<string, unknown>>;
+		expect(ctes).toHaveLength(1);
+		expect(ctes[0]['name']).toBe('orders');
+	}, 30_000);
+
+	it('parses SQL containing Jinja expressions and block tags', async () => {
+		const result = await parseSql(`{% set my_var = 'foo' %}
+with orders as (
+    select order_id, {{ 'amount' }} from {{ ref('raw_orders') }}
+)
+select * from orders`);
+		expect(result.success).toBe(true);
+		const data = result.data as Record<string, unknown>;
+		const ctes = data['ctes'] as Array<Record<string, unknown>>;
+		expect(ctes).toHaveLength(1);
+	}, 30_000);
+
+	it('returns refs extracted from Jinja expressions', async () => {
+		const result = await parseSql(`with src as (
+    select * from {{ ref('stg_orders') }}
+)
+select * from src`);
+		expect(result.success).toBe(true);
+		const data = result.data as Record<string, unknown>;
+		const refs = data['refs'] as Array<Record<string, unknown>>;
+		expect(refs.some(r => r['model'] === 'stg_orders')).toBe(true);
+	}, 30_000);
+
+	it('parses SQL with {{ config(...) }} at the top', async () => {
+		// Regression: {{ config() }} is in _STATEMENT_MACROS so identifier=None,
+		// but the old code fell through to the _ fallback instead of blanking to
+		// spaces — leaving a bare `_` before `with` which sqlglot rejected.
+		const result = await parseSql(`{{ config(materialized='table') }}
+
+with orders as (
+    select order_id from {{ ref('raw_orders') }}
+    left join {{ ref('raw_customers') }} as c
+        on orders.customer_id = c.customer_id
+)
+select * from orders`);
+		expect(result.success).toBe(true);
+		const data = result.data as Record<string, unknown>;
+		const ctes = data['ctes'] as Array<Record<string, unknown>>;
+		expect(ctes).toHaveLength(1);
+		expect(ctes[0]['name']).toBe('orders');
+	}, 30_000);
+});
