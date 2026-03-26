@@ -6,6 +6,7 @@ coverage/
 .vscode-test/
 temp_auto/
 .eslintcache
+nul
 
 # Python artifacts
 __pycache__/
