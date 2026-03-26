@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
 import type { ILogger } from '../types/logger';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import { type DbtExecutionService, Priority } from '../dbt/execution-service';
+import type { DbtExecutionService } from '../dbt/execution-service';
 import type { ManifestLoader } from '../dbt/manifest-loader';
+import type { CompileCache } from '../dbt/compile-cache';
 import { toolResult } from './tool-helpers';
 
 interface GetResourceInfoInput {
@@ -17,6 +18,7 @@ export class GetResourceInfoTool implements vscode.LanguageModelTool<GetResource
 		private readonly service: DbtExecutionService,
 		private readonly loader: ManifestLoader,
 		private readonly logger: ILogger,
+		private readonly compileCache: CompileCache,
 	) {}
 
 	async invoke(
@@ -41,26 +43,15 @@ export class GetResourceInfoTool implements vscode.LanguageModelTool<GetResource
 			return toolResult({ error: `Resource "${name}" not found in manifest` });
 		}
 
-		// If compiled SQL is requested but missing, trigger a compile
-		const hasCompiledSql = 'compiled_code' in rawNode && rawNode.compiled_code;
-		if (include_compiled_sql && !hasCompiledSql && rawNode.resource_type === 'model') {
-			try {
-				const compileResult = await this.service.submit({
-					type: 'compile',
-					args: ['compile', '-s', rawNode.name],
-					priority: Priority.Tool,
-					origin: 'copilot',
-					label: `compile ${rawNode.name}`,
-				});
-				if (compileResult.success) {
-					const reloaded = this.indexer.getRawNode(rawNode.unique_id);
-					if (reloaded) {
-						rawNode = reloaded;
-					}
-				}
-			} catch {
-				this.logger.warn('Failed to compile model for resource info');
-			}
+		// If compiled SQL is requested, use the shared CompileCache
+		let compiledSql: string | undefined;
+		if (include_compiled_sql && rawNode.resource_type === 'model') {
+			compiledSql = await this.compileCache.ensureCompiled(
+				rawNode.unique_id,
+				rawNode.name,
+				this.indexer.projectDir,
+				rawNode.original_file_path,
+			);
 		}
 
 		const columns = rawNode.columns ?? {};
@@ -79,9 +70,7 @@ export class GetResourceInfoTool implements vscode.LanguageModelTool<GetResource
 			tags: rawNode.tags,
 			...('schema' in rawNode ? { schema: rawNode.schema } : {}),
 			...('database' in rawNode ? { database: rawNode.database } : {}),
-			...('compiled_code' in rawNode && rawNode.compiled_code && include_compiled_sql
-				? { compiled_sql: rawNode.compiled_code }
-				: {}),
+			...(compiledSql && include_compiled_sql ? { compiled_sql: compiledSql } : {}),
 			...('raw_code' in rawNode && rawNode.raw_code
 				? { raw_sql: rawNode.raw_code }
 				: {}),

@@ -3,6 +3,7 @@ import type { ILogger } from '../types/logger';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { DbtExecutionService } from '../dbt/execution-service';
 import type { ManifestLoader } from '../dbt/manifest-loader';
+import type { CompileCache } from '../dbt/compile-cache';
 import { RunModelsTool } from './run-models';
 import { TestModelsTool } from './test-models';
 import { BuildModelsTool } from './build-models';
@@ -24,6 +25,7 @@ export function registerLanguageModelTools(
 	service: DbtExecutionService,
 	loader: ManifestLoader,
 	logger: ILogger,
+	compileCache: CompileCache,
 ): void {
 	logger.info('Registering language model tools for Copilot Agent Mode');
 
@@ -31,11 +33,11 @@ export function registerLanguageModelTools(
 		['run_models', new RunModelsTool(service, logger)],
 		['test_models', new TestModelsTool(service, logger)],
 		['build_models', new BuildModelsTool(service, logger)],
-		['compile_model', new CompileModelTool(service, loader, logger)],
+		['compile_model', new CompileModelTool(service, loader, logger, indexer, compileCache)],
 		['get_lineage', new GetLineageTool(indexer, logger)],
-		['get_column_lineage', new GetColumnLineageTool(indexer, service, logger)],
+		['get_column_lineage', new GetColumnLineageTool(indexer, service, logger, compileCache)],
 		['list_resources', new ListResourcesTool(indexer, logger)],
-		['get_resource_info', new GetResourceInfoTool(indexer, service, loader, logger)],
+		['get_resource_info', new GetResourceInfoTool(indexer, service, loader, logger, compileCache)],
 		['get_project_info', new GetProjectInfoTool(indexer, service, loader, logger)],
 		['query_database', new QueryDatabaseTool(service, indexer, logger)],
 		['install_deps', new InstallDepsTool(service, logger)],

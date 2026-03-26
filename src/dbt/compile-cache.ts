@@ -1,0 +1,152 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import type { ILogger } from '../types/logger';
+import type { DbtExecutionService } from './execution-service';
+import { Priority } from './execution-service';
+import type { ManifestLoader } from './manifest-loader';
+
+interface CacheEntry {
+	compiledCode: string;
+	/** mtime of the source SQL file at time of compilation */
+	sourceMtimeMs: number;
+}
+
+/**
+ * Shared in-memory cache for compiled_code, keyed by model unique_id.
+ *
+ * Problem solved: `dbt compile -s <model>` rewrites the full manifest, placing
+ * compiled_code only for the selected model and wiping it for all others. Without
+ * a cache, every tool call that needs compiled SQL triggers a redundant compile.
+ *
+ * Strategy:
+ * - Before compiling, check if we have a cached entry whose source-file mtime
+ *   matches the current file on disk. If so, return immediately — no subprocess.
+ * - After a compile succeeds, read the manifest directly and cache compiled_code
+ *   for ALL nodes that have it. This means one compile populates the cache for
+ *   every model dbt happened to compile (e.g. when compiling without -s selector
+ *   all models are populated at once).
+ * - Cache is invalidated per-model when the source file timestamp changes
+ *   (detected on next request) or when invalidate() is called explicitly.
+ */
+export class CompileCache {
+	private readonly _cache = new Map<string, CacheEntry>();
+
+	constructor(
+		private readonly service: DbtExecutionService,
+		private readonly loader: ManifestLoader,
+		private readonly logger: ILogger,
+	) {}
+
+	/**
+	 * Return compiled_code for the given model, compiling if necessary.
+	 * `uniqueId`   — dbt unique_id (e.g. "model.jaffle_shop.customers")
+	 * `modelName`  — short model name used as dbt -s selector
+	 * `projectDir` — project root, used to resolve original_file_path
+	 * `originalFilePath` — relative path from manifest (original_file_path field)
+	 */
+	async ensureCompiled(
+		uniqueId: string,
+		modelName: string,
+		projectDir: string,
+		originalFilePath: string,
+	): Promise<string | undefined> {
+		const absPath = path.join(projectDir, originalFilePath);
+		const currentMtime = this._fileMtime(absPath);
+
+		// Cache hit — source file unchanged
+		const cached = this._cache.get(uniqueId);
+		if (cached && currentMtime !== undefined && cached.sourceMtimeMs === currentMtime) {
+			this.logger.debug(`CompileCache: hit for ${uniqueId}`);
+			return cached.compiledCode;
+		}
+
+		// Warm path — compiled_code already in the manifest (e.g. after full `dbt compile`).
+		// Cache it so it survives a subsequent per-model compile that would wipe the manifest entry.
+		const { manifest } = this.loader.load();
+		const manifestNode = manifest.nodes[uniqueId];
+		if (manifestNode?.compiled_code) {
+			if (currentMtime !== undefined) {
+				this._cache.set(uniqueId, { compiledCode: manifestNode.compiled_code, sourceMtimeMs: currentMtime });
+			}
+			this.logger.debug(`CompileCache: warm from manifest for ${uniqueId}`);
+			return manifestNode.compiled_code;
+		}
+
+		this.logger.debug(`CompileCache: miss for ${uniqueId}, compiling`);
+
+		// Run dbt compile for this model
+		try {
+			const result = await this.service.submit({
+				type: 'compile',
+				args: ['compile', '-s', modelName],
+				priority: Priority.Tool,
+				origin: 'copilot',
+				label: `compile ${modelName}`,
+			});
+
+			if (!result.success) {
+				this.logger.warn(`CompileCache: compile failed for ${modelName}`);
+				return undefined;
+			}
+		} catch (err) {
+			this.logger.warn(`CompileCache: compile error for ${modelName}: ${err}`);
+			return undefined;
+		}
+
+		// Read the fresh manifest directly from disk and populate cache for ALL compiled nodes
+		this._populateCacheFromManifest(projectDir);
+
+		// Return from newly populated cache
+		const entry = this._cache.get(uniqueId);
+		return entry?.compiledCode;
+	}
+
+	/**
+	 * Explicitly invalidate the cache entry for a model (e.g. on SQL file save).
+	 * Accepts either a unique_id or a short model name.
+	 */
+	invalidate(uniqueIdOrName: string): void {
+		if (this._cache.delete(uniqueIdOrName)) {
+			this.logger.debug(`CompileCache: invalidated ${uniqueIdOrName}`);
+			return;
+		}
+		// Name-based fallback
+		for (const key of this._cache.keys()) {
+			if (key.endsWith(`.${uniqueIdOrName}`)) {
+				this._cache.delete(key);
+				this.logger.debug(`CompileCache: invalidated by name ${uniqueIdOrName} (key=${key})`);
+				return;
+			}
+		}
+	}
+
+	/**
+	 * Read the manifest from disk and populate the cache for every node that
+	 * has compiled_code. Called after a successful compile to warm the cache.
+	 */
+	private _populateCacheFromManifest(projectDir: string): void {
+		try {
+			const { manifest } = this.loader.load(true);
+			let count = 0;
+			for (const node of Object.values(manifest.nodes)) {
+				if (!node.compiled_code) continue;
+				const absPath = path.join(projectDir, node.original_file_path);
+				const mtime = this._fileMtime(absPath);
+				if (mtime === undefined) continue;
+				this._cache.set(node.unique_id, { compiledCode: node.compiled_code, sourceMtimeMs: mtime });
+				count++;
+			}
+			this.logger.debug(`CompileCache: populated ${count} entries from manifest`);
+		} catch (err) {
+			this.logger.warn(`CompileCache: failed to read manifest: ${err}`);
+		}
+	}
+
+	private _fileMtime(absPath: string): number | undefined {
+		try {
+			return fs.statSync(absPath).mtimeMs;
+		} catch {
+			return undefined;
+		}
+	}
+}

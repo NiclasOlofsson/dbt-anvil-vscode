@@ -1,7 +1,9 @@
 import * as vscode from 'vscode';
 import type { ILogger } from '../types/logger';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import { type DbtExecutionService, Priority } from '../dbt/execution-service';
+import { Priority } from '../dbt/execution-service';
+import type { DbtExecutionService } from '../dbt/execution-service';
+import type { CompileCache } from '../dbt/compile-cache';
 import { toolResult } from './tool-helpers';
 
 interface GetColumnLineageInput {
@@ -14,18 +16,70 @@ interface GetColumnLineageInput {
 // Schema mapping shape sent to the bridge: {database: {schema: {table: {col: type}}}}
 type SchemaMapping = Record<string, Record<string, Record<string, Record<string, string>>>>;
 
+/**
+ * Map dbt adapter type to sqlglot dialect name.
+ * Ported from dbt-core-mcp get_column_lineage._map_dbt_adapter_to_sqlglot_dialect.
+ */
+export function mapAdapterToDialect(adapterType: string): string {
+	const map: Record<string, string> = {
+		athena: 'athena',
+		bigquery: 'bigquery',
+		clickhouse: 'clickhouse',
+		databricks: 'databricks',
+		doris: 'doris',
+		dremio: 'dremio',
+		duckdb: 'duckdb',
+		fabric: 'fabric',
+		hive: 'hive',
+		materialize: 'materialize',
+		mysql: 'mysql',
+		oracle: 'oracle',
+		postgres: 'postgres',
+		postgresql: 'postgres',
+		redshift: 'redshift',
+		risingwave: 'risingwave',
+		singlestore: 'singlestore',
+		snowflake: 'snowflake',
+		spark: 'spark',
+		sqlite: 'sqlite',
+		starrocks: 'starrocks',
+		teradata: 'teradata',
+		trino: 'trino',
+		// Adapters needing explicit dialect mapping
+		synapse: 'tsql',
+		sqlserver: 'tsql',
+		glue: 'spark',
+		fabricspark: 'spark',
+	};
+	return map[adapterType.toLowerCase()] ?? adapterType.toLowerCase();
+}
+
 interface ColumnDependency {
 	column: string;
 	table: string;
 	schema?: string;
 	database?: string;
 	dbt_resource?: string;
+	/** Internal CTE transformations for model-type dependencies (Step 11) */
+	transformations?: Transformation[];
+	via_ctes?: string[];
+}
+
+interface TransformationBranch {
+	expression?: string;
+	sources: string[];
 }
 
 interface Transformation {
-	cte: string;
+	/** Namespaced id: "cte:name", "table:name", or "query" */
+	id: string;
+	/** Node type in the lineage graph */
+	type: 'cte' | 'table' | 'union' | 'outer_query';
 	column: string;
 	expression?: string;
+	sources: string[];
+	/** Present for union nodes */
+	branches?: TransformationBranch[];
 }
 
 interface LineageResult {
@@ -39,36 +93,161 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		private readonly indexer: ManifestIndexer,
 		private readonly service: DbtExecutionService,
 		private readonly logger: ILogger,
+		private readonly compileCache: CompileCache,
 	) {}
 
 	/**
 	 * Build sqlglot schema mapping from upstream nodes.
+	 * Tries database_columns (list from warehouse) first, then manifest columns dict.
 	 * Format: {database: {schema: {table: {column: type}}}}
+	 * Ported from dbt-core-mcp get_column_lineage._build_schema_mapping.
 	 */
 	private _buildSchemaMapping(upstreamIds: string[]): SchemaMapping {
 		const mapping: SchemaMapping = {};
 		for (const uid of upstreamIds) {
 			const raw = this.indexer.getRawNode(uid);
 			if (!raw) continue;
+			type RawRecord = Record<string, unknown>;
+			const r = raw as RawRecord;
 
-			const columns = raw.columns ?? {};
-			if (Object.keys(columns).length === 0) continue;
+			const db = (typeof r['database'] === 'string' ? r['database'] : undefined) ?? '__default__';
+			const schema = (typeof r['schema'] === 'string' ? r['schema'] : undefined) ?? '__default__';
+			// Use identifier (sources) or alias/name (models/seeds)
+			const table = ((typeof r['identifier'] === 'string' ? r['identifier'] : undefined)
+				?? (typeof r['alias'] === 'string' ? r['alias'] : undefined)
+				?? raw.name).toLowerCase();
 
-			const db = ('database' in raw ? raw.database : undefined) ?? '__default__';
-			const schema = ('schema' in raw ? raw.schema : undefined) ?? '__default__';
-			const table = raw.name.toLowerCase();
+			let columnMap: Record<string, string> | undefined;
+
+			// Try database_columns first (list format: [{col_name, type}])
+			const dbCols = r['database_columns'];
+			if (Array.isArray(dbCols) && dbCols.length > 0) {
+				columnMap = {};
+				for (const col of dbCols) {
+					if (col !== null && col !== undefined && typeof col === 'object' && 'col_name' in col) {
+						const c = col as { col_name: string; type?: string };
+						columnMap[c.col_name.toLowerCase()] = (c.type ?? 'unknown').toLowerCase();
+					}
+				}
+			}
+
+			// Fall back to manifest columns dict: {name: {data_type}}
+			if (!columnMap || Object.keys(columnMap).length === 0) {
+				const columns = raw.columns ?? {};
+				if (Object.keys(columns).length > 0) {
+					columnMap = Object.fromEntries(
+						Object.entries(columns).map(([col, info]) => [col.toLowerCase(), (info.data_type ?? 'unknown').toLowerCase()]),
+					);
+				}
+			}
+
+			if (!columnMap || Object.keys(columnMap).length === 0) continue;
 
 			mapping[db] ??= {};
 			mapping[db][schema] ??= {};
-			mapping[db][schema][table] = Object.fromEntries(
-				Object.entries(columns).map(([col, info]) => [col, info.data_type ?? 'unknown']),
-			);
+			mapping[db][schema][table] = columnMap;
 		}
 		return mapping;
 	}
 
 	/**
+	 * Resolve output columns for a resource using type-appropriate strategy.
+	 * Sources/seeds: manifest columns (or database_columns when available).
+	 * Models: SQL parsing via bridge.
+	 * Ported from dbt-core-mcp get_column_lineage._resolve_output_columns.
+	 */
+	private async _resolveOutputColumns(
+		resourceType: string,
+		raw: ReturnType<ManifestIndexer['getRawNode']>,
+		compiledCode: string,
+		dialect: string,
+		schemaMapping: SchemaMapping,
+	): Promise<{ columns: string[]; source: string }> {
+		if (raw === null || raw === undefined) return { columns: [], source: 'none' };
+		type RawRecord = Record<string, unknown>;
+		const r = raw as RawRecord;
+
+		if (resourceType === 'source' || resourceType === 'seed') {
+			// database_columns (list format)
+			const dbCols = r['database_columns'];
+			if (Array.isArray(dbCols) && dbCols.length > 0) {
+				const cols = (dbCols as Array<{ col_name?: string }>)
+					.filter(c => c.col_name)
+					.map(c => c.col_name as string);
+				if (cols.length > 0) return { columns: cols, source: 'warehouse' };
+			}
+			// manifest columns
+			const manifestCols = Object.keys(raw.columns ?? {});
+			if (manifestCols.length > 0) return { columns: manifestCols, source: 'manifest' };
+			// wildcard fallback
+			return { columns: ['*'], source: 'wildcard' };
+		}
+
+		// Models: SQL parsing via bridge
+		const cols = await this._getOutputColumns(compiledCode, dialect, schemaMapping);
+		return { columns: cols, source: cols.length > 0 ? 'sql' : 'none' };
+	}
+
+	/**
+	 * Attempt to resolve a wildcard (*) column to a specific column name for a known table.
+	 * Ported from dbt-core-mcp get_column_lineage._resolve_wildcard_column_in_table.
+	 */
+	private _resolveWildcardColumnInTable(tableName: string, relationLookup: Map<string, string>): string | undefined {
+		const uid = relationLookup.get(GetColumnLineageTool._normalizeRelationName(tableName));
+		if (!uid) return undefined;
+		const raw = this.indexer.getRawNode(uid);
+		if (!raw) return undefined;
+		const resourceType = raw.resource_type;
+		if (resourceType === 'source' || resourceType === 'seed') {
+			type RawRecord = Record<string, unknown>;
+			const r = raw as RawRecord;
+			const dbCols = r['database_columns'];
+			if (Array.isArray(dbCols) && dbCols.length > 0) {
+				const first = (dbCols as Array<{ col_name?: string }>)[0];
+				if (first?.col_name) return first.col_name;
+			}
+			const manifestCols = Object.keys(raw.columns ?? {});
+			if (manifestCols.length > 0) return manifestCols[0];
+		}
+		return undefined;
+	}
+
+	/**
+	 * Normalize relation names for matching: strip quotes/backticks, lowercase.
+	 * Ported from dbt-core-mcp get_column_lineage._normalize_relation_name.
+	 */
+	private static _normalizeRelationName(value: string): string {
+		return value.replace(/["`\[\]]/g, '').trim().toLowerCase();
+	}
+
+	/**
+	 * Register a uid under all FQN variants in the lookup map.
+	 * Mirrors dbt-core-mcp _add_relation_keys.
+	 */
+	private static _addRelationKeys(
+		lookup: Map<string, string>,
+		uid: string,
+		db: string | undefined,
+		schema: string | undefined,
+		identifier: string | undefined,
+		relationName?: string,
+	): void {
+		if (relationName) {
+			lookup.set(GetColumnLineageTool._normalizeRelationName(relationName), uid);
+		}
+		if (!identifier) return;
+		lookup.set(GetColumnLineageTool._normalizeRelationName(identifier), uid);
+		if (schema) {
+			lookup.set(GetColumnLineageTool._normalizeRelationName(`${schema}.${identifier}`), uid);
+		}
+		if (db && schema) {
+			lookup.set(GetColumnLineageTool._normalizeRelationName(`${db}.${schema}.${identifier}`), uid);
+		}
+	}
+
+	/**
 	 * Build FQN → unique_id lookup for resolving lineage dependencies to dbt resources.
+	 * Ported from dbt-core-mcp get_column_lineage._build_relation_lookup.
 	 */
 	private _buildRelationLookup(): Map<string, string> {
 		const lookup = new Map<string, string>();
@@ -78,33 +257,25 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		for (const [uid, model] of index.models) {
 			const raw = this.indexer.getRawNode(uid);
 			if (!raw) continue;
-
-			const db = ('database' in raw ? raw.database : undefined);
-			const schema = model.schema ?? ('schema' in raw ? raw.schema : undefined);
-			const name = raw.name.toLowerCase();
-
-			// Register at multiple keys for flexible matching
-			lookup.set(name, uid);
-			if (schema) {
-				lookup.set(`${schema}.${name}`.toLowerCase(), uid);
-			}
-			if (db && schema) {
-				lookup.set(`${db}.${schema}.${name}`.toLowerCase(), uid);
-			}
+			type RawRecord = Record<string, unknown>;
+			const r = raw as RawRecord;
+			const db = typeof r['database'] === 'string' ? r['database'] : undefined;
+			const schema = model.schema ?? (typeof r['schema'] === 'string' ? r['schema'] : undefined);
+			const identifier = (typeof r['alias'] === 'string' ? r['alias'] : undefined) ?? raw.name;
+			const relationName = typeof r['relation_name'] === 'string' ? r['relation_name'] : undefined;
+			GetColumnLineageTool._addRelationKeys(lookup, uid, db, schema, identifier?.toLowerCase(), relationName);
 		}
 
-		// Also register sources
 		for (const [uid, source] of index.sources) {
 			const raw = this.indexer.getRawNode(uid);
 			if (!raw) continue;
-
-			const name = source.name.toLowerCase();
-			const schema = source.schema?.toLowerCase();
-
-			lookup.set(name, uid);
-			if (schema) {
-				lookup.set(`${schema}.${name}`, uid);
-			}
+			type RawRecord = Record<string, unknown>;
+			const r = raw as RawRecord;
+			const db = typeof r['database'] === 'string' ? r['database'] : undefined;
+			const schema = source.schema?.toLowerCase() ?? (typeof r['schema'] === 'string' ? r['schema'] : undefined);
+			const identifier = (typeof r['identifier'] === 'string' ? r['identifier'] : undefined) ?? source.name;
+			const relationName = typeof r['relation_name'] === 'string' ? r['relation_name'] : undefined;
+			GetColumnLineageTool._addRelationKeys(lookup, uid, db, schema, identifier?.toLowerCase(), relationName);
 		}
 
 		return lookup;
@@ -117,18 +288,36 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		const table = dep.table.toLowerCase();
 
 		if (dep.database && dep.schema) {
-			const key = `${dep.database}.${dep.schema}.${table}`.toLowerCase();
-			const match = lookup.get(key);
+			const match = lookup.get(GetColumnLineageTool._normalizeRelationName(`${dep.database}.${dep.schema}.${table}`));
 			if (match) return match;
 		}
 
 		if (dep.schema) {
-			const key = `${dep.schema}.${table}`.toLowerCase();
-			const match = lookup.get(key);
+			const match = lookup.get(GetColumnLineageTool._normalizeRelationName(`${dep.schema}.${table}`));
 			if (match) return match;
 		}
 
-		return lookup.get(table);
+		return lookup.get(GetColumnLineageTool._normalizeRelationName(table));
+	}
+
+	/**
+	 * Ensure a model node has compiled_code, using the shared CompileCache.
+	 * Returns undefined for non-model nodes or if compilation fails.
+	 */
+	private async _ensureCompiled(uniqueId: string): Promise<string | undefined> {
+		const raw = this.indexer.getRawNode(uniqueId);
+		if (!raw) return undefined;
+		if (raw.resource_type !== 'model') return undefined;
+		// Fast path: compiled_code already present in the indexed manifest node.
+		// Delegates to compileCache only when absent so it can serve from cache
+		// or trigger a subprocess compile.
+		if ('compiled_code' in raw && raw.compiled_code) return raw.compiled_code;
+		return this.compileCache.ensureCompiled(
+			uniqueId,
+			raw.name,
+			this.indexer.projectDir,
+			raw.original_file_path,
+		);
 	}
 
 	/**
@@ -143,11 +332,11 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		const raw = this.indexer.getRawNode(modelUniqueId);
 		if (!raw) return null;
 
-		const compiledCode = 'compiled_code' in raw ? raw.compiled_code : undefined;
+		const compiledCode = await this._ensureCompiled(modelUniqueId);
 		if (!compiledCode) return null;
 
 		const lineage = this.indexer.getLineage(modelUniqueId, 5, 'upstream');
-		const schemaMapping = this._buildSchemaMapping(lineage.upstream);
+		const schemaMapping = this._buildSchemaMapping(lineage.upstream.map(n => n.uniqueId));
 
 		try {
 			const result = await this.service.submit({
@@ -213,6 +402,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 
 	/**
 	 * Recursively trace upstream dependencies for a column.
+	 * Handles wildcard (*) columns by resolving them via _resolveWildcardColumnInTable.
 	 */
 	private async _traceUpstreamRecursive(
 		modelUniqueId: string,
@@ -223,6 +413,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		currentDepth: number,
 		relationLookup: Map<string, string>,
 		visited: Set<string>,
+		columnEdges: Array<{ sourceModel: string; sourceColumn: string; targetModel: string; targetColumn: string }>,
 	): Promise<ColumnDependency[]> {
 		if (currentDepth >= maxDepth) return [];
 		if (columnName === '*') return [];
@@ -241,21 +432,43 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 			if (resolvedId) {
 				dep.dbt_resource = resolvedId;
 			}
+
+			// Try to resolve wildcard column before recursing
+			let effectiveColumn = dep.column;
+			if (effectiveColumn === '*') {
+				const resolved = this._resolveWildcardColumnInTable(dep.table, relationLookup);
+				if (resolved) {
+					effectiveColumn = resolved;
+					dep.column = resolved;
+				} else {
+					// select * is a passthrough — the column name we are tracing is preserved
+					effectiveColumn = columnName;
+					dep.column = columnName;
+				}
+			}
+
 			allDeps.push(dep);
 
-			// Recurse into upstream model dependencies
-			if (resolvedId && dep.column) {
+			// Record column-level edge and recurse into upstream model dependencies
+			if (resolvedId && effectiveColumn && effectiveColumn !== '*') {
+				columnEdges.push({
+					sourceModel: resolvedId,
+					sourceColumn: effectiveColumn,
+					targetModel: modelUniqueId,
+					targetColumn: columnName,
+				});
 				const node = this.indexer.getRawNode(resolvedId);
 				if (node && node.resource_type === 'model') {
 					const deeper = await this._traceUpstreamRecursive(
 						resolvedId,
 						node.name,
-						dep.column,
+						effectiveColumn,
 						dialect,
 						maxDepth,
 						currentDepth + 1,
 						relationLookup,
 						visited,
+						columnEdges,
 					);
 					allDeps.push(...deeper);
 				}
@@ -263,6 +476,173 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		}
 
 		return allDeps;
+	}
+
+	/**
+	 * Enrich model-type dependencies with their internal CTE transformations.
+	 * Ported from dbt-core-mcp get_column_lineage._trace_upstream_recursive enrichment block.
+	 */
+	private async _enrichDependencyTransformations(
+		dependencies: ColumnDependency[],
+		dialect: string,
+	): Promise<void> {
+		for (const dep of dependencies) {
+			if (!dep.dbt_resource || !dep.column || dep.column === '*') continue;
+			const raw = this.indexer.getRawNode(dep.dbt_resource);
+			if (!raw || raw.resource_type !== 'model') continue;
+			try {
+				const result = await this._traceColumn(dep.dbt_resource, raw.name, dep.column, dialect);
+				if (result && result.transformations.length > 0) {
+					dep.transformations = result.transformations;
+					// Derive via_ctes from new-format transformations
+					dep.via_ctes = result.transformations
+						.filter(t => t.type === 'cte' && t.id.startsWith('cte:'))
+						.map(t => t.id.slice(4));
+				}
+			} catch {
+				// Keep dep without internal transforms on failure
+			}
+		}
+	}
+
+	/**
+	 * Format the lineage response in the standard structure.
+	 * Derives via_ctes from the new namespaced transformation format.
+	 * Ported from dbt-core-mcp get_column_lineage._format_lineage_response.
+	 */
+	private _formatLineageResponse(
+		modelName: string,
+		uniqueId: string,
+		column: string,
+		direction: string,
+		dependencies: ColumnDependency[],
+		rootLineage: LineageResult | null,
+	): Record<string, unknown> {
+		const base = { model: modelName, unique_id: uniqueId, column, direction };
+
+		if (direction === 'downstream') {
+			return { ...base, usages: [], note: 'Downstream column lineage not yet implemented' };
+		}
+
+		const transformations = rootLineage?.transformations ?? [];
+
+		// Derive via_ctes from new namespaced format (cte:name → name)
+		const viaCtes: string[] = [];
+		for (const t of transformations) {
+			if (t.type === 'cte' && t.id.startsWith('cte:')) {
+				const name = t.id.slice(4);
+				if (!viaCtes.includes(name)) viaCtes.push(name);
+			}
+		}
+
+		return {
+			...base,
+			transformations,
+			via_ctes: viaCtes.length > 0 ? viaCtes : (rootLineage?.via_ctes ?? []),
+			dependencies,
+			dependency_count: dependencies.length,
+		};
+	}
+
+	/**
+	 * Resolve the output columns for a node by parsing its compiled SQL.
+	 * Falls back to manifest columns if compiled SQL is unavailable.
+	 */
+	async resolveColumnsForNode(uniqueId: string): Promise<string[]> {
+		const rawNode = this.indexer.getRawNode(uniqueId);
+		if (!rawNode) return [];
+
+		const manifestCols = Object.keys(rawNode.columns ?? {});
+
+		// _ensureCompiled: free if compiled_code already in manifest, compiles if missing
+		const compiledCode = await this._ensureCompiled(uniqueId);
+		if (!compiledCode) return manifestCols;
+
+		const index = this.indexer.index;
+		const dialect = mapAdapterToDialect(index?.adapterType ?? 'ansi');
+		const upstreamLineage = this.indexer.getLineage(uniqueId, 5, 'upstream');
+		const schemaMapping = this._buildSchemaMapping(upstreamLineage.upstream.map(n => n.uniqueId));
+
+		const { columns } = await this._resolveOutputColumns(
+			rawNode.resource_type,
+			rawNode,
+			compiledCode,
+			dialect,
+			schemaMapping,
+		);
+
+		if (columns.length > 0 && !columns.includes('*')) return columns;
+		return manifestCols.length > 0 ? manifestCols : columns;
+	}
+
+	/**
+	 * Trace column lineage directly, returning structured data.
+	 * Used by both the LM tool invoke() and the lineage graph webview.
+	 */
+	private static readonly _emptyColumnEdges: Array<{ sourceModel: string; sourceColumn: string; targetModel: string; targetColumn: string }> = [];
+
+	async traceColumnDirect(
+		uniqueId: string,
+		column: string,
+		direction: 'upstream' | 'downstream' | 'both' = 'upstream',
+		depth?: number,
+	): Promise<{ error?: string; dependencies: Array<{ column: string; dbt_resource?: string }>; columnEdges: Array<{ sourceModel: string; sourceColumn: string; targetModel: string; targetColumn: string }> }> {
+		const rawNode = this.indexer.getRawNode(uniqueId);
+		if (!rawNode) {
+			return { error: `Raw manifest data not found for "${uniqueId}"`, dependencies: [], columnEdges: GetColumnLineageTool._emptyColumnEdges };
+		}
+
+		// Sources, seeds, snapshots are terminal nodes — no compiled SQL needed, no upstream to trace
+		if (rawNode.resource_type !== 'model') {
+			return { dependencies: [], columnEdges: GetColumnLineageTool._emptyColumnEdges };
+		}
+
+		// _ensureCompiled: free if compiled_code already in manifest, compiles if missing
+		const compiledCode = await this._ensureCompiled(uniqueId);
+		if (!compiledCode) {
+			return { error: 'Could not resolve compiled SQL for this model.', dependencies: [], columnEdges: GetColumnLineageTool._emptyColumnEdges };
+		}
+
+		const index = this.indexer.index;
+		const dialect = mapAdapterToDialect(index?.adapterType ?? 'ansi');
+
+		const upstreamLineage = this.indexer.getLineage(uniqueId, 5, 'upstream');
+		const schemaMapping = this._buildSchemaMapping(upstreamLineage.upstream.map(n => n.uniqueId));
+		const { columns: outputColumns } = await this._resolveOutputColumns(
+			rawNode.resource_type,
+			rawNode,
+			compiledCode,
+			dialect,
+			schemaMapping,
+		);
+
+		if (outputColumns.length > 0 && !outputColumns.includes('*') && !outputColumns.includes(column)) {
+			return { error: `Column "${column}" not found in output`, dependencies: [], columnEdges: GetColumnLineageTool._emptyColumnEdges };
+		}
+
+		if (direction === 'downstream') {
+			return { dependencies: [], columnEdges: GetColumnLineageTool._emptyColumnEdges };
+		}
+
+		const maxDepth = depth ?? 10;
+		const relationLookup = this._buildRelationLookup();
+		const visited = new Set<string>();
+		const columnEdges: Array<{ sourceModel: string; sourceColumn: string; targetModel: string; targetColumn: string }> = [];
+
+		const dependencies = await this._traceUpstreamRecursive(
+			uniqueId,
+			rawNode.name,
+			column,
+			dialect,
+			maxDepth,
+			0,
+			relationLookup,
+			visited,
+			columnEdges,
+		);
+
+		await this._enrichDependencyTransformations(dependencies, dialect);
+		return { dependencies, columnEdges };
 	}
 
 	async invoke(
@@ -289,14 +669,21 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		}
 
 		const index = this.indexer.index;
-		const dialect = index?.adapterType ?? 'ansi';
+		const dialect = mapAdapterToDialect(index?.adapterType ?? 'ansi');
 
-		// Validate that the requested column exists in the output
+		// Resolve output columns using type-aware strategy
+		const resourceType = modelInfo.uniqueId.split('.')[0];
 		const upstreamLineage = this.indexer.getLineage(modelInfo.uniqueId, 5, 'upstream');
-		const schemaMapping = this._buildSchemaMapping(upstreamLineage.upstream);
-		const outputColumns = await this._getOutputColumns(compiledCode, dialect, schemaMapping);
+		const schemaMapping = this._buildSchemaMapping(upstreamLineage.upstream.map(n => n.uniqueId));
+		const { columns: outputColumns } = await this._resolveOutputColumns(
+			resourceType,
+			rawNode,
+			compiledCode,
+			dialect,
+			schemaMapping,
+		);
 
-		if (outputColumns.length > 0 && !outputColumns.includes(column)) {
+		if (outputColumns.length > 0 && !outputColumns.includes('*') && !outputColumns.includes(column)) {
 			return toolResult({
 				error: `Column "${column}" not found in output of model "${model}". Available columns: ${outputColumns.join(', ')}`,
 			});
@@ -307,6 +694,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		const visited = new Set<string>();
 
 		if (direction === 'upstream' || direction === 'both') {
+			const _invokeEdges: Array<{ sourceModel: string; sourceColumn: string; targetModel: string; targetColumn: string }> = [];
 			const dependencies = await this._traceUpstreamRecursive(
 				modelInfo.uniqueId,
 				modelInfo.name,
@@ -316,33 +704,34 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 				0,
 				relationLookup,
 				visited,
+				_invokeEdges,
 			);
 
-			// Get the root model's lineage for CTE paths and transformations
+			// Enrich model dependencies with their internal CTE transformations
+			await this._enrichDependencyTransformations(dependencies, dialect);
+
+			// Get root model's lineage for transformations and via_ctes
 			const rootLineage = await this._traceColumn(modelInfo.uniqueId, modelInfo.name, column, dialect);
 
-			return toolResult({
-				model: modelInfo.name,
-				unique_id: modelInfo.uniqueId,
+			return toolResult(this._formatLineageResponse(
+				modelInfo.name,
+				modelInfo.uniqueId,
 				column,
 				direction,
-				via_ctes: rootLineage?.via_ctes ?? [],
-				transformations: rootLineage?.transformations ?? [],
 				dependencies,
-				dependency_count: dependencies.length,
-			});
+				rootLineage,
+			));
 		}
 
-		// Downstream-only (future expansion)
-		return toolResult({
-			model: modelInfo.name,
-			unique_id: modelInfo.uniqueId,
+		// Downstream-only
+		return toolResult(this._formatLineageResponse(
+			modelInfo.name,
+			modelInfo.uniqueId,
 			column,
-			direction,
-			dependencies: [],
-			dependency_count: 0,
-			note: 'Downstream column lineage not yet implemented',
-		});
+			'downstream',
+			[],
+			null,
+		));
 	}
 
 	async prepareInvocation(

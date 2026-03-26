@@ -1,7 +1,7 @@
 {
 	"name": "dbt-studio-vscode",
 	"displayName": "dbt Studio",
-	"description": "dbt core development environment for VS Code — language support, model explorer, lineage graph, and Copilot tools",
+	"description": "A full-featured development environment and an AI-powered assistant — the best of both worlds for analytics engineering",
 	"version": "0.1.2",
 	"publisher": "nickeolofsson",
 	"license": "MIT",
@@ -101,6 +101,56 @@
 				"command": "dbt-studio.refreshExplorer",
 				"title": "dbt Studio: Refresh Model Explorer",
 				"icon": "$(refresh)"
+			},
+			{
+				"command": "dbt-studio.toggleLineageFollow",
+				"title": "dbt Studio: Toggle Lineage Follow Active Editor",
+				"icon": "$(link)"
+			},
+			{
+				"command": "dbt-studio.refreshTestExplorer",
+				"title": "dbt Studio: Refresh Test Explorer",
+				"icon": "$(refresh)"
+			},
+			{
+				"command": "dbt-studio.runTestFromExplorer",
+				"title": "Run Test",
+				"icon": "$(play)"
+			},
+			{
+				"command": "dbt-studio.runTestGroupFromExplorer",
+				"title": "Run All Tests in Group",
+				"icon": "$(run-all)"
+			},
+			{
+				"command": "dbt-studio.runTestCategoryFromExplorer",
+				"title": "Run All Tests in Category",
+				"icon": "$(run-all)"
+			},
+			{
+				"command": "dbt-studio.runAllTestsFromExplorer",
+				"title": "Run All Tests",
+				"icon": "$(run-all)"
+			},
+			{
+				"command": "dbt-studio.runNamedModel",
+				"title": "dbt Studio: Run Named Model",
+				"icon": "$(run)"
+			},
+			{
+				"command": "dbt-studio.testNamedModel",
+				"title": "dbt Studio: Test Named Model",
+				"icon": "$(beaker)"
+			},
+			{
+				"command": "dbt-studio.runUnitTest",
+				"title": "dbt Studio: Run Unit Test",
+				"icon": "$(beaker)"
+			},
+			{
+				"command": "dbt-studio.runCteTest",
+				"title": "dbt Studio: Run CTE Test",
+				"icon": "$(combine)"
 			}
 		],
 		"viewsContainers": {
@@ -109,6 +159,13 @@
 					"id": "dbt-studio",
 					"title": "dbt Studio",
 					"icon": "resources/icons/dbt-studio-activitybar.svg"
+				}
+			],
+			"panel": [
+				{
+					"id": "dbt-studio-panel",
+					"title": "dbt Lineage",
+					"icon": "$(type-hierarchy)"
 				}
 			]
 		},
@@ -120,8 +177,22 @@
 					"when": "workspaceHasDBT"
 				},
 				{
+					"id": "dbt-studio.testExplorer",
+					"name": "Test Explorer",
+					"when": "workspaceHasDBT"
+				},
+				{
 					"id": "dbt-studio.testResults",
 					"name": "Test Results",
+					"when": "workspaceHasDBT",
+					"visibility": "collapsed"
+				}
+			],
+			"dbt-studio-panel": [
+				{
+					"type": "webview",
+					"id": "dbt-studio.lineageGraph",
+					"name": "Lineage",
 					"when": "workspaceHasDBT"
 				}
 			]
@@ -149,6 +220,38 @@
 					"command": "dbt-studio.refreshExplorer",
 					"when": "view == dbt-studio.modelExplorer",
 					"group": "navigation"
+				},
+				{
+					"command": "dbt-studio.toggleLineageFollow",
+					"when": "view == dbt-studio.lineageGraph",
+					"group": "navigation"
+				},
+				{
+					"command": "dbt-studio.refreshTestExplorer",
+					"when": "view == dbt-studio.testExplorer",
+					"group": "navigation@2"
+				},
+				{
+					"command": "dbt-studio.runAllTestsFromExplorer",
+					"when": "view == dbt-studio.testExplorer",
+					"group": "navigation@1"
+				}
+			],
+			"view/item/context": [
+				{
+					"command": "dbt-studio.runTestFromExplorer",
+					"when": "view == dbt-studio.testExplorer && viewItem =~ /unitTestNode|dataTestNode|cteTestNode/",
+					"group": "inline@1"
+				},
+				{
+					"command": "dbt-studio.runTestGroupFromExplorer",
+					"when": "view == dbt-studio.testExplorer && viewItem == testGroup",
+					"group": "inline@1"
+				},
+				{
+					"command": "dbt-studio.runTestCategoryFromExplorer",
+					"when": "view == dbt-studio.testExplorer && viewItem == testCategory",
+					"group": "inline@1"
 				}
 			]
 		},
@@ -408,7 +511,11 @@
 						},
 						"direction": {
 							"type": "string",
-							"enum": ["upstream", "downstream", "both"],
+							"enum": [
+								"upstream",
+								"downstream",
+								"both"
+							],
 							"description": "Direction to trace lineage (default: upstream)"
 						},
 						"depth": {
@@ -722,6 +829,7 @@
 	"devDependencies": {
 		"@resvg/resvg-js": "^2.6.2",
 		"@stylistic/eslint-plugin": "^3.1.0",
+		"@types/dagre": "^0.7.54",
 		"@types/js-yaml": "^4.0.9",
 		"@types/node": "22.x",
 		"@types/vscode": "^1.102.0",
@@ -742,6 +850,7 @@
 		"vitest": "^4.0.18"
 	},
 	"dependencies": {
+		"dagre": "^0.8.5",
 		"js-yaml": "^4.1.1",
 		"node-sql-parser": "^5.3.6"
 	}

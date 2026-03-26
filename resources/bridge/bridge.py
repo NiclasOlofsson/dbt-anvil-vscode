@@ -15,9 +15,15 @@ Protocol:
   Shutdown: reads {"shutdown": true} from stdin → exits cleanly
 """
 
+import csv
+import hashlib
 import json
 import os
+import re
+import shutil
 import sys
+from io import StringIO
+from pathlib import Path
 
 # Prepend vendored dependencies (sqlglot) bundled with the extension.
 # This ensures bridge.py works regardless of what the user's project has installed.
@@ -357,6 +363,208 @@ def handle_describe_table(
     print(json.dumps({"success": True, "columns": columns}), flush=True)
 
 
+def _is_all_static_branch(branch: Any) -> bool:
+    """Return True if all SELECT expressions in a branch are literals or NULLs."""
+    try:
+        from sqlglot import exp  # type: ignore[import-not-found]
+    except ImportError:
+        return False
+    select = (
+        branch
+        if isinstance(branch, exp.Select)
+        else branch.find(exp.Select)
+        if hasattr(branch, "find")
+        else None
+    )
+    if not select:
+        return False
+    return all(isinstance(e, (exp.Literal, exp.Null)) for e in select.expressions)
+
+
+def _clean_static_union_branches(ast: Any, column_name: str, dialect: str) -> Any:
+    """Replace static UNION branches (all literals/NULLs) with the dynamic branch."""
+    try:
+        from sqlglot import exp  # type: ignore[import-not-found]
+    except ImportError:
+        return ast
+    for union in list(ast.find_all(exp.Union)):
+        left = union.left
+        right = union.right
+        left_static = _is_all_static_branch(left)
+        right_static = _is_all_static_branch(right)
+        if left_static and not right_static:
+            union.replace(right)
+        elif right_static and not left_static:
+            union.replace(left)
+    return ast
+
+
+def _extract_transformations_with_sources(lineage_node: Any) -> list[dict[str, Any]]:
+    """Extract transformations with namespaced IDs, types, and source references.
+
+    Two-pass approach:
+    1. First pass: create all transforms, build cte_to_id lookup, detect UNION branches
+    2. Second pass: extract sources by scanning expressions for CTE/table references
+
+    Ported from dbt-core-mcp get_column_lineage._extract_transformations_with_sources.
+    """
+    try:
+        from sqlglot import exp  # type: ignore[import-not-found]
+    except ImportError:
+        return []
+
+    transform_map: dict[str, dict[str, Any]] = {}
+    cte_to_id: dict[str, str] = {}
+    nodes_with_data: list[tuple[str, Any, str]] = []
+    outer_query_sources: set[str] = set()
+    union_branches: dict[str, list[dict[str, Any]]] = {}
+
+    # FIRST PASS
+    for node in lineage_node.walk():
+        if not hasattr(node, "name") or not node.name:
+            continue
+
+        if "." not in node.name:
+            if hasattr(node, "reference_node_name") and node.reference_node_name:
+                ref_cte = node.reference_node_name
+                branch_info: dict[str, Any] = {}
+                if hasattr(node, "expression") and node.expression:
+                    expr_str = str(node.expression)
+                    branch_info["expression"] = (
+                        expr_str if len(expr_str) <= 200 else expr_str[:197] + "..."
+                    )
+                    if " AS " in expr_str:
+                        branch_info["column"] = expr_str.split(" AS ")[-1].strip()
+                    branch_info["_full_expr"] = expr_str
+                union_branches.setdefault(ref_cte, []).append(branch_info)
+            continue
+
+        parts = node.name.split(".", 1)
+        cte_or_table = parts[0]
+        col_name = parts[1] if len(parts) > 1 else node.name
+
+        if cte_or_table == "__lineage_final__":
+            if hasattr(node, "expression") and node.expression:
+                expr_str = str(node.expression)
+                for potential_ref in expr_str.split():
+                    if "." in potential_ref:
+                        ref_name = potential_ref.split(".")[0].strip("(),")
+                        if ref_name and not ref_name.isdigit():
+                            outer_query_sources.add(ref_name)
+            continue
+
+        source_type = type(node.source).__name__ if hasattr(node, "source") else None
+        actual_cte_or_table = cte_or_table
+        if (
+            hasattr(node, "source")
+            and hasattr(node.source, "this")
+            and node.source.this
+        ):
+            actual_cte_or_table = str(node.source.this)
+
+        if source_type == "Table":
+            transform_id = f"table:{actual_cte_or_table}"
+            transform_type = "table"
+        else:
+            transform_id = f"cte:{actual_cte_or_table}"
+            transform_type = "cte"
+
+        cte_to_id[actual_cte_or_table] = transform_id
+
+        if hasattr(node, "expression") and node.expression:
+            nodes_with_data.append((transform_id, node, str(node.expression)))
+
+        if transform_id in transform_map:
+            continue
+
+        transform: dict[str, Any] = {
+            "id": transform_id,
+            "type": transform_type,
+            "column": col_name,
+        }
+        if hasattr(node, "expression") and node.expression:
+            expr_sql = str(node.expression)
+            if expr_sql and expr_sql.strip() != col_name:
+                transform["expression"] = (
+                    expr_sql if len(expr_sql) <= 200 else expr_sql[:197] + "..."
+                )
+
+        transform_map[transform_id] = transform
+
+    # Register UNION CTEs in cte_to_id
+    for ref_cte in union_branches:
+        cte_to_id[ref_cte] = f"cte:{ref_cte}"
+
+    # Create UNION transformations
+    for ref_cte, branches in union_branches.items():
+        if not branches:
+            continue
+        transform_id = f"cte:{ref_cte}"
+        column = branches[0].get("column", "")
+        formatted_branches: list[dict[str, Any]] = []
+        for branch_info in branches:
+            branch_entry: dict[str, Any] = {}
+            if "expression" in branch_info:
+                branch_entry["expression"] = branch_info["expression"]
+            source_ids: set[str] = set()
+            full_expr = branch_info.get("_full_expr", "")
+            if full_expr:
+                for cte_name, cte_id in cte_to_id.items():
+                    if f"{cte_name}." in full_expr:
+                        source_ids.add(cte_id)
+            branch_entry["sources"] = sorted(source_ids)
+            formatted_branches.append(branch_entry)
+        transform_map[transform_id] = {
+            "id": transform_id,
+            "type": "union",
+            "column": column,
+            "branches": formatted_branches,
+        }
+
+    # SECOND PASS: extract sources per non-union transform
+    sources_map: dict[str, set[str]] = {}
+    for transform_id, node, expr_str in nodes_with_data:
+        source_ids_2: set[str] = set()
+        if (
+            expr_str.strip() == "*"
+            and hasattr(node, "source")
+            and hasattr(node.source, "find")
+        ):
+            table_node = node.source.find(exp.Table)
+            if table_node and hasattr(table_node, "this"):
+                source_ids_2.add(f"table:{table_node.this}")
+        for cte_name, cte_id in cte_to_id.items():
+            if cte_id != transform_id and f"{cte_name}." in expr_str:
+                source_ids_2.add(cte_id)
+        sources_map.setdefault(transform_id, set()).update(source_ids_2)
+
+    transformations: list[dict[str, Any]] = []
+    for trans in transform_map.values():
+        if trans.get("type") != "union":
+            trans["sources"] = sorted(sources_map.get(trans["id"], set()))
+        transformations.append(trans)
+
+    if outer_query_sources:
+        column_for_query = next((t.get("column", "") for t in transformations), "")
+        resolved_sources: list[str] = []
+        for ref_name in outer_query_sources:
+            if ref_name in cte_to_id:
+                resolved_sources.append(cte_to_id[ref_name])
+            else:
+                resolved_sources.append(f"table:{ref_name}")
+        transformations.insert(
+            0,
+            {
+                "id": "query",
+                "type": "outer_query",
+                "column": column_for_query,
+                "sources": sorted(resolved_sources),
+            },
+        )
+
+    return transformations
+
+
 def _wrap_final_select(
     compiled_sql: str,
     column_name: str,
@@ -417,27 +625,44 @@ def _trace_column_lineage(
     schema_mapping: dict[str, Any],
     dialect: str,
 ) -> dict[str, Any]:
-    """Trace column lineage using sqlglot.lineage().
+    """Trace column lineage using sqlglot.lineage() with UNION-cleanup retry.
 
-    Returns upstream dependencies with CTE paths and transformations.
+    Returns upstream dependencies with CTE paths and namespaced transformations.
 
-    Ported from dbt-core-mcp get_column_lineage._analyze_column_lineage
-    and _extract_dependencies_from_lineage.
+    Ported from dbt-core-mcp get_column_lineage._analyze_column_lineage,
+    _extract_transformations_with_sources, and _extract_dependencies_from_lineage.
     """
+    from sqlglot.errors import SqlglotError  # type: ignore[import-not-found]
     from sqlglot.lineage import lineage  # type: ignore[import-not-found]
 
     wrapped_ast = _wrap_final_select(compiled_sql, column_name, dialect)
 
-    result = lineage(
-        column=column_name,
-        sql=wrapped_ast,
-        schema=schema_mapping,
-        dialect=dialect,
-    )
+    result = None
+    last_error: BaseException | None = None
+    for attempt in range(3):
+        try:
+            result = lineage(
+                column=column_name,
+                sql=wrapped_ast,
+                schema=schema_mapping,
+                dialect=dialect,
+            )
+            break
+        except (IndexError, SqlglotError) as exc:
+            last_error = exc
+            if attempt < 2:
+                wrapped_ast = _clean_static_union_branches(
+                    wrapped_ast, column_name, dialect
+                )
 
+    if result is None:
+        raise last_error or RuntimeError(
+            f"Could not trace lineage for column '{column_name}'"
+        )
+
+    # Extract dependencies (table nodes) and via_ctes
     dependencies: list[dict[str, Any]] = []
     via_ctes: list[str] = []
-    transformations: list[dict[str, str]] = []
 
     for node in result.walk():
         if not hasattr(node, "name") or not node.name:
@@ -452,7 +677,6 @@ def _trace_column_lineage(
             table_or_cte = None
             col = name
 
-        # Check if this is a source table (has database/schema/catalog on source)
         is_table = False
         if hasattr(node, "source"):
             source = node.source
@@ -461,25 +685,20 @@ def _trace_column_lineage(
             )
 
         if is_table and table_or_cte:
-            # Extract database/schema from the source expression
-            dep: dict[str, Any] = {"column": col, "table": table_or_cte}
+            # Use the actual table name from the source expression,
+            # not the SQL alias (e.g. "c" from "stg_customers AS c").
+            actual_table = getattr(node.source, "name", table_or_cte) or table_or_cte
+            dep: dict[str, Any] = {"column": col, "table": actual_table}
             if hasattr(node.source, "db") and node.source.db:
                 dep["schema"] = str(node.source.db).strip('"')
             if hasattr(node.source, "catalog") and node.source.catalog:
                 dep["database"] = str(node.source.catalog).strip('"')
             dependencies.append(dep)
         elif table_or_cte and table_or_cte != "__lineage_final__":
-            # CTE step
             if table_or_cte not in via_ctes:
                 via_ctes.append(table_or_cte)
-            transform: dict[str, str] = {"cte": table_or_cte, "column": col}
-            if hasattr(node, "expression") and node.expression is not None:
-                expr_sql = str(node.expression)
-                if expr_sql and expr_sql.strip() != col:
-                    if len(expr_sql) > 200:
-                        expr_sql = expr_sql[:197] + "..."
-                    transform["expression"] = expr_sql
-            transformations.append(transform)
+
+    transformations = _extract_transformations_with_sources(result)
 
     return {
         "dependencies": dependencies,
@@ -570,6 +789,565 @@ def handle_get_scope_columns(request: dict[str, Any]) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# CTE test support — ported from dbt-core-mcp cte_generator.py
+# ---------------------------------------------------------------------------
+
+
+def _cte_rows_to_sql(
+    rows: list[dict[str, Any]], columns: list[str] | None = None
+) -> str:
+    """Convert list of row dicts to SQL SELECT statements joined by UNION ALL."""
+    if columns is None:
+        cols_union: set[str] = set()
+        for row in rows:
+            cols_union.update(row.keys())
+        columns = sorted(cols_union)
+
+    if not columns:
+        return "SELECT NULL WHERE FALSE"
+
+    if not rows:
+        col_exprs = [f"NULL as {c}" for c in columns]
+        return f"SELECT {', '.join(col_exprs)} WHERE 1=0"
+
+    selects = []
+    for row in rows:
+        exprs = []
+        for col in columns:
+            v = row.get(col)
+            if v is None:
+                exprs.append(f"NULL as {col}")
+            elif isinstance(v, str):
+                if v.isdigit() or (v.replace(".", "", 1).replace("-", "", 1).isdigit()):
+                    exprs.append(f"{v} as {col}")
+                else:
+                    escaped = v.replace("'", "''")
+                    exprs.append(f"'{escaped}' as {col}")
+            else:
+                exprs.append(f"{v} as {col}")
+        selects.append(f"SELECT {', '.join(exprs)}")
+
+    return "\nUNION ALL\n".join(selects)
+
+
+def _cte_parse_csv_fixture(csv_text: str) -> tuple[list[str], list[dict[str, Any]]]:
+    """Parse a csv fixture string into (columns, rows_as_dicts)."""
+    sio = StringIO(csv_text.strip("\n"))
+    reader = csv.DictReader(line for line in sio if line.strip() != "")
+    columns = list(reader.fieldnames) if reader.fieldnames else []
+    rows = [dict(row) for row in reader]
+    return columns, rows
+
+
+def _cte_is_position_in_comment(sql: str, pos: int) -> bool:
+    """Check if a position in SQL is inside a comment (SQL or Jinja)."""
+    line_start = sql.rfind("\n", 0, pos) + 1
+    line_content = sql[line_start:pos]
+    if "--" in line_content:
+        return True
+
+    block_comment_depth = 0
+    jinja_comment_depth = 0
+    i = 0
+    while i < pos:
+        if i + 1 < len(sql):
+            two_char = sql[i : i + 2]
+            if two_char == "/*":
+                block_comment_depth += 1
+                i += 2
+                continue
+            elif two_char == "*/":
+                block_comment_depth -= 1
+                i += 2
+                continue
+            elif two_char == "{#":
+                jinja_comment_depth += 1
+                i += 2
+                continue
+            elif two_char == "#}":
+                jinja_comment_depth -= 1
+                i += 2
+                continue
+        i += 1
+
+    return block_comment_depth > 0 or jinja_comment_depth > 0
+
+
+def _cte_replace_cte_with_mock(
+    sql: str,
+    cte_name: str,
+    rows: list[dict[str, Any]],
+    columns: list[str] | None = None,
+) -> str:
+    """Replace a CTE definition with a mocked version from fixture rows."""
+    pattern = rf"\b{cte_name}\s+as\s*\("
+    matches = list(re.finditer(pattern, sql, re.IGNORECASE))
+
+    if not matches:
+        return sql
+
+    match = None
+    for m in matches:
+        if not _cte_is_position_in_comment(sql, m.start()):
+            match = m
+            break
+
+    if not match:
+        return sql
+
+    paren_pos = sql.index("(", match.start())
+    paren_count = 1
+    end_pos = paren_pos + 1
+    in_string = False
+    string_char = None
+    in_line_comment = False
+    in_block_comment = False
+
+    while end_pos < len(sql) and paren_count > 0:
+        char = sql[end_pos]
+        next_char = sql[end_pos + 1] if end_pos + 1 < len(sql) else ""
+
+        if not in_string and not in_block_comment and char == "-" and next_char == "-":
+            in_line_comment = True
+            end_pos += 2
+            continue
+
+        if in_line_comment:
+            if char == "\n":
+                in_line_comment = False
+            end_pos += 1
+            continue
+
+        if not in_string and not in_line_comment and char == "/" and next_char == "*":
+            in_block_comment = True
+            end_pos += 2
+            continue
+
+        if in_block_comment:
+            if char == "*" and next_char == "/":
+                in_block_comment = False
+                end_pos += 2
+            else:
+                end_pos += 1
+            continue
+
+        if char in ('"', "'"):
+            if not in_string:
+                in_string = True
+                string_char = char
+            elif char == string_char:
+                in_string = False
+                string_char = None
+
+        if not in_string and not in_line_comment and not in_block_comment:
+            if char == "(":
+                paren_count += 1
+            elif char == ")":
+                paren_count -= 1
+
+        end_pos += 1
+
+    mock_sql = _cte_rows_to_sql(rows, columns=columns)
+    mocked_cte = f"{cte_name} AS (\n    {mock_sql}\n)"
+    original_cte = sql[match.start() : end_pos]
+    return sql.replace(original_cte, mocked_cte)
+
+
+def _cte_generate_model(
+    base_model_path: Path,
+    cte_name: str,
+    test_given: list[dict[str, Any]],
+    output_path: Path,
+) -> bool:
+    """Generate a truncated model that selects from the target CTE."""
+    sql = base_model_path.read_text()
+
+    pattern = rf"\b{re.escape(cte_name)}(?:\s+AS)?\s+\("
+    matches = list(re.finditer(pattern, sql, re.IGNORECASE))
+
+    if not matches:
+        print(
+            f"[bridge] CTE '{cte_name}' not found in {base_model_path}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return False
+
+    match = None
+    for m in matches:
+        if not _cte_is_position_in_comment(sql, m.start()):
+            match = m
+            break
+
+    if not match:
+        print(
+            f"[bridge] CTE '{cte_name}' only in comments", file=sys.stderr, flush=True
+        )
+        return False
+
+    paren_pos = sql.index("(", match.start())
+    paren_count = 1
+    i = paren_pos + 1
+    in_string = False
+    string_char = None
+    in_line_comment = False
+    in_block_comment = False
+
+    while i < len(sql) and paren_count > 0:
+        char = sql[i]
+        next_char = sql[i + 1] if i + 1 < len(sql) else ""
+
+        if not in_string and not in_block_comment and char == "-" and next_char == "-":
+            in_line_comment = True
+            i += 2
+            continue
+
+        if in_line_comment:
+            if char == "\n":
+                in_line_comment = False
+            i += 1
+            continue
+
+        if not in_string and not in_line_comment and char == "/" and next_char == "*":
+            in_block_comment = True
+            i += 2
+            continue
+
+        if in_block_comment:
+            if char == "*" and next_char == "/":
+                in_block_comment = False
+                i += 2
+            else:
+                i += 1
+            continue
+
+        if char in ('"', "'") and (i == 0 or sql[i - 1] != "\\"):
+            if not in_string:
+                in_string = True
+                string_char = char
+            elif char == string_char:
+                in_string = False
+                string_char = None
+
+        if not in_string and not in_line_comment and not in_block_comment:
+            if char == "(":
+                paren_count += 1
+            elif char == ")":
+                paren_count -= 1
+
+        i += 1
+
+    if paren_count != 0:
+        print(
+            f"[bridge] Unmatched paren for CTE '{cte_name}'",
+            file=sys.stderr,
+            flush=True,
+        )
+        return False
+
+    upstream_sql = sql[:i].rstrip()
+
+    for given in test_given:
+        inp = given.get("input")
+        if isinstance(inp, str) and inp.startswith("::"):
+            mock_cte_name = inp.lstrip(":")
+            fmt = given.get("format", "dict")
+            if fmt == "csv":
+                columns, mock_rows = _cte_parse_csv_fixture(given.get("rows", ""))
+            else:
+                columns, mock_rows = None, given.get("rows", [])
+            upstream_sql = _cte_replace_cte_with_mock(
+                upstream_sql, mock_cte_name, mock_rows, columns
+            )
+
+    generated_sql = f"{upstream_sql}\n\nselect * from {cte_name}"
+    final_sql = f"-- sqlfluff:disable\n{generated_sql}"
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(final_sql)
+    return True
+
+
+def _cte_generate_test(
+    test_yaml_path: Path,
+    test_name: str,
+    generated_model: str,
+    gen_model_path: Path,
+    output_path: Path,
+) -> bool:
+    """Generate an enabled test YAML targeting the generated model."""
+    try:
+        import yaml as _yaml  # noqa: PLC0415
+    except ImportError:
+        print(
+            "[bridge] PyYAML not available — cannot generate CTE test YAML",
+            file=sys.stderr,
+            flush=True,
+        )
+        return False
+
+    with open(test_yaml_path) as f:
+        test_data = _yaml.safe_load(f)
+
+    target_test = None
+    for test in test_data.get("unit_tests", []):
+        if test["name"] == test_name:
+            target_test = test.copy()
+            break
+
+    if not target_test:
+        print(
+            f"[bridge] Test '{test_name}' not found in {test_yaml_path}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return False
+
+    generated_sql = gen_model_path.read_text()
+    ref_pattern = r"ref\(['\"](\w+)['\"]\)"
+    refs = re.findall(ref_pattern, generated_sql)
+    source_pattern = r"source\(['\"](\w+)['\"],\s*['\"](\w+)['\"]\)"
+    sources = re.findall(source_pattern, generated_sql)
+
+    actually_used: set[str] = set()
+    for ref_name in refs:
+        actually_used.add(f"ref('{ref_name}')")
+    for source_name, table_name in sources:
+        actually_used.add(f"source('{source_name}', '{table_name}')")
+
+    clean_given = [
+        g for g in target_test.get("given", []) if g.get("input") in actually_used
+    ]
+    target_test["given"] = clean_given
+
+    existing_inputs = {g.get("input", "") for g in target_test.get("given", [])}
+    for ref_name in refs:
+        ref_input = f"ref('{ref_name}')"
+        if ref_input not in existing_inputs:
+            target_test["given"].append({"input": ref_input, "rows": []})
+            existing_inputs.add(ref_input)
+    for source_name, table_name in sources:
+        source_input = f"source('{source_name}', '{table_name}')"
+        if source_input not in existing_inputs:
+            target_test["given"].append({"input": source_input, "rows": []})
+            existing_inputs.add(source_input)
+
+    target_test["model"] = generated_model
+    target_test.pop("config", None)
+
+    output_data = {"version": 2, "unit_tests": [target_test]}
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w") as f:
+        _yaml.safe_dump(
+            output_data, f, default_flow_style=False, sort_keys=False, width=120
+        )
+
+    return True
+
+
+def _cte_load_project_config(project_dir: Path) -> dict[str, Any]:
+    """Load dbt_project.yml and return its configuration dict."""
+    try:
+        import yaml as _yaml  # noqa: PLC0415
+    except ImportError:
+        return {}
+    project_file = project_dir / "dbt_project.yml"
+    if not project_file.exists():
+        return {}
+    with open(project_file) as f:
+        config = _yaml.safe_load(f)
+    return config or {}
+
+
+def _cte_find_model_file(
+    base_model: str,
+    yaml_path: Path,
+    project_dir: Path,
+    config: dict[str, Any],
+) -> Path | None:
+    """Locate the SQL model file for base_model by mirroring test-path structure onto model-paths."""
+    model_paths = config.get("model-paths", ["models"])
+    test_paths = config.get("test-paths", ["tests"])
+
+    # Build list of candidate test root dirs (same logic as generate_cte_tests)
+    test_roots: list[Path] = [project_dir / tp for tp in test_paths]
+    unit_tests_dir = project_dir / "unit_tests"
+    if unit_tests_dir.exists() and unit_tests_dir not in test_roots:
+        test_roots.append(unit_tests_dir)
+
+    # Determine relative path of yaml_path from whichever test root it belongs to
+    rel_parent: Path | None = None
+    for test_root in test_roots:
+        try:
+            rel = yaml_path.relative_to(test_root)
+            rel_parent = rel.parent
+            break
+        except ValueError:
+            continue
+
+    models_base = project_dir / model_paths[0]
+
+    if rel_parent is not None:
+        candidate = models_base / rel_parent / f"{base_model}.sql"
+        if candidate.exists():
+            return candidate
+
+    # Fallback: search recursively
+    for found in models_base.rglob(f"{base_model}.sql"):
+        return found
+
+    return None
+
+
+def handle_run_cte_test(
+    request: dict[str, Any],
+    project_dir: str,
+    profiles_dir: str,
+    dbt: Any,
+) -> None:
+    """Generate, run, and clean up a single CTE test.
+
+    Request: { "run_cte_test": true, "yaml_file": "/abs/path.yml", "test_name": "name" }
+    """
+    try:
+        import yaml as _yaml  # noqa: PLC0415
+    except ImportError:
+        print(
+            json.dumps({"success": False, "error": "PyYAML not available"}), flush=True
+        )
+        return
+
+    yaml_file = request.get("yaml_file", "")
+    test_name = request.get("test_name", "")
+    if not yaml_file or not test_name:
+        print(
+            json.dumps(
+                {"success": False, "error": "yaml_file and test_name are required"}
+            ),
+            flush=True,
+        )
+        return
+
+    yaml_path = Path(yaml_file)
+    proj_dir = Path(project_dir)
+    config = _cte_load_project_config(proj_dir)
+
+    # Load YAML and find the test
+    with open(yaml_path) as f:
+        test_data = _yaml.safe_load(f)
+
+    target_test = None
+    for test in test_data.get("unit_tests", []):
+        if test["name"] == test_name:
+            target_test = test
+            break
+
+    if not target_test:
+        print(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": f"Test '{test_name}' not found in {yaml_file}",
+                }
+            ),
+            flush=True,
+        )
+        return
+
+    model_spec: str = target_test.get("model", "")
+    if "::" not in model_spec:
+        print(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": f"model field '{model_spec}' missing '::' separator",
+                }
+            ),
+            flush=True,
+        )
+        return
+
+    base_model, cte_name = model_spec.split("::", 1)
+    test_hash = hashlib.md5(test_name.encode()).hexdigest()[:6]
+    gen_model_name = f"{base_model}__{cte_name}__{test_hash}"
+
+    # Determine output dirs
+    model_paths = config.get("model-paths", ["models"])
+    gen_models_dir = proj_dir / model_paths[0] / "__cte_tests"
+
+    if (proj_dir / "unit_tests").exists():
+        gen_tests_dir = proj_dir / "unit_tests" / "__cte_tests"
+    else:
+        test_paths = config.get("test-paths", ["tests"])
+        gen_tests_dir = proj_dir / test_paths[0] / "__cte_tests"
+
+    gen_model_path = gen_models_dir / f"{gen_model_name}.sql"
+    gen_test_path = gen_tests_dir / f"{gen_model_name}_unit_tests.yml"
+
+    # Clean any leftovers first
+    if gen_models_dir.exists():
+        shutil.rmtree(gen_models_dir)
+    if gen_tests_dir.exists():
+        shutil.rmtree(gen_tests_dir)
+
+    success = False
+    try:
+        # Find the model SQL file
+        model_file = _cte_find_model_file(base_model, yaml_path, proj_dir, config)
+        if not model_file:
+            print(
+                json.dumps(
+                    {
+                        "success": False,
+                        "error": f"Model file for '{base_model}' not found",
+                    }
+                ),
+                flush=True,
+            )
+            return
+
+        # Generate model + test files
+        if not _cte_generate_model(
+            model_file, cte_name, target_test.get("given", []), gen_model_path
+        ):
+            print(
+                json.dumps({"success": False, "error": "Failed to generate CTE model"}),
+                flush=True,
+            )
+            return
+
+        if not _cte_generate_test(
+            yaml_path, test_name, gen_model_name, gen_model_path, gen_test_path
+        ):
+            print(
+                json.dumps(
+                    {"success": False, "error": "Failed to generate CTE test YAML"}
+                ),
+                flush=True,
+            )
+            return
+
+        # Run the generated unit test
+        success = run_command(
+            dbt, ["test", "-s", gen_model_name], project_dir, profiles_dir
+        )
+
+    finally:
+        # Always clean up generated files
+        if gen_models_dir.exists():
+            shutil.rmtree(gen_models_dir, ignore_errors=True)
+        if gen_tests_dir.exists():
+            shutil.rmtree(gen_tests_dir, ignore_errors=True)
+
+    print(json.dumps({"success": success}), flush=True)
+
+
+# ---------------------------------------------------------------------------
+# End CTE test support
+# ---------------------------------------------------------------------------
+
+
 def main() -> None:
     configure_stdio()
     configure_dbt_env()
@@ -621,6 +1399,8 @@ def main() -> None:
             handle_describe_table(request, dbt, project_dir, profiles_dir)
         elif "get_columns" in request:
             handle_get_columns(request)
+        elif "run_cte_test" in request:
+            handle_run_cte_test(request, project_dir, profiles_dir, dbt)
         elif "command" in request:
             command_args: list = request["command"]
             if not command_args:
