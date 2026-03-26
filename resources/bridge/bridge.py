@@ -306,6 +306,7 @@ def handle_describe_table(
         "json",
         "--limit",
         "-1",
+        "--no-populate-cache",
         "--project-dir",
         project_dir,
         "--profiles-dir",

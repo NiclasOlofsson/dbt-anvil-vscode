@@ -8,6 +8,7 @@ import { detectPythonEnvironment } from './dbt/env-detector';
 import { BridgeRunner } from './dbt/bridge-runner';
 import { DbtExecutionService, Priority } from './dbt/execution-service';
 import { CompileCache } from './dbt/compile-cache';
+import { CompileCachePersistence } from './dbt/compile-cache-persistence';
 import { DescribeCache } from './dbt/describe-cache';
 import { ColumnStorePersistence } from './indexing/column-store-persistence';
 import { registerLanguageModelTools } from './tools';
@@ -109,6 +110,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	// -------- Compile cache (shared across all tools) --------
 	const compileCache = new CompileCache(executionService, manifestLoader, logger);
+	const compileCachePersistence = new CompileCachePersistence(context, logger);
+	const restoredCompileEntries = compileCachePersistence.restore(compileCache);
+	context.subscriptions.push({ dispose: () => compileCachePersistence.save(compileCache) });
 
 	// -------- Describe cache (shared across providers and tools) --------
 	const describeCache = new DescribeCache(executionService, manifestIndexer, logger);
@@ -117,10 +121,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const statusBar = new StatusBarManager(executionService, logger);
 	context.subscriptions.push(statusBar);
 
-	// Kick off a full compile to warm the cache. Runs after the status bar is
-	// subscribed so the "compiling" indicator is visible. Once started it cannot
-	// be interrupted — user actions queue behind it and get instant cache hits.
-	void compileCache.warmAll(projectDir);
+	// Kick off a full compile to warm the cache. Skipped if enough valid entries
+	// were restored from disk (mtime validation happens on first access per entry).
+	void compileCache.warmAll(projectDir, restoredCompileEntries);
 
 	// -------- Diagnostics provider --------
 	const columnResolver = new ColumnResolver(manifestIndexer, logger, executionService, describeCache);
