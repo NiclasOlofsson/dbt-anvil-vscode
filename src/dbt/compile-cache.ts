@@ -122,7 +122,7 @@ export class CompileCache {
 				type: 'compile',
 				args: ['compile'],
 				priority: Priority.User,
-				origin: 'extension',
+				origin: 'background',
 				label: 'compile (warm cache)',
 			});
 			if (!result.success) {

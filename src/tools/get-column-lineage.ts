@@ -108,7 +108,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 			const raw = this.indexer.getRawNode(uid);
 			if (!raw) continue;
 			type RawRecord = Record<string, unknown>;
-			const r = raw as RawRecord;
+			const r = raw as unknown as RawRecord;
 
 			const db = (typeof r['database'] === 'string' ? r['database'] : undefined) ?? '__default__';
 			const schema = (typeof r['schema'] === 'string' ? r['schema'] : undefined) ?? '__default__';
@@ -165,7 +165,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 	): Promise<{ columns: string[]; source: string }> {
 		if (raw === null || raw === undefined) return { columns: [], source: 'none' };
 		type RawRecord = Record<string, unknown>;
-		const r = raw as RawRecord;
+		const r = raw as unknown as RawRecord;
 
 		if (resourceType === 'source' || resourceType === 'seed') {
 			// database_columns (list format)
@@ -200,7 +200,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		const resourceType = raw.resource_type;
 		if (resourceType === 'source' || resourceType === 'seed') {
 			type RawRecord = Record<string, unknown>;
-			const r = raw as RawRecord;
+			const r = raw as unknown as RawRecord;
 			const dbCols = r['database_columns'];
 			if (Array.isArray(dbCols) && dbCols.length > 0) {
 				const first = (dbCols as Array<{ col_name?: string }>)[0];
@@ -258,7 +258,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 			const raw = this.indexer.getRawNode(uid);
 			if (!raw) continue;
 			type RawRecord = Record<string, unknown>;
-			const r = raw as RawRecord;
+			const r = raw as unknown as RawRecord;
 			const db = typeof r['database'] === 'string' ? r['database'] : undefined;
 			const schema = model.schema ?? (typeof r['schema'] === 'string' ? r['schema'] : undefined);
 			const identifier = (typeof r['alias'] === 'string' ? r['alias'] : undefined) ?? raw.name;
@@ -270,7 +270,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 			const raw = this.indexer.getRawNode(uid);
 			if (!raw) continue;
 			type RawRecord = Record<string, unknown>;
-			const r = raw as RawRecord;
+			const r = raw as unknown as RawRecord;
 			const db = typeof r['database'] === 'string' ? r['database'] : undefined;
 			const schema = source.schema?.toLowerCase() ?? (typeof r['schema'] === 'string' ? r['schema'] : undefined);
 			const identifier = (typeof r['identifier'] === 'string' ? r['identifier'] : undefined) ?? source.name;

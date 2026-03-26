@@ -72,7 +72,7 @@ function findTestLines(content: string, topKey: string): Map<string, number> {
 				if (!isMap(item)) continue;
 				for (const p of item.items) {
 					if (!isScalar(p.key) || p.key.value !== 'name') continue;
-					if (!isScalar(p.value) || p.value.value == null) continue;
+					if (!isScalar(p.value) || p.value.value === null || p.value.value === undefined) continue;
 					const testName = String(p.value.value);
 					const range = p.value.range;
 					if (range) {
@@ -460,18 +460,18 @@ export class TestExplorerProvider implements vscode.TreeDataProvider<TestItem> {
 						const unitTests = content['unit_tests'] as Array<Record<string, unknown>> | undefined;
 						if (!Array.isArray(unitTests)) continue;
 
-					const lineMap = findTestLines(raw, 'unit_tests');
+						const lineMap = findTestLines(raw, 'unit_tests');
 
-					for (const test of unitTests) {
-						const config = test['config'] as Record<string, unknown> | undefined;
-						if (config?.['cte_test'] !== true) continue;
+						for (const test of unitTests) {
+							const config = test['config'] as Record<string, unknown> | undefined;
+							if (config?.['cte_test'] !== true) continue;
 
-						const testName = test['name'] as string | undefined;
-						const modelSpec = test['model'] as string | undefined;
-						if (!testName || !modelSpec || !modelSpec.includes('::')) continue;
+							const testName = test['name'] as string | undefined;
+							const modelSpec = test['model'] as string | undefined;
+							if (!testName || !modelSpec || !modelSpec.includes('::')) continue;
 
-						const baseModel = modelSpec.split('::')[0];
-						const lineNumber = lineMap.get(testName);
+							const baseModel = modelSpec.split('::')[0];
+							const lineNumber = lineMap.get(testName);
 							const item = new TestNodeItem(
 								`cte_test.${baseModel}.${testName}`,
 								'cte_test',
