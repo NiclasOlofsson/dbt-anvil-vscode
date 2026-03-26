@@ -2,55 +2,84 @@ import * as vscode from 'vscode';
 import type { ManifestIndexer, IndexedModel, IndexedSource, ManifestIndex } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
 
-type ExplorerItem = GroupItem | ModelItem | SourceItem;
+// ---- Tree item types ----
 
-class GroupItem extends vscode.TreeItem {
+export type ExplorerItem = GroupItem | ModelItem | SourceItem;
+
+export class GroupItem extends vscode.TreeItem {
 	constructor(
-		public readonly label: string,
+		label: string,
 		public readonly children: ExplorerItem[],
+		collapsibleState?: vscode.TreeItemCollapsibleState,
 	) {
-		super(label, vscode.TreeItemCollapsibleState.Expanded);
+		super(label, collapsibleState ?? vscode.TreeItemCollapsibleState.Collapsed);
 		this.contextValue = 'group';
 	}
 }
 
-class ModelItem extends vscode.TreeItem {
+function materialisationIcon(mat: string): vscode.ThemeIcon {
+	switch (mat) {
+		case 'table': return new vscode.ThemeIcon('symbol-class');
+		case 'view': return new vscode.ThemeIcon('eye');
+		case 'incremental': return new vscode.ThemeIcon('diff-added');
+		case 'ephemeral': return new vscode.ThemeIcon('symbol-reference');
+		case 'seed': return new vscode.ThemeIcon('list-flat');
+		case 'snapshot': return new vscode.ThemeIcon('history');
+		default: return new vscode.ThemeIcon('file-code');
+	}
+}
+
+export class ModelItem extends vscode.TreeItem {
 	constructor(public readonly model: IndexedModel) {
 		super(model.name, vscode.TreeItemCollapsibleState.None);
 		this.description = model.materialisation;
 		this.tooltip = `${model.uniqueId}\n${model.description ?? ''}`.trim();
-		this.contextValue = 'model';
-		this.iconPath = new vscode.ThemeIcon('symbol-class');
+		this.contextValue = 'modelItem';
+		this.iconPath = materialisationIcon(model.materialisation);
 		if (model.path) {
 			this.command = {
 				command: 'vscode.open',
 				title: 'Open Model',
 				arguments: [vscode.Uri.file(model.path)],
 			};
+			this.resourceUri = vscode.Uri.file(model.path);
 		}
 	}
 }
 
-class SourceItem extends vscode.TreeItem {
+export class SourceItem extends vscode.TreeItem {
 	constructor(public readonly source: IndexedSource) {
 		super(source.name, vscode.TreeItemCollapsibleState.None);
-		this.description = `${source.sourceName}.${source.schema}`;
+		this.description = source.schema;
 		this.tooltip = `${source.uniqueId}\n${source.description ?? ''}`.trim();
-		this.contextValue = 'source';
+		this.contextValue = 'sourceItem';
 		this.iconPath = new vscode.ThemeIcon('database');
 	}
+}
+
+// ---- Provider ----
+
+interface DirNode {
+	children: Map<string, DirNode>;
+	models: IndexedModel[];
 }
 
 export class ModelExplorerProvider implements vscode.TreeDataProvider<ExplorerItem> {
 	private readonly _onDidChangeTreeData = new vscode.EventEmitter<ExplorerItem | undefined | void>();
 	readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
+	private _rootItems: ExplorerItem[] = [];
+	private _parentMap = new Map<ExplorerItem, ExplorerItem | undefined>();
+	private _modelItemMap = new Map<string, ModelItem>();
+
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
+		private readonly projectDir: string,
 	) {}
 
 	refresh(): void {
+		this._rebuildTree();
 		this._onDidChangeTreeData.fire();
 	}
 
@@ -59,64 +88,184 @@ export class ModelExplorerProvider implements vscode.TreeDataProvider<ExplorerIt
 	}
 
 	getChildren(element?: ExplorerItem): ExplorerItem[] {
+		if (!element) {
+			if (this._rootItems.length === 0) {
+				this._rebuildTree();
+			}
+			return this._rootItems;
+		}
 		if (element instanceof GroupItem) {
 			return element.children;
 		}
-
-		if (element) {
-			return [];
-		}
-
-		// Root level — build groups from manifest index
-		const index = this.indexer.index;
-		if (!index) {
-			return [new GroupItem('No manifest loaded — run dbt parse', [])];
-		}
-
-		return this._buildGroups(index);
+		return [];
 	}
 
-	private _buildGroups(index: ManifestIndex): GroupItem[] {
-		const groups: GroupItem[] = [];
+	getParent(element: ExplorerItem): ExplorerItem | undefined {
+		return this._parentMap.get(element);
+	}
 
-		// Models grouped by materialization
-		const modelsByMat = new Map<string, IndexedModel[]>();
+	findModelItemForReveal(uniqueId: string): ModelItem | undefined {
+		return this._modelItemMap.get(uniqueId);
+	}
+
+	// ---- Internal ----
+
+	private _rebuildTree(): void {
+		this._parentMap.clear();
+		this._modelItemMap.clear();
+
+		const index = this.indexer.index;
+		if (!index) {
+			this._rootItems = [];
+			return;
+		}
+
+		this._rootItems = this._buildRoots(index);
+		this._registerParents(undefined, this._rootItems);
+	}
+
+	private _registerParents(parent: ExplorerItem | undefined, children: ExplorerItem[]): void {
+		for (const child of children) {
+			this._parentMap.set(child, parent);
+			if (child instanceof ModelItem) {
+				this._modelItemMap.set(child.model.uniqueId, child);
+			}
+			if (child instanceof GroupItem) {
+				this._registerParents(child, child.children);
+			}
+		}
+	}
+
+	private _buildRoots(index: ManifestIndex): GroupItem[] {
+		const roots: GroupItem[] = [];
+
+		const dirChildren = this._buildDirectoryTree(index);
+		if (dirChildren.length > 0) {
+			roots.push(new GroupItem(
+				`Models (${index.models.size})`,
+				dirChildren,
+				vscode.TreeItemCollapsibleState.Expanded,
+			));
+		}
+
+		const tagChildren = this._buildTagGroups(index);
+		if (tagChildren.length > 0) {
+			roots.push(new GroupItem('By Tag', tagChildren));
+		}
+
+		const sourceChildren = this._buildSourceGroups(index);
+		if (sourceChildren.length > 0) {
+			roots.push(new GroupItem(
+				`Sources (${index.sources.size})`,
+				sourceChildren,
+				vscode.TreeItemCollapsibleState.Expanded,
+			));
+		}
+
+		return roots;
+	}
+
+	private _buildDirectoryTree(index: ManifestIndex): ExplorerItem[] {
+		const root: DirNode = { children: new Map(), models: [] };
+		const normProjectDir = this.projectDir.replace(/\\/g, '/').toLowerCase();
+
 		for (const model of index.models.values()) {
-			const mat = model.materialisation;
-			if (!modelsByMat.has(mat)) {
-				modelsByMat.set(mat, []);
+			const normPath = model.path.replace(/\\/g, '/');
+			const lowerPath = normPath.toLowerCase();
+
+			let relativePath: string;
+			if (lowerPath.startsWith(normProjectDir)) {
+				relativePath = normPath.substring(this.projectDir.length).replace(/^[\\/]/, '');
+			} else {
+				relativePath = normPath;
 			}
-			modelsByMat.get(mat)!.push(model);
+
+			const parts = relativePath.split('/');
+			const dirParts = parts.slice(0, -1);
+
+			let current = root;
+			for (const part of dirParts) {
+				if (!current.children.has(part)) {
+					current.children.set(part, { children: new Map(), models: [] });
+				}
+				current = current.children.get(part)!;
+			}
+			current.models.push(model);
 		}
 
-		if (modelsByMat.size > 0) {
-			const modelChildren: ExplorerItem[] = [];
-			for (const [mat, models] of [...modelsByMat.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-				const sorted = models.sort((a, b) => a.name.localeCompare(b.name));
-				modelChildren.push(new GroupItem(`${mat} (${sorted.length})`, sorted.map(m => new ModelItem(m))));
-			}
-			groups.push(new GroupItem(`Models (${index.models.size})`, modelChildren));
+		return this._convertDirNode(root);
+	}
+
+	private _convertDirNode(node: DirNode): ExplorerItem[] {
+		const items: ExplorerItem[] = [];
+
+		const sortedDirs = [...node.children.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+		for (const [name, child] of sortedDirs) {
+			const childItems = this._convertDirNode(child);
+			const total = this._countModels(child);
+			const group = new GroupItem(`${name} (${total})`, childItems);
+			group.iconPath = new vscode.ThemeIcon('folder');
+			items.push(group);
 		}
 
-		// Sources grouped by source_name
-		const sourcesByName = new Map<string, IndexedSource[]>();
+		const sortedModels = [...node.models].sort((a, b) => a.name.localeCompare(b.name));
+		for (const model of sortedModels) {
+			items.push(new ModelItem(model));
+		}
+
+		return items;
+	}
+
+	private _countModels(node: DirNode): number {
+		let count = node.models.length;
+		for (const child of node.children.values()) {
+			count += this._countModels(child);
+		}
+		return count;
+	}
+
+	private _buildTagGroups(index: ManifestIndex): GroupItem[] {
+		const tagMap = new Map<string, IndexedModel[]>();
+		for (const model of index.models.values()) {
+			for (const tag of model.tags) {
+				if (!tagMap.has(tag)) tagMap.set(tag, []);
+				tagMap.get(tag)!.push(model);
+			}
+		}
+
+		return [...tagMap.entries()]
+			.sort((a, b) => a[0].localeCompare(b[0]))
+			.map(([tag, models]) => {
+				const sorted = [...models].sort((a, b) => a.name.localeCompare(b.name));
+				const group = new GroupItem(
+					`${tag} (${sorted.length})`,
+					sorted.map(m => new ModelItem(m)),
+				);
+				group.iconPath = new vscode.ThemeIcon('tag');
+				return group;
+			});
+	}
+
+	private _buildSourceGroups(index: ManifestIndex): GroupItem[] {
+		const sourceMap = new Map<string, IndexedSource[]>();
 		for (const source of index.sources.values()) {
-			if (!sourcesByName.has(source.sourceName)) {
-				sourcesByName.set(source.sourceName, []);
+			if (!sourceMap.has(source.sourceName)) {
+				sourceMap.set(source.sourceName, []);
 			}
-			sourcesByName.get(source.sourceName)!.push(source);
+			sourceMap.get(source.sourceName)!.push(source);
 		}
 
-		if (sourcesByName.size > 0) {
-			const sourceChildren: ExplorerItem[] = [];
-			for (const [name, sources] of [...sourcesByName.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-				const sorted = sources.sort((a, b) => a.name.localeCompare(b.name));
-				sourceChildren.push(new GroupItem(`${name} (${sorted.length})`, sorted.map(s => new SourceItem(s))));
-			}
-			groups.push(new GroupItem(`Sources (${index.sources.size})`, sourceChildren));
-		}
-
-		return groups;
+		return [...sourceMap.entries()]
+			.sort((a, b) => a[0].localeCompare(b[0]))
+			.map(([name, sources]) => {
+				const sorted = [...sources].sort((a, b) => a.name.localeCompare(b.name));
+				const group = new GroupItem(
+					`${name} (${sorted.length})`,
+					sorted.map(s => new SourceItem(s)),
+				);
+				group.iconPath = new vscode.ThemeIcon('database');
+				return group;
+			});
 	}
 
 	dispose(): void {

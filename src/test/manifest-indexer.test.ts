@@ -159,7 +159,7 @@ describe('ManifestIndexer', () => {
 		indexer.build();
 
 		const lineage = indexer.getLineage('model.project.my_model', 2);
-		expect(lineage.downstream).toContain('model.project.downstream');
+		expect(lineage.downstream.map(n => n.uniqueId)).toContain('model.project.downstream');
 	});
 
 	it('should find models by tag', () => {

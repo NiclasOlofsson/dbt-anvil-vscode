@@ -27,7 +27,7 @@ export class DbtCodeLensProvider implements vscode.CodeLensProvider {
 			return this._sqlCodeLenses(document);
 		}
 
-		if (document.languageId === 'yaml') {
+		if (document.languageId === 'yaml' || document.languageId === 'jinja-yaml') {
 			return this._yamlCodeLenses(document);
 		}
 
@@ -71,47 +71,173 @@ export class DbtCodeLensProvider implements vscode.CodeLensProvider {
 
 	private _yamlCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {
 		const lenses: vscode.CodeLens[] = [];
-		const text = document.getText();
-		const lines = text.split('\n');
+		const lines = document.getText().split('\n');
 
-		// Find test entries: lines that match "- name: X" under a tests: block
-		// or data_tests: block, or lines with "- dbt_utils." etc.
-		const testLineRe = /^(\s+)-\s+(\w+):\s*$/;
-		const modelNameRe = /^\s+-\s+name:\s+(\S+)/;
-		let inTestsBlock = false;
-		let currentModel: string | undefined;
+		let context: 'none' | 'models' | 'data_tests' | 'unit_tests' = 'none';
+		let currentModelName: string | undefined;
+		let blockIndent = 0;
+
+		// Track the current unit test entry for extracting its model field
+		let unitTestName: string | undefined;
+		let unitTestLine = -1;
+		let unitTestModelName: string | undefined;
+		let isCteTest = false;
+
+		const flushUnitTest = (): void => {
+			if (unitTestName && unitTestLine >= 0) {
+				const range = new vscode.Range(unitTestLine, 0, unitTestLine, lines[unitTestLine].length);
+				if (isCteTest) {
+					lenses.push(
+						new vscode.CodeLens(range, {
+							title: '$(combine) Run CTE Test',
+							command: 'dbt-studio.runCteTest',
+							arguments: [document.fileName, unitTestName],
+							tooltip: `Generate and run CTE test: ${unitTestName}`,
+						}),
+					);
+				} else {
+					const modelRef = unitTestModelName ?? currentModelName;
+					const selector = modelRef
+						? `${modelRef},test_type:unit,test_name:${unitTestName}`
+						: unitTestName;
+					lenses.push(
+						new vscode.CodeLens(range, {
+							title: '$(beaker) Run Unit Test',
+							command: 'dbt-studio.runUnitTest',
+							arguments: [modelRef ?? '', unitTestName],
+							tooltip: `dbt test --select ${selector}`,
+						}),
+					);
+				}
+			}
+			unitTestName = undefined;
+			unitTestLine = -1;
+			unitTestModelName = undefined;
+			isCteTest = false;
+		};
 
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
+			const trimmed = line.trimStart();
+			const lineIndent = line.length - trimmed.length;
 
-			// Track current model name
-			const modelMatch = modelNameRe.exec(line);
-			if (modelMatch) {
-				currentModel = modelMatch[1];
-			}
+			// ---- Top-level block detection (indent 0) ----
+			if (lineIndent === 0 && trimmed.length > 0) {
+				// Flush any pending unit test before switching context
+				if (context === 'unit_tests') {
+					flushUnitTest();
+				}
 
-			// Detect tests: or data_tests: block
-			if (/^\s+tests:\s*$/.test(line) || /^\s+data_tests:\s*$/.test(line)) {
-				inTestsBlock = true;
-				continue;
-			}
-
-			// Exit tests block on non-indented or different block
-			if (inTestsBlock && /^\s+\w+:/.test(line) && !/^\s+-/.test(line)) {
-				inTestsBlock = false;
-			}
-
-			if (inTestsBlock && currentModel) {
-				const testMatch = testLineRe.exec(line);
-				if (testMatch) {
-					const range = new vscode.Range(i, 0, i, line.length);
-					lenses.push(new vscode.CodeLens(range, {
-						title: '$(beaker) Run Test',
-						command: 'dbt-studio.testModel',
-						tooltip: `dbt test -s ${currentModel}`,
-					}));
+				if (/^unit_tests:\s*$/.test(trimmed)) {
+					context = 'unit_tests';
+					blockIndent = 0;
+					currentModelName = undefined;
+					continue;
+				}
+				if (/^models:\s*$/.test(trimmed)) {
+					context = 'models';
+					blockIndent = 0;
+					currentModelName = undefined;
+					continue;
+				}
+				// Any other top-level key resets context
+				if (/^\w+.*:\s*$/.test(trimmed)) {
+					context = 'none';
+					currentModelName = undefined;
+					continue;
 				}
 			}
+
+			// ---- Models block: detect model names and nested tests ----
+			if (context === 'models') {
+				// Model name: "  - name: orders"
+				const modelNameMatch = /^(\s+)-\s+name:\s+(\S+)/.exec(line);
+				if (modelNameMatch && lineIndent <= 4) {
+					currentModelName = modelNameMatch[2];
+
+					if (this.indexer.findModelsByName(currentModelName).length > 0) {
+						const range = new vscode.Range(i, 0, i, line.length);
+						lenses.push(
+							new vscode.CodeLens(range, {
+								title: '$(run) Run',
+								command: 'dbt-studio.runNamedModel',
+								arguments: [currentModelName],
+								tooltip: `dbt run -s ${currentModelName}`,
+							}),
+							new vscode.CodeLens(range, {
+								title: '$(beaker) Test',
+								command: 'dbt-studio.testNamedModel',
+								arguments: [currentModelName],
+								tooltip: `dbt test -s ${currentModelName}`,
+							}),
+						);
+					}
+				}
+
+				// Nested data_tests: or tests: block
+				if (/^\s+data_tests:\s*$/.test(line) || /^\s+tests:\s*$/.test(line)) {
+					context = 'data_tests';
+					blockIndent = lineIndent;
+					continue;
+				}
+			}
+
+			// ---- Data tests block ----
+			if (context === 'data_tests') {
+				// Exit if de-indented past block
+				if (lineIndent <= blockIndent && trimmed.length > 0 && !trimmed.startsWith('-')) {
+					context = 'models';
+					// Re-process this line in models context
+					i--;
+					continue;
+				}
+
+				if (currentModelName) {
+					const dtMatch = /^\s+-\s+(\w+):\s*$/.exec(line);
+					if (dtMatch) {
+						const range = new vscode.Range(i, 0, i, line.length);
+						lenses.push(
+							new vscode.CodeLens(range, {
+								title: '$(beaker) Run Test',
+								command: 'dbt-studio.testNamedModel',
+								arguments: [currentModelName],
+								tooltip: `dbt test -s ${currentModelName}`,
+							}),
+						);
+					}
+				}
+			}
+
+			// ---- Unit tests block (top-level) ----
+			if (context === 'unit_tests') {
+				// New unit test entry: "  - name: test_something"
+				const utNameMatch = /^\s+-\s+name:\s+(\S+)/.exec(line);
+				if (utNameMatch) {
+					// Flush previous unit test
+					flushUnitTest();
+					unitTestName = utNameMatch[1];
+					unitTestLine = i;
+					unitTestModelName = undefined;
+					continue;
+				}
+
+				// Model field inside a unit test: "    model: dim_customers" or "    model: base_model::cte_name"
+				if (unitTestName) {
+					const modelMatch = /^\s+model:\s+(\S+)/.exec(line);
+					if (modelMatch) {
+						unitTestModelName = modelMatch[1];
+					}
+					// Detect cte_test: true inside config block
+					if (/^\s+cte_test:\s+true/.test(line)) {
+						isCteTest = true;
+					}
+				}
+			}
+		}
+
+		// Flush any pending unit test at end of file
+		if (context === 'unit_tests') {
+			flushUnitTest();
 		}
 
 		return lenses;

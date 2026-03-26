@@ -62,17 +62,17 @@ function createTestIndex(): ManifestIndex {
 }
 
 describe('ModelExplorerProvider', () => {
-	it('should show empty message when no index exists', () => {
+	it('should return empty array when no index exists', () => {
 		const indexer = createMockIndexer(null);
-		const provider = new ModelExplorerProvider(indexer, mockLogger);
+		const provider = new ModelExplorerProvider(indexer, mockLogger, '/project');
 		const children = provider.getChildren();
-		expect(children).toHaveLength(1);
+		expect(children).toHaveLength(0);
 	});
 
 	it('should show model groups when index exists', () => {
 		const index = createTestIndex();
 		const indexer = createMockIndexer(index);
-		const provider = new ModelExplorerProvider(indexer, mockLogger);
+		const provider = new ModelExplorerProvider(indexer, mockLogger, '/project');
 		const root = provider.getChildren();
 
 		// Should have Models and Sources groups
@@ -81,7 +81,7 @@ describe('ModelExplorerProvider', () => {
 
 	it('should fire onDidChangeTreeData on refresh', () => {
 		const indexer = createMockIndexer(null);
-		const provider = new ModelExplorerProvider(indexer, mockLogger);
+		const provider = new ModelExplorerProvider(indexer, mockLogger, '/project');
 		const listener = vi.fn();
 		provider.onDidChangeTreeData(listener);
 		provider.refresh();

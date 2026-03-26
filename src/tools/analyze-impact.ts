@@ -29,32 +29,55 @@ export class AnalyzeImpactTool implements vscode.LanguageModelTool<AnalyzeImpact
 		const target = resources[0];
 		const lineage = this.indexer.getLineage(target.uniqueId, 100, 'downstream');
 
-		const downstream = lineage.downstream.map(uid => {
-			const m = this.indexer.index?.models.get(uid);
-			if (m) {
-				return {
-					unique_id: uid,
-					name: m.name,
-					type: 'model',
-					materialization: m.materialisation,
-				};
-			}
-			const s = this.indexer.index?.sources.get(uid);
-			if (s) {
-				return { unique_id: uid, name: s.name, type: 'source' };
-			}
-			return { unique_id: uid, name: uid.split('.').pop() ?? uid, type: 'unknown' };
-		});
+		const affected = lineage.downstream.map(node => ({
+			unique_id: node.uniqueId,
+			name: node.name,
+			type: node.type,
+			distance: node.distance,
+		}));
+
+		const modelsAffected = affected.filter(n => n.type === 'model');
+		const testsAffected = affected.filter(n => n.type === 'test');
+		const otherAffected = affected.filter(n => n.type !== 'model' && n.type !== 'test');
+
+		// Group by distance
+		const affectedByDistance: Record<string, typeof affected> = {};
+		for (const node of affected) {
+			const key = String(node.distance);
+			affectedByDistance[key] ??= [];
+			affectedByDistance[key].push(node);
+		}
+
+		const modelCount = modelsAffected.length;
+		const impactLevel = modelCount <= 3 ? 'Low' : modelCount <= 10 ? 'Medium' : 'High';
+		const message = `${impactLevel} impact (${modelCount} model${modelCount === 1 ? '' : 's'} affected)`;
+
+		const resourceType = target.type;
+		let recommendation: string;
+		if (resourceType === 'source') {
+			recommendation = `Run dbt test -s source:${target.name}+ to validate source data`;
+		} else if (resourceType === 'seed') {
+			recommendation = `Run dbt seed -s ${target.name} && dbt run -s ${target.name}+ to rebuild`;
+		} else {
+			recommendation = `Run dbt run -s ${target.name}+ to rebuild all impacted models`;
+		}
 
 		return toolResult({
-			name: target.name,
-			unique_id: target.uniqueId,
-			resource_type: target.type,
-			impacted_count: downstream.length,
-			impacted_resources: downstream,
-			recommendation: downstream.length > 0
-				? `Run affected models: dbt run -s ${target.name}+`
-				: 'No downstream dependencies affected.',
+			resource: {
+				name: target.name,
+				unique_id: target.uniqueId,
+				resource_type: target.type,
+			},
+			impact: {
+				models_affected: modelsAffected,
+				models_affected_count: modelsAffected.length,
+				tests_affected_count: testsAffected.length,
+				other_affected_count: otherAffected.length,
+				total_affected: affected.length,
+			},
+			affected_by_distance: affectedByDistance,
+			recommendation,
+			message,
 		});
 	}
 

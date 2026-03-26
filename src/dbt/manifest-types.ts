@@ -194,6 +194,25 @@ export interface DbtProjectConfig {
 	snapshots?: Record<string, unknown>;
 }
 
+export interface DbtUnitTest {
+	unique_id: string;
+	name: string;
+	resource_type: 'unit_test';
+	package_name: string;
+	model: string;
+	path: string;
+	original_file_path: string;
+	fqn: string[];
+	description?: string;
+	tags: string[];
+	config?: DbtNodeConfig;
+	depends_on: DbtDependsOn;
+	schema?: string;
+	given?: unknown[];
+	expect?: unknown;
+	overrides?: unknown;
+}
+
 export interface DbtManifest {
 	metadata: DbtManifestMetadata;
 	nodes: Record<string, DbtNode>;
@@ -204,7 +223,7 @@ export interface DbtManifest {
 	docs: Record<string, unknown>;
 	semantic_models?: Record<string, unknown>;
 	saved_queries?: Record<string, unknown>;
-	unit_tests?: Record<string, unknown>;
+	unit_tests?: Record<string, DbtUnitTest>;
 	parent_map: Record<string, string[]>;
 	child_map: Record<string, string[]>;
 	group_map?: Record<string, string[]>;

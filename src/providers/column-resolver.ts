@@ -3,6 +3,7 @@ import type { DbtExecutionService } from '../dbt/execution-service';
 import { Priority } from '../dbt/execution-service';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
+import { DescribeCache } from '../dbt/describe-cache';
 import { stripJinja } from './jinja-utils';
 
 /**
@@ -15,12 +16,16 @@ import { stripJinja } from './jinja-utils';
 export class ColumnResolver {
 	private _scopeCache = new Map<string, { version: number; aliases: Record<string, string[]> }>();
 	private _scopeInFlight = new Map<string, Promise<Record<string, string[]>>>();
+	private readonly _describeCache: DescribeCache | undefined;
 
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
 		private readonly service?: DbtExecutionService,
-	) {}
+		describeCache?: DescribeCache,
+	) {
+		this._describeCache = describeCache ?? (service ? new DescribeCache(service, indexer, logger) : undefined);
+	}
 
 	/** Drop all cached scopes (e.g. after manifest reload). */
 	invalidateCache(): void {
@@ -92,44 +97,21 @@ export class ColumnResolver {
 
 		// Describe upstream tables to fill schema_mapping with column info
 		for (const [tableName, uniqueId] of refs) {
+			if (token.isCancellationRequested) return {};
+
+			if (!this._describeCache) continue;
+
 			const node = this.indexer.getRawNode(uniqueId);
 			const isSource = uniqueId.startsWith('source.');
 			const modelName = node && 'name' in node ? node.name : tableName;
-			const sourceName = node && 'source_name' in node ? node.source_name : undefined;
-
-			const cached = this.indexer.getColumns(uniqueId);
-			if (cached) {
-				this.logger.debug(`ColumnResolver describe: ${tableName} (cached)`);
-				const db = (schemaMapping['__described__'] ??= {});
-				const schema = (db['__described__'] ??= {});
-				schema[tableName.toLowerCase()] = Object.fromEntries(cached.map(c => [c, {}]));
-				continue;
-			}
-
-			if (token.isCancellationRequested) return {};
+			const sourceName = isSource && node && 'source_name' in node ? node.source_name : undefined;
 
 			this.logger.debug(`ColumnResolver describe: ${tableName} (${uniqueId})`);
-			try {
-				const descResult = await this.service.submit({
-					type: 'describe',
-					raw: isSource
-						? { describe_table: true, name: modelName, source_name: sourceName }
-						: { describe_table: true, name: modelName },
-					priority: Priority.Provider,
-					origin: 'provider',
-					label: `describe ${tableName}`,
-				});
-				const descData = descResult.data as Record<string, unknown> | undefined;
-				const cols = descData?.columns as string[] | undefined;
-				if (cols && cols.length > 0) {
-					this.indexer.setColumns(uniqueId, cols);
-					const db = (schemaMapping['__described__'] ??= {});
-					const schema = (db['__described__'] ??= {});
-					schema[tableName.toLowerCase()] = Object.fromEntries(cols.map(c => [c, {}]));
-					continue;
-				}
-			} catch {
-				// Fall back to YAML columns already in schemaMapping
+			const cols = await this._describeCache.describeTable(uniqueId, modelName, sourceName);
+			if (cols && cols.length > 0) {
+				const db = (schemaMapping['__described__'] ??= {});
+				const schema = (db['__described__'] ??= {});
+				schema[tableName.toLowerCase()] = Object.fromEntries(cols.map(c => [c, {}]));
 			}
 		}
 

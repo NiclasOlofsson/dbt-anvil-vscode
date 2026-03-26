@@ -3,9 +3,21 @@ import type { DbtManifest, DbtMacroArgument, DbtNode, DbtSource, ResourceType } 
 import { ManifestLoader } from '../dbt/manifest-loader';
 import type { ILogger } from '../types/logger';
 
+export interface LineageNode {
+	uniqueId: string;
+	name: string;
+	type: string;
+	distance: number;
+}
+
 export interface ModelLineage {
-	upstream: string[];
-	downstream: string[];
+	upstream: LineageNode[];
+	downstream: LineageNode[];
+	stats: {
+		upstream_count: number;
+		downstream_count: number;
+		total_dependencies: number;
+	};
 }
 
 export interface IndexedModel {
@@ -102,6 +114,14 @@ export class ManifestIndexer {
 
 	get index(): ManifestIndex | null {
 		return this._index;
+	}
+
+	get projectDir(): string {
+		return this.loader.projectDir;
+	}
+
+	manifestExists(): boolean {
+		return this.loader.manifestExists();
 	}
 
 	private _buildIndex(manifest: DbtManifest): ManifestIndex {
@@ -257,20 +277,29 @@ export class ManifestIndexer {
 	 */
 	getLineage(uniqueId: string, depth = 3, direction: 'both' | 'upstream' | 'downstream' = 'both'): ModelLineage {
 		const index = this._index;
-		if (!index) return { upstream: [], downstream: [] };
+		const empty = { upstream: [], downstream: [], stats: { upstream_count: 0, downstream_count: 0, total_dependencies: 0 } };
+		if (!index) return empty;
 
 		const upstream = direction === 'downstream'
 			? []
-			: this._traverse(index.parentMap, uniqueId, depth);
+			: this._traverse(index.parentMap, uniqueId, depth, index);
 		const downstream = direction === 'upstream'
 			? []
-			: this._traverse(index.childMap, uniqueId, depth);
+			: this._traverse(index.childMap, uniqueId, depth, index);
 
-		return { upstream, downstream };
+		return {
+			upstream,
+			downstream,
+			stats: {
+				upstream_count: upstream.length,
+				downstream_count: downstream.length,
+				total_dependencies: upstream.length + downstream.length,
+			},
+		};
 	}
 
-	private _traverse(map: Map<string, string[]>, startId: string, maxDepth: number): string[] {
-		const visited = new Set<string>();
+	private _traverse(map: Map<string, string[]>, startId: string, maxDepth: number, index: ManifestIndex): LineageNode[] {
+		const visited = new Map<string, number>(); // uid -> distance
 		const queue: [string, number][] = [[startId, 0]];
 
 		while (queue.length > 0) {
@@ -279,14 +308,20 @@ export class ManifestIndexer {
 			const neighbours = map.get(current) ?? [];
 			for (const n of neighbours) {
 				if (!visited.has(n)) {
-					visited.add(n);
+					visited.set(n, depth + 1);
 					queue.push([n, depth + 1]);
 				}
 			}
 		}
 
 		visited.delete(startId);
-		return [...visited];
+		return [...visited.entries()].map(([uid, distance]) => {
+			const m = index.models.get(uid);
+			const s = index.sources.get(uid);
+			const name = m?.name ?? s?.name ?? uid.split('.').pop() ?? uid;
+			const type = uid.split('.')[0];
+			return { uniqueId: uid, name, type, distance };
+		});
 	}
 
 	/**

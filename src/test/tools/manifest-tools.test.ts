@@ -2,14 +2,16 @@ import { describe, it, expect, vi } from 'vitest';
 import type { ManifestIndexer, ManifestIndex, IndexedModel, IndexedSource } from '../../indexing/manifest-indexer';
 import { ListResourcesTool } from '../../tools/list-resources';
 import { AnalyzeImpactTool } from '../../tools/analyze-impact';
+import { GetLineageTool } from '../../tools/get-lineage';
 import { GetProjectInfoTool } from '../../tools/get-project-info';
 import { GetColumnLineageTool } from '../../tools/get-column-lineage';
 import { QueryDatabaseTool } from '../../tools/query-database';
 import type { ManifestLoader } from '../../dbt/manifest-loader';
 import type { DbtExecutionService } from '../../dbt/execution-service';
-import { createMockLogger } from '../helpers';
+import { createMockLogger, createMockCompileCache } from '../helpers';
 
 const mockLogger = createMockLogger();
+const mockCompileCache = createMockCompileCache();
 
 function createTestIndex(): ManifestIndex {
 	const models = new Map<string, IndexedModel>();
@@ -70,11 +72,14 @@ function createMockIndexer(index: ManifestIndex | null): ManifestIndexer {
 			if (!index) return [];
 			return [...index.models.values()].filter(m => m.name === name);
 		}),
-		getLineage: vi.fn((uniqueId: string, depth: number) => {
-			if (!index) return { upstream: [], downstream: [] };
-			const up = index.parentMap.get(uniqueId) ?? [];
-			const down = index.childMap.get(uniqueId) ?? [];
-			return { upstream: up, downstream: down };
+		getLineage: vi.fn((uniqueId: string, _depth: number) => {
+			if (!index) return { upstream: [], downstream: [], stats: { upstream_count: 0, downstream_count: 0, total_dependencies: 0 } };
+			const upIds = index.parentMap.get(uniqueId) ?? [];
+			const downIds = index.childMap.get(uniqueId) ?? [];
+			const toNode = (uid: string, dist: number) => ({ uniqueId: uid, name: uid.split('.').pop() ?? uid, type: uid.split('.')[0], distance: dist });
+			const upstream = upIds.map(uid => toNode(uid, 1));
+			const downstream = downIds.map(uid => toNode(uid, 1));
+			return { upstream, downstream, stats: { upstream_count: upstream.length, downstream_count: downstream.length, total_dependencies: upstream.length + downstream.length } };
 		}),
 		findByTag: vi.fn(),
 		getRawNode: vi.fn(),
@@ -186,7 +191,7 @@ describe('GetColumnLineageTool', () => {
 			}),
 		} as unknown as DbtExecutionService;
 
-		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger);
+		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger, mockCompileCache);
 		const result = await tool.invoke(
 			{ input: { model: 'customers', column: 'customer_id' }, toolInvocationToken: undefined } as never,
 			token as never,
@@ -223,7 +228,7 @@ describe('GetColumnLineageTool', () => {
 			}),
 		} as unknown as DbtExecutionService;
 
-		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger);
+		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger, mockCompileCache);
 		const result = await tool.invoke(
 			{ input: { model: 'customers', column: 'nonexistent' }, toolInvocationToken: undefined } as never,
 			token as never,
@@ -238,7 +243,7 @@ describe('GetColumnLineageTool', () => {
 		const index = createTestIndex();
 		const indexer = createMockIndexer(index);
 		const mockService = { submit: vi.fn() } as unknown as DbtExecutionService;
-		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger);
+		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger, mockCompileCache);
 
 		const result = await tool.invoke(
 			{ input: { model: 'nonexistent', column: 'id' }, toolInvocationToken: undefined } as never,
@@ -261,7 +266,7 @@ describe('GetColumnLineageTool', () => {
 		});
 
 		const mockService = { submit: vi.fn() } as unknown as DbtExecutionService;
-		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger);
+		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger, mockCompileCache);
 
 		const result = await tool.invoke(
 			{ input: { model: 'customers', column: 'id' }, toolInvocationToken: undefined } as never,
@@ -308,7 +313,7 @@ describe('GetColumnLineageTool', () => {
 			}),
 		} as unknown as DbtExecutionService;
 
-		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger);
+		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger, mockCompileCache);
 		const result = await tool.invoke(
 			{ input: { model: 'customers', column: 'customer_id' }, toolInvocationToken: undefined } as never,
 			token as never,
@@ -416,3 +421,200 @@ describe('QueryDatabaseTool', () => {
 		expect(parsed.success).toBe(false);
 	});
 });
+
+describe('GetLineageTool', () => {
+	const token = { isCancellationRequested: false, onCancellationRequested: vi.fn() };
+
+	it('returns resource wrapper with name, unique_id, resource_type', async () => {
+		const index = createTestIndex();
+		const indexer = createMockIndexer(index);
+		const tool = new GetLineageTool(indexer, mockLogger);
+
+		const result = await tool.invoke(
+			{ input: { name: 'customers' }, toolInvocationToken: undefined } as never,
+			token as never,
+		);
+
+		const parsed = JSON.parse((result.content[0] as { value: string }).value);
+		expect(parsed.resource).toBeDefined();
+		expect(parsed.resource.name).toBe('customers');
+		expect(parsed.resource.unique_id).toBe('model.p.customers');
+		expect(parsed.resource.resource_type).toBe('model');
+	});
+
+	it('upstream nodes have unique_id, name, type, and distance fields', async () => {
+		const index = createTestIndex();
+		const indexer = createMockIndexer(index);
+		const tool = new GetLineageTool(indexer, mockLogger);
+
+		const result = await tool.invoke(
+			{ input: { name: 'customers', direction: 'upstream' }, toolInvocationToken: undefined } as never,
+			token as never,
+		);
+
+		const parsed = JSON.parse((result.content[0] as { value: string }).value);
+		expect(Array.isArray(parsed.upstream)).toBe(true);
+		expect(parsed.upstream.length).toBe(1);
+		const node = parsed.upstream[0];
+		expect(node.unique_id).toBe('model.p.orders');
+		expect(node.name).toBe('orders');
+		expect(node.type).toBe('model');
+		expect(node.distance).toBe(1);
+	});
+
+	it('downstream nodes have unique_id, name, type, and distance fields', async () => {
+		const index = createTestIndex();
+		const indexer = createMockIndexer(index);
+		const tool = new GetLineageTool(indexer, mockLogger);
+
+		const result = await tool.invoke(
+			{ input: { name: 'orders', direction: 'downstream' }, toolInvocationToken: undefined } as never,
+			token as never,
+		);
+
+		const parsed = JSON.parse((result.content[0] as { value: string }).value);
+		expect(Array.isArray(parsed.downstream)).toBe(true);
+		expect(parsed.downstream.length).toBe(1);
+		const node = parsed.downstream[0];
+		expect(node.unique_id).toBe('model.p.customers');
+		expect(node.name).toBe('customers');
+		expect(node.type).toBe('model');
+		expect(node.distance).toBe(1);
+	});
+
+	it('stats has upstream_count, downstream_count, total_dependencies', async () => {
+		const index = createTestIndex();
+		const indexer = createMockIndexer(index);
+		const tool = new GetLineageTool(indexer, mockLogger);
+
+		const result = await tool.invoke(
+			{ input: { name: 'customers', direction: 'both' }, toolInvocationToken: undefined } as never,
+			token as never,
+		);
+
+		const parsed = JSON.parse((result.content[0] as { value: string }).value);
+		expect(parsed.stats).toBeDefined();
+		expect(typeof parsed.stats.upstream_count).toBe('number');
+		expect(typeof parsed.stats.downstream_count).toBe('number');
+		expect(typeof parsed.stats.total_dependencies).toBe('number');
+		expect(parsed.stats.upstream_count).toBe(1);
+		expect(parsed.stats.downstream_count).toBe(0);
+		expect(parsed.stats.total_dependencies).toBe(1);
+	});
+
+	it('upstream direction returns empty downstream array', async () => {
+		const index = createTestIndex();
+		const indexer = createMockIndexer(index);
+		const tool = new GetLineageTool(indexer, mockLogger);
+
+		const result = await tool.invoke(
+			{ input: { name: 'customers', direction: 'upstream' }, toolInvocationToken: undefined } as never,
+			token as never,
+		);
+
+		const parsed = JSON.parse((result.content[0] as { value: string }).value);
+		expect(parsed.direction).toBe('upstream');
+		expect(parsed.upstream.length).toBeGreaterThan(0);
+	});
+
+	it('returns error when resource not found', async () => {
+		const index = createTestIndex();
+		const indexer = createMockIndexer(index);
+		const tool = new GetLineageTool(indexer, mockLogger);
+
+		const result = await tool.invoke(
+			{ input: { name: 'nonexistent' }, toolInvocationToken: undefined } as never,
+			token as never,
+		);
+
+		const parsed = JSON.parse((result.content[0] as { value: string }).value);
+		expect(parsed.error).toContain('not found');
+	});
+});
+
+describe('AnalyzeImpactTool (Python-parity)', () => {
+	const token = { isCancellationRequested: false, onCancellationRequested: vi.fn() };
+
+	it('returns resource wrapper with name, unique_id, resource_type', async () => {
+		const index = createTestIndex();
+		const indexer = createMockIndexer(index);
+		const tool = new AnalyzeImpactTool(indexer, mockLogger);
+
+		const result = await tool.invoke(
+			{ input: { name: 'orders' }, toolInvocationToken: undefined } as never,
+			token as never,
+		);
+
+		const parsed = JSON.parse((result.content[0] as { value: string }).value);
+		expect(parsed.resource).toBeDefined();
+		expect(parsed.resource.name).toBe('orders');
+		expect(parsed.resource.unique_id).toBe('model.p.orders');
+		expect(parsed.resource.resource_type).toBe('model');
+	});
+
+	it('impact sub-block contains models_affected, models_affected_count, total_affected', async () => {
+		const index = createTestIndex();
+		const indexer = createMockIndexer(index);
+		const tool = new AnalyzeImpactTool(indexer, mockLogger);
+
+		const result = await tool.invoke(
+			{ input: { name: 'orders' }, toolInvocationToken: undefined } as never,
+			token as never,
+		);
+
+		const parsed = JSON.parse((result.content[0] as { value: string }).value);
+		expect(parsed.impact).toBeDefined();
+		expect(Array.isArray(parsed.impact.models_affected)).toBe(true);
+		expect(typeof parsed.impact.models_affected_count).toBe('number');
+		expect(typeof parsed.impact.total_affected).toBe('number');
+		expect(parsed.impact.models_affected_count).toBe(1);
+	});
+
+	it('affected_by_distance groups nodes by integer distance key', async () => {
+		const index = createTestIndex();
+		const indexer = createMockIndexer(index);
+		const tool = new AnalyzeImpactTool(indexer, mockLogger);
+
+		const result = await tool.invoke(
+			{ input: { name: 'orders' }, toolInvocationToken: undefined } as never,
+			token as never,
+		);
+
+		const parsed = JSON.parse((result.content[0] as { value: string }).value);
+		expect(parsed.affected_by_distance).toBeDefined();
+		// customers is distance 1 from orders
+		expect(Array.isArray(parsed.affected_by_distance['1'])).toBe(true);
+		expect(parsed.affected_by_distance['1'].length).toBe(1);
+	});
+
+	it('Low impact message for 1 model affected', async () => {
+		const index = createTestIndex();
+		const indexer = createMockIndexer(index);
+		const tool = new AnalyzeImpactTool(indexer, mockLogger);
+
+		const result = await tool.invoke(
+			{ input: { name: 'orders' }, toolInvocationToken: undefined } as never,
+			token as never,
+		);
+
+		const parsed = JSON.parse((result.content[0] as { value: string }).value);
+		expect(parsed.message).toContain('Low impact');
+		expect(parsed.message).toContain('1 model');
+	});
+
+	it('recommendation mentions model name using dbt run -s syntax', async () => {
+		const index = createTestIndex();
+		const indexer = createMockIndexer(index);
+		const tool = new AnalyzeImpactTool(indexer, mockLogger);
+
+		const result = await tool.invoke(
+			{ input: { name: 'orders' }, toolInvocationToken: undefined } as never,
+			token as never,
+		);
+
+		const parsed = JSON.parse((result.content[0] as { value: string }).value);
+		expect(typeof parsed.recommendation).toBe('string');
+		expect(parsed.recommendation).toContain('orders+');
+	});
+});
+

@@ -7,9 +7,14 @@ import { ManifestWatcher } from './indexing/manifest-watcher';
 import { detectPythonEnvironment } from './dbt/env-detector';
 import { BridgeRunner } from './dbt/bridge-runner';
 import { DbtExecutionService, Priority } from './dbt/execution-service';
+import { CompileCache } from './dbt/compile-cache';
+import { DescribeCache } from './dbt/describe-cache';
 import { registerLanguageModelTools } from './tools';
+import { GetColumnLineageTool } from './tools/get-column-lineage';
 import { ModelExplorerProvider } from './views/model-explorer-provider';
 import { TestResultsProvider } from './views/test-results-provider';
+import { LineageGraphProvider } from './views/lineage-graph-provider';
+import { TestExplorerProvider } from './views/test-explorer-provider';
 import { DbtDefinitionProvider } from './providers/definition-provider';
 import { DbtHoverProvider } from './providers/hover-provider';
 import { DbtCompletionProvider } from './providers/completion-provider';
@@ -25,6 +30,7 @@ import { DbtCodeActionProvider } from './providers/code-action-provider';
 import { StatusBarManager } from './views/status-bar';
 import { DbtDiagnosticsProvider } from './providers/diagnostics-provider';
 import { ColumnResolver } from './providers/column-resolver';
+import { VsTestController } from './views/vs-test-controller';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
 	// -------- Bootstrap logging & service container --------
@@ -94,12 +100,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// Connect manifest watcher to execution service for background parse-on-save
 	manifestWatcher.setExecutionService(executionService);
 
+	// -------- Compile cache (shared across all tools) --------
+	const compileCache = new CompileCache(executionService, manifestLoader, logger);
+
+	// -------- Describe cache (shared across providers and tools) --------
+	const describeCache = new DescribeCache(executionService, manifestIndexer, logger);
+
 	// -------- Status bar --------
 	const statusBar = new StatusBarManager(executionService, logger);
 	context.subscriptions.push(statusBar);
 
 	// -------- Diagnostics provider --------
-	const columnResolver = new ColumnResolver(manifestIndexer, logger, executionService);
+	const columnResolver = new ColumnResolver(manifestIndexer, logger, executionService, describeCache);
 	const diagnosticsProvider = new DbtDiagnosticsProvider(executionService, manifestIndexer, statusBar, projectDir, logger, columnResolver);
 	context.subscriptions.push(diagnosticsProvider);
 
@@ -107,19 +119,70 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	void vscode.commands.executeCommand('setContext', 'workspaceHasDBT', manifestLoader.manifestExists());
 
 	// -------- Register Copilot language model tools --------
-	registerLanguageModelTools(context, manifestIndexer, executionService, manifestLoader, logger);
+	registerLanguageModelTools(context, manifestIndexer, executionService, manifestLoader, logger, compileCache);
 
 	// -------- Register tree views --------
-	const modelExplorerProvider = new ModelExplorerProvider(manifestIndexer, logger);
+	const modelExplorerProvider = new ModelExplorerProvider(manifestIndexer, logger, projectDir);
 	const testResultsProvider = new TestResultsProvider(logger);
+	const lineageGraphProvider = new LineageGraphProvider(manifestIndexer, logger);
+	const columnLineageTool = new GetColumnLineageTool(manifestIndexer, executionService, logger, compileCache);
+	lineageGraphProvider.setColumnLineageTool(columnLineageTool);
+	lineageGraphProvider.setExecutionService(executionService);
+	const testExplorerProvider = new TestExplorerProvider(manifestIndexer, manifestLoader, logger);
+
+	const modelExplorerView = vscode.window.createTreeView('dbt-studio.modelExplorer', {
+		treeDataProvider: modelExplorerProvider,
+		showCollapseAll: true,
+	});
+
 	context.subscriptions.push(
-		vscode.window.registerTreeDataProvider('dbt-studio.modelExplorer', modelExplorerProvider),
+		modelExplorerView,
 		vscode.window.registerTreeDataProvider('dbt-studio.testResults', testResultsProvider),
+		vscode.window.registerWebviewViewProvider(LineageGraphProvider.viewId, lineageGraphProvider),
+		vscode.window.registerTreeDataProvider('dbt-studio.testExplorer', testExplorerProvider),
 	);
+
+	// -------- Native VS Code Testing panel --------
+	const vsTestController = new VsTestController(testExplorerProvider, executionService, logger);
+	context.subscriptions.push(vsTestController);
+
+	// Refresh views whenever the manifest index is rebuilt (e.g. after dbt parse on save)
+	context.subscriptions.push(
+		manifestWatcher.onIndexRebuild(() => {
+			testExplorerProvider.refresh();
+			lineageGraphProvider.refreshGraph();
+		}),
+	);
+
+	// -------- Editor follow (sync explorer + lineage) --------
+	const revealModelForEditor = (editor: vscode.TextEditor | undefined) => {
+		if (!editor) return;
+		const uid = manifestIndexer.findModelByFilePath(editor.document.fileName);
+		if (!uid) return;
+
+		const item = modelExplorerProvider.findModelItemForReveal(uid);
+		if (item) {
+			void modelExplorerView.reveal(item, { select: true, focus: false });
+		}
+
+		if (lineageGraphProvider.followActive) {
+			lineageGraphProvider.setFocusModel(uid);
+		}
+	};
+
+	context.subscriptions.push(
+		vscode.window.onDidChangeActiveTextEditor(revealModelForEditor),
+	);
+
+	// Trigger immediately for the already-active editor on startup
+	revealModelForEditor(vscode.window.activeTextEditor);
 
 	// -------- Register language providers --------
 	const sqlSelector: vscode.DocumentSelector = { language: 'jinja-sql' };
-	const yamlSelector: vscode.DocumentSelector = { language: 'yaml', pattern: '**/{schema,sources,models}.yml' };
+	const yamlSelector: vscode.DocumentSelector = [
+		{ language: 'yaml', pattern: '**/*.{yml,yaml}' },
+		{ language: 'jinja-yaml', pattern: '**/*.{yml,yaml}' },
+	];
 	const definitionProvider = new DbtDefinitionProvider(manifestIndexer, manifestLoader, logger, columnResolver);
 	const hoverProvider = new DbtHoverProvider(manifestIndexer, logger, columnResolver);
 	const completionProvider = new DbtCompletionProvider(manifestIndexer, logger, columnResolver);
@@ -160,6 +223,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			try {
 				manifestIndexer.build(true);
 				modelExplorerProvider.refresh();
+				testExplorerProvider.refresh();
 				void vscode.window.showInformationMessage('dbt Studio: Manifest refreshed.');
 			} catch (err) {
 				void vscode.window.showErrorMessage(`dbt Studio: Failed to refresh manifest — ${err}`);
@@ -217,6 +281,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.commands.registerCommand('dbt-studio.compileModel', async () => {
 			const model = getActiveModelName();
 			if (!model) return;
+
+			// Use the shared cache — skip compile if file hasn't changed
+			const resources = manifestIndexer.findResource(model, 'model');
+			const raw = resources.length > 0 ? manifestIndexer.getRawNode(resources[0].uniqueId) : undefined;
+			if (raw && raw.resource_type === 'model') {
+				const compiledSql = await compileCache.ensureCompiled(
+					raw.unique_id, raw.name, manifestIndexer.projectDir, raw.original_file_path,
+				);
+				if (compiledSql) {
+					const doc = await vscode.workspace.openTextDocument({ content: compiledSql, language: 'sql' });
+					await vscode.window.showTextDocument(doc, { preview: true });
+					return;
+				}
+			}
+
+			// Fallback: direct compile for unknown / not-indexed models
 			const result = await executionService.submit({
 				type: 'compile', args: ['compile', '-s', model],
 				priority: Priority.User, origin: 'user', label: `compile ${model}`,
@@ -251,20 +331,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				void vscode.window.showWarningMessage(`Model "${model}" not found in manifest.`);
 				return;
 			}
-			const lineage = manifestIndexer.getLineage(models[0].uniqueId, 3);
-			const text = [
-				`Lineage for: ${model}`,
-				'',
-				'Upstream:',
-				...lineage.upstream.map(u => `  ← ${u}`),
-				lineage.upstream.length === 0 ? '  (none)' : '',
-				'Downstream:',
-				...lineage.downstream.map(d => `  → ${d}`),
-				lineage.downstream.length === 0 ? '  (none)' : '',
-			].join('\n');
-			void vscode.workspace.openTextDocument({ content: text }).then(doc =>
-				vscode.window.showTextDocument(doc, { preview: true }),
-			);
+			lineageGraphProvider.setFocusModel(models[0].uniqueId);
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.toggleLineageFollow', () => {
+			lineageGraphProvider.toggleFollow();
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.refreshTestExplorer', () => {
+			testExplorerProvider.refresh();
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.runDeps', async () => {
@@ -288,6 +363,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				try {
 					manifestIndexer.build(true);
 					modelExplorerProvider.refresh();
+					testExplorerProvider.refresh();
 				} catch {
 					// Index rebuild may fail if manifest is still invalid
 				}
@@ -306,6 +382,87 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			await vscode.workspace.fs.writeFile(fileUri, content);
 			const doc = await vscode.workspace.openTextDocument(fileUri);
 			await vscode.window.showTextDocument(doc);
+		}),
+
+		// ---- Test running commands (for explorer + CodeLens) ----
+
+		vscode.commands.registerCommand('dbt-studio.runNamedModel', async (modelName: string) => {
+			const result = await executionService.submit({
+				type: 'run', args: ['run', '-s', modelName],
+				priority: Priority.User, origin: 'user', label: `run ${modelName}`,
+			});
+			if (result.success) {
+				void vscode.window.showInformationMessage(`dbt run ${modelName}: success`);
+			} else {
+				void vscode.window.showErrorMessage(`dbt run ${modelName}: failed — ${result.stderr}`);
+			}
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.testNamedModel', async (modelName: string) => {
+			const result = await executionService.submit({
+				type: 'test', args: ['test', '-s', modelName],
+				priority: Priority.User, origin: 'user', label: `test ${modelName}`,
+			});
+			if (result.success) {
+				void vscode.window.showInformationMessage(`dbt test ${modelName}: success`);
+			} else {
+				void vscode.window.showErrorMessage(`dbt test ${modelName}: failed — ${result.stderr}`);
+			}
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.runUnitTest', async (modelName: string, testName: string) => {
+			const uid = testExplorerProvider.resolveUidByName(testName);
+			if (uid) {
+				await vsTestController.runTests([uid]);
+			} else {
+				// Fallback: test not yet indexed — run directly by selector
+				const selector = modelName
+					? `${modelName},test_type:unit,test_name:${testName}`
+					: testName;
+				testExplorerProvider.markRunningByName(testName);
+				const result = await executionService.submit({
+					type: 'test', args: ['test', '--select', selector, '--log-format', 'json'],
+					priority: Priority.User, origin: 'user', label: `unit test ${testName}`,
+				});
+				testExplorerProvider.markResultByName(testName, result.success);
+				if (result.success) {
+					void vscode.window.showInformationMessage(`Unit test ${testName}: passed`);
+				} else {
+					void vscode.window.showErrorMessage(`Unit test ${testName}: failed — ${result.stderr}`);
+				}
+			}
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.runCteTest', async (_yamlFilePath: string, testName: string) => {
+			const uid = testExplorerProvider.resolveUidByName(testName);
+			if (uid) {
+				await vsTestController.runTests([uid]);
+			} else {
+				void vscode.window.showWarningMessage(`CTE test '${testName}' not found in tree — refresh the Test Explorer.`);
+			}
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.runTestFromExplorer', async (item: unknown) => {
+			const testItem = item as { uniqueId: string } | undefined;
+			if (!testItem?.uniqueId) return;
+			await vsTestController.runTests([testItem.uniqueId]);
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.runTestGroupFromExplorer', async (item: unknown) => {
+			const group = item as { children: Array<{ uniqueId: string }> } | undefined;
+			if (!group?.children) return;
+			await vsTestController.runTests(group.children.map(c => c.uniqueId));
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.runTestCategoryFromExplorer', async (item: unknown) => {
+			const category = item as { children: Array<{ children: Array<{ uniqueId: string }> }> } | undefined;
+			if (!category?.children) return;
+			const uids = category.children.flatMap(g => g.children).map(n => n.uniqueId);
+			await vsTestController.runTests(uids);
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.runAllTestsFromExplorer', async () => {
+			await vsTestController.runTests();
 		}),
 	);
 
