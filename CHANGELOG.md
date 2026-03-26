@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.3
+## 0.1.4
 
 - Interactive lineage graph — visualize upstream/downstream model dependencies
 - Test results explorer — run and browse dbt test outcomes in the sidebar
