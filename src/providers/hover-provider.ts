@@ -1,18 +1,20 @@
 import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
+import type { ParseService } from '../services/parse-service';
 import type { ColumnResolver } from './column-resolver';
 import { isLinePositionInComment } from './comment-utils';
 
 /**
  * Hover tooltips for ref('model'), source('src','table'), macro references,
- * and column names (alias.column or bare column).
+ * CTE names (showing SQL-derived columns), and column names.
  */
 export class DbtHoverProvider implements vscode.HoverProvider {
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
 		private readonly columnResolver?: ColumnResolver,
+		private readonly parseService?: ParseService,
 	) {}
 
 	async provideHover(
@@ -59,6 +61,10 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 				return this._hoverMacro(match[1]);
 			}
 		}
+
+		// CTE name hover (after FROM/JOIN): show SQL-derived columns
+		const cteHover = await this._hoverCte(document, position, line, token);
+		if (cteHover) return cteHover;
 
 		// Column hover: alias.column or bare column name
 		if (this.columnResolver) {
@@ -167,6 +173,53 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		}
 
 		return undefined;
+	}
+
+	// ---- CTE hover ----
+
+	private async _hoverCte(
+		document: vscode.TextDocument,
+		position: vscode.Position,
+		line: string,
+		token: vscode.CancellationToken,
+	): Promise<vscode.Hover | undefined> {
+		if (!this.parseService) return undefined;
+
+		const prefix = line.substring(0, position.character);
+		if (/\{\{[^}]*$/.test(prefix) || /\{%[^%]*$/.test(prefix)) return undefined;
+
+		const wordRange = document.getWordRangeAtPosition(position, /[a-zA-Z_]\w*/);
+		if (!wordRange) return undefined;
+		const word = document.getText(wordRange);
+		if (SQL_KEYWORDS.has(word.toUpperCase())) return undefined;
+
+		// Only trigger after FROM/JOIN
+		const beforeWord = line.substring(0, wordRange.start.character);
+		if (!/\b(?:from|join)\s+$/i.test(beforeWord)) return undefined;
+
+		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const model = await this.parseService.getDocumentModel(document, dialect);
+		if (token.isCancellationRequested || !model) return undefined;
+
+		const cte = model.ctes.find(c => c.name.toLowerCase() === word.toLowerCase() || c.alias?.toLowerCase() === word.toLowerCase());
+		if (!cte) return undefined;
+
+		const md = new vscode.MarkdownString();
+		md.appendMarkdown(`**\`${cte.name}\`** — CTE (${cte.columns.length} columns)\n\n`);
+		md.appendMarkdown(`- **Lines:** ${cte.line + 1}–${cte.endLine + 1}\n\n`);
+		if (cte.columns.length > 0) {
+			md.appendMarkdown('**Columns:**\n');
+			const display = cte.columns.slice(0, 30);
+			for (const col of display) {
+				md.appendMarkdown(`- \`${col.name}\` _(line ${col.line + 1})_\n`);
+			}
+			if (cte.columns.length > 30) {
+				md.appendMarkdown(`- _...and ${cte.columns.length - 30} more_\n`);
+			}
+		}
+
+		this.logger.debug(`Hover: CTE '${word}' → ${cte.columns.length} columns`);
+		return new vscode.Hover(md, wordRange);
 	}
 
 	// ---- Column hover ----

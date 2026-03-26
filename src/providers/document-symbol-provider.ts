@@ -49,7 +49,7 @@ export class DbtDocumentSymbolProvider implements vscode.DocumentSymbolProvider 
 		document: vscode.TextDocument,
 		model: import('../services/parse-service').DocumentModel,
 	): vscode.DocumentSymbol[] {
-		if (model.ctes.length === 0) return [];
+		if (model.ctes.length === 0 && model.finalColumns.length === 0) return [];
 
 		const symbols: vscode.DocumentSymbol[] = [];
 		const lineCount = document.lineCount;
@@ -87,25 +87,39 @@ export class DbtDocumentSymbolProvider implements vscode.DocumentSymbolProvider 
 			symbols.push(sym);
 		}
 
-		// Final SELECT symbol
+		// Final SELECT symbol — find the final SELECT start line
 		const modelName = this._getModelName(document);
 		if (modelName && model.finalColumns.length > 0) {
 			const lastLine = lineCount - 1;
-			const range = new vscode.Range(lastLine, 0, lastLine, 0);
+			// Try to find the final SELECT: the last SELECT that isn't inside a CTE.
+			// Simple heuristic: scan backwards from end for a line starting with "select".
+			let finalSelectLine = lastLine;
+			for (let i = lastLine; i >= 0; i--) {
+				if (/^\s*select\b/i.test(document.lineAt(i).text)) {
+					finalSelectLine = i;
+					break;
+				}
+			}
+			const startPos = new vscode.Position(finalSelectLine, 0);
+			const endPos = document.lineAt(lastLine).range.end;
+			const range = new vscode.Range(startPos, endPos);
+			const selectionRange = document.lineAt(finalSelectLine).range;
 			const finalSym = new vscode.DocumentSymbol(
 				modelName,
 				'final query',
 				vscode.SymbolKind.Class,
 				range,
-				range,
+				selectionRange,
 			);
 			for (const col of model.finalColumns) {
+				const colLine = Math.min(col.line, lineCount - 1);
+				const colRange = document.lineAt(colLine).range;
 				const childSym = new vscode.DocumentSymbol(
-					col,
+					col.name,
 					'output column',
 					vscode.SymbolKind.Field,
-					range,
-					range,
+					colRange,
+					colRange,
 				);
 				finalSym.children.push(childSym);
 			}

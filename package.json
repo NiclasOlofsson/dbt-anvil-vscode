@@ -105,7 +105,22 @@
 			{
 				"command": "dbt-studio.toggleLineageFollow",
 				"title": "dbt Studio: Toggle Lineage Follow Active Editor",
-				"icon": "$(link)"
+				"icon": "$(eye)"
+			},
+			{
+				"command": "dbt-studio.toggleLineageFollowOff",
+				"title": "dbt Studio: Toggle Lineage Follow Active Editor",
+				"icon": "$(eye-closed)"
+			},
+			{
+				"command": "dbt-studio.showLineageTests",
+				"title": "dbt Studio: Show Tests in Lineage Graph",
+				"icon": "$(beaker)"
+			},
+			{
+				"command": "dbt-studio.hideLineageTests",
+				"title": "dbt Studio: Hide Tests in Lineage Graph",
+				"icon": "$(beaker)"
 			},
 			{
 				"command": "dbt-studio.refreshTestExplorer",
@@ -200,19 +215,24 @@
 		"menus": {
 			"editor/title": [
 				{
-					"command": "dbt-studio.runModel",
+					"command": "dbt-studio.showLineage",
 					"when": "resourceLangId == jinja-sql && workspaceHasDBT",
 					"group": "navigation@1"
 				},
 				{
-					"command": "dbt-studio.testModel",
+					"command": "dbt-studio.runModel",
 					"when": "resourceLangId == jinja-sql && workspaceHasDBT",
 					"group": "navigation@2"
 				},
 				{
-					"command": "dbt-studio.compileModel",
+					"command": "dbt-studio.testModel",
 					"when": "resourceLangId == jinja-sql && workspaceHasDBT",
 					"group": "navigation@3"
+				},
+				{
+					"command": "dbt-studio.compileModel",
+					"when": "resourceLangId == jinja-sql && workspaceHasDBT",
+					"group": "navigation@4"
 				}
 			],
 			"view/title": [
@@ -223,8 +243,23 @@
 				},
 				{
 					"command": "dbt-studio.toggleLineageFollow",
-					"when": "view == dbt-studio.lineageGraph",
+					"when": "view == dbt-studio.lineageGraph && dbt-studio.lineageFollowActive",
 					"group": "navigation"
+				},
+				{
+					"command": "dbt-studio.toggleLineageFollowOff",
+					"when": "view == dbt-studio.lineageGraph && !dbt-studio.lineageFollowActive",
+					"group": "navigation"
+				},
+				{
+					"command": "dbt-studio.hideLineageTests",
+					"when": "view == dbt-studio.lineageGraph && dbt-studio.lineageShowTests",
+					"group": "navigation@2"
+				},
+				{
+					"command": "dbt-studio.showLineageTests",
+					"when": "view == dbt-studio.lineageGraph && !dbt-studio.lineageShowTests",
+					"group": "navigation@2"
 				},
 				{
 					"command": "dbt-studio.refreshTestExplorer",
@@ -258,6 +293,11 @@
 		"configuration": {
 			"title": "dbt Studio",
 			"properties": {
+				"dbt-studio.lineageShowTests": {
+					"type": "boolean",
+					"default": true,
+					"description": "Show test nodes in the lineage graph."
+				},
 				"dbt-studio.profilesDir": {
 					"type": "string",
 					"default": "",

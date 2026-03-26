@@ -38,15 +38,26 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 	private _view?: vscode.WebviewView;
 	private _focusModel?: string;
 	private _followActive = true;
-	private _depth = 2;
-	private _direction: 'both' | 'upstream' | 'downstream' = 'both';
+	private _upstreamDepth = 2;
+	private _downstreamDepth = 1;
+	private _enrichGeneration = 0;
+	private _showTests: boolean;
 	private _columnLineageTool?: GetColumnLineageTool;
 	private _executionService?: DbtExecutionService;
 
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
-	) {}
+	) {
+		this._showTests = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('lineageShowTests', true);
+		vscode.workspace.onDidChangeConfiguration(e => {
+			if (e.affectsConfiguration('dbt-studio.lineageShowTests')) {
+				this._showTests = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('lineageShowTests', true);
+				void vscode.commands.executeCommand('setContext', 'dbt-studio.lineageShowTests', this._showTests);
+				this._updateGraph();
+			}
+		});
+	}
 
 	setExecutionService(service: DbtExecutionService): void {
 		this._executionService = service;
@@ -67,6 +78,15 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 			'dbt-studio.lineageFollowActive',
 			this._followActive,
 		);
+	}
+
+	get showTests(): boolean {
+		return this._showTests;
+	}
+
+	setShowTests(value: boolean): void {
+		void vscode.workspace.getConfiguration('dbt-studio').update('lineageShowTests', value, vscode.ConfigurationTarget.Global);
+		// Config change listener handles re-render and context key update
 	}
 
 	setFocusModel(uniqueId: string): void {
@@ -94,13 +114,19 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 			if (msg['command'] === 'openFile' && typeof msg['filePath'] === 'string') {
 				void vscode.commands.executeCommand('vscode.open', vscode.Uri.file(msg['filePath'] as string));
 			}
-			if (msg['command'] === 'setDepth' && typeof msg['depth'] === 'number') {
-				this._depth = msg['depth'] as number;
+			if (msg['command'] === 'incrementUpstream') {
+				this._upstreamDepth++;
 				this._updateGraph();
 			}
-			if (msg['command'] === 'setDirection' && typeof msg['direction'] === 'string') {
-				this._direction = msg['direction'] as 'both' | 'upstream' | 'downstream';
+			if (msg['command'] === 'decrementUpstream') {
+				if (this._upstreamDepth > 0) { this._upstreamDepth--; this._updateGraph(); }
+			}
+			if (msg['command'] === 'incrementDownstream') {
+				this._downstreamDepth++;
 				this._updateGraph();
+			}
+			if (msg['command'] === 'decrementDownstream') {
+				if (this._downstreamDepth > 0) { this._downstreamDepth--; this._updateGraph(); }
 			}
 			if (msg['command'] === 'traceColumn' && typeof msg['model'] === 'string' && typeof msg['column'] === 'string') {
 				void this._handleTraceColumn(msg['model'] as string, msg['column'] as string);
@@ -129,18 +155,20 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 	private async _updateGraphAsync(): Promise<void> {
 		if (!this._view || !this._focusModel) return;
 
+		const gen = ++this._enrichGeneration;
+
 		// Ensure manifest exists before building the graph
 		const ready = await this._ensureParsed();
 		if (!ready) {
-			void this._view.webview.postMessage({ command: 'setGraph', nodes: [], edges: [], focusId: this._focusModel, depth: this._depth, direction: this._direction });
+			void this._view.webview.postMessage({ command: 'setGraph', nodes: [], edges: [], focusId: this._focusModel, upstreamDepth: this._upstreamDepth, downstreamDepth: this._downstreamDepth });
 			return;
 		}
 
 		const index = this.indexer.index;
 		if (!index) return;
 
-		const lineage = this.indexer.getLineage(this._focusModel, this._depth, this._direction);
-		const { nodes, edges } = this._buildGraph(index, lineage, this._focusModel);
+		const lineage = this.indexer.getLineage(this._focusModel, this._upstreamDepth, this._downstreamDepth);
+		const { nodes, edges } = this._buildGraph(index, lineage, this._focusModel, this._showTests);
 		this._computeLayout(nodes, edges);
 
 		void this._view.webview.postMessage({
@@ -148,13 +176,13 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 			nodes,
 			edges,
 			focusId: this._focusModel,
-			depth: this._depth,
-			direction: this._direction,
+			upstreamDepth: this._upstreamDepth,
+			downstreamDepth: this._downstreamDepth,
 		});
 
 		// Progressively enrich columns for nodes that have compiled SQL
 		if (this._columnLineageTool) {
-			void this._enrichColumns(nodes);
+			void this._enrichColumns(nodes, gen);
 		}
 	}
 
@@ -184,13 +212,15 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 		return false;
 	}
 
-	private async _enrichColumns(nodes: PositionedNode[]): Promise<void> {
+	private async _enrichColumns(nodes: PositionedNode[], gen: number): Promise<void> {
 		if (!this._view || !this._columnLineageTool) return;
 
 		for (const node of nodes) {
+			if (gen !== this._enrichGeneration) return;
 			if (node.columns.length > 0) continue;
 			try {
 				const cols = await this._columnLineageTool.resolveColumnsForNode(node.id);
+				if (gen !== this._enrichGeneration) return;
 				if (cols.length > 0 && this._view) {
 					void this._view.webview.postMessage({
 						command: 'updateColumns',
@@ -290,11 +320,19 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 		index: ManifestIndex,
 		lineage: { upstream: { uniqueId: string }[]; downstream: { uniqueId: string }[] },
 		focusId: string,
+		showTests = true,
 	): { nodes: PositionedNode[]; edges: GraphEdge[] } {
 		const allIds = new Set<string>();
 		allIds.add(focusId);
 		for (const node of lineage.upstream) allIds.add(node.uniqueId);
 		for (const node of lineage.downstream) allIds.add(node.uniqueId);
+
+		// Filter test nodes when showTests is false
+		if (!showTests) {
+			for (const id of [...allIds]) {
+				if (id.split('.')[0] === 'test') allIds.delete(id);
+			}
+		}
 
 		const nodes: PositionedNode[] = [];
 		for (const id of allIds) {
@@ -408,13 +446,27 @@ body {
 	background: var(--vscode-sideBar-background);
 	position: relative; z-index: 10;
 }
-.controls label { font-size: 11px; color: var(--vscode-descriptionForeground); }
-.controls select, .controls input {
-	background: var(--vscode-input-background);
-	color: var(--vscode-input-foreground);
-	border: 1px solid var(--vscode-input-border, transparent);
-	padding: 2px 4px; font-size: 11px; border-radius: 2px;
+.depth-control { display: flex; align-items: center; gap: 4px; }
+.depth-chevron {
+	font-size: 16px; font-weight: 900;
+	color: var(--vscode-foreground); opacity: 0.75;
+	padding: 1px 2px; line-height: 1; user-select: none;
 }
+.depth-control button {
+	background: var(--vscode-button-secondaryBackground, var(--vscode-input-background));
+	color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+	border: 1px solid var(--vscode-input-border, transparent);
+	padding: 2px 7px; font-size: 14px; font-weight: 700; border-radius: 3px; cursor: pointer; line-height: 1.3;
+}
+.depth-control button:hover { background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground)); }
+.depth-value { font-size: 13px; font-weight: 600; min-width: 16px; text-align: center; }
+.fit-btn {
+	background: var(--vscode-button-secondaryBackground, var(--vscode-input-background));
+	color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+	border: 1px solid var(--vscode-input-border, transparent);
+	padding: 2px 7px; font-size: 12px; border-radius: 3px; cursor: pointer;
+}
+.fit-btn:hover { background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground)); }
 .legend { display: flex; gap: 8px; margin-left: auto; }
 .legend-item { display: flex; align-items: center; gap: 3px; font-size: 10px; color: var(--vscode-descriptionForeground); }
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
@@ -544,14 +596,19 @@ svg.edges polygon {
 </head>
 <body>
 <div class="controls">
-	<label>Depth</label>
-	<input type="number" id="depth" min="1" max="10" value="2" style="width:48px">
-	<label>Direction</label>
-	<select id="direction">
-		<option value="both" selected>Both</option>
-		<option value="upstream">Upstream</option>
-		<option value="downstream">Downstream</option>
-	</select>
+	<div class="depth-control">
+		<button id="up-inc">+</button>
+		<button id="up-dec">−</button>
+		<span class="depth-value" id="up-depth">2</span>
+		<span class="depth-chevron">❮</span>
+	</div>
+	<div class="depth-control">
+		<span class="depth-chevron">❯</span>
+		<span class="depth-value" id="dn-depth">1</span>
+		<button id="dn-dec">−</button>
+		<button id="dn-inc">+</button>
+	</div>
+	<button class="fit-btn" id="fit-btn">⊡ Fit</button>
 	<div class="legend">
 		<span class="legend-item"><span class="swatch" style="background:var(--vscode-charts-blue, #5B8DEF)"></span>Model</span>
 		<span class="legend-item"><span class="swatch" style="background:var(--vscode-charts-green, #43A686)"></span>Source</span>
@@ -572,8 +629,8 @@ svg.edges polygon {
 	const edgesSvg = document.getElementById('edges');
 	const wrapEl = document.getElementById('canvas-wrap');
 	const emptyEl = document.getElementById('empty');
-	const depthInput = document.getElementById('depth');
-	const dirSelect = document.getElementById('direction');
+	const upDepthEl = document.getElementById('up-depth');
+	const dnDepthEl = document.getElementById('dn-depth');
 
 	const TYPE_COLORS = {
 		model:    'var(--vscode-charts-blue, #5B8DEF)',
@@ -589,6 +646,7 @@ svg.edges polygon {
 	let isPanning = false, startX = 0, startY = 0;
 	let graphData = null;
 	let lastFocusId = null;
+	let lastHighlightMsg = null;
 	const expandedCards = new Set();
 	const nodeInitialTops = new Map();
 
@@ -631,6 +689,18 @@ svg.edges polygon {
 
 	/* ── Render Graph ── */
 	function setGraph(data) {
+		/* When depth changes (same focus model), preserve the focus node's screen position.
+		 * Capture where the focus node currently sits on screen before replacing graphData. */
+		let anchorScreenX = null, anchorScreenY = null, anchorNewNode = null;
+		if (graphData && data.focusId === lastFocusId) {
+			const oldNode = graphData.nodes.find(function(n) { return n.id === data.focusId; });
+			if (oldNode) {
+				anchorScreenX = oldNode.x * scale + panX;
+				anchorScreenY = oldNode.y * scale + panY;
+				anchorNewNode = data.nodes.find(function(n) { return n.id === data.focusId; });
+			}
+		}
+
 		graphData = data;
 		emptyEl.style.display = 'none';
 		wrapEl.style.display = 'block';
@@ -693,10 +763,20 @@ svg.edges polygon {
 		 * when the same model re-renders (e.g. column enrichment completing). */
 		const focusChanged = data.focusId !== lastFocusId;
 		lastFocusId = data.focusId;
-		if (focusChanged) fitToView(data);
+		if (focusChanged) {
+			expandedCards.clear();
+			lastHighlightMsg = null;
+			fitToView(data);
+		} else if (anchorNewNode !== null) {
+			/* Depth changed: keep focus node at the same screen position, same zoom. */
+			panX = anchorScreenX - anchorNewNode.x * scale;
+			panY = anchorScreenY - anchorNewNode.y * scale;
+			applyTransform();
+		}
 
-		depthInput.value = data.depth;
-		dirSelect.value = data.direction;
+		redrawColumnEdges();
+		upDepthEl.textContent = data.upstreamDepth;
+		dnDepthEl.textContent = data.downstreamDepth;
 
 		/* Record initial card top positions (collapsed state) for re-layout after expand/collapse */
 		nodeInitialTops.clear();
@@ -795,6 +875,7 @@ svg.edges polygon {
 			}
 		}
 		drawEdges(graphData);
+		redrawColumnEdges();
 	}
 
 	/* ── Event Delegation ── */
@@ -830,14 +911,20 @@ svg.edges polygon {
 	});
 
 	/* ── Controls ── */
-	depthInput.addEventListener('change', function() {
-		const val = parseInt(depthInput.value, 10);
-		if (val >= 1 && val <= 10) {
-			vscode.postMessage({ command: 'setDepth', depth: val });
-		}
+	document.getElementById('up-inc').addEventListener('click', function() {
+		vscode.postMessage({ command: 'incrementUpstream' });
 	});
-	dirSelect.addEventListener('change', function() {
-		vscode.postMessage({ command: 'setDirection', direction: dirSelect.value });
+	document.getElementById('up-dec').addEventListener('click', function() {
+		vscode.postMessage({ command: 'decrementUpstream' });
+	});
+	document.getElementById('dn-inc').addEventListener('click', function() {
+		vscode.postMessage({ command: 'incrementDownstream' });
+	});
+	document.getElementById('dn-dec').addEventListener('click', function() {
+		vscode.postMessage({ command: 'decrementDownstream' });
+	});
+	document.getElementById('fit-btn').addEventListener('click', function() {
+		if (graphData) fitToView(graphData);
 	});
 
 	window.addEventListener('message', function(event) {
@@ -917,9 +1004,11 @@ svg.edges polygon {
 			'</div>';
 		}
 		colList.innerHTML = colHtml;
+		redrawColumnEdges();
 	}
 
 	function highlightColumns(msg) {
+		lastHighlightMsg = msg.columns ? msg : null;
 		canvas.querySelectorAll('.col-item.highlighted').forEach(function(el) {
 			el.classList.remove('highlighted');
 		});
@@ -982,6 +1071,30 @@ svg.edges polygon {
 			path.style.stroke = 'var(--vscode-charts-blue, #5B8DEF)';
 			edgesSvg.appendChild(path);
 		}
+	}
+
+	function redrawColumnEdges() {
+		if (!lastHighlightMsg || !graphData) return;
+		canvas.querySelectorAll('.col-item.highlighted').forEach(function(el) { el.classList.remove('highlighted'); });
+		edgesSvg.querySelectorAll('.col-edge').forEach(function(el) { el.remove(); });
+		const highlightedEls = [];
+		for (const c of (lastHighlightMsg.columns || [])) {
+			const sel = '.col-item[data-model="' + CSS.escape(c.model) + '"][data-col="' + CSS.escape(c.column) + '"]';
+			const el = canvas.querySelector(sel);
+			if (!el) continue;
+			const colList = el.closest('.col-list');
+			const isCollapsed = colList && colList.style.display === 'none';
+			if (isCollapsed) {
+				/* Card is collapsed — fall back to card element so lines flow to/from the card edge,
+				 * just like model edges do. No highlight class since the column row is hidden. */
+				const card = canvas.querySelector('[data-id="' + CSS.escape(c.model) + '"]');
+				if (card) highlightedEls.push({ model: c.model, column: c.column, el: card });
+			} else {
+				el.classList.add('highlighted');
+				highlightedEls.push({ model: c.model, column: c.column, el: el });
+			}
+		}
+		drawColumnEdges(highlightedEls, lastHighlightMsg.columnEdges || []);
 	}
 
 	function escHtml(s) {

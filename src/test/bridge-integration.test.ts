@@ -265,4 +265,35 @@ select * from orders`);
 		expect(ctes).toHaveLength(1);
 		expect(ctes[0]['name']).toBe('orders');
 	}, 30_000);
+
+	it('parses SQL where a dbt macro appears in a statement-level position', async () => {
+		// Regression: {{ generic_is_deleted() }} expands to a SQL fragment (e.g.
+		// an extra JOIN condition).  After normal _blank_jinja it becomes a bare
+		// identifier like "generic_is_deleted" between a JOIN condition and a
+		// UNION ALL — an invalid position that makes sqlglot raise.
+		// The retry path (aggressive blanking + ErrorLevel.IGNORE) must recover.
+		const result = await parseSql(`with warehouse as (
+    select
+        wh.mkey,
+        ss.sourcename
+    from gold__warehouse wh
+    left join gold__sourcesystem ss
+        on ss.sourcename = wh.sourcesystembkey
+    {{ generic_is_deleted(wh.is_deleted) }}
+    union all
+    select
+        wh2.mkey,
+        ss2.sourcename
+    from gold__warehouse2 wh2
+    left join gold__sourcesystem ss2
+        on ss2.sourcename = wh2.sourcesystembkey
+    {{ generic_is_deleted(wh2.is_deleted) }}
+)
+select mkey, sourcename from warehouse`);
+		expect(result.success).toBe(true);
+		const data = result.data as Record<string, unknown>;
+		const ctes = data['ctes'] as Array<Record<string, unknown>>;
+		expect(ctes).toHaveLength(1);
+		expect(ctes[0]['name']).toBe('warehouse');
+	}, 30_000);
 });

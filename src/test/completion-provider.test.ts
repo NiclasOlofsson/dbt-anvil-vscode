@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ColumnResolver } from '../providers/column-resolver';
+import type { ParseService } from '../services/parse-service';
+import type { DocumentModel } from '../services/parse-service';
 
 import { DbtCompletionProvider } from '../providers/completion-provider';
 import { createMockLogger } from './helpers';
@@ -98,25 +100,33 @@ describe('DbtCompletionProvider — bare column completions', () => {
 		expect(emailItem!.detail).toBe('column of customers');
 	});
 
-	it('skips bare column completions after FROM keyword', async () => {
+	it('returns table completions (not columns) after FROM keyword', async () => {
 		const linePrefix = 'FROM cu';
 		const doc = mockDocument([linePrefix]);
 		const pos = { line: 0, character: linePrefix.length };
 
 		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
 
-		// Should return undefined (no branch matched) rather than column completions
-		expect(items).toBeUndefined();
+		// Should return table/CTE completions (empty without ParseService), not column completions
+		expect(items).toBeDefined();
+		expect(items).toBeInstanceOf(Array);
+		// No column items should leak through
+		const columnItems = items?.filter(i => i.kind === 5 /* CompletionItemKind.Field */);
+		expect(columnItems).toHaveLength(0);
 	});
 
-	it('skips bare column completions after JOIN keyword', async () => {
+	it('returns table completions (not columns) after JOIN keyword', async () => {
 		const linePrefix = 'JOIN ord';
 		const doc = mockDocument([linePrefix]);
 		const pos = { line: 0, character: linePrefix.length };
 
 		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
 
-		expect(items).toBeUndefined();
+		// Should return table/CTE completions (empty without ParseService), not column completions
+		expect(items).toBeDefined();
+		expect(items).toBeInstanceOf(Array);
+		const columnItems = items?.filter(i => i.kind === 5 /* CompletionItemKind.Field */);
+		expect(columnItems).toHaveLength(0);
 	});
 
 	it('returns [] (not undefined) when no aliases resolved', async () => {
@@ -150,5 +160,83 @@ describe('DbtCompletionProvider — alias.column completions (existing)', () => 
 		expect(labels).toContain('id');
 		expect(labels).toContain('name');
 		expect(items![0].detail).toBe('column of c');
+	});
+});
+
+describe('DbtCompletionProvider — FROM/JOIN with ParseService', () => {
+	function makeParseService(model: DocumentModel): ParseService {
+		return {
+			getDocumentModel: vi.fn().mockResolvedValue(model),
+			evict: vi.fn(),
+		} as unknown as ParseService;
+	}
+
+	function makeIndexerWithModels(): ManifestIndexer {
+		const models = new Map([
+			['model.jaffle.customers', { name: 'customers', uniqueId: 'model.jaffle.customers', materialisation: 'table', packageName: 'jaffle', path: 'models/customers.sql', schema: 'main', tags: [], description: '' }],
+			['model.jaffle.orders', { name: 'orders', uniqueId: 'model.jaffle.orders', materialisation: 'view', packageName: 'jaffle', path: 'models/orders.sql', schema: 'main', tags: [], description: '' }],
+		]);
+		return {
+			index: { adapterType: 'duckdb', models, sources: new Map() },
+			findModelsByName: () => [],
+			getRawNode: () => null,
+			getColumns: () => null,
+			setColumns: vi.fn(),
+			buildSchemaMapping: () => ({}),
+		} as unknown as ManifestIndexer;
+	}
+
+	const docModel: DocumentModel = {
+		ctes: [
+			{ name: 'base', line: 0, endLine: 5, columns: [{ name: 'id', line: 1 }, { name: 'name', line: 2 }] },
+			{ name: 'enriched', line: 6, endLine: 10, columns: [{ name: 'total', line: 7 }] },
+		],
+		refs: [],
+		sources: [],
+		finalColumns: [] as import('../services/parse-service').ColumnInfo[],
+		timing: { parseMs: 1, totalMs: 2 },
+	};
+
+	it('returns CTE names before model names after FROM', async () => {
+		const indexer = makeIndexerWithModels();
+		const parseService = makeParseService(docModel);
+		const provider = new DbtCompletionProvider(indexer, createMockLogger(), makeColumnResolver({}), parseService);
+
+		const linePrefix = 'FROM ';
+		const doc = mockDocument([linePrefix]);
+		const pos = { line: 0, character: linePrefix.length };
+
+		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
+
+		expect(items).toBeDefined();
+		const labels = items!.map(i => i.label);
+		expect(labels).toContain('base');
+		expect(labels).toContain('enriched');
+		expect(labels).toContain('customers');
+		expect(labels).toContain('orders');
+
+		// CTEs should sort before models
+		const baseIdx = items!.findIndex(i => i.label === 'base');
+		const customersIdx = items!.findIndex(i => i.label === 'customers');
+		expect(baseIdx).toBeLessThan(customersIdx);
+	});
+
+	it('shows CTE column count in detail', async () => {
+		const parseService = makeParseService(docModel);
+		const provider = new DbtCompletionProvider(makeIndexerWithModels(), createMockLogger(), makeColumnResolver({}), parseService);
+
+		const linePrefix = 'JOIN ';
+		const doc = mockDocument([linePrefix]);
+		const pos = { line: 0, character: linePrefix.length };
+
+		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
+
+		const baseItem = items!.find(i => i.label === 'base');
+		expect(baseItem).toBeDefined();
+		expect(baseItem!.detail).toBe('CTE (2 columns)');
+
+		const enrichedItem = items!.find(i => i.label === 'enriched');
+		expect(enrichedItem).toBeDefined();
+		expect(enrichedItem!.detail).toBe('CTE (1 columns)');
 	});
 });

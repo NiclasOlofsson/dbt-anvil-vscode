@@ -126,8 +126,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// were restored from disk (mtime validation happens on first access per entry).
 	void compileCache.warmAll(projectDir, restoredCompileEntries);
 
+	// -------- Parse service (structural parse + background alias enrichment) --------
+	const parseService = new ParseService(bridgeRunner, logger, { service: executionService, describeCache, indexer: manifestIndexer });
+
 	// -------- Diagnostics provider --------
-	const columnResolver = new ColumnResolver(manifestIndexer, logger, executionService, describeCache);
+	const columnResolver = new ColumnResolver(manifestIndexer, logger, parseService);
 	const diagnosticsProvider = new DbtDiagnosticsProvider(executionService, manifestIndexer, statusBar, projectDir, logger, columnResolver);
 	context.subscriptions.push(diagnosticsProvider);
 
@@ -144,6 +147,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const columnLineageTool = new GetColumnLineageTool(manifestIndexer, executionService, logger, compileCache);
 	lineageGraphProvider.setColumnLineageTool(columnLineageTool);
 	lineageGraphProvider.setExecutionService(executionService);
+	// Initialise context keys so the correct toolbar icons show from the start
+	void vscode.commands.executeCommand('setContext', 'dbt-studio.lineageFollowActive', lineageGraphProvider.followActive);
+	void vscode.commands.executeCommand('setContext', 'dbt-studio.lineageShowTests', lineageGraphProvider.showTests);
 	const testExplorerProvider = new TestExplorerProvider(manifestIndexer, manifestLoader, logger);
 
 	const modelExplorerView = vscode.window.createTreeView('dbt-studio.modelExplorer', {
@@ -200,15 +206,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		{ language: 'yaml', pattern: '**/*.{yml,yaml}' },
 		{ language: 'jinja-yaml', pattern: '**/*.{yml,yaml}' },
 	];
-	const definitionProvider = new DbtDefinitionProvider(manifestIndexer, manifestLoader, logger, columnResolver);
-	const hoverProvider = new DbtHoverProvider(manifestIndexer, logger, columnResolver);
-	const completionProvider = new DbtCompletionProvider(manifestIndexer, logger, columnResolver);
+	const definitionProvider = new DbtDefinitionProvider(manifestIndexer, manifestLoader, logger, columnResolver, parseService);
+	const hoverProvider = new DbtHoverProvider(manifestIndexer, logger, columnResolver, parseService);
+	const completionProvider = new DbtCompletionProvider(manifestIndexer, logger, columnResolver, parseService);
 	const yamlCompletionProvider = new YamlCompletionProvider(manifestIndexer, logger);
 	const yamlHoverProvider = new YamlHoverProvider(manifestIndexer, logger);
 	const referenceProvider = new DbtReferenceProvider(manifestIndexer, logger, columnResolver);
 	const renameProvider = new DbtRenameProvider(manifestIndexer, manifestLoader, logger);
 	const codeLensProvider = new DbtCodeLensProvider(manifestIndexer, logger);
-	const parseService = new ParseService(bridgeRunner, logger);
 	const documentSymbolProvider = new DbtDocumentSymbolProvider(manifestIndexer, logger, parseService);
 	const workspaceSymbolProvider = new DbtWorkspaceSymbolProvider(manifestIndexer, logger);
 	const signatureHelpProvider = new DbtSignatureHelpProvider(manifestIndexer, logger);
@@ -350,10 +355,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				return;
 			}
 			lineageGraphProvider.setFocusModel(models[0].uniqueId);
+			void vscode.commands.executeCommand('dbt-studio.lineageGraph.focus');
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.toggleLineageFollow', () => {
 			lineageGraphProvider.toggleFollow();
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.toggleLineageFollowOff', () => {
+			lineageGraphProvider.toggleFollow();
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.showLineageTests', () => {
+			lineageGraphProvider.setShowTests(true);
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.hideLineageTests', () => {
+			lineageGraphProvider.setShowTests(false);
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.refreshTestExplorer', () => {
