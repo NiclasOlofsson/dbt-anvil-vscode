@@ -194,6 +194,7 @@ describe('DbtCompletionProvider — FROM/JOIN with ParseService', () => {
 		refs: [],
 		sources: [],
 		finalColumns: [] as import('../services/parse-service').ColumnInfo[],
+		tokens: [],
 		timing: { parseMs: 1, totalMs: 2 },
 	};
 

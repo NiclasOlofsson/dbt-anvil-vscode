@@ -3,7 +3,8 @@ import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ManifestLoader } from '../dbt/manifest-loader';
 import type { ILogger } from '../types/logger';
-import type { ParseService } from '../services/parse-service';
+import { ParseService } from '../services/parse-service';
+import type { DocumentModel } from '../services/parse-service';
 import type { ColumnResolver } from './column-resolver';
 import { isLinePositionInComment } from './comment-utils';
 
@@ -55,13 +56,15 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 			}
 		}
 
-		// CTE navigation: FROM/JOIN cte_name → jump to CTE definition
-		const cteDef = await this._resolveCteOrTable(document, position, line, token);
-		if (cteDef) return cteDef;
+		// Token-based resolution: CTE navigation + column definitions
+		if (this.parseService) {
+			const tokenDef = await this._resolveToken(document, position, token);
+			if (tokenDef) return tokenDef;
+		}
 
-		// Column definition: alias.column → jump to CTE that defines the alias
+		// Fallback: bare column search via alias resolution
 		if (this.columnResolver) {
-			return this._resolveColumn(document, position, line, token);
+			return this._resolveColumnFallback(document, position, line, token);
 		}
 
 		return undefined;
@@ -111,58 +114,101 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 		return undefined;
 	}
 
-	// ---- Column go-to-definition ----
+	// ---- Token-based definition (AST position resolution) ----
 
-	private async _resolveCteOrTable(
+	private async _resolveToken(
 		document: vscode.TextDocument,
 		position: vscode.Position,
-		line: string,
 		token: vscode.CancellationToken,
 	): Promise<vscode.Definition | undefined> {
-		// Skip Jinja blocks
-		const prefix = line.substring(0, position.character);
-		if (/\{\{[^}]*$/.test(prefix) || /\{%[^%]*$/.test(prefix)) return undefined;
+		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const model = await this.parseService!.getDocumentModel(document, dialect);
+		if (token.isCancellationRequested || !model) return undefined;
 
-		const wordRange = document.getWordRangeAtPosition(position, /[a-zA-Z_]\w*/);
-		if (!wordRange) return undefined;
-		const word = document.getText(wordRange);
-		if (DEFINITION_SQL_KEYWORDS.has(word.toUpperCase())) return undefined;
+		const resolved = ParseService.resolveAtPosition(model, position.line, position.character);
+		if (!resolved) return undefined;
 
-		// Only trigger after FROM/JOIN keywords
-		const beforeWord = line.substring(0, wordRange.start.character);
-		if (!/\b(?:from|join)\s+$/i.test(beforeWord)) return undefined;
-
-		// Try ParseService first for accurate CTE positions
-		if (this.parseService) {
-			const dialect = this.indexer.index?.adapterType ?? 'ansi';
-			const model = await this.parseService.getDocumentModel(document, dialect);
-			if (token.isCancellationRequested) return undefined;
-			if (model) {
-				const wlc = word.toLowerCase();
-				const cte = model.ctes.find(c => c.name.toLowerCase() === wlc || c.alias?.toLowerCase() === wlc);
-				if (cte) {
-					this.logger.debug(`Definition: FROM/JOIN '${word}' → CTE at line ${cte.line + 1}`);
-					return new vscode.Location(document.uri, new vscode.Position(cte.line, 0));
+		switch (resolved.kind) {
+			case 'table_ref': {
+				const name = resolved.token.name;
+				return this._jumpToCte(document, model, name)
+					?? this._resolveRef(name);
+			}
+			case 'table_alias': {
+				const name = resolved.token.name;
+				return this._jumpToCte(document, model, name)
+					?? this._resolveRef(name);
+			}
+			case 'table_qualifier': {
+				const alias = resolved.token.table!;
+				return this._jumpToCte(document, model, alias);
+			}
+			case 'column': {
+				const colToken = resolved.token;
+				if (colToken.table) {
+					return this._jumpToCte(document, model, colToken.table, colToken.name);
 				}
+				// Bare column — find first alias that provides it
+				if (this.columnResolver) {
+					const aliases = await this.columnResolver.getScopeAliases(document, token);
+					if (token.isCancellationRequested) return undefined;
+					for (const [alias, cols] of Object.entries(aliases)) {
+						if (cols.some(c => c.toLowerCase() === colToken.name.toLowerCase())) {
+							return this._jumpToCte(document, model, alias, colToken.name);
+						}
+					}
+				}
+				return undefined;
 			}
 		}
+	}
 
-		const refDef = this._resolveRef(word);
-		if (refDef) {
-			this.logger.debug(`Definition: FROM/JOIN '${word}' → ref model`);
-			return refDef;
+	// ---- Jump to CTE / ref / source by alias name ----
+
+	private _jumpToCte(
+		document: vscode.TextDocument,
+		model: DocumentModel,
+		alias: string,
+		column?: string,
+	): vscode.Definition | undefined {
+		const lc = alias.toLowerCase();
+
+		const cte = model.ctes.find(c => c.name.toLowerCase() === lc || c.alias?.toLowerCase() === lc);
+		if (cte) {
+			if (column) {
+				const col = cte.columns.find(c => c.name.toLowerCase() === column.toLowerCase());
+				if (col) {
+					this.logger.debug(`Definition: column '${column}' in CTE '${alias}' → line ${col.line + 1}`);
+					return new vscode.Location(document.uri, new vscode.Position(col.line, 0));
+				}
+			}
+			this.logger.debug(`Definition: CTE '${alias}' → line ${cte.line + 1}`);
+			return new vscode.Location(document.uri, new vscode.Position(cte.line, 0));
+		}
+
+		const ref = model.refs.find(r => r.alias?.toLowerCase() === lc);
+		if (ref) {
+			this.logger.debug(`Definition: alias '${alias}' → ref('${ref.model}')`);
+			return this._resolveRef(ref.model) as vscode.Location | undefined;
+		}
+
+		const source = model.sources.find(s => s.alias?.toLowerCase() === lc);
+		if (source) {
+			this.logger.debug(`Definition: alias '${alias}' → source('${source.sourceName}','${source.tableName}')`);
+			return this._resolveSource(source.sourceName, source.tableName);
 		}
 
 		return undefined;
 	}
 
-	private async _resolveColumn(
+	// ---- Fallback: bare column without token match ----
+
+	private async _resolveColumnFallback(
 		document: vscode.TextDocument,
 		position: vscode.Position,
 		line: string,
 		token: vscode.CancellationToken,
 	): Promise<vscode.Definition | undefined> {
-		// Skip Jinja blocks
 		const prefix = line.substring(0, position.character);
 		if (/\{\{[^}]*$/.test(prefix) || /\{%[^%]*$/.test(prefix)) return undefined;
 
@@ -171,88 +217,17 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 		const word = document.getText(wordRange);
 		if (DEFINITION_SQL_KEYWORDS.has(word.toUpperCase())) return undefined;
 
-		// Detect alias.column pattern
-		const nearby = line.substring(Math.max(0, wordRange.start.character - 40), wordRange.end.character + 40);
-		const dotMatch = /(\w+)\.(\w+)/.exec(nearby);
-		let targetAlias: string | undefined;
-		let targetColumn: string | undefined;
-
-		if (dotMatch) {
-			const dotOffset = nearby.indexOf(dotMatch[0]);
-			const absStart = Math.max(0, wordRange.start.character - 40) + dotOffset;
-			const aliasEnd = absStart + dotMatch[1].length;
-			const colStart = aliasEnd + 1;
-			const colEnd = colStart + dotMatch[2].length;
-
-			if (position.character >= colStart && position.character <= colEnd) {
-				targetAlias = dotMatch[1];
-				targetColumn = dotMatch[2];
-			} else if (position.character >= absStart && position.character <= aliasEnd) {
-				targetAlias = dotMatch[1];
-			}
-		}
-
-		// Verify alias exists in scope
 		const aliases = await this.columnResolver!.getScopeAliases(document, token);
 		if (token.isCancellationRequested) return undefined;
 
-		if (targetAlias) {
-			const cols = aliases[targetAlias] ?? aliases[targetAlias.toLowerCase()];
-			if (!cols) return undefined;
-
-			return this._jumpToCte(document, targetAlias, targetColumn, token);
-		}
-
-		// Bare column name (no alias prefix) — find first alias that provides it
+		// Find first alias that provides this column, then jump to CTE
 		for (const [alias, cols] of Object.entries(aliases)) {
 			if (cols.some(c => c.toLowerCase() === word.toLowerCase())) {
-				return this._jumpToCte(document, alias, word, token);
-			}
-		}
-
-		return undefined;
-	}
-
-	private async _jumpToCte(
-		document: vscode.TextDocument,
-		alias: string,
-		column: string | undefined,
-		token: vscode.CancellationToken,
-	): Promise<vscode.Location | undefined> {
-		if (this.parseService) {
-			const dialect = this.indexer.index?.adapterType ?? 'ansi';
-			const model = await this.parseService.getDocumentModel(document, dialect);
-			if (token.isCancellationRequested) return undefined;
-			if (model) {
-				const lc = alias.toLowerCase();
-
-				const cte = model.ctes.find(c => c.name.toLowerCase() === lc || c.alias?.toLowerCase() === lc);
-				if (cte) {
-					if (column) {
-						const col = cte.columns.find(c => c.name.toLowerCase() === column.toLowerCase());
-						if (col) {
-							this.logger.debug(`Definition: column '${column}' in CTE '${alias}' → line ${col.line + 1}`);
-							return new vscode.Location(document.uri, new vscode.Position(col.line, 0));
-						}
-					}
-					this.logger.debug(`Definition: CTE '${alias}' → line ${cte.line + 1}`);
-					return new vscode.Location(document.uri, new vscode.Position(cte.line, 0));
+				if (this.parseService) {
+					const dialect = this.indexer.index?.adapterType ?? 'ansi';
+					const model = await this.parseService.getDocumentModel(document, dialect);
+					if (model) return this._jumpToCte(document, model, alias, word);
 				}
-
-				const ref = model.refs.find(r => r.alias?.toLowerCase() === lc);
-				if (ref) {
-					this.logger.debug(`Definition: alias '${alias}' → ref('${ref.model}')`);
-					return this._resolveRef(ref.model) as vscode.Location | undefined;
-				}
-
-				const source = model.sources.find(s => s.alias?.toLowerCase() === lc);
-				if (source) {
-					this.logger.debug(`Definition: alias '${alias}' → source('${source.sourceName}','${source.tableName}')`);
-					return this._resolveSource(source.sourceName, source.tableName);
-				}
-
-				// Model parsed successfully — alias not found in any structured data
-				return undefined;
 			}
 		}
 

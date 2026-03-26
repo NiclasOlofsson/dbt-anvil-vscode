@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
-import type { ParseService } from '../services/parse-service';
+import { ParseService } from '../services/parse-service';
 import type { ColumnResolver } from './column-resolver';
 import { isLinePositionInComment } from './comment-utils';
 
@@ -62,13 +62,15 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 			}
 		}
 
-		// CTE name hover (after FROM/JOIN): show SQL-derived columns
-		const cteHover = await this._hoverCte(document, position, line, token);
-		if (cteHover) return cteHover;
+		// Token-based resolution: CTE names, columns, table aliases
+		if (this.parseService) {
+			const tokenHover = await this._hoverToken(document, position, token);
+			if (tokenHover) return tokenHover;
+		}
 
-		// Column hover: alias.column or bare column name
+		// Fallback: column hover via alias resolution when no token match
 		if (this.columnResolver) {
-			return this._hoverColumn(document, position, line, token);
+			return this._hoverColumnFallback(document, position, line, token);
 		}
 
 		return undefined;
@@ -175,66 +177,98 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		return undefined;
 	}
 
-	// ---- CTE hover ----
+	// ---- Token-based hover (AST position resolution) ----
 
-	private async _hoverCte(
+	private async _hoverToken(
 		document: vscode.TextDocument,
 		position: vscode.Position,
-		line: string,
 		token: vscode.CancellationToken,
 	): Promise<vscode.Hover | undefined> {
-		if (!this.parseService) return undefined;
-
-		const prefix = line.substring(0, position.character);
-		if (/\{\{[^}]*$/.test(prefix) || /\{%[^%]*$/.test(prefix)) return undefined;
-
-		const wordRange = document.getWordRangeAtPosition(position, /[a-zA-Z_]\w*/);
-		if (!wordRange) return undefined;
-		const word = document.getText(wordRange);
-		if (SQL_KEYWORDS.has(word.toUpperCase())) return undefined;
-
-		// Only trigger after FROM/JOIN
-		const beforeWord = line.substring(0, wordRange.start.character);
-		if (!/\b(?:from|join)\s+$/i.test(beforeWord)) return undefined;
-
 		const dialect = this.indexer.index?.adapterType ?? 'ansi';
-		const model = await this.parseService.getDocumentModel(document, dialect);
+		const model = await this.parseService!.getDocumentModel(document, dialect);
 		if (token.isCancellationRequested || !model) return undefined;
 
-		const cte = model.ctes.find(c => c.name.toLowerCase() === word.toLowerCase() || c.alias?.toLowerCase() === word.toLowerCase());
-		if (!cte) return undefined;
+		const resolved = ParseService.resolveAtPosition(model, position.line, position.character);
+		if (!resolved) return undefined;
 
-		const md = new vscode.MarkdownString();
-		md.appendMarkdown(`**\`${cte.name}\`** — CTE (${cte.columns.length} columns)\n\n`);
-		md.appendMarkdown(`- **Lines:** ${cte.line + 1}–${cte.endLine + 1}\n\n`);
-		if (cte.columns.length > 0) {
-			md.appendMarkdown('**Columns:**\n');
-			const display = cte.columns.slice(0, 30);
-			for (const col of display) {
-				md.appendMarkdown(`- \`${col.name}\` _(line ${col.line + 1})_\n`);
+		switch (resolved.kind) {
+			case 'table_ref': {
+				// Table name in FROM/JOIN — show CTE columns if it's a CTE
+				const name = resolved.token.name;
+				const cte = model.ctes.find(c =>
+					c.name.toLowerCase() === name.toLowerCase()
+					|| c.alias?.toLowerCase() === name.toLowerCase(),
+				);
+				if (cte) return this._buildCteHover(cte);
+				return undefined;
 			}
-			if (cte.columns.length > 30) {
-				md.appendMarkdown(`- _...and ${cte.columns.length - 30} more_\n`);
+			case 'table_alias': {
+				// Alias definition in FROM/JOIN (e.g. the `o` in `FROM orders o`)
+				const name = resolved.token.alias!;
+				const cte = model.ctes.find(c =>
+					c.name.toLowerCase() === resolved.token.name.toLowerCase()
+					|| c.alias?.toLowerCase() === name.toLowerCase(),
+				);
+				if (cte) return this._buildCteHover(cte);
+				return undefined;
+			}
+			case 'table_qualifier': {
+				// Alias prefix of a column ref (e.g. the `o` in `o.order_id`)
+				const alias = resolved.token.table!;
+				if (this.columnResolver) {
+					const aliases = await this.columnResolver.getScopeAliases(document, token);
+					if (token.isCancellationRequested) return undefined;
+					const cols = aliases[alias] ?? aliases[alias.toLowerCase()];
+					if (cols) return this._buildAliasHover(alias, cols);
+				}
+				return undefined;
+			}
+			case 'column': {
+				// Column reference — show column info with source
+				const colToken = resolved.token;
+				if (colToken.table && this.columnResolver) {
+					const aliases = await this.columnResolver.getScopeAliases(document, token);
+					if (token.isCancellationRequested) return undefined;
+					const cols = aliases[colToken.table] ?? aliases[colToken.table.toLowerCase()];
+					if (cols && cols.some(c => c.toLowerCase() === colToken.name.toLowerCase())) {
+						return this._buildColumnHover(colToken.name, colToken.table);
+					}
+				}
+				// Bare column (no table qualifier) — search all aliases
+				if (!colToken.table && this.columnResolver) {
+					const aliases = await this.columnResolver.getScopeAliases(document, token);
+					if (token.isCancellationRequested) return undefined;
+					const sources: string[] = [];
+					for (const [alias, cols] of Object.entries(aliases)) {
+						if (cols.some(c => c.toLowerCase() === colToken.name.toLowerCase())) {
+							sources.push(alias);
+						}
+					}
+					if (sources.length > 0) {
+						return this._buildColumnHover(
+							colToken.name,
+							sources.length === 1 ? sources[0] : undefined,
+							undefined,
+							sources,
+						);
+					}
+				}
+				return undefined;
 			}
 		}
-
-		this.logger.debug(`Hover: CTE '${word}' → ${cte.columns.length} columns`);
-		return new vscode.Hover(md, wordRange);
 	}
 
-	// ---- Column hover ----
+	// ---- Fallback column hover (no token match) ----
 
-	private async _hoverColumn(
+	private async _hoverColumnFallback(
 		document: vscode.TextDocument,
 		position: vscode.Position,
 		line: string,
 		token: vscode.CancellationToken,
 	): Promise<vscode.Hover | undefined> {
-		// Skip Jinja blocks — columns don't apply there
 		const prefix = line.substring(0, position.character);
 		if (/\{\{[^}]*$/.test(prefix) || /\{%[^%]*$/.test(prefix)) return undefined;
 
-		// Skip SQL keywords
 		const wordRange = document.getWordRangeAtPosition(position, /[a-zA-Z_]\w*/);
 		if (!wordRange) return undefined;
 		const word = document.getText(wordRange);
@@ -242,33 +276,6 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 
 		const aliases = await this.columnResolver!.getScopeAliases(document, token);
 		if (token.isCancellationRequested || Object.keys(aliases).length === 0) return undefined;
-
-		// Try alias.column pattern: word is either the alias or the column
-		const dotMatch = /(\w+)\.(\w+)/.exec(
-			line.substring(Math.max(0, wordRange.start.character - 40), wordRange.end.character + 40),
-		);
-		if (dotMatch) {
-			const alias = dotMatch[1];
-			const col = dotMatch[2];
-			// Re-check that cursor actually covers the column part
-			const dotStart = line.indexOf(dotMatch[0], Math.max(0, wordRange.start.character - 40));
-			const colStart = dotStart + alias.length + 1;
-			const colEnd = colStart + col.length;
-			if (position.character >= colStart && position.character <= colEnd) {
-				const cols = aliases[alias] ?? aliases[alias.toLowerCase()];
-				if (cols && cols.some(c => c.toLowerCase() === col.toLowerCase())) {
-					return this._buildColumnHover(col, alias, cols);
-				}
-			}
-			// Cursor on the alias part — show alias info
-			const aliasEnd = dotStart + alias.length;
-			if (position.character >= dotStart && position.character <= aliasEnd) {
-				const cols = aliases[alias] ?? aliases[alias.toLowerCase()];
-				if (cols) {
-					return this._buildAliasHover(alias, cols);
-				}
-			}
-		}
 
 		// Bare column name — search all aliases
 		const sources: string[] = [];
@@ -282,6 +289,23 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		}
 
 		return undefined;
+	}
+
+	private _buildCteHover(cte: { name: string; line: number; endLine: number; columns: { name: string; line: number }[] }): vscode.Hover {
+		const md = new vscode.MarkdownString();
+		md.appendMarkdown(`**\`${cte.name}\`** — CTE (${cte.columns.length} columns)\n\n`);
+		md.appendMarkdown(`- **Lines:** ${cte.line + 1}–${cte.endLine + 1}\n\n`);
+		if (cte.columns.length > 0) {
+			md.appendMarkdown('**Columns:**\n');
+			const display = cte.columns.slice(0, 30);
+			for (const col of display) {
+				md.appendMarkdown(`- \`${col.name}\` _(line ${col.line + 1})_\n`);
+			}
+			if (cte.columns.length > 30) {
+				md.appendMarkdown(`- _...and ${cte.columns.length - 30} more_\n`);
+			}
+		}
+		return new vscode.Hover(md);
 	}
 
 	private _buildColumnHover(

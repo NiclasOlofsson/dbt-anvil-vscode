@@ -41,11 +41,53 @@ export interface SourceInfo {
 	alias?: string;
 }
 
+export interface ColumnRefToken {
+	type: 'column_ref';
+	name: string;
+	/** 0-based line */
+	line: number;
+	/** 0-based inclusive start column */
+	col: number;
+	/** 0-based exclusive end column */
+	endCol: number;
+	/** Table/alias qualifier, e.g. `o` in `o.order_id` */
+	table?: string;
+	tableLine?: number;
+	tableCol?: number;
+	tableEndCol?: number;
+}
+
+export interface TableRefToken {
+	type: 'table_ref';
+	name: string;
+	line: number;
+	col: number;
+	endCol: number;
+	/** SQL alias, e.g. `o` in `FROM orders o` */
+	alias?: string;
+	aliasLine?: number;
+	aliasCol?: number;
+	aliasEndCol?: number;
+}
+
+export type TokenInfo = ColumnRefToken | TableRefToken;
+
+/**
+ * Result of resolving a cursor position against the AST token map.
+ * Tells the caller exactly what the cursor is sitting on.
+ */
+export type PositionResolution =
+	| { kind: 'column'; token: ColumnRefToken }
+	| { kind: 'table_qualifier'; token: ColumnRefToken }
+	| { kind: 'table_ref'; token: TableRefToken }
+	| { kind: 'table_alias'; token: TableRefToken };
+
 export interface DocumentModel {
 	ctes: CteInfo[];
 	refs: RefInfo[];
 	sources: SourceInfo[];
 	finalColumns: ColumnInfo[];
+	tokens: TokenInfo[];
 	timing: { parseMs: number; totalMs: number };
 	/**
 	 * Alias → column-name map populated asynchronously after the initial parse.
@@ -201,6 +243,55 @@ export class ParseService {
 		this._logger.debug('[parse-service] enrichment cache invalidated');
 	}
 
+	/**
+	 * Resolve a cursor position against the token map from the AST.
+	 * Returns what the cursor is sitting on: a column reference,
+	 * a table qualifier (the alias prefix of a column), a table reference
+	 * (in FROM/JOIN), or a table alias definition.
+	 */
+	static resolveAtPosition(
+		model: DocumentModel,
+		line: number,
+		col: number,
+	): PositionResolution | null {
+		for (const token of model.tokens) {
+			if (token.type === 'column_ref') {
+				// Check the column name span
+				if (token.line === line && col >= token.col && col < token.endCol) {
+					return { kind: 'column', token };
+				}
+				// Check the table qualifier span (e.g. the `o` in `o.order_id`)
+				if (
+					token.table !== undefined
+					&& token.tableLine === line
+					&& token.tableCol !== undefined
+					&& token.tableEndCol !== undefined
+					&& col >= token.tableCol
+					&& col < token.tableEndCol
+				) {
+					return { kind: 'table_qualifier', token };
+				}
+			} else {
+				// table_ref — check the table name span
+				if (token.line === line && col >= token.col && col < token.endCol) {
+					return { kind: 'table_ref', token };
+				}
+				// Check the alias span (e.g. the `o` in `FROM orders o`)
+				if (
+					token.alias !== undefined
+					&& token.aliasLine === line
+					&& token.aliasCol !== undefined
+					&& token.aliasEndCol !== undefined
+					&& col >= token.aliasCol
+					&& col < token.aliasEndCol
+				) {
+					return { kind: 'table_alias', token };
+				}
+			}
+		}
+		return null;
+	}
+
 	private async _parse(
 		document: vscode.TextDocument,
 		key: string,
@@ -224,6 +315,7 @@ export class ParseService {
 			refs: data.refs ?? [],
 			sources: data.sources ?? [],
 			finalColumns: data.finalColumns ?? [],
+			tokens: (data as unknown as Record<string, unknown>).tokens as TokenInfo[] ?? [],
 			timing: data.timing ?? { parseMs: 0, totalMs: 0 },
 		};
 

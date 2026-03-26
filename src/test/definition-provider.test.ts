@@ -4,7 +4,7 @@ import { DbtDefinitionProvider } from '../providers/definition-provider';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ManifestLoader } from '../dbt/manifest-loader';
 import type { ColumnResolver } from '../providers/column-resolver';
-import type { ParseService, DocumentModel } from '../services/parse-service';
+import type { ParseService, DocumentModel, TokenInfo } from '../services/parse-service';
 import { createMockLogger } from './helpers';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -116,6 +116,11 @@ describe('DbtDefinitionProvider — CTE navigation via ParseService', () => {
 		refs: [],
 		sources: [],
 		finalColumns: [{ name: 'id', line: 8 }, { name: 'name', line: 8 }, { name: 'email', line: 8 }],
+		tokens: [
+			{ type: 'table_ref', name: 'raw_customers', line: 2, col: 7, endCol: 21 },
+			{ type: 'table_ref', name: 'base', line: 6, col: 7, endCol: 11 },
+			{ type: 'table_ref', name: 'enriched', line: 8, col: 14, endCol: 22 },
+		] as TokenInfo[],
 		timing: { parseMs: 5, totalMs: 10 },
 	};
 
@@ -199,6 +204,13 @@ describe('DbtDefinitionProvider — column go-to-definition via ParseService', (
 		refs: [],
 		sources: [],
 		finalColumns: [{ name: 'name', line: 8 }],
+		tokens: [
+			// Line 7: "SELECT base.name FROM base"
+			// base.name → column_ref with table qualifier
+			{ type: 'column_ref', name: 'name', line: 7, col: 12, endCol: 16, table: 'base', tableLine: 7, tableCol: 7, tableEndCol: 11 },
+			// FROM base → table_ref
+			{ type: 'table_ref', name: 'base', line: 7, col: 22, endCol: 26 },
+		] as TokenInfo[],
 		timing: { parseMs: 5, totalMs: 10 },
 	};
 

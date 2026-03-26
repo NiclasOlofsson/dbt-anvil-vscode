@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import { DbtHoverProvider } from '../providers/hover-provider';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ColumnResolver } from '../providers/column-resolver';
-import type { ParseService, DocumentModel } from '../services/parse-service';
+import type { ParseService, DocumentModel, TokenInfo } from '../services/parse-service';
 import { createMockLogger } from './helpers';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -101,6 +101,14 @@ describe('DbtHoverProvider — CTE hover via ParseService', () => {
 		refs: [],
 		sources: [],
 		finalColumns: [{ name: 'id', line: 8 }, { name: 'name', line: 8 }],
+		tokens: [
+			// Line 2: "  FROM raw_customers"
+			{ type: 'table_ref', name: 'raw_customers', line: 2, col: 7, endCol: 21 },
+			// Line 6: "  FROM base"
+			{ type: 'table_ref', name: 'base', line: 6, col: 7, endCol: 11 },
+			// Line 8: "SELECT * FROM enriched"
+			{ type: 'table_ref', name: 'enriched', line: 8, col: 14, endCol: 22 },
+		] as TokenInfo[],
 		timing: { parseMs: 5, totalMs: 10 },
 	};
 
@@ -163,6 +171,10 @@ describe('DbtHoverProvider — CTE hover via ParseService', () => {
 	it('returns undefined when ParseService has no matching CTE', async () => {
 		const emptyModel: DocumentModel = {
 			ctes: [], refs: [], sources: [], finalColumns: [] as import('../services/parse-service').ColumnInfo[],
+			tokens: [
+				// Token exists but no matching CTE in the model
+				{ type: 'table_ref', name: 'base', line: 6, col: 7, endCol: 11 },
+			] as TokenInfo[],
 			timing: { parseMs: 1, totalMs: 2 },
 		};
 		const parseService = createMockParseService(emptyModel);
