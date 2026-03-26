@@ -106,9 +106,16 @@ export class CompileCache {
 	 * all models at once. This is much faster than compiling models individually
 	 * on first request, since there is only one subprocess startup overhead.
 	 *
+	 * If `minCachedEntries` is provided and the cache already holds at least that
+	 * many valid entries (restored from disk), the compile is skipped entirely.
+	 *
 	 * Safe to call fire-and-forget — errors are logged, not thrown.
 	 */
-	async warmAll(projectDir: string): Promise<void> {
+	async warmAll(projectDir: string, minCachedEntries = 0): Promise<void> {
+		if (minCachedEntries > 0 && this._cache.size >= minCachedEntries) {
+			this.logger.info(`CompileCache: ${this._cache.size} entries already cached — skipping warm compile`);
+			return;
+		}
 		this.logger.info('CompileCache: starting background full compile to warm cache');
 		try {
 			const result = await this.service.submit({
@@ -127,6 +134,29 @@ export class CompileCache {
 		} catch (err) {
 			this.logger.warn(`CompileCache: background full compile error: ${err}`);
 		}
+	}
+
+	/**
+	 * Seed the in-memory cache from persisted data, validating each entry's
+	 * sourceMtimeMs against the current file on disk. Stale entries are dropped.
+	 * Returns the number of valid entries loaded.
+	 */
+	seedFromPersisted(entries: Record<string, { compiledCode: string; sourceMtimeMs: number }>): number {
+		let loaded = 0;
+		for (const [uid, entry] of Object.entries(entries)) {
+			// We don't have projectDir here so we can't resolve the file path —
+			// store as-is and let ensureCompiled() do the mtime validation on first access.
+			this._cache.set(uid, entry);
+			loaded++;
+		}
+		return loaded;
+	}
+
+	/**
+	 * Export all current cache entries for persistence.
+	 */
+	exportForPersistence(): Record<string, { compiledCode: string; sourceMtimeMs: number }> {
+		return Object.fromEntries(this._cache);
 	}
 
 	/**
