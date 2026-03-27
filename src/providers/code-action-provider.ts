@@ -21,6 +21,7 @@ export class DbtCodeActionProvider implements vscode.CodeActionProvider {
 		_context: vscode.CodeActionContext,
 		_token: vscode.CancellationToken,
 	): vscode.CodeAction[] {
+		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.codeActions', true)) return [];
 		if (document.languageId !== 'jinja-sql') return [];
 
 		const actions: vscode.CodeAction[] = [];

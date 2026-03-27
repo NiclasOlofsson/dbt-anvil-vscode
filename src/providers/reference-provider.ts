@@ -22,6 +22,7 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 		_context: vscode.ReferenceContext,
 		token: vscode.CancellationToken,
 	): Promise<vscode.Location[]> {
+		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.references', true)) return [];
 		const line = document.lineAt(position.line).text;
 
 		// Skip comments

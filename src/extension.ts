@@ -516,6 +516,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.commands.registerCommand('dbt-studio.runAllTestsFromExplorer', async () => {
 			await vsTestController.runTests();
 		}),
+
+		vscode.commands.registerCommand('dbt-studio.openSettings', () => {
+			void vscode.commands.executeCommand('workbench.action.openSettings', '@ext:nickeolofsson.dbt-studio-vscode');
+		}),
 	);
 
 	logger.info(`dbt Studio v${version} activated.`);
