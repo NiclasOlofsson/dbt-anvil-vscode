@@ -1,3 +1,4 @@
+/// <reference types="node" />
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as yaml from 'js-yaml';

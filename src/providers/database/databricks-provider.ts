@@ -1,3 +1,4 @@
+/// <reference lib="dom" />
 import type { ILogger } from '../../types/logger';
 import type { DbtExecutionService } from '../../dbt/execution-service';
 import type { DatabricksConnection } from './profiles-reader';
