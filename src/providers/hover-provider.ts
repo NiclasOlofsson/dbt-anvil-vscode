@@ -235,6 +235,9 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 				}
 				return null;
 			}
+			case 'column_def':
+				// Column definition (e.g. in a CTE select list) — nothing to hover
+				return null;
 			case 'column': {
 				// Column reference — show column info with source
 				const colToken = resolved.token;

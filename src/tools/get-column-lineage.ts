@@ -335,7 +335,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		const compiledCode = await this._ensureCompiled(modelUniqueId);
 		if (!compiledCode) return null;
 
-		const lineage = this.indexer.getLineage(modelUniqueId, 5, 'upstream');
+		const lineage = this.indexer.getLineage(modelUniqueId, 5, 0);
 		const schemaMapping = this._buildSchemaMapping(lineage.upstream.map(n => n.uniqueId));
 
 		try {
@@ -560,7 +560,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 
 		const index = this.indexer.index;
 		const dialect = mapAdapterToDialect(index?.adapterType ?? 'ansi');
-		const upstreamLineage = this.indexer.getLineage(uniqueId, 5, 'upstream');
+		const upstreamLineage = this.indexer.getLineage(uniqueId, 5, 0);
 		const schemaMapping = this._buildSchemaMapping(upstreamLineage.upstream.map(n => n.uniqueId));
 
 		const { columns } = await this._resolveOutputColumns(
@@ -606,7 +606,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		const index = this.indexer.index;
 		const dialect = mapAdapterToDialect(index?.adapterType ?? 'ansi');
 
-		const upstreamLineage = this.indexer.getLineage(uniqueId, 5, 'upstream');
+		const upstreamLineage = this.indexer.getLineage(uniqueId, 5, 0);
 		const schemaMapping = this._buildSchemaMapping(upstreamLineage.upstream.map(n => n.uniqueId));
 		const { columns: outputColumns } = await this._resolveOutputColumns(
 			rawNode.resource_type,
@@ -673,7 +673,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 
 		// Resolve output columns using type-aware strategy
 		const resourceType = modelInfo.uniqueId.split('.')[0];
-		const upstreamLineage = this.indexer.getLineage(modelInfo.uniqueId, 5, 'upstream');
+		const upstreamLineage = this.indexer.getLineage(modelInfo.uniqueId, 5, 0);
 		const schemaMapping = this._buildSchemaMapping(upstreamLineage.upstream.map(n => n.uniqueId));
 		const { columns: outputColumns } = await this._resolveOutputColumns(
 			resourceType,
