@@ -267,6 +267,22 @@ export class BridgeRunner {
 	}
 
 	/**
+	 * Compile a Jinja SQL string without executing it.
+	 * Returns the compiled SQL or throws if compilation fails.
+	 */
+	async compileInlineSql(sql: string): Promise<string> {
+		const result = await this.invokeRaw({ compile_inline: sql });
+		if (!result.success || !result.data) {
+			throw new Error(`compile_inline failed: ${result.stderr || 'unknown error'}`);
+		}
+		const compiled = result.data['compiled_sql'];
+		if (typeof compiled !== 'string') {
+			throw new Error('compile_inline: missing compiled_sql in bridge response');
+		}
+		return compiled;
+	}
+
+	/**
 	 * Save current manifest as run state for state-based selection.
 	 * Copies target/manifest.json → target/state_last_run/manifest.json.
 	 */

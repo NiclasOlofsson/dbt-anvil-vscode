@@ -5,6 +5,7 @@ import type { DbtExecutionService } from '../dbt/execution-service';
 import type { ManifestLoader } from '../dbt/manifest-loader';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ManifestWatcher } from '../indexing/manifest-watcher';
+import type { DatabaseProvider } from '../providers/database/database-provider';
 
 export interface ServiceContainerOptions {
 	extensionContext: vscode.ExtensionContext;
@@ -28,6 +29,7 @@ export class ServiceContainer {
 
 	// Lazily set by the extension bootstrapper
 	private _bridgeRunner: BridgeRunner | null = null;
+	private _databaseProvider: DatabaseProvider | null = null;
 	private _manifestLoader: ManifestLoader | null = null;
 	private _manifestIndexer: ManifestIndexer | null = null;
 	private _manifestWatcher: ManifestWatcher | null = null;
@@ -133,5 +135,16 @@ export class ServiceContainer {
 			throw new Error('DbtExecutionService is not yet initialized.');
 		}
 		return this._executionService;
+	}
+
+	setDatabaseProvider(provider: DatabaseProvider): void {
+		this._databaseProvider = provider;
+	}
+
+	getDatabaseProvider(): DatabaseProvider {
+		if (!this._databaseProvider) {
+			throw new Error('DatabaseProvider is not yet initialized.');
+		}
+		return this._databaseProvider;
 	}
 }

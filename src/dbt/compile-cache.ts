@@ -56,7 +56,7 @@ export class CompileCache {
 		// Cache hit — source file unchanged
 		const cached = this._cache.get(uniqueId);
 		if (cached && currentMtime !== undefined && cached.sourceMtimeMs === currentMtime) {
-			this.logger.debug(`CompileCache: hit for ${uniqueId}`);
+			this.logger.trace(`CompileCache: hit for ${uniqueId}`);
 			return cached.compiledCode;
 		}
 
@@ -68,11 +68,11 @@ export class CompileCache {
 			if (currentMtime !== undefined) {
 				this._cache.set(uniqueId, { compiledCode: manifestNode.compiled_code, sourceMtimeMs: currentMtime });
 			}
-			this.logger.debug(`CompileCache: warm from manifest for ${uniqueId}`);
+			this.logger.trace(`CompileCache: warm from manifest for ${uniqueId}`);
 			return manifestNode.compiled_code;
 		}
 
-		this.logger.debug(`CompileCache: miss for ${uniqueId}, compiling`);
+		this.logger.trace(`CompileCache: miss for ${uniqueId}, compiling`);
 
 		// Run dbt compile for this model
 		try {
@@ -165,14 +165,14 @@ export class CompileCache {
 	 */
 	invalidate(uniqueIdOrName: string): void {
 		if (this._cache.delete(uniqueIdOrName)) {
-			this.logger.debug(`CompileCache: invalidated ${uniqueIdOrName}`);
+			this.logger.trace(`CompileCache: invalidated ${uniqueIdOrName}`);
 			return;
 		}
 		// Name-based fallback
 		for (const key of this._cache.keys()) {
 			if (key.endsWith(`.${uniqueIdOrName}`)) {
 				this._cache.delete(key);
-				this.logger.debug(`CompileCache: invalidated by name ${uniqueIdOrName} (key=${key})`);
+				this.logger.trace(`CompileCache: invalidated by name ${uniqueIdOrName} (key=${key})`)
 				return;
 			}
 		}
@@ -194,7 +194,7 @@ export class CompileCache {
 				this._cache.set(node.unique_id, { compiledCode: node.compiled_code, sourceMtimeMs: mtime });
 				count++;
 			}
-			this.logger.debug(`CompileCache: populated ${count} entries from manifest`);
+			this.logger.trace(`CompileCache: populated ${count} entries from manifest`);
 		} catch (err) {
 			this.logger.warn(`CompileCache: failed to read manifest: ${err}`);
 		}

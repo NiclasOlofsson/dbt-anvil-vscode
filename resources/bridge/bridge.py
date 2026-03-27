@@ -15,15 +15,10 @@ Protocol:
   Shutdown: reads {"shutdown": true} from stdin → exits cleanly
 """
 
-import csv
-import hashlib
 import json
 import os
 import re
-import shutil
 import sys
-from io import StringIO
-from pathlib import Path
 
 # Prepend vendored dependencies (sqlglot) bundled with the extension.
 # This ensures bridge.py works regardless of what the user's project has installed.
@@ -281,6 +276,70 @@ def _get_scope_columns(
                     aliases[alias] = cols
 
     return aliases
+
+
+def handle_compile_inline(
+    request: dict[str, Any], dbt: Any, project_dir: str, profiles_dir: str
+) -> None:
+    """Compile a Jinja SQL string without executing it.
+
+    Runs `dbt compile --inline <sql>` and returns the compiled SQL so that
+    direct database providers can strip Jinja before sending the query.
+    """
+    sql: str = request.get("compile_inline", "")
+    if not sql:
+        print(
+            json.dumps({"success": False, "error": "compile_inline sql is required"}),
+            flush=True,
+        )
+        return
+
+    args = [
+        "compile",
+        "--inline",
+        sql,
+        "--output",
+        "json",
+        "--project-dir",
+        project_dir,
+        "--profiles-dir",
+        profiles_dir,
+        "--log-format",
+        "json",
+    ]
+
+    try:
+        print(
+            "[bridge] compile_inline: compiling inline SQL", file=sys.stderr, flush=True
+        )
+        result = dbt.invoke(args)
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception as exc:
+        print(json.dumps({"success": False, "error": str(exc)}), flush=True)
+        return
+
+    compiled_sql: str | None = None
+    try:
+        run_results = getattr(result, "result", None)
+        if run_results and hasattr(run_results, "results") and run_results.results:
+            first = run_results.results[0]
+            node = getattr(first, "node", None)
+            if node is not None:
+                compiled_sql = getattr(node, "compiled_code", None)
+    except Exception as exc:
+        print(
+            f"[bridge] compile_inline parse error: {exc}", file=sys.stderr, flush=True
+        )
+
+    if compiled_sql is None:
+        print(
+            json.dumps({"success": False, "error": "Could not extract compiled SQL"}),
+            flush=True,
+        )
+        return
+
+    print(json.dumps({"success": True, "compiled_sql": compiled_sql}), flush=True)
 
 
 def handle_describe_table(
@@ -1510,565 +1569,6 @@ def handle_get_scope_columns(request: dict[str, Any]) -> None:
         )
 
 
-# ---------------------------------------------------------------------------
-# CTE test support — ported from dbt-core-mcp cte_generator.py
-# ---------------------------------------------------------------------------
-
-
-def _cte_rows_to_sql(
-    rows: list[dict[str, Any]], columns: list[str] | None = None
-) -> str:
-    """Convert list of row dicts to SQL SELECT statements joined by UNION ALL."""
-    if columns is None:
-        cols_union: set[str] = set()
-        for row in rows:
-            cols_union.update(row.keys())
-        columns = sorted(cols_union)
-
-    if not columns:
-        return "SELECT NULL WHERE FALSE"
-
-    if not rows:
-        col_exprs = [f"NULL as {c}" for c in columns]
-        return f"SELECT {', '.join(col_exprs)} WHERE 1=0"
-
-    selects = []
-    for row in rows:
-        exprs = []
-        for col in columns:
-            v = row.get(col)
-            if v is None:
-                exprs.append(f"NULL as {col}")
-            elif isinstance(v, str):
-                if v.isdigit() or (v.replace(".", "", 1).replace("-", "", 1).isdigit()):
-                    exprs.append(f"{v} as {col}")
-                else:
-                    escaped = v.replace("'", "''")
-                    exprs.append(f"'{escaped}' as {col}")
-            else:
-                exprs.append(f"{v} as {col}")
-        selects.append(f"SELECT {', '.join(exprs)}")
-
-    return "\nUNION ALL\n".join(selects)
-
-
-def _cte_parse_csv_fixture(csv_text: str) -> tuple[list[str], list[dict[str, Any]]]:
-    """Parse a csv fixture string into (columns, rows_as_dicts)."""
-    sio = StringIO(csv_text.strip("\n"))
-    reader = csv.DictReader(line for line in sio if line.strip() != "")
-    columns = list(reader.fieldnames) if reader.fieldnames else []
-    rows = [dict(row) for row in reader]
-    return columns, rows
-
-
-def _cte_is_position_in_comment(sql: str, pos: int) -> bool:
-    """Check if a position in SQL is inside a comment (SQL or Jinja)."""
-    line_start = sql.rfind("\n", 0, pos) + 1
-    line_content = sql[line_start:pos]
-    if "--" in line_content:
-        return True
-
-    block_comment_depth = 0
-    jinja_comment_depth = 0
-    i = 0
-    while i < pos:
-        if i + 1 < len(sql):
-            two_char = sql[i : i + 2]
-            if two_char == "/*":
-                block_comment_depth += 1
-                i += 2
-                continue
-            elif two_char == "*/":
-                block_comment_depth -= 1
-                i += 2
-                continue
-            elif two_char == "{#":
-                jinja_comment_depth += 1
-                i += 2
-                continue
-            elif two_char == "#}":
-                jinja_comment_depth -= 1
-                i += 2
-                continue
-        i += 1
-
-    return block_comment_depth > 0 or jinja_comment_depth > 0
-
-
-def _cte_replace_cte_with_mock(
-    sql: str,
-    cte_name: str,
-    rows: list[dict[str, Any]],
-    columns: list[str] | None = None,
-) -> str:
-    """Replace a CTE definition with a mocked version from fixture rows."""
-    pattern = rf"\b{cte_name}\s+as\s*\("
-    matches = list(re.finditer(pattern, sql, re.IGNORECASE))
-
-    if not matches:
-        return sql
-
-    match = None
-    for m in matches:
-        if not _cte_is_position_in_comment(sql, m.start()):
-            match = m
-            break
-
-    if not match:
-        return sql
-
-    paren_pos = sql.index("(", match.start())
-    paren_count = 1
-    end_pos = paren_pos + 1
-    in_string = False
-    string_char = None
-    in_line_comment = False
-    in_block_comment = False
-
-    while end_pos < len(sql) and paren_count > 0:
-        char = sql[end_pos]
-        next_char = sql[end_pos + 1] if end_pos + 1 < len(sql) else ""
-
-        if not in_string and not in_block_comment and char == "-" and next_char == "-":
-            in_line_comment = True
-            end_pos += 2
-            continue
-
-        if in_line_comment:
-            if char == "\n":
-                in_line_comment = False
-            end_pos += 1
-            continue
-
-        if not in_string and not in_line_comment and char == "/" and next_char == "*":
-            in_block_comment = True
-            end_pos += 2
-            continue
-
-        if in_block_comment:
-            if char == "*" and next_char == "/":
-                in_block_comment = False
-                end_pos += 2
-            else:
-                end_pos += 1
-            continue
-
-        if char in ('"', "'"):
-            if not in_string:
-                in_string = True
-                string_char = char
-            elif char == string_char:
-                in_string = False
-                string_char = None
-
-        if not in_string and not in_line_comment and not in_block_comment:
-            if char == "(":
-                paren_count += 1
-            elif char == ")":
-                paren_count -= 1
-
-        end_pos += 1
-
-    mock_sql = _cte_rows_to_sql(rows, columns=columns)
-    mocked_cte = f"{cte_name} AS (\n    {mock_sql}\n)"
-    original_cte = sql[match.start() : end_pos]
-    return sql.replace(original_cte, mocked_cte)
-
-
-def _cte_generate_model(
-    base_model_path: Path,
-    cte_name: str,
-    test_given: list[dict[str, Any]],
-    output_path: Path,
-) -> bool:
-    """Generate a truncated model that selects from the target CTE."""
-    sql = base_model_path.read_text()
-
-    pattern = rf"\b{re.escape(cte_name)}(?:\s+AS)?\s+\("
-    matches = list(re.finditer(pattern, sql, re.IGNORECASE))
-
-    if not matches:
-        print(
-            f"[bridge] CTE '{cte_name}' not found in {base_model_path}",
-            file=sys.stderr,
-            flush=True,
-        )
-        return False
-
-    match = None
-    for m in matches:
-        if not _cte_is_position_in_comment(sql, m.start()):
-            match = m
-            break
-
-    if not match:
-        print(
-            f"[bridge] CTE '{cte_name}' only in comments", file=sys.stderr, flush=True
-        )
-        return False
-
-    paren_pos = sql.index("(", match.start())
-    paren_count = 1
-    i = paren_pos + 1
-    in_string = False
-    string_char = None
-    in_line_comment = False
-    in_block_comment = False
-
-    while i < len(sql) and paren_count > 0:
-        char = sql[i]
-        next_char = sql[i + 1] if i + 1 < len(sql) else ""
-
-        if not in_string and not in_block_comment and char == "-" and next_char == "-":
-            in_line_comment = True
-            i += 2
-            continue
-
-        if in_line_comment:
-            if char == "\n":
-                in_line_comment = False
-            i += 1
-            continue
-
-        if not in_string and not in_line_comment and char == "/" and next_char == "*":
-            in_block_comment = True
-            i += 2
-            continue
-
-        if in_block_comment:
-            if char == "*" and next_char == "/":
-                in_block_comment = False
-                i += 2
-            else:
-                i += 1
-            continue
-
-        if char in ('"', "'") and (i == 0 or sql[i - 1] != "\\"):
-            if not in_string:
-                in_string = True
-                string_char = char
-            elif char == string_char:
-                in_string = False
-                string_char = None
-
-        if not in_string and not in_line_comment and not in_block_comment:
-            if char == "(":
-                paren_count += 1
-            elif char == ")":
-                paren_count -= 1
-
-        i += 1
-
-    if paren_count != 0:
-        print(
-            f"[bridge] Unmatched paren for CTE '{cte_name}'",
-            file=sys.stderr,
-            flush=True,
-        )
-        return False
-
-    upstream_sql = sql[:i].rstrip()
-
-    for given in test_given:
-        inp = given.get("input")
-        if isinstance(inp, str) and inp.startswith("::"):
-            mock_cte_name = inp.lstrip(":")
-            fmt = given.get("format", "dict")
-            if fmt == "csv":
-                columns, mock_rows = _cte_parse_csv_fixture(given.get("rows", ""))
-            else:
-                columns, mock_rows = None, given.get("rows", [])
-            upstream_sql = _cte_replace_cte_with_mock(
-                upstream_sql, mock_cte_name, mock_rows, columns
-            )
-
-    generated_sql = f"{upstream_sql}\n\nselect * from {cte_name}"
-    final_sql = f"-- sqlfluff:disable\n{generated_sql}"
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(final_sql)
-    return True
-
-
-def _cte_generate_test(
-    test_yaml_path: Path,
-    test_name: str,
-    generated_model: str,
-    gen_model_path: Path,
-    output_path: Path,
-) -> bool:
-    """Generate an enabled test YAML targeting the generated model."""
-    try:
-        import yaml as _yaml  # noqa: PLC0415
-    except ImportError:
-        print(
-            "[bridge] PyYAML not available — cannot generate CTE test YAML",
-            file=sys.stderr,
-            flush=True,
-        )
-        return False
-
-    with open(test_yaml_path) as f:
-        test_data = _yaml.safe_load(f)
-
-    target_test = None
-    for test in test_data.get("unit_tests", []):
-        if test["name"] == test_name:
-            target_test = test.copy()
-            break
-
-    if not target_test:
-        print(
-            f"[bridge] Test '{test_name}' not found in {test_yaml_path}",
-            file=sys.stderr,
-            flush=True,
-        )
-        return False
-
-    generated_sql = gen_model_path.read_text()
-    ref_pattern = r"ref\(['\"](\w+)['\"]\)"
-    refs = re.findall(ref_pattern, generated_sql)
-    source_pattern = r"source\(['\"](\w+)['\"],\s*['\"](\w+)['\"]\)"
-    sources = re.findall(source_pattern, generated_sql)
-
-    actually_used: set[str] = set()
-    for ref_name in refs:
-        actually_used.add(f"ref('{ref_name}')")
-    for source_name, table_name in sources:
-        actually_used.add(f"source('{source_name}', '{table_name}')")
-
-    clean_given = [
-        g for g in target_test.get("given", []) if g.get("input") in actually_used
-    ]
-    target_test["given"] = clean_given
-
-    existing_inputs = {g.get("input", "") for g in target_test.get("given", [])}
-    for ref_name in refs:
-        ref_input = f"ref('{ref_name}')"
-        if ref_input not in existing_inputs:
-            target_test["given"].append({"input": ref_input, "rows": []})
-            existing_inputs.add(ref_input)
-    for source_name, table_name in sources:
-        source_input = f"source('{source_name}', '{table_name}')"
-        if source_input not in existing_inputs:
-            target_test["given"].append({"input": source_input, "rows": []})
-            existing_inputs.add(source_input)
-
-    target_test["model"] = generated_model
-    target_test.pop("config", None)
-
-    output_data = {"version": 2, "unit_tests": [target_test]}
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w") as f:
-        _yaml.safe_dump(
-            output_data, f, default_flow_style=False, sort_keys=False, width=120
-        )
-
-    return True
-
-
-def _cte_load_project_config(project_dir: Path) -> dict[str, Any]:
-    """Load dbt_project.yml and return its configuration dict."""
-    try:
-        import yaml as _yaml  # noqa: PLC0415
-    except ImportError:
-        return {}
-    project_file = project_dir / "dbt_project.yml"
-    if not project_file.exists():
-        return {}
-    with open(project_file) as f:
-        config = _yaml.safe_load(f)
-    return config or {}
-
-
-def _cte_find_model_file(
-    base_model: str,
-    yaml_path: Path,
-    project_dir: Path,
-    config: dict[str, Any],
-) -> Path | None:
-    """Locate the SQL model file for base_model by mirroring test-path structure onto model-paths."""
-    model_paths = config.get("model-paths", ["models"])
-    test_paths = config.get("test-paths", ["tests"])
-
-    # Build list of candidate test root dirs (same logic as generate_cte_tests)
-    test_roots: list[Path] = [project_dir / tp for tp in test_paths]
-    unit_tests_dir = project_dir / "unit_tests"
-    if unit_tests_dir.exists() and unit_tests_dir not in test_roots:
-        test_roots.append(unit_tests_dir)
-
-    # Determine relative path of yaml_path from whichever test root it belongs to
-    rel_parent: Path | None = None
-    for test_root in test_roots:
-        try:
-            rel = yaml_path.relative_to(test_root)
-            rel_parent = rel.parent
-            break
-        except ValueError:
-            continue
-
-    models_base = project_dir / model_paths[0]
-
-    if rel_parent is not None:
-        candidate = models_base / rel_parent / f"{base_model}.sql"
-        if candidate.exists():
-            return candidate
-
-    # Fallback: search recursively
-    for found in models_base.rglob(f"{base_model}.sql"):
-        return found
-
-    return None
-
-
-def handle_run_cte_test(
-    request: dict[str, Any],
-    project_dir: str,
-    profiles_dir: str,
-    dbt: Any,
-) -> None:
-    """Generate, run, and clean up a single CTE test.
-
-    Request: { "run_cte_test": true, "yaml_file": "/abs/path.yml", "test_name": "name" }
-    """
-    try:
-        import yaml as _yaml  # noqa: PLC0415
-    except ImportError:
-        print(
-            json.dumps({"success": False, "error": "PyYAML not available"}), flush=True
-        )
-        return
-
-    yaml_file = request.get("yaml_file", "")
-    test_name = request.get("test_name", "")
-    if not yaml_file or not test_name:
-        print(
-            json.dumps(
-                {"success": False, "error": "yaml_file and test_name are required"}
-            ),
-            flush=True,
-        )
-        return
-
-    yaml_path = Path(yaml_file)
-    proj_dir = Path(project_dir)
-    config = _cte_load_project_config(proj_dir)
-
-    # Load YAML and find the test
-    with open(yaml_path) as f:
-        test_data = _yaml.safe_load(f)
-
-    target_test = None
-    for test in test_data.get("unit_tests", []):
-        if test["name"] == test_name:
-            target_test = test
-            break
-
-    if not target_test:
-        print(
-            json.dumps(
-                {
-                    "success": False,
-                    "error": f"Test '{test_name}' not found in {yaml_file}",
-                }
-            ),
-            flush=True,
-        )
-        return
-
-    model_spec: str = target_test.get("model", "")
-    if "::" not in model_spec:
-        print(
-            json.dumps(
-                {
-                    "success": False,
-                    "error": f"model field '{model_spec}' missing '::' separator",
-                }
-            ),
-            flush=True,
-        )
-        return
-
-    base_model, cte_name = model_spec.split("::", 1)
-    test_hash = hashlib.md5(test_name.encode()).hexdigest()[:6]
-    gen_model_name = f"{base_model}__{cte_name}__{test_hash}"
-
-    # Determine output dirs
-    model_paths = config.get("model-paths", ["models"])
-    gen_models_dir = proj_dir / model_paths[0] / "__cte_tests"
-
-    if (proj_dir / "unit_tests").exists():
-        gen_tests_dir = proj_dir / "unit_tests" / "__cte_tests"
-    else:
-        test_paths = config.get("test-paths", ["tests"])
-        gen_tests_dir = proj_dir / test_paths[0] / "__cte_tests"
-
-    gen_model_path = gen_models_dir / f"{gen_model_name}.sql"
-    gen_test_path = gen_tests_dir / f"{gen_model_name}_unit_tests.yml"
-
-    # Clean any leftovers first
-    if gen_models_dir.exists():
-        shutil.rmtree(gen_models_dir)
-    if gen_tests_dir.exists():
-        shutil.rmtree(gen_tests_dir)
-
-    success = False
-    try:
-        # Find the model SQL file
-        model_file = _cte_find_model_file(base_model, yaml_path, proj_dir, config)
-        if not model_file:
-            print(
-                json.dumps(
-                    {
-                        "success": False,
-                        "error": f"Model file for '{base_model}' not found",
-                    }
-                ),
-                flush=True,
-            )
-            return
-
-        # Generate model + test files
-        if not _cte_generate_model(
-            model_file, cte_name, target_test.get("given", []), gen_model_path
-        ):
-            print(
-                json.dumps({"success": False, "error": "Failed to generate CTE model"}),
-                flush=True,
-            )
-            return
-
-        if not _cte_generate_test(
-            yaml_path, test_name, gen_model_name, gen_model_path, gen_test_path
-        ):
-            print(
-                json.dumps(
-                    {"success": False, "error": "Failed to generate CTE test YAML"}
-                ),
-                flush=True,
-            )
-            return
-
-        # Run the generated unit test
-        success = run_command(
-            dbt, ["test", "-s", gen_model_name], project_dir, profiles_dir
-        )
-
-    finally:
-        # Always clean up generated files
-        if gen_models_dir.exists():
-            shutil.rmtree(gen_models_dir, ignore_errors=True)
-        if gen_tests_dir.exists():
-            shutil.rmtree(gen_tests_dir, ignore_errors=True)
-
-    print(json.dumps({"success": success}), flush=True)
-
-
-# ---------------------------------------------------------------------------
-# End CTE test support
-# ---------------------------------------------------------------------------
-
-
 def main() -> None:
     configure_stdio()
     configure_dbt_env()
@@ -2078,7 +1578,7 @@ def main() -> None:
     profiles_dir = resolve_profiles_dir(project_dir)
 
     # dbt is lazy-loaded — only imported/instantiated when a request that
-    # actually needs it arrives (command, describe_table, run_cte_test).
+    # actually needs it arrives (command, describe_table).
     # This lets the bridge start and serve parse_document / get_column_lineage
     # requests even in Python environments without dbt installed.
     dbt: Any = None
@@ -2142,9 +1642,7 @@ def main() -> None:
                 )
                 continue
             handle_describe_table(request, d, project_dir, profiles_dir)
-        elif "get_columns" in request:
-            handle_get_columns(request)
-        elif "run_cte_test" in request:
+        elif "compile_inline" in request:
             d = get_dbt()
             if d is None:
                 print(
@@ -2152,7 +1650,9 @@ def main() -> None:
                     flush=True,
                 )
                 continue
-            handle_run_cte_test(request, project_dir, profiles_dir, d)
+            handle_compile_inline(request, d, project_dir, profiles_dir)
+        elif "get_columns" in request:
+            handle_get_columns(request)
         elif "command" in request:
             command_args: list = request["command"]
             if not command_args:

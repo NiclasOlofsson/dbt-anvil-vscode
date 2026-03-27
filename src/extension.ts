@@ -4,12 +4,14 @@ import { ServiceContainer } from './types/service-container';
 import { ManifestLoader } from './dbt/manifest-loader';
 import { ManifestIndexer } from './indexing/manifest-indexer';
 import { ManifestWatcher } from './indexing/manifest-watcher';
-import { detectPythonEnvironment } from './dbt/env-detector';
+import { detectPythonEnvironment, detectProfilesDir } from './dbt/env-detector';
 import { BridgeRunner } from './dbt/bridge-runner';
 import { DbtExecutionService, Priority } from './dbt/execution-service';
 import { CompileCache } from './dbt/compile-cache';
 import { CompileCachePersistence } from './dbt/compile-cache-persistence';
 import { DescribeCache } from './dbt/describe-cache';
+import { loadProjectConfig } from './dbt/project-config';
+import { createDatabaseProvider } from './providers/database/database-provider-factory';
 import { ColumnStorePersistence } from './indexing/column-store-persistence';
 import { registerLanguageModelTools } from './tools';
 import { GetColumnLineageTool } from './tools/get-column-lineage';
@@ -34,6 +36,7 @@ import { StatusBarManager } from './views/status-bar';
 import { DbtDiagnosticsProvider } from './providers/diagnostics-provider';
 import { ColumnResolver } from './providers/column-resolver';
 import { VsTestController } from './views/vs-test-controller';
+import { CteTestRunner } from './dbt/cte-test-runner';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
 	// -------- Bootstrap logging & service container --------
@@ -118,6 +121,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// -------- Describe cache (shared across providers and tools) --------
 	const describeCache = new DescribeCache(executionService, manifestIndexer, logger);
 
+	// -------- Database provider (direct warehouse access, bypasses dbt bridge queue) --------
+	const projectConfig = loadProjectConfig(projectDir);
+	const profileName = projectConfig?.profile ?? 'default';
+	const profilesDir = detectProfilesDir(projectDir);
+	const adapterType = manifestIndexer.index?.adapterType ?? 'ansi';
+	const databaseProvider = await createDatabaseProvider(adapterType, profileName, profilesDir, executionService, logger);
+	container.setDatabaseProvider(databaseProvider);
+	describeCache.setProvider(databaseProvider);
+
 	// -------- Status bar --------
 	const statusBar = new StatusBarManager(executionService, logger);
 	context.subscriptions.push(statusBar);
@@ -138,7 +150,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	void vscode.commands.executeCommand('setContext', 'workspaceHasDBT', manifestLoader.manifestExists());
 
 	// -------- Register Copilot language model tools --------
-	registerLanguageModelTools(context, manifestIndexer, executionService, manifestLoader, logger, compileCache);
+	registerLanguageModelTools(context, manifestIndexer, executionService, manifestLoader, logger, compileCache, databaseProvider);
 
 	// -------- Register tree views --------
 	const modelExplorerProvider = new ModelExplorerProvider(manifestIndexer, logger, projectDir);
@@ -165,7 +177,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	);
 
 	// -------- Native VS Code Testing panel --------
-	const vsTestController = new VsTestController(testExplorerProvider, executionService, logger);
+	const cteTestRunner = new CteTestRunner(projectDir, executionService);
+	const vsTestController = new VsTestController(testExplorerProvider, executionService, logger, cteTestRunner);
 	context.subscriptions.push(vsTestController);
 
 	// Refresh views whenever the manifest index is rebuilt (e.g. after dbt parse on save)
