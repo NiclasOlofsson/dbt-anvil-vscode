@@ -53,6 +53,15 @@ const CANCELLABLE_TYPES = new Set<DbtJobType>([
 	'parse', 'compile', 'compile_inline', 'describe', 'scope_columns', 'get_columns', 'column_lineage', 'generate_cte_tests', 'run_cte_test', 'debug',
 ]);
 
+/**
+ * Types where at most one job per unique key may sit in the queue at a time.
+ * When a conflict is found, the higher-priority job survives; on a tie the
+ * incoming job replaces the existing one (latest wins for idempotent ops).
+ * `parse` has no meaningful args so it deduplicates globally.
+ * `compile` deduplicates per selector so two different models can still queue.
+ */
+const STRICT_DEDUP_TYPES = new Set<DbtJobType>(['parse', 'compile']);
+
 const SUPPRESS_WATCHER_TYPES = new Set<DbtJobType>([
 	'describe', 'scope_columns', 'get_columns', 'column_lineage', 'show', 'run_cte_test',
 ]);
@@ -86,6 +95,11 @@ export class DbtExecutionService implements vscode.Disposable {
 		private readonly logger: ILogger,
 	) {}
 
+	/** Dedup key: type alone for arg-less commands, type+args for parameterised ones. */
+	private _jobKey(job: DbtJob): string {
+		return job.args ? job.type + ':' + job.args.join('\0') : job.type;
+	}
+
 	submit(request: DbtJobRequest): Promise<DbtCommandResult> {
 		if (this._disposed) {
 			return Promise.reject(new Error('Execution service is disposed'));
@@ -100,13 +114,32 @@ export class DbtExecutionService implements vscode.Disposable {
 				reject,
 			};
 
-			// Dedup: replace queued job of same type at lower or equal priority
-			const existingIdx = this._queue.findIndex(j => j.type === job.type && j.priority <= job.priority);
-			if (existingIdx !== -1) {
-				const existing = this._queue[existingIdx];
-				this.logger.debug(`Dedup: replacing queued ${existing.type} (id=${existing.id}) with id=${job.id}`);
-				existing.reject(new Error('Superseded by higher-priority job'));
-				this._queue.splice(existingIdx, 1);
+			if (STRICT_DEDUP_TYPES.has(job.type)) {
+				// Strict dedup: at most one job per key in the queue regardless of priority direction.
+				const key = this._jobKey(job);
+				const existingIdx = this._queue.findIndex(j => this._jobKey(j) === key);
+				if (existingIdx !== -1) {
+					const existing = this._queue[existingIdx];
+					if (existing.priority > job.priority) {
+						// Existing has higher priority — drop the incoming job
+						this.logger.debug(`Dedup: dropping ${job.type} (id=${job.id}) — higher-priority job already queued (id=${existing.id})`);
+						reject(new Error('Superseded by higher-priority queued job'));
+						return;
+					}
+					// Incoming same or higher priority — replace existing
+					this.logger.debug(`Dedup: replacing queued ${existing.type} (id=${existing.id}) with id=${job.id}`);
+					existing.reject(new Error('Superseded by higher-priority job'));
+					this._queue.splice(existingIdx, 1);
+				}
+			} else {
+				// Standard dedup: replace a queued same-type job only when it has lower or equal priority
+				const existingIdx = this._queue.findIndex(j => j.type === job.type && j.priority <= job.priority);
+				if (existingIdx !== -1) {
+					const existing = this._queue[existingIdx];
+					this.logger.debug(`Dedup: replacing queued ${existing.type} (id=${existing.id}) with id=${job.id}`);
+					existing.reject(new Error('Superseded by higher-priority job'));
+					this._queue.splice(existingIdx, 1);
+				}
 			}
 
 			// Insert in priority order (higher priority closer to front)
