@@ -1,0 +1,745 @@
+/**
+ * Integration tests for definition-provider alias resolution.
+ *
+ * Uses the real Python bridge to parse SQL — no mocked DocumentModels.
+ * This suite is the canonical replacement for the unit tests in definition-provider.test.ts
+ * which rely on hand-crafted DocumentModels that can drift from what the bridge actually emits.
+ *
+ * What is covered here:
+ *   - Bridge emitting correct CTE / ref / token data for a realistic SQL fixture
+ *   - ParseService.resolveAtPosition: hit-testing a cursor position against the token map
+ *   - resolveAlias: mapping an alias string to its CTE / ref / source target
+ *   - DbtDefinitionProvider.provideDefinition: end-to-end navigation from cursor → location
+ *
+ * What is NOT covered here (known gaps):
+ *   - ref('model') / source('x','y') click navigation (handled by regex, not token-based;
+ *     those code paths are exercised by the regex itself, no token positions involved)
+ *   - Bare column navigation when the column is NOT schema-resolved (cold describe cache)
+ *   - Multi-package ref() returning multiple locations (picker scenario)
+ *   - source() alias resolution (no source() calls in the SQL fixture)
+ *   - resolveAtPosition returning null for a position that has no token
+ *
+ * Requires a Python environment with sqlglot installed (same as bridge-integration tests).
+ */
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import * as path from 'node:path';
+import { BridgeRunner } from '../dbt/bridge-runner';
+import { detectPythonEnvironment } from '../dbt/env-detector';
+import { ParseService } from '../services/parse-service';
+import type { ColumnDefToken, ColumnRefToken, DocumentModel, TableRefToken } from '../services/parse-service';
+import { DbtDefinitionProvider, resolveAlias } from '../providers/definition-provider';
+import * as vscode from 'vscode';
+import { createMockLogger } from './helpers';
+
+const JAFFLE_SHOP = path.join(__dirname, '..', '..', 'samples', 'jaffle_shop');
+const BRIDGE_PY = path.join(__dirname, '..', '..', 'resources', 'bridge', 'bridge.py');
+
+// The SQL under test — mirrors a real warehouse enrichment model.
+// Line numbers are 0-based; use SQL.split('\n') to derive positions.
+const SQL = `with address_with_country as (
+	select *
+	from {{ ref('gold__address') }}
+),
+warehouses_enriched as (
+	select
+		wh.*,
+		addr.street as warehouse_address_street,
+		city as warehouse_address_city,
+		addr.zipcode as warehouse_address_zipcode,
+		addr.countrycode_2char as warehouse_address_country,
+		addr.location_description as warehouse_location_description
+	from {{ ref('gold__warehouse') }} as wh
+	left join address_with_country as addr
+		on
+			wh.gold_warehousekey = addr.gold_warehousekey
+			and addr.isprimaryaddress = true
+			and addr.is_current = true
+			and addr.is_deleted = false
+			and addr.is_valid = true
+	where wh.gold_sourcesystemkey = 'd365'
+),
+raw_orders as (
+	select *
+	from {{ source('raw', 'orders') }}
+)
+select * from warehouses_enriched`;
+
+// Column schema for the two refs in SQL — lets sqlglot qualify() resolve bare columns
+// (e.g. bare `city` → `addr`) even when they come through a SELECT * chain.
+const SQL_SCHEMA: Record<string, Record<string, string>> = {
+	gold__address: {
+		gold_warehousekey: 'TEXT',
+		city: 'TEXT',
+		street: 'TEXT',
+		zipcode: 'TEXT',
+		countrycode_2char: 'TEXT',
+		location_description: 'TEXT',
+		isprimaryaddress: 'BOOLEAN',
+		is_current: 'BOOLEAN',
+		is_deleted: 'BOOLEAN',
+		is_valid: 'BOOLEAN',
+	},
+	gold__warehouse: {
+		gold_warehousekey: 'TEXT',
+		gold_sourcesystemkey: 'TEXT',
+	},
+};
+
+describe('definition-provider integration (real bridge)', () => {
+	let bridge: BridgeRunner;
+	let model: DocumentModel;
+
+	beforeAll(async () => {
+		const env = detectPythonEnvironment(JAFFLE_SHOP);
+		bridge = new BridgeRunner(BRIDGE_PY, JAFFLE_SHOP, env, createMockLogger());
+
+		const result = await bridge.invokeRaw({ parse_document: true, sql: SQL, dialect: 'ansi', schema: SQL_SCHEMA });
+		expect(result.success, 'bridge parse failed').toBe(true);
+
+		const data = result.data as Record<string, unknown>;
+		model = {
+			ctes: (data['ctes'] ?? []) as DocumentModel['ctes'],
+			refs: (data['refs'] ?? []) as DocumentModel['refs'],
+			sources: (data['sources'] ?? []) as DocumentModel['sources'],
+			finalColumns: (data['finalColumns'] ?? []) as DocumentModel['finalColumns'],
+			tokens: (data['tokens'] ?? []) as DocumentModel['tokens'],
+			timing: (data['timing'] ?? { parseMs: 0, totalMs: 0 }) as DocumentModel['timing'],
+		};
+	}, 30_000);
+
+	afterAll(async () => {
+		await bridge.shutdown();
+	});
+
+	// ---- DocumentModel structure ----
+	//
+	// Validates that the Python bridge (sqlglot) produces the raw DocumentModel data
+	// we depend on. These tests are the contract between the bridge output and the
+	// rest of the TypeScript code — if they break, something changed in bridge.py or
+	// sqlglot's behaviour, not in our providers.
+	//
+	// Coverage:
+	//   ✅ CTE names and line spans
+	//   ✅ SELECT * CTE column recording
+	//   ✅ ref() extraction and alias annotation
+	//   ✅ table_ref tokens with alias line/col positions
+	//   ✅ column_ref tokens with qualifier positions (addr.street)
+	//   ✅ bare column resolved to table via schema-aware qualify() (city → addr)
+	//   ✅ column_def output alias tokens (warehouse_address_street)
+	//   ✅ source() table_ref token col/endCol covering the full {{ source('ns','tbl') }} span
+	//   ✅ refs entry enriched position fields (modelCol, modelEndCol, jinjaCol, jinjaEndCol)
+	//   ✅ sources entry enriched position fields (sourceNameCol/EndCol, tableNameCol/EndCol, jinjaCol/EndCol)
+	//
+	// Not covered:
+	//   ❌ wh.* wildcard expansion into individual column_ref tokens
+
+	describe('DocumentModel structure', () => {
+		it('parses three CTEs', () => {
+			expect(model.ctes).toHaveLength(3);
+			const names = model.ctes.map(c => c.name);
+			expect(names).toContain('address_with_country');
+			expect(names).toContain('warehouses_enriched');
+			expect(names).toContain('raw_orders');
+		});
+
+		it('address_with_country CTE has SELECT * column', () => {
+			const awc = model.ctes.find(c => c.name === 'address_with_country')!;
+			expect(awc).toBeDefined();
+			expect(awc.columns.some(c => c.name === '*')).toBe(true);
+		});
+
+		it('warehouses_enriched CTE spans the right lines', () => {
+			const we = model.ctes.find(c => c.name === 'warehouses_enriched')!;
+			expect(we).toBeDefined();
+			// Should start on line 4 (0-based) and close on or after line 21
+			expect(we.line).toBe(4);
+			expect(we.endLine).toBeGreaterThanOrEqual(21);
+		});
+
+		it('parses two refs: gold__address and gold__warehouse', () => {
+			const refNames = model.refs.map(r => r.model);
+			expect(refNames).toContain('gold__address');
+			expect(refNames).toContain('gold__warehouse');
+		});
+
+		it('gold__address ref has no alias, is on line 2, col 9', () => {
+			// Line 2: "\tfrom {{ ref('gold__address') }}"
+			// ref( starts after "\tfrom {{ " → col 9
+			const addr = model.refs.find(r => r.model === 'gold__address')!;
+			expect(addr).toBeDefined();
+			expect(addr.alias).toBeUndefined();
+			expect(addr.line).toBe(2);
+			expect(addr.col).toBe(9);
+		});
+
+		it('gold__warehouse ref has alias wh, is on line 12, col 9', () => {
+			// Line 12: "\tfrom {{ ref('gold__warehouse') }} as wh"
+			// ref( starts after "\tfrom {{ " → col 9
+			const wh = model.refs.find(r => r.model === 'gold__warehouse')!;
+			expect(wh).toBeDefined();
+			expect(wh.alias).toBe('wh');
+			expect(wh.line).toBe(12);
+			expect(wh.col).toBe(9);
+		});
+
+		it('emits table_ref token for gold__warehouse as wh with aliasLine 12', () => {
+			// Line 12: "\tfrom {{ ref('gold__warehouse') }} as wh"
+			// _blank_jinja replaces {{ ref(...) }} in-place preserving offsets, so
+			// 'gold__warehouse' starts at col 6 (the position of the opening {{ ).
+			// endCol covers the full jinja tag {{ ref('gold__warehouse') }} = 28 chars.
+			const tok = model.tokens
+				.filter((t): t is TableRefToken => t.type === 'table_ref')
+				.find(t => t.name === 'gold__warehouse' && t.alias === 'wh');
+			expect(tok).toBeDefined();
+			expect(tok!.line).toBe(12);
+			expect(tok!.col).toBe(6);
+			expect(tok!.endCol).toBe(6 + '{{ ref(\'gold__warehouse\') }}'.length); // 34
+			expect(tok!.aliasLine).toBe(12);
+			expect(tok!.aliasCol).toBe(38);
+			expect(tok!.aliasEndCol).toBe(38 + 'wh'.length);
+		});
+
+		it('emits table_ref token for gold__address (no alias) on line 2', () => {
+			// Line 2: "\tfrom {{ ref('gold__address') }}"
+			// col=6: the {{ starts at col 6. endCol covers the full tag = 26 chars.
+			// Note: qualify() may add an auto-alias equal to the table name; we find by name alone.
+			const tok = model.tokens
+				.filter((t): t is TableRefToken => t.type === 'table_ref')
+				.find(t => t.name === 'gold__address');
+			expect(tok).toBeDefined();
+			expect(tok!.line).toBe(2);
+			expect(tok!.col).toBe(6);
+			expect(tok!.endCol).toBe(6 + '{{ ref(\'gold__address\') }}'.length); // 32
+		});
+
+		it('emits table_ref token for address_with_country as addr with aliasLine 13', () => {
+			// Line 13: "\tleft join address_with_country as addr"
+			// address_with_country is a CTE name (not jinja), so col is its literal position.
+			const tok = model.tokens
+				.filter((t): t is TableRefToken => t.type === 'table_ref')
+				.find(t => t.name === 'address_with_country' && t.alias === 'addr');
+			expect(tok).toBeDefined();
+			expect(tok!.line).toBe(13);
+			expect(tok!.col).toBe(11);
+			expect(tok!.endCol).toBe(11 + 'address_with_country'.length);
+			expect(tok!.aliasLine).toBe(13);
+			expect(tok!.aliasCol).toBe(35);
+			expect(tok!.aliasEndCol).toBe(35 + 'addr'.length);
+		});
+
+		it('emits column_ref token for addr.street on line 7 with correct col range', () => {
+			const tok = model.tokens
+				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
+				.find(t => t.table === 'addr' && t.name === 'street');
+			expect(tok).toBeDefined();
+			expect(tok!.line).toBe(7);
+			expect(tok!.col).toBe(7);
+			expect(tok!.endCol).toBe(7 + 'street'.length);
+			expect(tok!.tableCol).toBe(2);
+			expect(tok!.tableEndCol).toBe(2 + 'addr'.length);
+		});
+
+		it('emits column_ref token for city on line 8 resolved to table addr', () => {
+			const tok = model.tokens
+				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
+				.find(t => t.name === 'city' && t.line === 8);
+			expect(tok).toBeDefined();
+			expect(tok!.line).toBe(8);
+			expect(tok!.col).toBe(2);
+			expect(tok!.endCol).toBe(2 + 'city'.length);
+			expect(tok!.table).toBe('addr');
+		});
+
+		it('emits column_def token for warehouse_address_street alias on line 7', () => {
+			const tok = model.tokens
+				.filter((t): t is ColumnDefToken => t.type === 'column_def')
+				.find(t => t.name === 'warehouse_address_street' && t.line === 7);
+			expect(tok).toBeDefined();
+			expect(tok!.col).toBe(17);
+			expect(tok!.endCol).toBe(17 + 'warehouse_address_street'.length);
+		});
+
+		it('emits table_ref token for raw_orders source() on line 24', () => {
+			// Line 24: "\tfrom {{ source('raw', 'orders') }}"
+			// _blank_jinja replaces {{ source('ns', 'tbl') }} with 'tbl' padded to tag length.
+			// So sqlglot sees 'orders' as the table identifier starting at the '{{' position.
+			// _jinja_ref_end now covers source tags too, so endCol spans the full jinja tag.
+			const tok = model.tokens
+				.filter((t): t is TableRefToken => t.type === 'table_ref')
+				.find(t => t.name === 'orders' && t.line === 24);
+			expect(tok).toBeDefined();
+			expect(tok!.col).toBe(6);
+			expect(tok!.endCol).toBe(6 + '{{ source(\'raw\', \'orders\') }}'.length); // 35
+		});
+
+		it('refs entry for gold__address carries enriched position fields', () => {
+			// Line 2: "\tfrom {{ ref('gold__address') }}"
+			// jinjaCol=6 (the {{), modelCol=14 (the 'g' of gold__address, after ref(')
+			// modelEndCol=27 (exclusive, position of closing '), jinjaEndCol=32
+			const ref = model.refs.find(r => r.model === 'gold__address')!;
+			expect(ref).toBeDefined();
+			expect(ref.jinjaCol).toBe(6);
+			expect(ref.jinjaEndCol).toBe(32);
+			expect(ref.modelCol).toBe(14);
+			expect(ref.modelEndCol).toBe(27);
+		});
+
+		it('sources entry for raw.orders carries enriched position fields', () => {
+			// Line 24: "\tfrom {{ source('raw', 'orders') }}"
+			// jinjaCol=6 ({{), sourceNameCol=17 ('r' of raw), sourceNameEndCol=20 (excl)
+			// tableNameCol=24 ('o' of orders), tableNameEndCol=30 (excl), jinjaEndCol=35
+			const src = model.sources.find(s => s.sourceName === 'raw' && s.tableName === 'orders')!;
+			expect(src).toBeDefined();
+			expect(src.jinjaCol).toBe(6);
+			expect(src.jinjaEndCol).toBe(35);
+			expect(src.sourceNameCol).toBe(17);
+			expect(src.sourceNameEndCol).toBe(20);
+			expect(src.tableNameCol).toBe(24);
+			expect(src.tableNameEndCol).toBe(30);
+		});
+	});
+
+	// ---- ParseService.resolveAtPosition ----
+	//
+	// Tests the hit-testing layer: given a (line, col) cursor position, resolveAtPosition
+	// must return the right kind and token, or null. This is the only way the VS Code
+	// providers know what the user clicked on.
+	//
+	// The key correctness invariant: table_ref alias positions must win over column_ref
+	// qualifier positions, because schema-aware qualify() synthesises column_ref tokens
+	// whose tableCol lands exactly on the alias keyword (discovered bug, now fixed).
+	//
+	// Coverage:
+	//   ✅ table_ref name span → 'table_ref'
+	//   ✅ table_ref alias span → 'table_alias' (for both FROM and JOIN aliases)
+	//   ✅ column_ref qualifier span → 'table_qualifier' (SELECT list)
+	//   ✅ column_ref qualifier span → 'table_qualifier' (ON clause)
+	//   ✅ column_ref column span → 'column' (ON clause, both sides)
+	//   ✅ bare column name span (city on line 8) → 'column' with table resolved
+	//
+	// Not covered:
+	//   ❌ column_def span → 'column_def'
+	//   ❌ position outside all tokens → null
+
+	describe('ParseService.resolveAtPosition', () => {
+		it('resolves address_with_country table name (JOIN, line 13) → table_ref', () => {
+			const tok = model.tokens
+				.filter((t): t is TableRefToken => t.type === 'table_ref')
+				.find(t => t.name === 'address_with_country' && t.alias === 'addr');
+			expect(tok).toBeDefined();
+
+			const resolved = ParseService.resolveAtPosition(model, tok!.line, tok!.col);
+			expect(resolved?.kind).toBe('table_ref');
+			expect(resolved?.token.name).toBe('address_with_country');
+		});
+
+		it('resolves addr alias definition (line 13) → table_alias', () => {
+			const tok = model.tokens
+				.filter((t): t is TableRefToken => t.type === 'table_ref')
+				.find(t => t.alias === 'addr');
+			expect(tok).toBeDefined();
+
+			const resolved = ParseService.resolveAtPosition(model, tok!.aliasLine!, tok!.aliasCol!);
+			expect(resolved?.kind).toBe('table_alias');
+			expect(resolved?.token.name).toBe('address_with_country');
+		});
+
+		it('resolves wh alias definition (line 12) → table_alias', () => {
+			const tok = model.tokens
+				.filter((t): t is TableRefToken => t.type === 'table_ref')
+				.find(t => t.name === 'gold__warehouse' && t.alias === 'wh');
+			expect(tok).toBeDefined();
+
+			const resolved = ParseService.resolveAtPosition(model, tok!.aliasLine!, tok!.aliasCol!);
+			expect(resolved?.kind).toBe('table_alias');
+			expect(resolved?.token.name).toBe('gold__warehouse');
+		});
+
+		it('resolves wh qualifier in wh.gold_warehousekey (ON clause) → table_qualifier', () => {
+			const tok = model.tokens
+				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
+				.find(t => t.name === 'gold_warehousekey' && t.table === 'wh' && t.tableLine === 15);
+			expect(tok).toBeDefined();
+
+			const resolved = ParseService.resolveAtPosition(model, tok!.tableLine!, tok!.tableCol!);
+			expect(resolved?.kind).toBe('table_qualifier');
+			expect((resolved?.token as ColumnRefToken).table).toBe('wh');
+		});
+
+		it('resolves gold_warehousekey column (wh side, ON clause) → column', () => {
+			const tok = model.tokens
+				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
+				.find(t => t.name === 'gold_warehousekey' && t.table === 'wh' && t.line === 15);
+			expect(tok).toBeDefined();
+
+			const resolved = ParseService.resolveAtPosition(model, tok!.line, tok!.col);
+			expect(resolved?.kind).toBe('column');
+			expect((resolved?.token as ColumnRefToken).table).toBe('wh');
+		});
+
+		it('resolves addr qualifier in addr.gold_warehousekey (ON clause) → table_qualifier', () => {
+			const tok = model.tokens
+				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
+				.find(t => t.name === 'gold_warehousekey' && t.table === 'addr' && t.tableLine === 15);
+			expect(tok).toBeDefined();
+
+			const resolved = ParseService.resolveAtPosition(model, tok!.tableLine!, tok!.tableCol!);
+			expect(resolved?.kind).toBe('table_qualifier');
+			expect((resolved?.token as ColumnRefToken).table).toBe('addr');
+		});
+
+		it('resolves gold_warehousekey column (addr side, ON clause) → column', () => {
+			const tok = model.tokens
+				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
+				.find(t => t.name === 'gold_warehousekey' && t.table === 'addr' && t.line === 15);
+			expect(tok).toBeDefined();
+
+			const resolved = ParseService.resolveAtPosition(model, tok!.line, tok!.col);
+			expect(resolved?.kind).toBe('column');
+			expect((resolved?.token as ColumnRefToken).table).toBe('addr');
+		});
+
+		it('resolves addr qualifier in addr.street (SELECT list) → table_qualifier', () => {
+			const tok = model.tokens
+				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
+				.find(t => t.name === 'street' && t.table === 'addr');
+			expect(tok).toBeDefined();
+
+			const resolved = ParseService.resolveAtPosition(model, tok!.tableLine!, tok!.tableCol!);
+			expect(resolved?.kind).toBe('table_qualifier');
+			expect((resolved?.token as ColumnRefToken).table).toBe('addr');
+		});
+
+		it('resolves city (bare column, line 8) → column with table addr', () => {
+			// city has no qualifier in the source SQL; qualify() resolved it to addr.
+			// There is no tableCol span, so only the column name range [col, endCol] matches.
+			const tok = model.tokens
+				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
+				.find(t => t.name === 'city' && t.line === 8);
+			expect(tok).toBeDefined();
+
+			const resolved = ParseService.resolveAtPosition(model, tok!.line, tok!.col + 1);
+			expect(resolved?.kind).toBe('column');
+			expect((resolved?.token as ColumnRefToken).table).toBe('addr');
+		});
+	});
+
+	// ---- resolveAlias: pure function, real DocumentModel, no VS Code ----
+	//
+	// resolveAlias is the lookup that maps an alias string (e.g. 'addr') to what it
+	// actually refers to: a CTE, a ref(), or a source(). It is used by both the
+	// definition provider (_jumpToColumn) and the hover provider.
+	//
+	// It has two modes:
+	//   - Scoped (atLine provided): prefers aliases defined in the enclosing CTE body,
+	//     so inner aliases shadow outer ones.
+	//   - Global (no atLine): falls back to the whole-document alias table.
+	//
+	// Coverage:
+	//   ✅ CTE alias scoped to enclosing CTE body (addr → address_with_country at line 15)
+	//   ✅ ref() alias scoped to enclosing CTE body (wh → gold__warehouse at line 15)
+	//   ✅ CTE resolved by its own name globally (address_with_country → CTE)
+	//   ✅ CTE alias resolved globally without atLine (addr → address_with_country)
+	//   ✅ unknown alias → undefined
+	//
+	// Not covered:
+	//   ❌ source() alias resolution (no source() calls in the SQL fixture)
+	//   ❌ alias that exists in outer scope but is shadowed by inner scope
+
+	describe('resolveAlias', () => {
+		it('resolves "addr" inside warehouses_enriched (line 15) → CTE address_with_country', () => {
+			const result = resolveAlias(model, 'addr', 15);
+			expect(result?.kind).toBe('cte');
+			expect(result?.kind === 'cte' && result.cte.name).toBe('address_with_country');
+		});
+
+		it('resolves "wh" inside warehouses_enriched (line 15) → ref gold__warehouse', () => {
+			const result = resolveAlias(model, 'wh', 15);
+			expect(result?.kind).toBe('ref');
+			expect(result?.kind === 'ref' && result.ref.model).toBe('gold__warehouse');
+		});
+
+		it('resolves "address_with_country" by name → CTE', () => {
+			const result = resolveAlias(model, 'address_with_country');
+			expect(result?.kind).toBe('cte');
+			expect(result?.kind === 'cte' && result.cte.name).toBe('address_with_country');
+		});
+
+		it('resolves "addr" without atLine → CTE (global cteTok fallback)', () => {
+			const result = resolveAlias(model, 'addr');
+			expect(result?.kind).toBe('cte');
+			expect(result?.kind === 'cte' && result.cte.name).toBe('address_with_country');
+		});
+
+		it('returns undefined for unknown alias', () => {
+			expect(resolveAlias(model, 'nonexistent', 15)).toBeUndefined();
+		});
+	});
+
+	// ---- DbtDefinitionProvider.provideDefinition — end-to-end with real parsed model ----
+	//
+	// Full round-trip tests: cursor position → provider → vscode.Location (or undefined).
+	// The indexer is mocked (no real manifest), so ref() / source() lookups return nothing.
+	// The parseService mock returns the real `model` parsed by the bridge in beforeAll.
+	//
+	// Navigation rules under test:
+	//   table_qualifier  → jump to the alias definition site (same file)
+	//   table_alias      → undefined (you are already on the definition)
+	//   column_def       → undefined (you are already on the definition)
+	//   column (qualified) → follow alias → CTE → find column → navigate to its definition
+	//                        if CTE has SELECT *, navigate to the * itself
+	//
+	// Coverage:
+	//   ✅ qualifier 'wh' → alias site on line 12
+	//   ✅ qualifier 'addr' → alias site on line 13
+	//   ✅ alias definition site 'addr' → undefined
+	//   ✅ alias definition site 'wh' → undefined
+	//   ✅ column_def 'warehouse_address_street' → undefined
+	//   ✅ qualified column addr.street → SELECT * on line 1 (stays in same file)
+	//   ✅ bare column city (schema-resolved to addr) → SELECT * on line 1
+	//   ✅ {{ source('raw', 'orders') }} click → navigates to sources.yml (via regex path)
+	//
+	// Not covered:
+	//   ❌ source() via token path (case 'table_ref' currently falls through to _resolveRef;
+	//      fixing it requires storing sourceName in the table_ref token or a second lookup)
+
+	describe('DbtDefinitionProvider.provideDefinition', () => {
+		const cancelToken: vscode.CancellationToken = { isCancellationRequested: false, onCancellationRequested: vi.fn() };
+
+		// makeProvider constructs the real DbtDefinitionProvider with three fake dependencies:
+		//   indexer    — stands in for the dbt manifest; findModelsByName returns a path only
+		//                when explicitly given one via modelPaths (default: empty → not found).
+		//                sourcePaths maps 'ns.tbl' keys to { uid, schemaYml } for source() lookups.
+		//   parseService — skips a second bridge call; returns the real `model` already parsed
+		//                  in beforeAll (schema-resolved tokens included).
+		//   loader     — only used for projectDir when building file paths.
+		// The provider itself and all its internal logic (resolveToken, jumpToCte, etc.) run for real.
+		function makeProvider(
+			modelPaths: Record<string, string> = {},
+			sourcePaths: Record<string, { uid: string; schemaYml: string }> = {},
+		) {
+			const indexer = {
+				index: {
+					adapterType: 'duckdb',
+					models: new Map(),
+					sources: new Map(Object.values(sourcePaths).map(v => [v.uid, {}])),
+					macros: new Map(),
+					nodesByName: new Map(Object.entries(sourcePaths).map(([key, v]) => [key, [v.uid]])),
+				},
+				findModelsByName: (name: string) => {
+					const p = modelPaths[name];
+					return p ? [{ path: p }] : [];
+				},
+				getRawNode: (uid: string) => {
+					const entry = Object.values(sourcePaths).find(v => v.uid === uid);
+					return entry ? { original_file_path: entry.schemaYml } : null;
+				},
+				getColumns: () => null,
+				setColumns: vi.fn(),
+				buildSchemaMapping: () => ({}),
+			};
+			const parseService = {
+				getDocumentModel: vi.fn().mockResolvedValue(model),
+				evict: vi.fn(),
+			};
+			const loader = { projectDir: '/project' };
+			return new DbtDefinitionProvider(indexer as never, loader as never, createMockLogger(), parseService as never);
+		}
+
+		// makeDoc fakes a vscode.TextDocument — the VS Code document API is not available
+		// outside the extension host, so we provide just the methods provideDefinition uses:
+		// lineAt() for reading line text, uri for constructing Locations, and getText() for
+		// the SQL content. The fileName is arbitrary but .sql so languageId matches.
+		function makeDoc() {
+			const lines = SQL.split('\n');
+			return {
+				languageId: 'jinja-sql',
+				fileName: '/project/models/mart.sql',
+				getText: () => SQL,
+				lineAt: (n: number) => ({ text: lines[n] ?? '', range: new vscode.Range(n, 0, n, (lines[n] ?? '').length) }),
+				positionAt: () => new vscode.Position(0, 0),
+				getWordRangeAtPosition: () => undefined,
+				lineCount: lines.length,
+				uri: vscode.Uri.file('/project/models/mart.sql'),
+				version: 1,
+			} as unknown as vscode.TextDocument;
+		}
+
+		it('wh qualifier → aliasLine of wh definition (line 12)', async () => {
+			const doc = makeDoc();
+			// resolveAtPosition on 'wh.' returns table_qualifier with table='wh'
+			// find the token for wh.gold_warehousekey in the ON clause (line 15)
+			const whQualTok = model.tokens
+				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
+				.find(t => t.table === 'wh' && t.name === 'gold_warehousekey')!;
+			expect(whQualTok).toBeDefined();
+
+			const whRef = model.tokens
+				.filter((t): t is TableRefToken => t.type === 'table_ref')
+				.find(t => t.alias === 'wh')!;
+
+			// click on the qualifier part (the 'wh' before the dot)
+			const result = await makeProvider().provideDefinition(doc, new vscode.Position(whQualTok.tableLine!, whQualTok.tableCol! + 1), cancelToken);
+
+			expect(result).toBeDefined();
+			const loc = (Array.isArray(result) ? result[0] : result) as vscode.Location;
+			expect(loc.uri.fsPath).toContain('mart');
+			expect(loc.range.start.line).toBe(whRef.aliasLine);
+		});
+
+		it('addr qualifier → aliasLine of addr definition (line 13)', async () => {
+			const doc = makeDoc();
+			const addrQualTok = model.tokens
+				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
+				.find(t => t.table === 'addr' && t.tableLine !== undefined)!;
+			expect(addrQualTok).toBeDefined();
+
+			const addrRef = model.tokens
+				.filter((t): t is TableRefToken => t.type === 'table_ref')
+				.find(t => t.alias === 'addr')!;
+
+			const result = await makeProvider().provideDefinition(doc, new vscode.Position(addrQualTok.tableLine!, addrQualTok.tableCol! + 1), cancelToken);
+
+			expect(result).toBeDefined();
+			const loc = (Array.isArray(result) ? result[0] : result) as vscode.Location;
+			expect(loc.uri.fsPath).toContain('mart');
+			expect(loc.range.start.line).toBe(addrRef.aliasLine);
+		});
+
+		it('clicking on addr alias definition → undefined (no ctrl+click on definition site)', async () => {
+			const doc = makeDoc();
+			const addrRef = model.tokens
+				.filter((t): t is TableRefToken => t.type === 'table_ref')
+				.find(t => t.alias === 'addr')!;
+			expect(addrRef).toBeDefined();
+
+			const result = await makeProvider().provideDefinition(doc, new vscode.Position(addrRef.aliasLine!, addrRef.aliasCol! + 1), cancelToken);
+
+			expect(result).toBeUndefined();
+		});
+
+		it('clicking on wh alias definition (FROM driver) → undefined (no ctrl+click on definition site)', async () => {
+			const doc = makeDoc();
+			const whRef = model.tokens
+				.filter((t): t is TableRefToken => t.type === 'table_ref')
+				.find(t => t.alias === 'wh')!;
+			expect(whRef).toBeDefined();
+
+			const result = await makeProvider().provideDefinition(doc, new vscode.Position(whRef.aliasLine!, whRef.aliasCol! + 1), cancelToken);
+
+			expect(result).toBeUndefined();
+		});
+
+		it('clicking on warehouse_address_street column alias → undefined (definition site)', async () => {
+			const doc = makeDoc();
+			const defTok = model.tokens
+				.filter((t): t is ColumnDefToken => t.type === 'column_def')
+				.find(t => t.name === 'warehouse_address_street' && t.line === 7)!;
+			expect(defTok).toBeDefined();
+
+			const result = await makeProvider().provideDefinition(doc, new vscode.Position(defTok.line, defTok.col + 1), cancelToken);
+
+			expect(result).toBeUndefined();
+		});
+
+		it('addr.street → * on line 1 in the current file (not gold__address)', async () => {
+			// Line 7: "\t\taddr.street as warehouse_address_street,"
+			// addr is a CTE alias for address_with_country which does SELECT *
+			// Correct: navigate to the * on line 1, stay in the current file
+			const doc = makeDoc();
+			const streetTok = model.tokens
+				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
+				.find(t => t.name === 'street' && t.table === 'addr')!;
+			expect(streetTok).toBeDefined();
+
+			const result = await makeProvider().provideDefinition(doc, new vscode.Position(streetTok.line, streetTok.col + 1), cancelToken);
+
+			expect(result).toBeDefined();
+			const loc = (Array.isArray(result) ? result[0] : result) as vscode.Location;
+			expect(loc.uri.fsPath).toContain('mart');
+			expect(loc.range.start.line).toBe(1); // line 1: "\tselect *"
+		});
+
+		it('clicking on {{ ref(\'gold__warehouse\') }} → resolves to model file path', async () => {
+			// Line 12: "\tfrom {{ ref('gold__warehouse') }} as wh"
+			// Click anywhere inside the jinja tag — the table_ref token now spans the full tag.
+			// Indexer is given a fake model path so _resolveRef returns a Location.
+			const doc = makeDoc();
+			const tok = model.tokens
+				.filter((t): t is TableRefToken => t.type === 'table_ref')
+				.find(t => t.name === 'gold__warehouse')!;
+			expect(tok).toBeDefined();
+
+			const fakeModelPath = '/project/models/gold__warehouse.sql';
+			// Click in the middle of the jinja tag span
+			const clickCol = Math.floor((tok.col + tok.endCol) / 2);
+			const result = await makeProvider({ gold__warehouse: fakeModelPath })
+				.provideDefinition(doc, new vscode.Position(tok.line, clickCol), cancelToken);
+
+			expect(result).toBeDefined();
+			const loc = (Array.isArray(result) ? result[0] : result) as vscode.Location;
+			expect(loc.uri.fsPath).toContain('gold__warehouse');
+			expect(loc.range.start.line).toBe(0);
+		});
+
+		it('clicking on address_with_country in JOIN → jumps to CTE definition (line 0)', async () => {
+			// Line 13: "\tleft join address_with_country as addr"
+			// address_with_country is a CTE — _jumpToCte should navigate to line 0.
+			const doc = makeDoc();
+			const tok = model.tokens
+				.filter((t): t is TableRefToken => t.type === 'table_ref')
+				.find(t => t.name === 'address_with_country')!;
+			expect(tok).toBeDefined();
+
+			const result = await makeProvider()
+				.provideDefinition(doc, new vscode.Position(tok.line, tok.col + 1), cancelToken);
+
+			expect(result).toBeDefined();
+			const loc = (Array.isArray(result) ? result[0] : result) as vscode.Location;
+			expect(loc.uri.fsPath).toContain('mart');
+			expect(loc.range.start.line).toBe(0); // CTE is defined at line 0
+		});
+
+		it('city (bare column, schema-resolved to addr) → SELECT * on line 1', async () => {
+			// Line 8: "\t\tcity as warehouse_address_city," — city has no qualifier in the
+			// source SQL, but qualify() resolved it to addr. resolveAtPosition returns
+			// kind: 'column' (no tableCol span), then _jumpToColumn follows addr →
+			// CTE address_with_country → SELECT * on line 1. Same destination as addr.street.
+			const doc = makeDoc();
+			const cityTok = model.tokens
+				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
+				.find(t => t.name === 'city' && t.line === 8)!;
+			expect(cityTok).toBeDefined();
+
+			const result = await makeProvider().provideDefinition(doc, new vscode.Position(cityTok.line, cityTok.col + 1), cancelToken);
+
+			expect(result).toBeDefined();
+			const loc = (Array.isArray(result) ? result[0] : result) as vscode.Location;
+			expect(loc.uri.fsPath).toContain('mart');
+			expect(loc.range.start.line).toBe(1); // SELECT * on line 1
+		});
+
+		it('clicking on {{ source(\'raw\', \'orders\') }} \u2192 navigates to sources.yml', async () => {
+			// Line 24: "\tfrom {{ source('raw', 'orders') }}"
+			// Only the table name identifier ('orders', col 24-30) is clickable.
+			// The provider checks model.sources entries by tableNameCol/tableNameEndCol,
+			// then calls _resolveSource('raw', 'orders').
+			const doc = makeDoc();
+			const src = model.sources.find(s => s.sourceName === 'raw' && s.tableName === 'orders')!;
+			expect(src).toBeDefined();
+
+			// Click in the middle of 'orders' (the clickable table name identifier).
+			const clickCol = Math.floor((src.tableNameCol! + src.tableNameEndCol!) / 2);
+			const result = await makeProvider(
+				{},
+				{ 'raw.orders': { uid: 'source.raw.orders', schemaYml: 'models/sources.yml' } },
+			).provideDefinition(doc, new vscode.Position(src.line, clickCol), cancelToken);
+
+			expect(result).toBeDefined();
+			const loc = (Array.isArray(result) ? result[0] : result) as vscode.Location;
+			expect(loc.uri.fsPath).toContain('sources');
+			expect(loc.range.start.line).toBe(0);
+		});
+	});
+
+});

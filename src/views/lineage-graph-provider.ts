@@ -41,6 +41,7 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 	private _upstreamDepth = 2;
 	private _downstreamDepth = 1;
 	private _enrichGeneration = 0;
+	private readonly _depthPerModel = new Map<string, { upstream: number; downstream: number }>();
 	private _showTests: boolean;
 	private _columnLineageTool?: GetColumnLineageTool;
 	private _executionService?: DbtExecutionService;
@@ -91,8 +92,23 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 
 	setFocusModel(uniqueId: string): void {
 		if (this._focusModel === uniqueId) return;
+		// Save depths for the model we're leaving so they're restored on return
+		if (this._focusModel) {
+			this._depthPerModel.set(this._focusModel, { upstream: this._upstreamDepth, downstream: this._downstreamDepth });
+		}
 		this._focusModel = uniqueId;
+		const savedDepths = this._depthPerModel.get(uniqueId);
+		this._upstreamDepth = savedDepths?.upstream ?? 2;
+		this._downstreamDepth = savedDepths?.downstream ?? 1;
 		this._updateGraph();
+	}
+
+	/** Called when a file is closed in the editor — clears its persisted lineage state. */
+	notifyFileClosed(filePath: string): void {
+		const uid = this.indexer.findModelByFilePath(filePath);
+		if (!uid) return;
+		this._depthPerModel.delete(uid);
+		void this._view?.webview.postMessage({ command: 'clearFileState', focusId: uid });
 	}
 
 	/** Called when the manifest index is rebuilt so the graph reflects fresh data. */
@@ -649,6 +665,8 @@ svg.edges polygon {
 	let lastHighlightMsg = null;
 	const expandedCards = new Set();
 	const nodeInitialTops = new Map();
+	/* Per-model saved state: expanded cards, column trace, pan/zoom */
+	const savedStates = new Map();
 
 	/* ── Pan & Zoom ── */
 	function applyTransform() {
@@ -657,7 +675,11 @@ svg.edges polygon {
 	}
 
 	wrapEl.addEventListener('pointerdown', function(e) {
-		if (e.target.closest('.card')) return;
+		/* Use composedPath for robustness — scrollbar clicks in some webview environments
+		 * report e.target as the canvas/wrapEl rather than the col-list element itself. */
+		const path = e.composedPath ? e.composedPath() : [e.target];
+		const insideCard = path.some(function(el) { return el.classList && el.classList.contains('card'); });
+		if (insideCard) return;
 		isPanning = true;
 		startX = e.clientX - panX;
 		startY = e.clientY - panY;
@@ -674,8 +696,29 @@ svg.edges polygon {
 		isPanning = false;
 		wrapEl.classList.remove('dragging');
 	});
+	wrapEl.addEventListener('pointercancel', function() {
+		isPanning = false;
+		wrapEl.classList.remove('dragging');
+	});
 	wrapEl.addEventListener('wheel', function(e) {
+		/* Always prevent the webview document from scrolling — if we let the default
+		 * happen over a col-list the iframe body shifts, corrupting getBoundingClientRect
+		 * and making subsequent zoom anchors jump wildly. */
 		e.preventDefault();
+		/* When over a col-list, forward the delta to the list's own scrollTop manually.
+		 * Normalise: deltaMode 0 = pixels (scale down), 1 = lines, 2 = pages. */
+		const colList = e.target.closest && e.target.closest('.col-list');
+		if (colList) {
+			const LINE_HEIGHT = 24;
+			let px;
+			if (e.deltaMode === 1) { px = e.deltaY * LINE_HEIGHT; }
+			else if (e.deltaMode === 2) { px = e.deltaY * colList.clientHeight; }
+			else { px = e.deltaY * 0.25; }  /* pixel mode — quarter the native delta */
+			colList.scrollTop += px;
+			return;
+		}
+		/* Don't zoom if a pan drag is active — the two conflict and cause erratic jumps */
+		if (isPanning) return;
 		const rect = wrapEl.getBoundingClientRect();
 		const mx = e.clientX - rect.left;
 		const my = e.clientY - rect.top;
@@ -689,10 +732,31 @@ svg.edges polygon {
 
 	/* ── Render Graph ── */
 	function setGraph(data) {
+		const focusChanged = data.focusId !== lastFocusId;
+
+		if (focusChanged && lastFocusId) {
+			/* Save view state for the model we're navigating away from */
+			savedStates.set(lastFocusId, {
+				expandedCards: new Set(expandedCards),
+				lastHighlightMsg: lastHighlightMsg,
+				panX: panX, panY: panY, scale: scale,
+			});
+		}
+
+		const restoredState = focusChanged ? savedStates.get(data.focusId) : null;
+		if (focusChanged) {
+			expandedCards.clear();
+			lastHighlightMsg = null;
+			if (restoredState) {
+				for (const id of restoredState.expandedCards) expandedCards.add(id);
+				lastHighlightMsg = restoredState.lastHighlightMsg;
+			}
+		}
+
 		/* When depth changes (same focus model), preserve the focus node's screen position.
 		 * Capture where the focus node currently sits on screen before replacing graphData. */
 		let anchorScreenX = null, anchorScreenY = null, anchorNewNode = null;
-		if (graphData && data.focusId === lastFocusId) {
+		if (graphData && !focusChanged) {
 			const oldNode = graphData.nodes.find(function(n) { return n.id === data.focusId; });
 			if (oldNode) {
 				anchorScreenX = oldNode.x * scale + panX;
@@ -761,12 +825,19 @@ svg.edges polygon {
 
 		/* Only fit to view when switching to a different model; preserve zoom/pan
 		 * when the same model re-renders (e.g. column enrichment completing). */
-		const focusChanged = data.focusId !== lastFocusId;
 		lastFocusId = data.focusId;
 		if (focusChanged) {
-			expandedCards.clear();
-			lastHighlightMsg = null;
-			fitToView(data);
+			if (restoredState) {
+				/* Returning to a previously-viewed model: restore pan/zoom and relayout
+				 * expanded cards after the browser has had a chance to reflow. */
+				panX = restoredState.panX;
+				panY = restoredState.panY;
+				scale = restoredState.scale;
+				applyTransform();
+				requestAnimationFrame(function() { relayoutAfterToggle(); });
+			} else {
+				fitToView(data);
+			}
 		} else if (anchorNewNode !== null) {
 			/* Depth changed: keep focus node at the same screen position, same zoom. */
 			panX = anchorScreenX - anchorNewNode.x * scale;
@@ -875,7 +946,8 @@ svg.edges polygon {
 			}
 		}
 		drawEdges(graphData);
-		redrawColumnEdges();
+		/* Defer column edge redraw one frame so browser reflows card heights first */
+		requestAnimationFrame(redrawColumnEdges);
 	}
 
 	/* ── Event Delegation ── */
@@ -910,6 +982,14 @@ svg.edges polygon {
 		}
 	});
 
+	/* Redraw column edges on col-list scroll so the line tracks the scrolled position.
+	 * Scroll events don't bubble, so use capture phase on the canvas container. */
+	canvas.addEventListener('scroll', function(e) {
+		if (e.target.classList && e.target.classList.contains('col-list')) {
+			requestAnimationFrame(redrawColumnEdges);
+		}
+	}, true);
+
 	/* ── Controls ── */
 	document.getElementById('up-inc').addEventListener('click', function() {
 		vscode.postMessage({ command: 'incrementUpstream' });
@@ -933,6 +1013,7 @@ svg.edges polygon {
 		if (msg.command === 'highlightColumns') highlightColumns(msg);
 		if (msg.command === 'updateColumns') updateColumns(msg);
 		if (msg.command === 'columnLineageStatus') showStatus(msg);
+		if (msg.command === 'clearFileState') savedStates.delete(msg.focusId);
 	});
 
 	function showStatus(msg) {
@@ -1004,6 +1085,10 @@ svg.edges polygon {
 			'</div>';
 		}
 		colList.innerHTML = colHtml;
+		/* If this card is already expanded its height just changed — re-stack sibling cards */
+		if (expandedCards.has(msg.nodeId)) {
+			relayoutAfterToggle();
+		}
 		redrawColumnEdges();
 	}
 
@@ -1023,6 +1108,19 @@ svg.edges polygon {
 			const el = canvas.querySelector(sel);
 			if (el) {
 				el.classList.add('highlighted');
+				/* Scroll the col-list to reveal the highlighted item WITHOUT calling
+				 * scrollIntoView — that can propagate to the webview iframe and shift
+				 * wrapEl.getBoundingClientRect(), breaking the wheel zoom anchor. */
+				const revealList = el.closest('.col-list');
+				if (revealList) {
+					const elTop = el.offsetTop;
+					const elBottom = elTop + el.offsetHeight;
+					if (elTop < revealList.scrollTop) {
+						revealList.scrollTop = elTop;
+					} else if (elBottom > revealList.scrollTop + revealList.clientHeight) {
+						revealList.scrollTop = elBottom - revealList.clientHeight;
+					}
+				}
 				highlightedEls.push({ model: c.model, column: c.column, el: el });
 				const colList = el.closest('.col-list');
 				if (colList && colList.style.display === 'none') {
@@ -1036,35 +1134,76 @@ svg.edges polygon {
 		}
 
 		if (graphData) {
-			drawEdges(graphData);
-			drawColumnEdges(highlightedEls, msg.columnEdges || []);
+			/* Defer everything one frame so the browser reflows expanded col-lists first.
+			 * Reading card.offsetHeight before reflow returns stale collapsed heights
+			 * causing relayoutAfterToggle to stack cards at wrong positions. */
+			requestAnimationFrame(function() {
+				relayoutAfterToggle();
+				/* relayoutAfterToggle itself defers redrawColumnEdges via rAF — that will
+				 * pick up lastHighlightMsg.  But we also need a second frame here to let
+				 * relayoutAfterToggle's own DOM writes (card.style.top) settle before
+				 * we sample positions for the column edges. */
+				requestAnimationFrame(function() {
+					drawEdges(graphData);
+					drawColumnEdges(highlightedEls, msg.columnEdges || []);
+				});
+			});
 		}
 	}
 
 	function drawColumnEdges(highlightedEls, columnEdges) {
 		if (highlightedEls.length < 2 || !graphData || !columnEdges.length) return;
 
+		const CARD_W = 180;
 		const elByKey = {};
 		for (const h of highlightedEls) {
 			elByKey[h.model + '\x00' + h.column] = h;
 		}
+
+		const nodeMap = {};
+		for (const n of graphData.nodes) nodeMap[n.id] = n;
 
 		for (const edge of columnEdges) {
 			const sc = elByKey[edge.sourceModel + '\x00' + edge.sourceColumn];
 			const tc = elByKey[edge.targetModel + '\x00' + edge.targetColumn];
 			if (!sc || !tc) continue;
 
-			const srcRect = sc.el.getBoundingClientRect();
-			const tgtRect = tc.el.getBoundingClientRect();
-			const canvasRect = canvas.getBoundingClientRect();
+			const srcNode = nodeMap[sc.model];
+			const tgtNode = nodeMap[tc.model];
+			if (!srcNode || !tgtNode) continue;
 
-			/* Convert screen coords to canvas-local coords */
-			const x1 = (srcRect.right - canvasRect.left) / scale;
-			const y1 = (srcRect.top + srcRect.height / 2 - canvasRect.top) / scale;
-			const x2 = (tgtRect.left - canvasRect.left) / scale;
-			const y2 = (tgtRect.top + tgtRect.height / 2 - canvasRect.top) / scale;
+			/* Canvas-local Y of an element — works entirely in canvas coordinates.
+			 * card.style.top is set by setGraph/relayoutAfterToggle in canvas-local px.
+			 * el.offsetTop is offset from card top (col-list is position:static so card
+			 * is the offsetParent). Subtract colList.scrollTop because the col-list has
+			 * max-height + overflow-y:auto — the element may be scrolled out of view.
+			 * If the element is outside the col-list's visible window, clamp Y to the
+			 * visible edge so the line enters/exits at the list boundary. */
+			function toCanvasY(el) {
+				if (el.classList.contains('card')) {
+					return parseInt(el.style.top) + el.offsetHeight / 2;
+				}
+				const card = el.closest('.card');
+				const colList = el.closest('.col-list');
+				if (!card) return 0;
+				const cardTop = parseInt(card.style.top);
+				if (!colList) return cardTop + el.offsetTop + el.offsetHeight / 2;
+				/* el.offsetTop is relative to the card (nearest positioned ancestor),
+				 * so it already includes colList.offsetTop. Subtract scrollTop to get
+				 * the visible Y within the card. */
+				const visY = el.offsetTop - colList.scrollTop + el.offsetHeight / 2;
+				const listTop = colList.offsetTop;
+				const listBottom = listTop + colList.clientHeight;
+				return cardTop + Math.max(listTop, Math.min(listBottom, visY));
+			}
+
+			const x1 = srcNode.x + CARD_W / 2;
+			const y1 = toCanvasY(sc.el);
+
+			const x2 = tgtNode.x - CARD_W / 2;
+			const y2 = toCanvasY(tc.el);
+
 			const cx = (x1 + x2) / 2;
-
 			const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
 			path.setAttribute('d', 'M' + x1 + ',' + y1 + ' C' + cx + ',' + y1 + ' ' + cx + ',' + y2 + ' ' + x2 + ',' + y2);
 			path.setAttribute('class', 'col-edge');
@@ -1091,6 +1230,9 @@ svg.edges polygon {
 				if (card) highlightedEls.push({ model: c.model, column: c.column, el: card });
 			} else {
 				el.classList.add('highlighted');
+				/* Do NOT call scrollIntoView here — this function is called from
+				 * the col-list scroll listener, so calling scrollIntoView would
+				 * fight the user's scroll and/or trigger an infinite scroll loop. */
 				highlightedEls.push({ model: c.model, column: c.column, el: el });
 			}
 		}

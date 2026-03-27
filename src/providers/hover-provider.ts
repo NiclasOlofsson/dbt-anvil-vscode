@@ -62,13 +62,16 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 			}
 		}
 
-		// Token-based resolution: CTE names, columns, table aliases
+		// Token-based resolution: CTE names, columns, table aliases.
+		// Returns null (not undefined) when the AST recognised the token but had
+		// nothing to show — in that case skip the fallback to avoid spurious matches.
 		if (this.parseService) {
 			const tokenHover = await this._hoverToken(document, position, token);
-			if (tokenHover) return tokenHover;
+			if (tokenHover !== undefined) return tokenHover ?? undefined;
 		}
 
-		// Fallback: column hover via alias resolution when no token match
+		// Fallback: column hover via alias resolution when cursor is on an
+		// unrecognised word (AST returned no token for this position).
 		if (this.columnResolver) {
 			return this._hoverColumnFallback(document, position, line, token);
 		}
@@ -179,17 +182,25 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 
 	// ---- Token-based hover (AST position resolution) ----
 
+	// Returns:
+	//   Hover  — show this tooltip
+	//   null   — AST recognised the token but has nothing to show; suppress fallback
+	//   undefined — AST found no token here; caller may run the generic fallback
 	private async _hoverToken(
 		document: vscode.TextDocument,
 		position: vscode.Position,
 		token: vscode.CancellationToken,
-	): Promise<vscode.Hover | undefined> {
+	): Promise<vscode.Hover | null | undefined> {
 		const dialect = this.indexer.index?.adapterType ?? 'ansi';
 		const model = await this.parseService!.getDocumentModel(document, dialect);
 		if (token.isCancellationRequested || !model) return undefined;
 
 		const resolved = ParseService.resolveAtPosition(model, position.line, position.character);
-		if (!resolved) return undefined;
+		if (!resolved) {
+			this.logger.debug(`Hover: no token at ${position.line}:${position.character} (${model.tokens.length} tokens in model)`);
+			return undefined;
+		}
+		this.logger.debug(`Hover: token at ${position.line}:${position.character} → kind='${resolved.kind}' name='${resolved.token.name}'`);
 
 		switch (resolved.kind) {
 			case 'table_ref': {
@@ -200,7 +211,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 					|| c.alias?.toLowerCase() === name.toLowerCase(),
 				);
 				if (cte) return this._buildCteHover(cte);
-				return undefined;
+				return null;
 			}
 			case 'table_alias': {
 				// Alias definition in FROM/JOIN (e.g. the `o` in `FROM orders o`)
@@ -210,7 +221,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 					|| c.alias?.toLowerCase() === name.toLowerCase(),
 				);
 				if (cte) return this._buildCteHover(cte);
-				return undefined;
+				return null;
 			}
 			case 'table_qualifier': {
 				// Alias prefix of a column ref (e.g. the `o` in `o.order_id`)
@@ -221,7 +232,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 					const cols = aliases[alias] ?? aliases[alias.toLowerCase()];
 					if (cols) return this._buildAliasHover(alias, cols);
 				}
-				return undefined;
+				return null;
 			}
 			case 'column': {
 				// Column reference — show column info with source
@@ -230,9 +241,16 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 					const aliases = await this.columnResolver.getScopeAliases(document, token);
 					if (token.isCancellationRequested) return undefined;
 					const cols = aliases[colToken.table] ?? aliases[colToken.table.toLowerCase()];
+					this.logger.debug(`Hover: column '${colToken.table}.${colToken.name}' — aliases has '${colToken.table}': ${cols ? `[${cols.join(', ')}]` : 'not found'} (${Object.keys(aliases).length} aliases total)`);
 					if (cols && cols.some(c => c.toLowerCase() === colToken.name.toLowerCase())) {
 						return this._buildColumnHover(colToken.name, colToken.table);
 					}
+					// Qualified column whose qualifier wasn't resolved — suppress fallback
+					// to avoid spurious matches from unrelated tables in the alias map.
+					return null;
+				} else if (colToken.table) {
+					this.logger.debug(`Hover: column '${colToken.table}.${colToken.name}' — no columnResolver configured`);
+					return null;
 				}
 				// Bare column (no table qualifier) — search all aliases
 				if (!colToken.table && this.columnResolver) {
@@ -253,7 +271,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 						);
 					}
 				}
-				return undefined;
+				return null;
 			}
 		}
 	}

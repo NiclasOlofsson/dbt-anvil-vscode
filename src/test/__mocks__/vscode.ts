@@ -93,10 +93,15 @@ export class Range {
 }
 
 export class Location {
+	public readonly range: Range;
 	constructor(
 		public readonly uri: Uri,
-		public readonly range: Range | Position,
-	) {}
+		rangeOrPosition: Range | Position,
+	) {
+		this.range = rangeOrPosition instanceof Position
+			? new Range(rangeOrPosition, rangeOrPosition)
+			: rangeOrPosition;
+	}
 }
 
 export class LanguageModelTextPart {
