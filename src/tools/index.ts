@@ -4,6 +4,7 @@ import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { DbtExecutionService } from '../dbt/execution-service';
 import type { ManifestLoader } from '../dbt/manifest-loader';
 import type { CompileCache } from '../dbt/compile-cache';
+import type { DatabaseProvider } from '../providers/database/database-provider';
 import { RunModelsTool } from './run-models';
 import { TestModelsTool } from './test-models';
 import { BuildModelsTool } from './build-models';
@@ -26,6 +27,7 @@ export function registerLanguageModelTools(
 	loader: ManifestLoader,
 	logger: ILogger,
 	compileCache: CompileCache,
+	databaseProvider: DatabaseProvider,
 ): void {
 	logger.info('Registering language model tools for Copilot Agent Mode');
 
@@ -39,7 +41,7 @@ export function registerLanguageModelTools(
 		['list_resources', new ListResourcesTool(indexer, logger)],
 		['get_resource_info', new GetResourceInfoTool(indexer, service, loader, logger, compileCache)],
 		['get_project_info', new GetProjectInfoTool(indexer, service, loader, logger)],
-		['query_database', new QueryDatabaseTool(service, indexer, logger)],
+		['query_database', new QueryDatabaseTool(databaseProvider, indexer, logger)],
 		['install_deps', new InstallDepsTool(service, logger)],
 		['analyze_impact', new AnalyzeImpactTool(indexer, logger)],
 		['load_seeds', new LoadSeedsTool(service, logger)],

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { parseDbtTestOutput } from '../dbt/test-result-parser';
 import { DbtExecutionService, Priority } from '../dbt/execution-service';
+import type { CteTestRunner } from '../dbt/cte-test-runner';
 import type { TestExplorerProvider, TestGroupItem, TestNodeItem } from './test-explorer-provider';
 import type { ILogger } from '../types/logger';
 
@@ -24,6 +25,7 @@ export class VsTestController implements vscode.Disposable {
 		private readonly explorerProvider: TestExplorerProvider,
 		private readonly executionService: DbtExecutionService,
 		private readonly logger: ILogger,
+		private readonly cteTestRunner: CteTestRunner,
 	) {
 		this._controller = vscode.tests.createTestController('dbt-studio', 'dbt Tests');
 		this._runProfile = this._controller.createRunProfile(
@@ -220,13 +222,7 @@ export class VsTestController implements vscode.Disposable {
 			return;
 		}
 
-		const result = await this.executionService.submit({
-			type: 'run_cte_test',
-			raw: { run_cte_test: true, yaml_file: node.yamlFilePath, test_name: node.testName },
-			priority: Priority.User,
-			origin: 'user',
-			label: `CTE test ${node.testName}`,
-		});
+		const result = await this.cteTestRunner.runCteTest(node.yamlFilePath, node.testName);
 
 		if (result.success) {
 			run.passed(item);

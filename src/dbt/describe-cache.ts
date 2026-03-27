@@ -2,6 +2,7 @@ import type { ILogger } from '../types/logger';
 import type { DbtExecutionService } from './execution-service';
 import { Priority } from './execution-service';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
+import type { DatabaseProvider } from '../providers/database/database-provider';
 
 /**
  * Shared in-memory cache for describe_table results, keyed by dbt unique_id.
@@ -27,7 +28,17 @@ export class DescribeCache {
 		private readonly service: DbtExecutionService,
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
+		private _provider: DatabaseProvider | null = null,
 	) {}
+
+	/**
+	 * Set the DatabaseProvider to use for describe operations.
+	 * When set, describe operations bypass the dbt bridge and use the provider directly.
+	 * Can be set after construction when the provider is ready.
+	 */
+	setProvider(provider: DatabaseProvider): void {
+		this._provider = provider;
+	}
 
 	/**
 	 * Return the column list for the given resource, describing it via the
@@ -44,13 +55,13 @@ export class DescribeCache {
 	): Promise<string[] | undefined> {
 		const cached = this.indexer.getColumns(uniqueId);
 		if (cached) {
-			this.logger.debug(`DescribeCache: hit for ${uniqueId}`);
+			this.logger.trace(`DescribeCache: hit for ${uniqueId}`);
 			return cached;
 		}
 
 		const inflight = this._inflight.get(uniqueId);
 		if (inflight) {
-			this.logger.debug(`DescribeCache: awaiting inflight for ${uniqueId}`);
+			this.logger.trace(`DescribeCache: awaiting inflight for ${uniqueId}`);
 			return inflight;
 		}
 
@@ -68,8 +79,21 @@ export class DescribeCache {
 		name: string,
 		sourceName?: string,
 	): Promise<string[] | undefined> {
-		this.logger.debug(`DescribeCache: miss for ${uniqueId}, fetching from bridge`);
+		this.logger.trace(`DescribeCache: miss for ${uniqueId}, fetching from bridge`);
 		try {
+			// Prefer the DatabaseProvider when available (may bypass the dbt bridge queue)
+			if (this._provider) {
+				const defs = await this._provider.describe(name, { isSource: !!sourceName, sourceName });
+				const cols = defs.map(d => d.name).filter(Boolean);
+				if (cols.length > 0) {
+					this.indexer.setColumns(uniqueId, cols);
+					this.logger.trace(`DescribeCache: stored ${cols.length} columns for ${uniqueId} (via provider)`);
+					return cols;
+				}
+				return undefined;
+			}
+
+			// Fallback: use the dbt bridge describe_table command
 			const result = await this.service.submit({
 				type: 'describe',
 				raw: sourceName
@@ -82,7 +106,7 @@ export class DescribeCache {
 			const cols = (result.data as Record<string, unknown> | undefined)?.columns as string[] | undefined;
 			if (cols && cols.length > 0) {
 				this.indexer.setColumns(uniqueId, cols);
-				this.logger.debug(`DescribeCache: stored ${cols.length} columns for ${uniqueId}`);
+				this.logger.trace(`DescribeCache: stored ${cols.length} columns for ${uniqueId}`);
 				return cols;
 			}
 		} catch (err) {

@@ -7,7 +7,7 @@ import type { ILogger } from '../types/logger';
 export type { DbtCommandResult } from './bridge-runner';
 
 export type DbtJobType =
-	| 'parse' | 'compile' | 'run' | 'test' | 'build'
+	| 'parse' | 'compile' | 'compile_inline' | 'run' | 'test' | 'build'
 	| 'seed' | 'snapshot' | 'deps' | 'show' | 'debug'
 	| 'describe' | 'scope_columns' | 'get_columns' | 'column_lineage'
 	| 'generate_cte_tests' | 'run_cte_test';
@@ -50,7 +50,7 @@ interface DbtJob extends DbtJobInfo {
 }
 
 const CANCELLABLE_TYPES = new Set<DbtJobType>([
-	'parse', 'compile', 'describe', 'scope_columns', 'get_columns', 'column_lineage', 'generate_cte_tests', 'run_cte_test', 'debug',
+	'parse', 'compile', 'compile_inline', 'describe', 'scope_columns', 'get_columns', 'column_lineage', 'generate_cte_tests', 'run_cte_test', 'debug',
 ]);
 
 const SUPPRESS_WATCHER_TYPES = new Set<DbtJobType>([
@@ -214,5 +214,27 @@ export class DbtExecutionService implements vscode.Disposable {
 		this._onJobCompleted.dispose();
 		this._onJobFailed.dispose();
 		this._onQueueChanged.dispose();
+	}
+
+	/**
+	 * Compile a Jinja SQL string via `dbt compile --inline` without executing it.
+	 * Returns the compiled SQL string, or rejects if compilation fails.
+	 */
+	async compileInline(sql: string, priority: DbtJobPriority = Priority.Tool): Promise<string> {
+		const result = await this.submit({
+			type: 'compile_inline',
+			raw: { compile_inline: sql },
+			priority,
+			origin: 'provider',
+			label: 'compile inline SQL',
+		});
+		if (!result.success || !result.data) {
+			throw new Error(`compile_inline failed: ${result.stderr || 'unknown error'}`);
+		}
+		const compiled = result.data['compiled_sql'];
+		if (typeof compiled !== 'string') {
+			throw new Error('compile_inline: missing compiled_sql in bridge response');
+		}
+		return compiled;
 	}
 }

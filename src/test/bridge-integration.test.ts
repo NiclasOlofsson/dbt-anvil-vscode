@@ -286,7 +286,7 @@ select * from orders`);
 		// an extra JOIN condition).  After normal _blank_jinja it becomes a bare
 		// identifier like "generic_is_deleted" between a JOIN condition and a
 		// UNION ALL — an invalid position that makes sqlglot raise.
-		// The retry path (aggressive blanking + ErrorLevel.IGNORE) must recover.
+		// The retry path (jinja2 stub rendering + ErrorLevel.IGNORE) must recover.
 		const result = await parseSql(`with warehouse as (
     select
         wh.mkey,
@@ -310,5 +310,19 @@ select mkey, sourcename from warehouse`);
 		const ctes = data['ctes'] as Array<Record<string, unknown>>;
 		expect(ctes).toHaveLength(1);
 		expect(ctes[0]['name']).toBe('warehouse');
+		// Line numbers must be reported in raw-SQL coordinates (not rendered coordinates).
+		// For this SQL there are no multi-line or dropped Jinja blocks, so the
+		// line_map is identity — raw and rendered lines match exactly.
+		// 'warehouse' CTE name is on line 0 (0-based).
+		expect(ctes[0]['line']).toBe(0);
+		type ColEntry = { name: string; line: number };
+		const cols = ctes[0]['columns'] as ColEntry[];
+		// SELECT list: wh.mkey on line 2, ss.sourcename on line 3.
+		expect(cols.find(c => c.name === 'mkey')?.line).toBe(2);
+		expect(cols.find(c => c.name === 'sourcename')?.line).toBe(3);
 	}, 30_000);
+
+	// Line-number accuracy is tested by the 'parses SQL where a dbt macro appears
+	// in a statement-level position' test above, which asserts ctes[0]['line'] and
+	// per-column line numbers are in raw-SQL coordinates after the jinja2 fallback path.
 });

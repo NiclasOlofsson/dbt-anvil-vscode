@@ -330,20 +330,16 @@ describe('GetColumnLineageTool', () => {
 describe('QueryDatabaseTool', () => {
 	const token = { isCancellationRequested: false, onCancellationRequested: vi.fn() };
 
-	it('parses JSON rows from dbt show --output json stdout', async () => {
+	it('returns rows from provider.query()', async () => {
 		const index = createTestIndex();
 		const indexer = createMockIndexer(index);
 		const rows = [{ id: 1, name: 'Alice' }, { id: 2, name: 'Bob' }];
-		const showJson = JSON.stringify({ show: rows });
-		const mockService = {
-			submit: vi.fn().mockResolvedValue({
-				success: true,
-				stdout: `09:00:00  Running with dbt=1.8.0\n${showJson}\n{"success": true}`,
-				stderr: '',
-			}),
-		} as unknown as DbtExecutionService;
+		const mockProvider = {
+			adapterType: 'databricks',
+			query: vi.fn().mockResolvedValue({ columns: ['id', 'name'], rows, rowCount: 2 }),
+		} as unknown as import('../../providers/database/database-provider').DatabaseProvider;
 
-		const tool = new QueryDatabaseTool(mockService, indexer, mockLogger);
+		const tool = new QueryDatabaseTool(mockProvider, indexer, mockLogger);
 		const result = await tool.invoke(
 			{ input: { sql: 'SELECT 1' }, toolInvocationToken: undefined } as never,
 			token as never,
@@ -355,70 +351,60 @@ describe('QueryDatabaseTool', () => {
 		expect(parsed.rows).toEqual(rows);
 	});
 
-	it('passes --output json and --no-populate-cache flags to the service', async () => {
+	it('calls provider.query() with the provided SQL', async () => {
 		const index = createTestIndex();
 		const indexer = createMockIndexer(index);
-		const submit = vi.fn().mockResolvedValue({
-			success: true,
-			stdout: '{"show": []}',
-			stderr: '',
-		});
-		const mockService = { submit } as unknown as DbtExecutionService;
+		const querySpy = vi.fn().mockResolvedValue({ columns: [], rows: [], rowCount: 0 });
+		const mockProvider = {
+			adapterType: 'databricks',
+			query: querySpy,
+		} as unknown as import('../../providers/database/database-provider').DatabaseProvider;
 
-		const tool = new QueryDatabaseTool(mockService, indexer, mockLogger);
+		const tool = new QueryDatabaseTool(mockProvider, indexer, mockLogger);
 		await tool.invoke(
 			{ input: { sql: 'SELECT 42 AS n' }, toolInvocationToken: undefined } as never,
 			token as never,
 		);
 
-		const submittedArgs: string[] = submit.mock.calls[0][0].args;
-		expect(submittedArgs).toContain('--output');
-		expect(submittedArgs).toContain('json');
-		expect(submittedArgs).toContain('--no-populate-cache');
+		expect(querySpy).toHaveBeenCalledWith('SELECT 42 AS n', -1);
 	});
 
-	it('falls back to raw output when no show JSON line found', async () => {
+	it('returns empty rows when provider returns zero results', async () => {
 		const index = createTestIndex();
 		const indexer = createMockIndexer(index);
-		const mockService = {
-			submit: vi.fn().mockResolvedValue({
-				success: true,
-				stdout: '09:00:00  Some log line\n{"success": true}',
-				stderr: '',
-			}),
-		} as unknown as DbtExecutionService;
+		const mockProvider = {
+			adapterType: 'databricks',
+			query: vi.fn().mockResolvedValue({ columns: [], rows: [], rowCount: 0 }),
+		} as unknown as import('../../providers/database/database-provider').DatabaseProvider;
 
-		const tool = new QueryDatabaseTool(mockService, indexer, mockLogger);
+		const tool = new QueryDatabaseTool(mockProvider, indexer, mockLogger);
 		const result = await tool.invoke(
 			{ input: { sql: 'SELECT 1' }, toolInvocationToken: undefined } as never,
 			token as never,
 		);
 
 		const parsed = JSON.parse((result.content[0] as { value: string }).value);
-		// formatBridgeResult shape — success present, raw output passed through
 		expect(parsed.success).toBe(true);
-		expect(typeof parsed.output).toBe('string');
+		expect(parsed.row_count).toBe(0);
+		expect(parsed.rows).toEqual([]);
 	});
 
-	it('returns error result when dbt show fails', async () => {
+	it('returns error result when provider.query() throws', async () => {
 		const index = createTestIndex();
 		const indexer = createMockIndexer(index);
-		const mockService = {
-			submit: vi.fn().mockResolvedValue({
-				success: false,
-				stdout: '',
-				stderr: 'Compilation error',
-			}),
-		} as unknown as DbtExecutionService;
+		const mockProvider = {
+			adapterType: 'databricks',
+			query: vi.fn().mockRejectedValue(new Error('Compilation error')),
+		} as unknown as import('../../providers/database/database-provider').DatabaseProvider;
 
-		const tool = new QueryDatabaseTool(mockService, indexer, mockLogger);
+		const tool = new QueryDatabaseTool(mockProvider, indexer, mockLogger);
 		const result = await tool.invoke(
 			{ input: { sql: 'SELECT bad_column FROM missing_table' }, toolInvocationToken: undefined } as never,
 			token as never,
 		);
 
 		const parsed = JSON.parse((result.content[0] as { value: string }).value);
-		expect(parsed.success).toBe(false);
+		expect(parsed.error).toContain('Compilation error');
 	});
 });
 

@@ -12,7 +12,7 @@ function escapeRegExp(s: string): string {
 /**
  * Check whether a position in SQL is inside a comment (SQL line/block or Jinja).
  */
-function isPositionInComment(sql: string, pos: number): boolean {
+export function isPositionInComment(sql: string, pos: number): boolean {
 	// Line comment on same line?
 	const lineStart = sql.lastIndexOf('\n', pos - 1) + 1;
 	const lineContent = sql.slice(lineStart, pos);
@@ -38,7 +38,7 @@ function isPositionInComment(sql: string, pos: number): boolean {
  * Find the opening paren of a CTE definition and return [matchStart, parenPos].
  * Returns null if no non-comment match found.
  */
-function findCteDef(sql: string, cteName: string): { matchStart: number; parenPos: number } | null {
+export function findCteDef(sql: string, cteName: string): { matchStart: number; parenPos: number } | null {
 	// cteName [AS] (  — AS optional (Spark/Databricks), require whitespace before '('
 	const pattern = new RegExp(`\\b${escapeRegExp(cteName)}(?:\\s+AS)?\\s+\\(`, 'gi');
 	let match: RegExpExecArray | null;
@@ -56,7 +56,7 @@ function findCteDef(sql: string, cteName: string): { matchStart: number; parenPo
  * while skipping strings, line comments, and block comments.
  * Returns the position AFTER the closing paren, or -1 on failure.
  */
-function findMatchingParen(sql: string, openPos: number): number {
+export function findMatchingParen(sql: string, openPos: number): number {
 	let depth = 1;
 	let i = openPos + 1;
 	let inString = false;

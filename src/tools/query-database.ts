@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import type { ILogger } from '../types/logger';
-import { type DbtExecutionService, Priority } from '../dbt/execution-service';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import { toolResult, formatBridgeResult } from './tool-helpers';
+import type { DatabaseProvider } from '../providers/database/database-provider';
+import { toolResult } from './tool-helpers';
 import { extractCteSql } from './cte-extractor';
 
 interface QueryDatabaseInput {
@@ -13,7 +13,7 @@ interface QueryDatabaseInput {
 
 export class QueryDatabaseTool implements vscode.LanguageModelTool<QueryDatabaseInput> {
 	constructor(
-		private readonly service: DbtExecutionService,
+		private readonly provider: DatabaseProvider,
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
 	) {}
@@ -44,41 +44,18 @@ export class QueryDatabaseTool implements vscode.LanguageModelTool<QueryDatabase
 			sql = extracted;
 		}
 
-		const args = ['show', '--inline', sql, '--limit', '-1', '--output', 'json', '--no-populate-cache'];
-		const result = await this.service.submit({
-			type: 'show',
-			args,
-			priority: Priority.Tool,
-			origin: 'copilot',
-			label: 'query database',
-		});
-
-		if (!result.success) {
-			return toolResult(formatBridgeResult(result));
+		try {
+			const result = await this.provider.query(sql, -1);
+			return toolResult({ success: true, row_count: result.rowCount, rows: result.rows });
+		} catch (err) {
+			return toolResult({ error: String(err) });
 		}
-
-		// dbt show --output json emits a single line: {"show": [...rows...]}
-		// mixed in with log lines — find and parse it
-		const showLine = result.stdout.split('\n').find(line => line.trimStart().startsWith('{"show"'));
-		if (showLine) {
-			try {
-				const data = JSON.parse(showLine.trim()) as Record<string, unknown>;
-				const rows = data['show'];
-				if (Array.isArray(rows)) {
-					return toolResult({ success: true, row_count: rows.length, rows });
-				}
-			} catch {
-				// fall through to raw output
-			}
-		}
-
-		return toolResult(formatBridgeResult(result));
 	}
 
 	async prepareInvocation(
 		_options: vscode.LanguageModelToolInvocationPrepareOptions<QueryDatabaseInput>,
 		_token: vscode.CancellationToken,
 	): Promise<vscode.PreparedToolInvocation> {
-		return { invocationMessage: 'Querying database via dbt show...' };
+		return { invocationMessage: `Querying database via ${this.provider.adapterType}...` };
 	}
 }
