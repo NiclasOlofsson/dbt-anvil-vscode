@@ -35,6 +35,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		private readonly projectDir: string,
 		private readonly logger: ILogger,
 		private readonly columnResolver?: ColumnResolver,
+		onEnrichmentComplete?: vscode.Event<vscode.Uri>,
 	) {
 		this._parseCollection = vscode.languages.createDiagnosticCollection('dbt-studio');
 		this._refCollection = vscode.languages.createDiagnosticCollection('dbt-studio-refs');
@@ -87,6 +88,19 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 				}
 			}),
 		);
+
+		// Re-validate column diagnostics when background enrichment completes.
+		// Enrichment runs asynchronously after parse — without this, column
+		// diagnostics stay stale until the user edits the file again.
+		if (onEnrichmentComplete && this.columnResolver) {
+			this._disposables.push(
+				onEnrichmentComplete((uri) => {
+					if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) return;
+					const doc = vscode.workspace.textDocuments.find(d => d.uri.toString() === uri.toString());
+					if (doc) this._validateColumnsDebounced(doc);
+				}),
+			);
+		}
 
 		// Validate all currently open editors
 		for (const editor of vscode.window.visibleTextEditors) {

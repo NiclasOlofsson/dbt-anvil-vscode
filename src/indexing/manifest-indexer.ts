@@ -464,7 +464,7 @@ export class ManifestIndexer {
 
 		// First build — no previous state to compare against
 		if (oldChecksums.size === 0) {
-			this.clearColumnStore();
+			this.clearColumnStore(manifest);
 			return;
 		}
 
@@ -492,14 +492,20 @@ export class ManifestIndexer {
 		for (const uid of changed) {
 			this.invalidateModel(uid);
 		}
+
+		// Pre-populate column store from manifest columns for evicted nodes
+		this._prePopulateColumns(manifest);
 	}
 
-	/** Clear the entire column store (e.g. on full manifest rebuild). */
-	clearColumnStore(): void {
+	/** Clear the entire column store (e.g. on full manifest rebuild), then pre-populate from manifest. */
+	clearColumnStore(manifest?: DbtManifest): void {
 		const size = this._columnStore.size;
 		this._columnStore.clear();
 		if (size > 0) {
 			this.logger.debug(`Column store: cleared all ${size} entries`);
+		}
+		if (manifest) {
+			this._prePopulateColumns(manifest);
 		}
 	}
 
@@ -517,6 +523,38 @@ export class ManifestIndexer {
 			}
 		}
 		return undefined;
+	}
+
+	/**
+	 * Pre-populate the column store from manifest column definitions.
+	 * Nodes with schema.yml-defined columns get fresh column data immediately
+	 * after a manifest rebuild — only nodes WITHOUT schema.yml columns need
+	 * a bridge describe call.
+	 */
+	private _prePopulateColumns(manifest: DbtManifest): void {
+		let count = 0;
+		for (const [uid, node] of Object.entries(manifest.nodes)) {
+			if (!isIndexableNode(node.resource_type)) continue;
+			if (this._columnStore.has(uid)) continue;
+			if (!node.columns) continue;
+			const colNames = Object.keys(node.columns);
+			if (colNames.length > 0) {
+				this._columnStore.set(uid, colNames);
+				count++;
+			}
+		}
+		for (const [uid, source] of Object.entries(manifest.sources)) {
+			if (this._columnStore.has(uid)) continue;
+			if (!source.columns) continue;
+			const colNames = Object.keys(source.columns);
+			if (colNames.length > 0) {
+				this._columnStore.set(uid, colNames);
+				count++;
+			}
+		}
+		if (count > 0) {
+			this.logger.info(`Column store: pre-populated ${count} entries from manifest`);
+		}
 	}
 
 	private _evictDownstream(uniqueId: string, visited: Set<string>, evicted: Set<string>): void {

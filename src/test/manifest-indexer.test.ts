@@ -250,7 +250,8 @@ describe('ManifestIndexer', () => {
 		const indexer = new ManifestIndexer(loader, mockLogger);
 		indexer.build();
 
-		expect(indexer.getColumns('model.project.my_model')).toBeUndefined();
+		// Pre-populated from manifest columns (my_model has columns: { id })
+		expect(indexer.getColumns('model.project.my_model')).toEqual(['id']);
 		indexer.setColumns('model.project.my_model', ['id', 'name']);
 		expect(indexer.getColumns('model.project.my_model')).toEqual(['id', 'name']);
 	});
@@ -264,7 +265,8 @@ describe('ManifestIndexer', () => {
 		// Invalidate loader so mtime cache is cleared, forcing a real re-read
 		loader.invalidate();
 		indexer.build(true);
-		expect(indexer.getColumns('model.project.my_model')).toBeUndefined();
+		// After full rebuild, pre-population restores columns from manifest
+		expect(indexer.getColumns('model.project.my_model')).toEqual(['id']);
 	});
 
 	it('should invalidate model and all downstream dependents', () => {
@@ -367,7 +369,9 @@ describe('ManifestIndexer', () => {
 			writeManifest(manifest2);
 			indexer.build(true);
 
-			expect(indexer.getColumns('model.project.my_model')).toBeUndefined();
+			// my_model changed — evicted then re-populated from manifest columns
+			expect(indexer.getColumns('model.project.my_model')).toEqual(['id']);
+			// downstream evicted as dependent — no manifest columns to pre-populate
 			expect(indexer.getColumns('model.project.downstream')).toBeUndefined();
 			expect(indexer.getColumns('seed.project.my_seed')).toEqual(['col1']);
 		});
