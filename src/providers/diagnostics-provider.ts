@@ -215,7 +215,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		this._columnCts = new vscode.CancellationTokenSource();
 		const token = this._columnCts.token;
 
-		const aliases = await this.columnResolver.getScopeAliases(document, token);
+		const { tokens, aliases } = await this.columnResolver.getTokensAndAliases(document, token);
 		if (token.isCancellationRequested) return;
 		if (Object.keys(aliases).length === 0) {
 			this._columnCollection.delete(document.uri);
@@ -223,39 +223,22 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 			return;
 		}
 
-		const text = document.getText();
-		const commentRanges = computeCommentRanges(text);
 		const diagnostics: vscode.Diagnostic[] = [];
 
-		// Find alias.column patterns and validate the column exists
-		const pattern = /\b(\w+)\.(\w+)\b/g;
-		let match;
-		while ((match = pattern.exec(text)) !== null) {
-			if (isOffsetInComment(match.index, commentRanges)) continue;
-			const alias = match[1];
-			const column = match[2];
+		for (const t of tokens) {
+			if (t.type !== 'column_ref' || !t.table) continue;
 
-			// Skip non-alias patterns (e.g. schema.table, module.function)
-			if (COLUMN_DIAG_SKIP_ALIASES.has(alias.toUpperCase())) continue;
+			const cols = aliases[t.table] ?? aliases[t.table.toLowerCase()];
+			if (!cols) continue; // alias not in scope map — unresolvable, skip
 
-			const cols = aliases[alias] ?? aliases[alias.toLowerCase()];
-			if (!cols) continue; // Unknown alias — not a column reference or unresolvable
-
-			if (!cols.some(c => c.toLowerCase() === column.toLowerCase())) {
-				const colStart = match.index + alias.length + 1;
+			if (!cols.some(c => c.toLowerCase() === t.name.toLowerCase())) {
 				const range = new vscode.Range(
-					document.positionAt(colStart),
-					document.positionAt(colStart + column.length),
+					new vscode.Position(t.line, t.col),
+					new vscode.Position(t.line, t.endCol),
 				);
-
-				// Skip Jinja blocks
-				const lineText = document.lineAt(document.positionAt(colStart).line).text;
-				const beforePos = lineText.substring(0, document.positionAt(colStart).character);
-				if (/\{\{[^}]*$/.test(beforePos) || /\{%[^%]*$/.test(beforePos)) continue;
-
 				const diag = new vscode.Diagnostic(
 					range,
-					`Column '${column}' not found in '${alias}' (known columns: ${cols.slice(0, 5).join(', ')}${cols.length > 5 ? ', ...' : ''})`,
+					`Column '${t.name}' not found in '${t.table}' (known columns: ${cols.slice(0, 5).join(', ')}${cols.length > 5 ? ', ...' : ''})`,
 					vscode.DiagnosticSeverity.Warning,
 				);
 				diag.source = 'dbt';
@@ -358,8 +341,4 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 	}
 }
 
-const COLUMN_DIAG_SKIP_ALIASES = new Set([
-	'DBT', 'REF', 'SOURCE', 'CONFIG', 'VAR', 'ENV_VAR',
-	'THIS', 'MODEL', 'SCHEMA', 'DATABASE', 'TARGET',
-	'IS', 'AS', 'ON', 'IN', 'BY', 'OR', 'AND', 'NOT',
-]);
+

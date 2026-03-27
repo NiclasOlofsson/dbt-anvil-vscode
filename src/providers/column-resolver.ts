@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
-import type { ParseService } from '../services/parse-service';
+import type { ParseService, TokenInfo } from '../services/parse-service';
 
 /**
  * Shared column resolution service.  Resolves alias → column-name mappings
@@ -29,5 +29,16 @@ export class ColumnResolver {
 	): Promise<Record<string, string[]>> {
 		const dialect = this.indexer.index?.adapterType ?? 'ansi';
 		return this.parseService.getAliases(document, dialect, token);
+	}
+
+	async getTokensAndAliases(
+		document: vscode.TextDocument,
+		token: vscode.CancellationToken,
+	): Promise<{ tokens: TokenInfo[]; aliases: Record<string, string[]> }> {
+		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		// getDocumentModel is cached — second call in getAliases is free.
+		const model = await this.parseService.getDocumentModel(document, dialect);
+		const aliases = await this.parseService.getAliases(document, dialect, token);
+		return { tokens: model?.tokens ?? [], aliases };
 	}
 }
