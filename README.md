@@ -1,60 +1,88 @@
-# dbt Studio for VS Code
+# dbt Studio
 
-**dbt Studio** goes beyond the basics. Where most dbt extensions stop at model and source completions, dbt Studio adds the things that actually make you faster — column intelligence, interactive lineage, test results, and deep Copilot integration.
+A VS Code extension that gives dbt the same kind of language support that most programming languages have had for years.
 
-No configuration required. Open a project and it just works.
+If you work with TypeScript or Python in VS Code, you take column completions, go-to-definition, and inline diagnostics for granted. dbt projects haven't had any of that. dbt Studio changes that — column intelligence, interactive lineage, an integrated test runner, and Copilot tools that can query your warehouse and trace your DAG.
 
----
+No configuration. Open a dbt project and everything works.
 
-## What Makes It Different
+## Column Intelligence
 
-### Column Intelligence
+dbt Studio parses your models and knows their columns. Type in a SELECT and you get completions from the actual columns defined upstream. Hover over a column name to see where it comes from. Rename it and every reference updates.
 
-Most extensions know about your models. dbt Studio knows about your *columns*.
+This works through refs, sources, CTEs, and joins — across your entire project.
 
-Get completions for column names as you type — drawn from the actual shape of the model you're in. Trace any column all the way back through your lineage to where it originally comes from.
+## Lineage
 
-### Lineage Graph
+An interactive graph that follows your editor. Open a model and see its upstream and downstream dependencies in a side panel. Click into column-level lineage to trace individual columns through the DAG.
 
-See the full upstream and downstream picture for any model in an interactive graph. It follows wherever you are in the editor, so the view always matches what you're working on.
+Depth controls let you expand or collapse the view. The graph updates as you navigate between files.
 
-### Test Explorer
+## Testing
 
-Run dbt tests and see results right in the sidebar — no switching to a terminal, no scrolling through logs.
+Run dbt tests from the editor. Results show up in a sidebar — pass, fail, warn — with the real error output.
 
-### Ask Copilot About Your Project
+dbt Studio can also test individual CTEs inside a model in isolation, using the `model::cte_name` convention. Useful when a model has complex intermediate steps you want to verify on their own.
 
-dbt Studio gives GitHub Copilot real understanding of your project — and the ability to act on it.
+Tests integrate with VS Code's native Test Controller, so the Testing panel works too.
 
-> *"What would break if I changed stg_orders?"*
-> *"Trace the revenue column back to its source"*
-> *"Run the staging models and show me what failed"*
-> *"Query the top 10 customers by lifetime value"*
+## Copilot Tools
 
----
+With GitHub Copilot, dbt Studio registers 14 tools that give Copilot real access to your project:
 
-## Everything Else You'd Expect
+- **Project & Resources** — project info, resource listing, model/source details, dependency installation
+- **Lineage & Impact** — lineage tracing, impact analysis, column-level lineage
+- **Database** — run queries against your warehouse directly from chat
+- **Execution** — run, test, build, compile, seed, snapshot models
+
+Some examples:
+
+> "What would break if I dropped customer_id from stg_orders?"
+>
+> "Show me the top 10 customers by lifetime value"
+>
+> "Run the staging models and tell me what failed"
+>
+> "Trace the revenue column back to its source table"
+
+Copilot uses the tools to actually query your project and run commands — these aren't canned responses.
+
+## Full Feature List
 
 - Syntax highlighting for Jinja SQL and Jinja in YAML
-- Jump to definition for models and sources
-- Hover to see model details
-- Completions for `ref()`, `source()`, and Jinja
-- Model explorer in the sidebar
-- Run, test, build, or compile from the editor title bar
+- Go to definition for models, sources, and macros
+- Hover info — model details, column metadata, source descriptions
+- Completions — `ref()`, `source()`, Jinja blocks, column names, YAML schema
+- Find all references for models and sources
+- Rename models (including the file) and columns across the project
+- CodeLens — run/test/compile actions inline above models
+- Diagnostics — parse errors, unresolved refs, column mismatches
+- Document symbols — navigate CTEs and model structure via the outline
+- Workspace symbols — find any model or source by name (Ctrl+T)
+- Signature help for Jinja macros
+- Quick Fix — create missing model files from unresolved refs
+- Model Explorer — browse the project tree with materialisation icons
+- Test Explorer with status tracking
 
----
+## Under the Hood
+
+dbt Studio runs a Python bridge process that talks to your project over JSON stdin/stdout. It auto-detects your Python environment — venv, uv, poetry, pipenv, conda, or system Python — and bundles sqlglot for column-level lineage parsing.
+
+Parsing is two-layered: a fast structural pass on save, plus async database enrichment for column metadata. Everything is cached to disk and survives restarts. When the cache is valid, startup is near-instant.
 
 ## Getting Started
 
-1. **Install** — search for **dbt Studio** in the VS Code Extensions panel
-2. **Open a dbt project** — the extension activates automatically
-3. **Talk to Copilot** — open Copilot Chat to use the AI tools (requires GitHub Copilot)
+1. Install **dbt Studio** from the VS Code Extensions panel
+2. Open a folder containing `dbt_project.yml`
+3. The extension activates and starts indexing automatically
 
-### Requirements
+For AI features, install GitHub Copilot.
+
+## Requirements
 
 - VS Code 1.102.0 or later
 - Python environment with `dbt-core` installed
-- GitHub Copilot (for AI features)
+- GitHub Copilot (optional — needed for AI tools)
 
 ## License
 
