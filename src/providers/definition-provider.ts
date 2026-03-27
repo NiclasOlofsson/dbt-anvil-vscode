@@ -88,6 +88,7 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 		position: vscode.Position,
 		token: vscode.CancellationToken,
 	): Promise<vscode.Definition | undefined> {
+		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.definition', true)) return undefined;
 		const line = document.lineAt(position.line).text;
 
 		// Skip comments
@@ -106,7 +107,7 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 			);
 			if (ref) {
 				const def = this._resolveRef(ref.model);
-				this.logger.debug(`Definition: ref('${ref.model}') → ${def ? 'resolved' : 'not found'}`);
+				this.logger.trace(`Definition: ref('${ref.model}') → ${def ? 'resolved' : 'not found'}`);
 				return def;
 			}
 
@@ -118,7 +119,7 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 			);
 			if (src) {
 				const def = this._resolveSource(src.sourceName, src.tableName);
-				this.logger.debug(`Definition: source('${src.sourceName}', '${src.tableName}') → ${def ? 'resolved' : 'not found'}`);
+				this.logger.trace(`Definition: source('${src.sourceName}', '${src.tableName}') → ${def ? 'resolved' : 'not found'}`);
 				return def;
 			}
 
@@ -188,7 +189,7 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 			this.logger.trace(`Definition: no token at ${position.line}:${position.character} (${model.tokens.length} tokens in model)`);
 			return undefined;
 		}
-		this.logger.debug(`Definition: token at ${position.line}:${position.character} → kind='${resolved.kind}' name='${resolved.token.name}'`);
+		this.logger.trace(`Definition: token at ${position.line}:${position.character} → kind='${resolved.kind}' name='${resolved.token.name}'`);
 
 		switch (resolved.kind) {
 			case 'table_ref': {
@@ -215,7 +216,7 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 				if (colToken.table) {
 					return this._jumpToColumn(document, model, colToken.table, colToken.name, colToken.line);
 				}
-				this.logger.debug(`Definition: bare column '${colToken.name}' (no table qualifier) → undefined`);
+				this.logger.trace(`Definition: bare column '${colToken.name}' (no table qualifier) → undefined`);
 				return undefined;
 			}
 		}
@@ -242,7 +243,7 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 	): Promise<vscode.Definition | undefined> {
 		const target = this._resolveAlias(model, alias, atLine);
 		if (!target) {
-			this.logger.debug(`Definition: qualifier '${alias}' not found in CTEs, refs, or sources → undefined`);
+			this.logger.trace(`Definition: qualifier '${alias}' not found in CTEs, refs, or sources → undefined`);
 			return undefined;
 		}
 		switch (target.kind) {
@@ -260,18 +261,18 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 	): Promise<vscode.Location | undefined> {
 		const col = cte.columns.find(c => c.name.toLowerCase() === column.toLowerCase());
 		if (col) {
-			this.logger.debug(`Definition: '${column}' in CTE '${cte.name}' → line ${col.line + 1}`);
+			this.logger.trace(`Definition: '${column}' in CTE '${cte.name}' → line ${col.line + 1}`);
 			return new vscode.Location(document.uri, new vscode.Position(col.line, 0));
 		}
 
 		// Column not explicit — SELECT * means the column comes through unchanged; navigate to the *
 		const starCol = cte.columns.find(c => c.name === '*');
 		if (starCol) {
-			this.logger.debug(`Definition: '${column}' from SELECT * in CTE '${cte.name}' → * at line ${starCol.line + 1}`);
+			this.logger.trace(`Definition: '${column}' from SELECT * in CTE '${cte.name}' → * at line ${starCol.line + 1}`);
 			return new vscode.Location(document.uri, new vscode.Position(starCol.line, 0));
 		}
 
-		this.logger.debug(`Definition: '${column}' not resolved in CTE '${cte.name}' → CTE line ${cte.line + 1}`);
+		this.logger.trace(`Definition: '${column}' not resolved in CTE '${cte.name}' → CTE line ${cte.line + 1}`);
 		return new vscode.Location(document.uri, new vscode.Position(cte.line, 0));
 	}
 
@@ -288,7 +289,7 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 			if (targetModel) {
 				const col = targetModel.finalColumns.find(c => c.name.toLowerCase() === column.toLowerCase());
 				if (col) {
-					this.logger.debug(`Definition: '${column}' in ref '${modelName}' → line ${col.line + 1}`);
+					this.logger.trace(`Definition: '${column}' in ref '${modelName}' → line ${col.line + 1}`);
 					return new vscode.Location(uri, new vscode.Position(col.line, 0));
 				}
 			}
@@ -296,12 +297,12 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 			// parse failed — fall through to file-level location
 		}
 
-		this.logger.debug(`Definition: '${column}' in ref '${modelName}' → model file (column not found in parsed output)`);
+		this.logger.trace(`Definition: '${column}' in ref '${modelName}' → model file (column not found in parsed output)`);
 		return modelLoc;
 	}
 
 	private _jumpToSourceColumn(source: SourceInfo, column: string): vscode.Definition | undefined {
-		this.logger.debug(`Definition: '${column}' in source '${source.sourceName}.${source.tableName}' → schema file`);
+		this.logger.trace(`Definition: '${column}' in source '${source.sourceName}.${source.tableName}' → schema file`);
 		return this._resolveSource(source.sourceName, source.tableName);
 	}
 
@@ -320,23 +321,23 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 			if (column) {
 				const col = cte.columns.find(c => c.name.toLowerCase() === column.toLowerCase());
 				if (col) {
-					this.logger.debug(`Definition: column '${column}' in CTE '${alias}' → line ${col.line + 1}`);
+					this.logger.trace(`Definition: column '${column}' in CTE '${alias}' → line ${col.line + 1}`);
 					return new vscode.Location(document.uri, new vscode.Position(col.line, 0));
 				}
 			}
-			this.logger.debug(`Definition: CTE '${alias}' → line ${cte.line + 1}`);
+			this.logger.trace(`Definition: CTE '${alias}' → line ${cte.line + 1}`);
 			return new vscode.Location(document.uri, new vscode.Position(cte.line, 0));
 		}
 
 		const ref = model.refs.find(r => r.alias?.toLowerCase() === lc);
 		if (ref) {
-			this.logger.debug(`Definition: alias '${alias}' → ref('${ref.model}')`);
+			this.logger.trace(`Definition: alias '${alias}' → ref('${ref.model}')`);
 			return this._resolveRef(ref.model) as vscode.Location | undefined;
 		}
 
 		const source = model.sources.find(s => s.alias?.toLowerCase() === lc);
 		if (source) {
-			this.logger.debug(`Definition: alias '${alias}' → source('${source.sourceName}','${source.tableName}')`);
+			this.logger.trace(`Definition: alias '${alias}' → source('${source.sourceName}','${source.tableName}')`);
 			return this._resolveSource(source.sourceName, source.tableName);
 		}
 

@@ -23,6 +23,7 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 		token: vscode.CancellationToken,
 		_context: vscode.CompletionContext,
 	): Promise<vscode.CompletionItem[] | undefined> {
+		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.completion', true)) return undefined;
 		const linePrefix = document.lineAt(position.line).text.substring(0, position.character);
 
 		// Skip comments
@@ -31,7 +32,7 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 		// Inside ref('...')
 		if (/ref\(\s*['"][^'"]*$/.test(linePrefix)) {
 			const items = this._completeRef();
-			this.logger.debug(`Completion: ref() → ${items.length} models`);
+			this.logger.trace(`Completion: ref() → ${items.length} models`);
 			return items;
 		}
 
@@ -40,7 +41,7 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 		const sourceSecondMatch = sourceSecond.exec(linePrefix);
 		if (sourceSecondMatch) {
 			const items = this._completeSourceTable(sourceSecondMatch[1]);
-			this.logger.debug(`Completion: source('${sourceSecondMatch[1]}', ...) → ${items.length} tables`);
+			this.logger.trace(`Completion: source('${sourceSecondMatch[1]}', ...) → ${items.length} tables`);
 			return items;
 		}
 
