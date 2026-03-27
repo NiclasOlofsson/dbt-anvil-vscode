@@ -346,7 +346,8 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 		// Filter test nodes when showTests is false
 		if (!showTests) {
 			for (const id of [...allIds]) {
-				if (id.split('.')[0] === 'test') allIds.delete(id);
+				const kind = id.split('.')[0];
+				if (kind === 'test' || kind === 'unit_test') allIds.delete(id);
 			}
 		}
 
@@ -628,7 +629,7 @@ svg.edges polygon {
 	<div class="legend">
 		<span class="legend-item"><span class="swatch" style="background:var(--vscode-charts-blue, #5B8DEF)"></span>Model</span>
 		<span class="legend-item"><span class="swatch" style="background:var(--vscode-charts-green, #43A686)"></span>Source</span>
-		<span class="legend-item"><span class="swatch" style="background:var(--vscode-charts-purple, #C77DBA)"></span>Test</span>
+		<span class="legend-item"><span class="swatch" style="background:var(--vscode-charts-purple, #C77DBA)"></span>Tests</span>
 		<span class="legend-item"><span class="swatch" style="background:var(--vscode-charts-orange, #E8963E)"></span>Exposure</span>
 	</div>
 </div>
@@ -649,13 +650,14 @@ svg.edges polygon {
 	const dnDepthEl = document.getElementById('dn-depth');
 
 	const TYPE_COLORS = {
-		model:    'var(--vscode-charts-blue, #5B8DEF)',
-		source:   'var(--vscode-charts-green, #43A686)',
-		test:     'var(--vscode-charts-purple, #C77DBA)',
-		exposure: 'var(--vscode-charts-orange, #E8963E)',
-		metric:   'var(--vscode-charts-orange, #E8963E)',
-		seed:     'var(--vscode-charts-yellow, #8B7355)',
-		snapshot: 'var(--vscode-descriptionForeground)',
+		model:     'var(--vscode-charts-blue, #5B8DEF)',
+		source:    'var(--vscode-charts-green, #43A686)',
+		test:      'var(--vscode-charts-purple, #C77DBA)',
+		unit_test: 'var(--vscode-charts-purple, #C77DBA)',
+		exposure:  'var(--vscode-charts-orange, #E8963E)',
+		metric:    'var(--vscode-charts-orange, #E8963E)',
+		seed:      'var(--vscode-charts-yellow, #8B7355)',
+		snapshot:  'var(--vscode-descriptionForeground)',
 	};
 
 	let panX = 0, panY = 0, scale = 1;

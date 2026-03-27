@@ -390,6 +390,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			lineageGraphProvider.setShowTests(false);
 		}),
 
+		vscode.commands.registerCommand('dbt-studio.toggleLineageTests', () => {
+			lineageGraphProvider.setShowTests(!lineageGraphProvider.showTests);
+		}),
+
 		vscode.commands.registerCommand('dbt-studio.refreshTestExplorer', () => {
 			testExplorerProvider.refresh();
 		}),

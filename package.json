@@ -123,6 +123,11 @@
 				"icon": "$(beaker)"
 			},
 			{
+				"command": "dbt-studio.toggleLineageTests",
+				"title": "dbt Studio: Toggle Tests in Lineage Graph",
+				"icon": "$(beaker)"
+			},
+			{
 				"command": "dbt-studio.refreshTestExplorer",
 				"title": "dbt Studio: Refresh Test Explorer",
 				"icon": "$(refresh)"
@@ -257,14 +262,10 @@
 					"group": "navigation"
 				},
 				{
-					"command": "dbt-studio.hideLineageTests",
-					"when": "view == dbt-studio.lineageGraph && dbt-studio.lineageShowTests",
-					"group": "navigation@2"
-				},
-				{
-					"command": "dbt-studio.showLineageTests",
-					"when": "view == dbt-studio.lineageGraph && !dbt-studio.lineageShowTests",
-					"group": "navigation@2"
+					"command": "dbt-studio.toggleLineageTests",
+					"when": "view == dbt-studio.lineageGraph",
+					"group": "navigation@2",
+					"checked": "dbt-studio.lineageShowTests"
 				},
 				{
 					"command": "dbt-studio.refreshTestExplorer",
@@ -279,16 +280,6 @@
 				{
 					"command": "dbt-studio.openSettings",
 					"when": "view == dbt-studio.modelExplorer",
-					"group": "navigation@100"
-				},
-				{
-					"command": "dbt-studio.openSettings",
-					"when": "view == dbt-studio.testExplorer",
-					"group": "navigation@100"
-				},
-				{
-					"command": "dbt-studio.openSettings",
-					"when": "view == dbt-studio.testResults",
 					"group": "navigation@100"
 				}
 			],
