@@ -2,32 +2,26 @@
 
 ## 0.1.4
 
-- Interactive lineage graph — visualize upstream/downstream model dependencies
-- Test results explorer — run and browse dbt test outcomes in the sidebar
-- Column intelligence — bare-word column completions, comment-aware parsing, column lineage rewrite
-- Describe column cache persisted across restarts — no re-DESCRIBE on reload
-- Compile cache persisted across restarts — startup is instant after first warm run
+This release adds the two biggest missing pieces: a lineage graph and column intelligence.
+
+- **Lineage graph** — An interactive DAG view that follows your editor. See upstream and downstream models for whatever file you're working on. Supports column-level lineage highlighting and depth controls.
+- **Column completions** — Type a column name and get completions from the actual columns in the model, pulled from your warehouse. Works across refs, sources, CTEs, and joins.
+- **Test explorer** — Run dbt tests from the sidebar and see pass/fail/warn results with real error output, instead of scrolling through terminal logs.
+- **Persistent caching** — Column metadata and compiled SQL are saved to disk. Restarting VS Code no longer means waiting for everything to re-compile and re-describe.
 
 ## 0.1.2
 
-- Exclude `samples/` directory from VSIX package (reduced install size)
+- Reduced extension install size by excluding sample project from the package.
 
 ## 0.1.1
 
-- Column completions (`alias.` → columns) now use warehouse-truth via `dbt show` with YAML as fallback
-- Described columns cached per session — no repeat bridge calls after first trigger
-- In-flight deduplication: VS Code's concurrent completion triggers share one bridge call
-- Respect VS Code cancellation token — bail out early when user types next character
-- Manifest watcher debounce (500ms) and suppress/resume during bridge calls
-- Manifest loader mtime short-circuit — skip re-parse if file unchanged on disk
+Column completions now pull real column metadata from the warehouse (via `dbt show`) instead of relying only on YAML definitions. Results are cached so repeated completions are instant. General responsiveness improvements — the extension cancels work immediately when you keep typing, and avoids redundant parsing when the manifest hasn't changed.
 
 ## 0.1.0
 
-- Initial release
-- Copilot language model tools for dbt project interaction
-- Model explorer sidebar with grouped resource tree
-- Jinja SQL syntax highlighting
-- Go-to-definition for ref() and source()
-- Hover information for model references
-- Auto-completion for ref(), source(), and Jinja functions
-- Test results panel
+First release. The starting point:
+
+- **Copilot tools** — 14 tools that let GitHub Copilot query your project, trace lineage, run models, and execute SQL against your warehouse.
+- **Language support** — Jinja SQL syntax highlighting, go-to-definition for `ref()` and `source()`, hover info, and completions for refs, sources, and Jinja functions.
+- **Model explorer** — A sidebar tree showing all models, sources, and seeds grouped by directory.
+- **Test results** — A panel for viewing dbt test output.
