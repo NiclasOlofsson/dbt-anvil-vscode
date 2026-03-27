@@ -195,6 +195,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	context.subscriptions.push(
 		vscode.window.onDidChangeActiveTextEditor(revealModelForEditor),
+		vscode.workspace.onDidCloseTextDocument((doc) => {
+			lineageGraphProvider.notifyFileClosed(doc.fileName);
+		}),
 	);
 
 	// Trigger immediately for the already-active editor on startup

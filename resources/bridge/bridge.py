@@ -1047,24 +1047,62 @@ def handle_parse_document(request: dict[str, Any]) -> None:
     def offset_to_line(offset: int) -> int:
         return max(0, bisect.bisect_right(line_starts, offset) - 1)
 
+    def offset_to_col(offset: int) -> int:
+        line = offset_to_line(offset)
+        return offset - line_starts[line]
+
+    # Build a lookup: (line_0, col_0) → exclusive end_col_0 of the full jinja
+    # tag for every {{ ref(...) }} in the raw SQL.  Used below to extend
+    # table_ref token endCol beyond the identifier to cover the whole tag.
+    _jinja_ref_end: dict[tuple[int, int], int] = {}
+
     # Extract refs/sources from raw Jinja SQL (they live inside Jinja tags and
     # would disappear from any preprocessed version).
     ref_re = re.compile(r"ref\(\s*['\"]([^'\"]+)['\"]\s*\)")
     source_re = re.compile(
         r"source\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"]([^'\"]+)['\"]\s*\)"
     )
-    refs: list[dict[str, Any]] = [
-        {"model": m.group(1), "line": offset_to_line(m.start())}
-        for m in ref_re.finditer(raw_sql)
-    ]
-    sources: list[dict[str, Any]] = [
-        {
-            "sourceName": m.group(1),
-            "tableName": m.group(2),
-            "line": offset_to_line(m.start()),
-        }
-        for m in source_re.finditer(raw_sql)
-    ]
+    for jinja_m in _JINJA_TAG_RE.finditer(raw_sql):
+        if ref_re.search(jinja_m.group(0)) or source_re.search(jinja_m.group(0)):
+            line_0 = offset_to_line(jinja_m.start())
+            col_0 = offset_to_col(jinja_m.start())
+            # All chars in a ref/source tag are on one line, so end col = start col + tag length.
+            end_col_0 = col_0 + (jinja_m.end() - jinja_m.start())
+            _jinja_ref_end[(line_0, col_0)] = end_col_0
+
+    refs: list[dict[str, Any]] = []
+    for m in ref_re.finditer(raw_sql):
+        jinja_start = raw_sql.rfind("{{", 0, m.start())
+        jinja_end = raw_sql.find("}}", m.end()) + 2
+        refs.append(
+            {
+                "model": m.group(1),
+                "line": offset_to_line(m.start()),
+                "col": offset_to_col(m.start()),
+                "modelCol": offset_to_col(m.start(1)),
+                "modelEndCol": offset_to_col(m.end(1)),
+                "jinjaCol": offset_to_col(jinja_start),
+                "jinjaEndCol": offset_to_col(jinja_end),
+            }
+        )
+    sources: list[dict[str, Any]] = []
+    for m in source_re.finditer(raw_sql):
+        jinja_start = raw_sql.rfind("{{", 0, m.start())
+        jinja_end = raw_sql.find("}}", m.end()) + 2
+        sources.append(
+            {
+                "sourceName": m.group(1),
+                "tableName": m.group(2),
+                "line": offset_to_line(m.start()),
+                "col": offset_to_col(m.start()),
+                "sourceNameCol": offset_to_col(m.start(1)),
+                "sourceNameEndCol": offset_to_col(m.end(1)),
+                "tableNameCol": offset_to_col(m.start(2)),
+                "tableNameEndCol": offset_to_col(m.end(2)),
+                "jinjaCol": offset_to_col(jinja_start),
+                "jinjaEndCol": offset_to_col(jinja_end),
+            }
+        )
 
     try:
         from sqlglot import exp, parse_one  # type: ignore[import-not-found]
@@ -1257,13 +1295,19 @@ def handle_parse_document(request: dict[str, Any]) -> None:
     # `SELECT name FROM base`) get their table qualifier resolved by
     # sqlglot's scope analyser.  This is best-effort: if qualify fails
     # (rare on malformed SQL) we proceed with the unqualified AST.
+    #
+    # Optional: caller may supply "schema" as {table: {col: type}} to
+    # let sqlglot resolve bare columns that span SELECT * sources.
     # ------------------------------------------------------------------
+    caller_schema: dict[str, Any] = request.get("schema", {})
     try:
         from sqlglot.optimizer.qualify import (  # type: ignore[import-not-found]
             qualify,
         )
 
-        ast = qualify(ast, schema={}, infer_schema=True, dialect=sqlglot_dialect)
+        ast = qualify(
+            ast, schema=caller_schema, infer_schema=True, dialect=sqlglot_dialect
+        )
     except Exception:
         pass  # best-effort — fall back to unqualified columns
 
@@ -1278,7 +1322,9 @@ def handle_parse_document(request: dict[str, Any]) -> None:
         if not raw_line_1 or not raw_col_1:
             continue
         col_name = col_id.this
-        end_col_0 = raw_col_1 - 1  # 0-based exclusive end
+        end_col_0 = (
+            raw_col_1  # 0-based exclusive end (sqlglot col is 1-based inclusive end)
+        )
         start_col_0 = end_col_0 - len(col_name)
         token_entry: dict[str, Any] = {
             "type": "column_ref",
@@ -1295,12 +1341,33 @@ def handle_parse_document(request: dict[str, Any]) -> None:
             tbl_col_1 = tbl_id.meta.get("col")
             if tbl_line_1 and tbl_col_1:
                 tbl_name = tbl_id.this
-                tbl_end_0 = tbl_col_1 - 1
+                tbl_end_0 = tbl_col_1  # 0-based exclusive end
                 tbl_start_0 = tbl_end_0 - len(tbl_name)
                 token_entry["tableLine"] = to_raw_line(tbl_line_1 - 1)
                 token_entry["tableCol"] = tbl_start_0
                 token_entry["tableEndCol"] = tbl_end_0
         tokens.append(token_entry)
+
+    for alias_node in ast.find_all(exp.Alias):
+        alias_id = alias_node.args.get("alias")
+        if not isinstance(alias_id, exp.Identifier):
+            continue
+        raw_line_1 = alias_id.meta.get("line")
+        raw_col_1 = alias_id.meta.get("col")
+        if not raw_line_1 or not raw_col_1:
+            continue
+        alias_name = alias_id.this
+        end_col_0 = raw_col_1
+        start_col_0 = end_col_0 - len(alias_name)
+        tokens.append(
+            {
+                "type": "column_def",
+                "name": alias_name,
+                "line": to_raw_line(raw_line_1 - 1),
+                "col": start_col_0,
+                "endCol": end_col_0,
+            }
+        )
 
     for tbl_node in ast.find_all(exp.Table):
         tbl_id = tbl_node.this
@@ -1311,14 +1378,18 @@ def handle_parse_document(request: dict[str, Any]) -> None:
         if not raw_line_1 or not raw_col_1:
             continue
         tbl_name = tbl_id.this
-        end_col_0 = raw_col_1 - 1
+        end_col_0 = raw_col_1  # 0-based exclusive end
         start_col_0 = end_col_0 - len(tbl_name)
+        line_0 = to_raw_line(raw_line_1 - 1)
+        # If this table came from a jinja ref(), the sqlglot endCol only covers
+        # the bare identifier; extend it to the closing }} of the full tag.
+        jinja_end = _jinja_ref_end.get((line_0, start_col_0))
         token_entry = {
             "type": "table_ref",
             "name": tbl_name,
-            "line": to_raw_line(raw_line_1 - 1),
+            "line": line_0,
             "col": start_col_0,
-            "endCol": end_col_0,
+            "endCol": jinja_end if jinja_end is not None else end_col_0,
         }
         alias_node = tbl_node.args.get("alias")
         if isinstance(alias_node, exp.TableAlias):
@@ -1329,7 +1400,7 @@ def handle_parse_document(request: dict[str, Any]) -> None:
                 a_col_1 = alias_id.meta.get("col")
                 if a_line_1 and a_col_1:
                     a_name = alias_id.this
-                    a_end_0 = a_col_1 - 1
+                    a_end_0 = a_col_1  # 0-based exclusive end
                     a_start_0 = a_end_0 - len(a_name)
                     token_entry["aliasLine"] = to_raw_line(a_line_1 - 1)
                     token_entry["aliasCol"] = a_start_0

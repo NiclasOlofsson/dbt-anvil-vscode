@@ -28,8 +28,18 @@ export interface RefInfo {
 	model: string;
 	/** 0-based line */
 	line: number;
+	/** 0-based column of the start of the ref() call */
+	col: number;
 	/** Table alias used in FROM/JOIN, e.g. `ss` in `{{ ref('model') }} ss` */
 	alias?: string;
+	/** 0-based column start of the model name string content (quotes excluded) */
+	modelCol?: number;
+	/** 0-based exclusive column end of the model name string content */
+	modelEndCol?: number;
+	/** 0-based column start of the full {{ ref(...) }} jinja tag */
+	jinjaCol?: number;
+	/** 0-based exclusive column end of the full {{ ref(...) }} jinja tag */
+	jinjaEndCol?: number;
 }
 
 export interface SourceInfo {
@@ -37,8 +47,22 @@ export interface SourceInfo {
 	tableName: string;
 	/** 0-based line */
 	line: number;
+	/** 0-based column of the start of the source() call */
+	col: number;
 	/** Table alias used in FROM/JOIN, e.g. `s` in `{{ source('x','y') }} s` */
 	alias?: string;
+	/** 0-based column start of the sourceName string content (quotes excluded) */
+	sourceNameCol?: number;
+	/** 0-based exclusive column end of the sourceName string content */
+	sourceNameEndCol?: number;
+	/** 0-based column start of the tableName string content (quotes excluded) */
+	tableNameCol?: number;
+	/** 0-based exclusive column end of the tableName string content */
+	tableNameEndCol?: number;
+	/** 0-based column start of the full {{ source(...) }} jinja tag */
+	jinjaCol?: number;
+	/** 0-based exclusive column end of the full {{ source(...) }} jinja tag */
+	jinjaEndCol?: number;
 }
 
 export interface ColumnRefToken {
@@ -70,7 +94,15 @@ export interface TableRefToken {
 	aliasEndCol?: number;
 }
 
-export type TokenInfo = ColumnRefToken | TableRefToken;
+export interface ColumnDefToken {
+	type: 'column_def';
+	name: string;
+	line: number;
+	col: number;
+	endCol: number;
+}
+
+export type TokenInfo = ColumnRefToken | TableRefToken | ColumnDefToken;
 
 /**
  * Result of resolving a cursor position against the AST token map.
@@ -80,7 +112,8 @@ export type PositionResolution =
 	| { kind: 'column'; token: ColumnRefToken }
 	| { kind: 'table_qualifier'; token: ColumnRefToken }
 	| { kind: 'table_ref'; token: TableRefToken }
-	| { kind: 'table_alias'; token: TableRefToken };
+	| { kind: 'table_alias'; token: TableRefToken }
+	| { kind: 'column_def'; token: ColumnDefToken };
 
 export interface DocumentModel {
 	ctes: CteInfo[];
@@ -191,6 +224,17 @@ export class ParseService {
 			cteAliases[cte.name] = cols;
 			if (cte.alias) cteAliases[cte.alias] = cols;
 		}
+		// Also resolve FROM/JOIN aliases that point to CTEs.
+		// e.g. `LEFT JOIN address_with_country AS addr` where address_with_country
+		// is a CTE — `addr` must map to that CTE's columns.
+		for (const token of model.tokens) {
+			if (token.type === 'table_ref' && token.alias) {
+				const aliasLc = token.alias.toLowerCase();
+				if (aliasLc in cteAliases) continue;
+				const targetCols = cteAliases[token.name.toLowerCase()];
+				if (targetCols) cteAliases[aliasLc] = targetCols;
+			}
+		}
 		if (model.aliases !== undefined) return { ...cteAliases, ...model.aliases };
 		if (!this._enrichment) return cteAliases;
 		if (token.isCancellationRequested) return cteAliases;
@@ -254,6 +298,24 @@ export class ParseService {
 		line: number,
 		col: number,
 	): PositionResolution | null {
+		// Table alias definitions take priority over column_ref qualifier spans.
+		// When schema-aware qualify() expands SELECT * it synthesises column_ref
+		// tokens whose tableCol lands on the alias token's position — without this
+		// priority pass those synthetic tokens would shadow the real alias site.
+		for (const token of model.tokens) {
+			if (
+				token.type === 'table_ref'
+				&& token.alias !== undefined
+				&& token.aliasLine === line
+				&& token.aliasCol !== undefined
+				&& token.aliasEndCol !== undefined
+				&& col >= token.aliasCol
+				&& col < token.aliasEndCol
+			) {
+				return { kind: 'table_alias', token };
+			}
+		}
+
 		for (const token of model.tokens) {
 			if (token.type === 'column_ref') {
 				// Check the column name span
@@ -271,21 +333,14 @@ export class ParseService {
 				) {
 					return { kind: 'table_qualifier', token };
 				}
+			} else if (token.type === 'column_def') {
+				if (token.line === line && col >= token.col && col < token.endCol) {
+					return { kind: 'column_def', token };
+				}
 			} else {
 				// table_ref — check the table name span
 				if (token.line === line && col >= token.col && col < token.endCol) {
 					return { kind: 'table_ref', token };
-				}
-				// Check the alias span (e.g. the `o` in `FROM orders o`)
-				if (
-					token.alias !== undefined
-					&& token.aliasLine === line
-					&& token.aliasCol !== undefined
-					&& token.aliasEndCol !== undefined
-					&& col >= token.aliasCol
-					&& col < token.aliasEndCol
-				) {
-					return { kind: 'table_alias', token };
 				}
 			}
 		}
@@ -297,11 +352,34 @@ export class ParseService {
 		key: string,
 		dialect: string,
 	): Promise<DocumentModel | null> {
-		const result = await this._bridge.invokeRaw({
+		const rawText = document.getText();
+
+		// Build a schema hint from any already-cached describe results so that
+		// sqlglot qualify() can resolve bare (unqualified) column references in
+		// the very first parse when the describe cache is warm.  This is purely
+		// opportunistic — if the cache is cold the dict stays empty and behaviour
+		// is identical to before.
+		const schema: Record<string, Record<string, string>> = {};
+		if (this._enrichment) {
+			const { refs } = stripJinja(rawText, this._enrichment.indexer);
+			for (const [tableName, uniqueId] of refs) {
+				const cols = this._enrichment.indexer.getColumns(uniqueId);
+				if (cols && cols.length > 0) {
+					schema[tableName.toLowerCase()] = Object.fromEntries(cols.map(c => [c.toLowerCase(), 'varchar']));
+				}
+			}
+		}
+
+		const parseRequest: Record<string, unknown> = {
 			parse_document: true,
-			sql: document.getText(),
+			sql: rawText,
 			dialect: dialect || 'ansi',
-		});
+		};
+		if (Object.keys(schema).length > 0) {
+			parseRequest['schema'] = schema;
+		}
+
+		const result = await this._bridge.invokeRaw(parseRequest);
 
 		if (!result.success || !result.data) {
 			const errMsg = (result.data as Record<string, unknown>)?.['error'] ?? 'no response';
