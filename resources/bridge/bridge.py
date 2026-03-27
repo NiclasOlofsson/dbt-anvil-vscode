@@ -106,6 +106,23 @@ def _find_table_columns(schema_mapping: dict[str, Any], table_name: str) -> list
     return []
 
 
+def _merge_alias(aliases: dict[str, list[str]], alias: str, cols: list[str]) -> None:
+    """Merge cols into aliases[alias], deduplicating case-insensitively.
+
+    The same alias name can appear in multiple SQL scopes (e.g. a CTE body and
+    the outer SELECT both aliasing different tables as `map`).  Because the
+    diagnostic regex is not scope-aware it validates against a single column
+    list per alias, so we union the lists to avoid false positive warnings.
+    """
+    if alias not in aliases:
+        aliases[alias] = cols
+        return
+    existing_lower = {c.lower() for c in aliases[alias]}
+    aliases[alias] = aliases[alias] + [
+        c for c in cols if c.lower() not in existing_lower
+    ]
+
+
 def _get_output_columns(
     compiled_sql: str,
     dialect: str,
@@ -243,22 +260,22 @@ def _get_scope_columns(
 
         # Register selected sources — alias → columns
         for alias, (_, source) in scope.selected_sources.items():
-            if alias in aliases:
-                # Already resolved (e.g. CTE name), skip re-resolving
-                continue
             if isinstance(source, exp.Table):
                 # External table: first try schema_mapping, then check if alias
                 # matches a CTE we already resolved
                 table_name = source.name
                 cols = _find_table_columns(schema_mapping, table_name)
                 if cols:
-                    aliases[alias] = cols
+                    _merge_alias(aliases, alias, cols)
                     # Also register the unaliased table name
                     if alias != table_name.lower():
-                        aliases[table_name.lower()] = cols
+                        _merge_alias(aliases, table_name.lower(), cols)
                 elif table_name in aliases:
                     # Table name matches a CTE — propagate for the alias
-                    aliases[alias] = aliases[table_name]
+                    _merge_alias(aliases, alias, aliases[table_name])
+                elif alias in aliases:
+                    # Already resolved as a CTE name — leave it unchanged
+                    pass
             else:
                 # CTE/subquery reference — read its projection
                 cols = (
@@ -273,7 +290,7 @@ def _get_scope_columns(
                     if parent_alias and parent_alias in aliases:
                         cols = aliases[parent_alias]
                 if cols:
-                    aliases[alias] = cols
+                    _merge_alias(aliases, alias, cols)
 
     return aliases
 
