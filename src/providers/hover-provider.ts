@@ -22,6 +22,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		position: vscode.Position,
 		token: vscode.CancellationToken,
 	): Promise<vscode.Hover | undefined> {
+		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.hover', true)) return undefined;
 		const line = document.lineAt(position.line).text;
 
 		// Skip comments
@@ -35,7 +36,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 			const end = start + match[0].length;
 			if (position.character >= start && position.character <= end) {
 				const hover = this._hoverRef(match[1]);
-				this.logger.debug(`Hover: ref('${match[1]}') → ${hover ? 'found' : 'not found'}`);
+				this.logger.trace(`Hover: ref('${match[1]}') → ${hover ? 'found' : 'not found'}`);
 				return hover;
 			}
 		}
@@ -47,7 +48,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 			const end = start + match[0].length;
 			if (position.character >= start && position.character <= end) {
 				const hover = this._hoverSource(match[1], match[2]);
-				this.logger.debug(`Hover: source('${match[1]}', '${match[2]}') → ${hover ? 'found' : 'not found'}`);
+				this.logger.trace(`Hover: source('${match[1]}', '${match[2]}') → ${hover ? 'found' : 'not found'}`);
 				return hover;
 			}
 		}
@@ -200,7 +201,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 			this.logger.trace(`Hover: no token at ${position.line}:${position.character} (${model.tokens.length} tokens in model)`);
 			return undefined;
 		}
-		this.logger.debug(`Hover: token at ${position.line}:${position.character} → kind='${resolved.kind}' name='${resolved.token.name}'`);
+		this.logger.trace(`Hover: token at ${position.line}:${position.character} → kind='${resolved.kind}' name='${resolved.token.name}'`);
 
 		switch (resolved.kind) {
 			case 'table_ref': {
@@ -241,7 +242,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 					const aliases = await this.columnResolver.getScopeAliases(document, token);
 					if (token.isCancellationRequested) return undefined;
 					const cols = aliases[colToken.table] ?? aliases[colToken.table.toLowerCase()];
-					this.logger.debug(`Hover: column '${colToken.table}.${colToken.name}' — aliases has '${colToken.table}': ${cols ? `[${cols.join(', ')}]` : 'not found'} (${Object.keys(aliases).length} aliases total)`);
+					this.logger.trace(`Hover: column '${colToken.table}.${colToken.name}' — aliases has '${colToken.table}': ${cols ? `[${cols.join(', ')}]` : 'not found'} (${Object.keys(aliases).length} aliases total)`);
 					if (cols && cols.some(c => c.toLowerCase() === colToken.name.toLowerCase())) {
 						return this._buildColumnHover(colToken.name, colToken.table);
 					}
@@ -249,7 +250,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 					// to avoid spurious matches from unrelated tables in the alias map.
 					return null;
 				} else if (colToken.table) {
-					this.logger.debug(`Hover: column '${colToken.table}.${colToken.name}' — no columnResolver configured`);
+					this.logger.trace(`Hover: column '${colToken.table}.${colToken.name}' — no columnResolver configured`);
 					return null;
 				}
 				// Bare column (no table qualifier) — search all aliases
