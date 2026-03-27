@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.5
+
+- **Databricks native queries** — If you're on Databricks, the extension now talks directly to the SQL Statement API instead of going through `dbt show`. Queries run faster and don't require a dbt invocation for every describe or inline execution.
+- **Document outline** — CTEs and columns now appear in the breadcrumb bar and the Outline panel (Ctrl+Shift+O), each with correct source positions. Jump straight to any CTE or column definition without scrolling.
+- **Feature toggles** — Every feature area (completions, hover, diagnostics, go-to-definition, etc.) can now be turned on or off individually from Settings, with immediate effect — no window reload needed. A gear icon in the Model Explorer, Test Explorer, and Test Results panels opens the relevant settings page directly.
+- **More accurate hover and go-to-definition** — Both providers are now built on the AST token index rather than text patterns. Hover info and definition jumps are more precise, and spurious matches on unrelated text are gone.
+
 ## 0.1.4
 
 This release adds the two biggest missing pieces: a lineage graph and column intelligence.

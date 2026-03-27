@@ -283,7 +283,7 @@ export const workspace = {
 	workspaceFolders: [] as WorkspaceFolder[],
 	findFiles: vi.fn().mockResolvedValue([]),
 	getConfiguration: vi.fn(() => ({
-		get: vi.fn(),
+		get: vi.fn((_key: string, defaultValue?: unknown) => defaultValue ?? true),
 		has: vi.fn(),
 		update: vi.fn(),
 	})),

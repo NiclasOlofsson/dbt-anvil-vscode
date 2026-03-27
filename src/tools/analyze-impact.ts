@@ -27,7 +27,7 @@ export class AnalyzeImpactTool implements vscode.LanguageModelTool<AnalyzeImpact
 		}
 
 		const target = resources[0];
-		const lineage = this.indexer.getLineage(target.uniqueId, 100, 'downstream');
+		const lineage = this.indexer.getLineage(target.uniqueId, 0, 100);
 
 		const affected = lineage.downstream.map(node => ({
 			unique_id: node.uniqueId,
