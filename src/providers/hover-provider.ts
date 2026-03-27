@@ -197,7 +197,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 
 		const resolved = ParseService.resolveAtPosition(model, position.line, position.character);
 		if (!resolved) {
-			this.logger.debug(`Hover: no token at ${position.line}:${position.character} (${model.tokens.length} tokens in model)`);
+			this.logger.trace(`Hover: no token at ${position.line}:${position.character} (${model.tokens.length} tokens in model)`);
 			return undefined;
 		}
 		this.logger.debug(`Hover: token at ${position.line}:${position.character} → kind='${resolved.kind}' name='${resolved.token.name}'`);

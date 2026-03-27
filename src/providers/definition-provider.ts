@@ -185,7 +185,7 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 
 		const resolved = ParseService.resolveAtPosition(model, position.line, position.character);
 		if (!resolved) {
-			this.logger.debug(`Definition: no token at ${position.line}:${position.character} (${model.tokens.length} tokens in model)`);
+			this.logger.trace(`Definition: no token at ${position.line}:${position.character} (${model.tokens.length} tokens in model)`);
 			return undefined;
 		}
 		this.logger.debug(`Definition: token at ${position.line}:${position.character} → kind='${resolved.kind}' name='${resolved.token.name}'`);
