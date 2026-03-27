@@ -44,6 +44,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		this._disposables.push(
 			service.onJobCompleted(({ job, result }) => {
 				if (job.type === 'parse') {
+					if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) return;
 					// Always scan stderr — dbt parse can return success=true
 					// even when there are compilation/syntax errors in models.
 					// Also scan stdout — dbt often writes error details there too.
@@ -53,6 +54,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 			}),
 			service.onJobFailed(({ job, error }) => {
 				if (job.type === 'parse') {
+					if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) return;
 					this._handleParseOutput(error.message, false);
 				}
 			}),
@@ -61,19 +63,34 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		// Real-time ref/source validation
 		this._disposables.push(
 			vscode.workspace.onDidOpenTextDocument((doc) => {
+				if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) return;
 				this._validateDocument(doc);
 			}),
 			vscode.workspace.onDidChangeTextDocument((e) => {
+				if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) return;
 				this._validateDocumentDebounced(e.document);
 			}),
 			vscode.workspace.onDidCloseTextDocument((doc) => {
 				this._refCollection.delete(doc.uri);
 				this._columnCollection.delete(doc.uri);
 			}),
+			vscode.workspace.onDidChangeConfiguration((e) => {
+				if (e.affectsConfiguration('dbt-studio.providers.sql.diagnostics')) {
+					const enabled = vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true);
+					if (!enabled) {
+						this.clearAll();
+					} else {
+						for (const editor of vscode.window.visibleTextEditors) {
+							this._validateDocument(editor.document);
+						}
+					}
+				}
+			}),
 		);
 
 		// Validate all currently open editors
 		for (const editor of vscode.window.visibleTextEditors) {
+			if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) break;
 			this._validateDocument(editor.document);
 		}
 	}

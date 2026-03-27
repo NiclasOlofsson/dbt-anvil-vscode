@@ -172,7 +172,7 @@ export class CompileCache {
 		for (const key of this._cache.keys()) {
 			if (key.endsWith(`.${uniqueIdOrName}`)) {
 				this._cache.delete(key);
-				this.logger.trace(`CompileCache: invalidated by name ${uniqueIdOrName} (key=${key})`)
+				this.logger.trace(`CompileCache: invalidated by name ${uniqueIdOrName} (key=${key})`);
 				return;
 			}
 		}

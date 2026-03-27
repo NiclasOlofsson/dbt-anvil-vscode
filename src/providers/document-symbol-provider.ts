@@ -21,6 +21,7 @@ export class DbtDocumentSymbolProvider implements vscode.DocumentSymbolProvider 
 		document: vscode.TextDocument,
 		_token: vscode.CancellationToken,
 	): vscode.ProviderResult<vscode.DocumentSymbol[]> {
+		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.documentSymbols', true)) return [];
 		if (document.languageId === 'jinja-sql') {
 			return this._sqlSymbols(document);
 		}

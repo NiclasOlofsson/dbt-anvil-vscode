@@ -23,6 +23,7 @@ export class DbtCodeLensProvider implements vscode.CodeLensProvider {
 		document: vscode.TextDocument,
 		_token: vscode.CancellationToken,
 	): vscode.CodeLens[] {
+		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.codeLens', true)) return [];
 		if (document.languageId === 'jinja-sql') {
 			return this._sqlCodeLenses(document);
 		}

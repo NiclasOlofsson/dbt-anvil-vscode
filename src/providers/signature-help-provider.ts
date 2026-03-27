@@ -18,6 +18,7 @@ export class DbtSignatureHelpProvider implements vscode.SignatureHelpProvider {
 		_token: vscode.CancellationToken,
 		_context: vscode.SignatureHelpContext,
 	): vscode.SignatureHelp | undefined {
+		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.signatureHelp', true)) return undefined;
 		const linePrefix = document.lineAt(position.line).text.substring(0, position.character);
 
 		// Match {{ macro_name( ... with cursor after ( or after a comma

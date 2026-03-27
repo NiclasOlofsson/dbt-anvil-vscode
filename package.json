@@ -166,6 +166,11 @@
 				"command": "dbt-studio.runCteTest",
 				"title": "dbt Studio: Run CTE Test",
 				"icon": "$(combine)"
+			},
+			{
+				"command": "dbt-studio.openSettings",
+				"title": "dbt Studio: Open Settings",
+				"icon": "$(gear)"
 			}
 		],
 		"viewsContainers": {
@@ -270,6 +275,21 @@
 					"command": "dbt-studio.runAllTestsFromExplorer",
 					"when": "view == dbt-studio.testExplorer",
 					"group": "navigation@1"
+				},
+				{
+					"command": "dbt-studio.openSettings",
+					"when": "view == dbt-studio.modelExplorer",
+					"group": "navigation@100"
+				},
+				{
+					"command": "dbt-studio.openSettings",
+					"when": "view == dbt-studio.testExplorer",
+					"group": "navigation@100"
+				},
+				{
+					"command": "dbt-studio.openSettings",
+					"when": "view == dbt-studio.testResults",
+					"group": "navigation@100"
 				}
 			],
 			"view/item/context": [
@@ -290,33 +310,125 @@
 				}
 			]
 		},
-		"configuration": {
-			"title": "dbt Studio",
-			"properties": {
-				"dbt-studio.lineageShowTests": {
-					"type": "boolean",
-					"default": true,
-					"description": "Show test nodes in the lineage graph."
-				},
-				"dbt-studio.profilesDir": {
-					"type": "string",
-					"default": "",
-					"description": "Path to dbt profiles directory. Leave empty to use project directory or ~/.dbt."
-				},
-				"dbt-studio.logLevel": {
-					"type": "string",
-					"default": "info",
-					"enum": [
-						"trace",
-						"debug",
-						"info",
-						"warn",
-						"error"
-					],
-					"description": "Log level for dbt Studio output channel."
+		"configuration": [
+			{
+				"title": "dbt Studio",
+				"properties": {
+					"dbt-studio.lineageShowTests": {
+						"type": "boolean",
+						"default": true,
+						"description": "Show test nodes in the lineage graph."
+					},
+					"dbt-studio.profilesDir": {
+						"type": "string",
+						"default": "",
+						"description": "Path to dbt profiles directory. Leave empty to use project directory or ~/.dbt."
+					},
+					"dbt-studio.logLevel": {
+						"type": "string",
+						"default": "info",
+						"enum": [
+							"trace",
+							"debug",
+							"info",
+							"warn",
+							"error"
+						],
+						"description": "Log level for dbt Studio output channel."
+					}
+				}
+			},
+			{
+				"title": "dbt Studio > Providers",
+				"properties": {
+					"dbt-studio.providers.codeLens": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "**Enabled**: Show Run / Build / Test / Compile code lens actions above dbt SQL models and test entries in schema.yml."
+					},
+					"dbt-studio.providers.documentSymbols": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "**Enabled**: Populate the Outline panel and breadcrumbs with CTEs (SQL files) and model/column hierarchy (YAML files)."
+					},
+					"dbt-studio.providers.workspaceSymbols": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "**Enabled**: Include dbt models, sources, and macros in workspace symbol search (Ctrl+T / Cmd+T)."
+					}
+				}
+			},
+			{
+				"title": "dbt Studio > Providers > SQL",
+				"properties": {
+					"dbt-studio.providers.sql.hover": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "**Enabled**: Show hover tooltips for `ref()`, `source()`, macros, CTE names, and column names in Jinja SQL files."
+					},
+					"dbt-studio.providers.sql.completion": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "**Enabled**: Provide autocomplete for `ref()`, `source()`, macros, columns, and table names after FROM/JOIN in Jinja SQL files."
+					},
+					"dbt-studio.providers.sql.definition": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "**Enabled**: Enable Go to Definition for `ref()`, `source()`, macros, CTEs, and column names in Jinja SQL files."
+					},
+					"dbt-studio.providers.sql.references": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "**Enabled**: Enable Find All References for `ref()`, `source()`, and column names in Jinja SQL files."
+					},
+					"dbt-studio.providers.sql.rename": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "**Enabled**: Enable Rename Symbol for dbt models — updates `ref()` calls, schema.yml entries, and renames the `.sql` file. Works best when `sql.definition` is also enabled."
+					},
+					"dbt-studio.providers.sql.signatureHelp": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "**Enabled**: Show parameter hints when typing dbt macro calls in Jinja SQL files."
+					},
+					"dbt-studio.providers.sql.codeActions": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "**Enabled**: Show quick-fix actions for unknown `ref()` and `source()` calls in Jinja SQL files (e.g. create missing model file)."
+					},
+					"dbt-studio.providers.sql.diagnostics": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "**Enabled**: Show dbt parse errors, unknown `ref()`/`source()` calls, and invalid column names in the Problems panel. Disabling this clears all dbt Studio diagnostics immediately."
+					}
+				}
+			},
+			{
+				"title": "dbt Studio > Providers > YAML",
+				"properties": {
+					"dbt-studio.providers.yaml.hover": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "**Enabled**: Show hover tooltips for model and source names in dbt schema YAML files."
+					},
+					"dbt-studio.providers.yaml.completion": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "**Enabled**: Provide autocomplete for model names, column names, tags, test names, and source references in dbt schema YAML files."
+					}
+				}
+			},
+			{
+				"title": "dbt Studio > Database",
+				"properties": {
+					"dbt-studio.database.preferNativeAdapter": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "**Enabled**: Use a native database adapter (e.g. Databricks REST API) for faster parallel queries when available. Disable to force all queries through `dbt show` instead — useful as a fallback if the native adapter has issues."
+					}
 				}
 			}
-		},
+		],
 		"languageModelTools": [
 			{
 				"name": "run_models",

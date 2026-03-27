@@ -45,6 +45,7 @@ export class DbtRenameProvider implements vscode.RenameProvider {
 		newName: string,
 		token: vscode.CancellationToken,
 	): Promise<vscode.WorkspaceEdit | undefined> {
+		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.rename', true)) return undefined;
 		const line = document.lineAt(position.line).text;
 
 		const refRe = /ref\(\s*['"]([^'"]+)['"]\s*\)/g;

@@ -1,3 +1,4 @@
+import * as vscode from 'vscode';
 import type { ILogger } from '../../types/logger';
 import type { DbtExecutionService } from '../../dbt/execution-service';
 import type { DatabaseProvider } from './database-provider';
@@ -24,7 +25,8 @@ export async function createDatabaseProvider(
 	executionService: DbtExecutionService,
 	logger: ILogger,
 ): Promise<DatabaseProvider> {
-	if (adapterType === 'databricks') {
+	const preferNative = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('database.preferNativeAdapter', true);
+	if (preferNative && adapterType === 'databricks') {
 		const reader = new ProfilesReader(profileName, profilesDir);
 		const connection = await reader.readConnection();
 
