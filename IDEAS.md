@@ -25,3 +25,8 @@ Option A is simpler and cleaner — two processes, clear separation, no threadin
 
 This would mean: a hover during a dbt run doesn't have to wait for the run to finish. parse_document and scope_columns would be completely non-blocking relative to dbt commands.
 
+## Performance info
+
+C:\Development\dbt_oatanalytics\target\perf_info.json
+
+Have intersting information that we should look into.

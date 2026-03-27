@@ -6,6 +6,7 @@ import type { BridgeRunner } from '../dbt/bridge-runner';
 import type { DbtExecutionService } from '../dbt/execution-service';
 import type { DescribeCache } from '../dbt/describe-cache';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
+import type { ScopeColumnsCache } from '../dbt/scope-columns-cache';
 import { createMockLogger } from './helpers';
 
 const mockLogger = createMockLogger();
@@ -84,6 +85,15 @@ function createMockService(
 	} as unknown as DbtExecutionService;
 }
 
+function createMockScopeColumnsCache(
+	aliasResult?: Record<string, string[]>,
+): ScopeColumnsCache {
+	return {
+		scopeColumns: vi.fn().mockResolvedValue(aliasResult ?? {}),
+		clear: vi.fn(),
+	} as unknown as ScopeColumnsCache;
+}
+
 function createEnrichment(
 	aliasResult?: Record<string, string[]>,
 	describeColumns?: string[],
@@ -92,6 +102,7 @@ function createEnrichment(
 		service: createMockService(aliasResult),
 		describeCache: createMockDescribeCache(describeColumns),
 		indexer: createMockIndexer(),
+		scopeColumnsCache: createMockScopeColumnsCache(aliasResult),
 	};
 }
 
@@ -222,7 +233,7 @@ describe('ParseService — enrichment tier', () => {
 			expect(first).toEqual({ t: ['id'] });
 			expect(second).toEqual({ t: ['id'] });
 			// scope_columns bridge should only be called once
-			expect(enrichment.service.submit).toHaveBeenCalledTimes(1);
+			expect(enrichment.scopeColumnsCache.scopeColumns).toHaveBeenCalledTimes(1);
 		});
 
 		it('enriches aliases in-place on the DocumentModel', async () => {
@@ -253,7 +264,9 @@ describe('ParseService — enrichment tier', () => {
 				getRawNode: vi.fn().mockReturnValue({ name: 'orders' }),
 			});
 
-			const parseService = new ParseService(bridge, mockLogger, { service, describeCache, indexer });
+			const scopeCache = createMockScopeColumnsCache({ orders: ['id', 'amount'] });
+
+			const parseService = new ParseService(bridge, mockLogger, { service, describeCache, indexer, scopeColumnsCache: scopeCache });
 
 			// We need stripJinja to extract the ref. Since we mock the indexer
 			// with findModelsByName returning [], the SQL passes through unchanged.
@@ -265,9 +278,7 @@ describe('ParseService — enrichment tier', () => {
 				createToken(),
 			);
 
-			expect(service.submit).toHaveBeenCalledWith(
-				expect.objectContaining({ type: 'scope_columns' }),
-			);
+			expect(scopeCache.scopeColumns).toHaveBeenCalled();
 			expect(result).toEqual({ orders: ['id', 'amount'] });
 		});
 	});
@@ -291,6 +302,7 @@ describe('ParseService — enrichment tier', () => {
 				service: slowService,
 				describeCache: createMockDescribeCache(),
 				indexer: createMockIndexer(),
+				scopeColumnsCache: createMockScopeColumnsCache(),
 			});
 
 			await parseService.getDocumentModel(createMockDocument('SELECT 1'), 'duckdb');
@@ -330,10 +342,10 @@ describe('ParseService — enrichment tier', () => {
 			parseService.invalidateEnrichment();
 			expect(parseService.getCachedAliases(doc)).toBeNull();
 
-			// Re-enrich — bridge scope call should happen again
-			const initialCalls = (enrichment.service.submit as ReturnType<typeof vi.fn>).mock.calls.length;
+			// Re-enrich — scope_columns cache call should happen again
+			const initialCalls = (enrichment.scopeColumnsCache.scopeColumns as ReturnType<typeof vi.fn>).mock.calls.length;
 			await parseService.getAliases(doc, 'duckdb', createToken());
-			expect((enrichment.service.submit as ReturnType<typeof vi.fn>).mock.calls.length)
+			expect((enrichment.scopeColumnsCache.scopeColumns as ReturnType<typeof vi.fn>).mock.calls.length)
 				.toBeGreaterThan(initialCalls);
 		});
 	});

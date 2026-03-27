@@ -10,6 +10,7 @@ import { DbtExecutionService, Priority } from './dbt/execution-service';
 import { CompileCache } from './dbt/compile-cache';
 import { CompileCachePersistence } from './dbt/compile-cache-persistence';
 import { DescribeCache } from './dbt/describe-cache';
+import { ScopeColumnsCache } from './dbt/scope-columns-cache';
 import { loadProjectConfig } from './dbt/project-config';
 import { createDatabaseProvider } from './providers/database/database-provider-factory';
 import { ColumnStorePersistence } from './indexing/column-store-persistence';
@@ -139,11 +140,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	void compileCache.warmAll(projectDir, restoredCompileEntries);
 
 	// -------- Parse service (structural parse + background alias enrichment) --------
-	const parseService = new ParseService(bridgeRunner, logger, { service: executionService, describeCache, indexer: manifestIndexer });
+	const scopeColumnsCache = new ScopeColumnsCache(executionService, logger);
+	const parseService = new ParseService(bridgeRunner, logger, { service: executionService, describeCache, indexer: manifestIndexer, scopeColumnsCache });
+	manifestWatcher.setParseService(parseService);
 
 	// -------- Diagnostics provider --------
 	const columnResolver = new ColumnResolver(manifestIndexer, logger, parseService);
-	const diagnosticsProvider = new DbtDiagnosticsProvider(executionService, manifestIndexer, statusBar, projectDir, logger, columnResolver);
+	const diagnosticsProvider = new DbtDiagnosticsProvider(executionService, manifestIndexer, statusBar, projectDir, logger, columnResolver, parseService.onEnrichmentComplete);
 	context.subscriptions.push(diagnosticsProvider);
 
 	// -------- Set workspaceHasDBT context --------

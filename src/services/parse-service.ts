@@ -1,8 +1,8 @@
-import type * as vscode from 'vscode';
+import * as vscode from 'vscode';
 import type { BridgeRunner } from '../dbt/bridge-runner';
 import type { DescribeCache } from '../dbt/describe-cache';
 import type { DbtExecutionService } from '../dbt/execution-service';
-import { Priority } from '../dbt/execution-service';
+import type { ScopeColumnsCache } from '../dbt/scope-columns-cache';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import { stripJinja } from '../providers/jinja-utils';
 import type { ILogger } from '../types/logger';
@@ -138,6 +138,7 @@ export interface EnrichmentConfig {
 	service: DbtExecutionService;
 	describeCache: DescribeCache;
 	indexer: ManifestIndexer;
+	scopeColumnsCache: ScopeColumnsCache;
 }
 
 interface CacheEntry {
@@ -162,6 +163,9 @@ export class ParseService {
 	private readonly _cache = new Map<string, CacheEntry>();
 	private readonly _inflight = new Map<string, Promise<DocumentModel | null>>();
 	private readonly _enrichInflight = new Map<string, Promise<void>>();
+
+	private readonly _onEnrichmentComplete = new vscode.EventEmitter<vscode.Uri>();
+	readonly onEnrichmentComplete = this._onEnrichmentComplete.event;
 
 	constructor(
 		private readonly _bridge: BridgeRunner,
@@ -284,7 +288,56 @@ export class ParseService {
 		for (const entry of this._cache.values()) {
 			entry.model.aliases = undefined;
 		}
+		this._enrichment?.scopeColumnsCache.clear();
 		this._logger.debug('[parse-service] enrichment cache invalidated');
+	}
+
+	/**
+	 * Clear enriched aliases only for documents that reference any of the given
+	 * unique IDs. Documents that don't reference any of the affected nodes keep
+	 * their cached aliases intact.
+	 */
+	invalidateEnrichmentFor(affectedIds: Set<string>): void {
+		if (affectedIds.size === 0) return;
+		if (!this._enrichment) return;
+		const { indexer } = this._enrichment;
+		let count = 0;
+		for (const [uri, entry] of this._cache) {
+			if (entry.model.aliases === undefined) continue;
+			// Check if any ref in this document's model points to an affected node
+			const text = entry.model.refs;
+			let affected = false;
+			for (const ref of text) {
+				const uids = indexer.findModelsByName(ref.model);
+				if (uids.some(m => affectedIds.has(m.uniqueId))) {
+					affected = true;
+					break;
+				}
+			}
+			if (!affected) {
+				for (const src of entry.model.sources) {
+					const key = `source.${src.sourceName}.${src.tableName}`;
+					// Source unique IDs follow the pattern source.<project>.<source_name>.<table_name>
+					// Check if any affected ID matches this source
+					for (const id of affectedIds) {
+						if (id.endsWith(`.${src.sourceName}.${src.tableName}`)) {
+							affected = true;
+							break;
+						}
+					}
+					if (affected) break;
+				}
+			}
+			if (affected) {
+				entry.model.aliases = undefined;
+				count++;
+			}
+		}
+		if (count > 0) {
+			// Also clear scope_columns cache since schema mapping may have changed
+			this._enrichment.scopeColumnsCache.clear();
+			this._logger.debug(`[parse-service] enrichment invalidated for ${count} document(s) affected by ${affectedIds.size} node(s)`);
+		}
 	}
 
 	/**
@@ -436,7 +489,7 @@ export class ParseService {
 		token?: vscode.CancellationToken,
 	): Promise<void> {
 		if (!this._enrichment) return;
-		const { service, describeCache, indexer } = this._enrichment;
+		const { describeCache, indexer, scopeColumnsCache } = this._enrichment;
 
 		try {
 			const { sql, refs } = stripJinja(document.getText(), indexer);
@@ -448,7 +501,10 @@ export class ParseService {
 			const schemaMapping = indexer.buildSchemaMapping();
 			const dialect = entry.dialect;
 
-			for (const [tableName, uniqueId] of refs) {
+			// Phase 3: Fire all describe requests concurrently.
+			// DescribeCache already has inflight dedup — concurrent calls for the
+			// same uniqueId share one Promise. Cache hits return immediately.
+			const describePromises = [...refs].map(async ([tableName, uniqueId]) => {
 				if (token?.isCancellationRequested) return;
 
 				const node = indexer.getRawNode(uniqueId);
@@ -462,26 +518,25 @@ export class ParseService {
 					const schema = (db['__described__'] ??= {});
 					schema[tableName.toLowerCase()] = Object.fromEntries(cols.map(c => [c, {}]));
 				}
-			}
+			});
+			await Promise.all(describePromises);
 
 			if (token?.isCancellationRequested) return;
 
-			const result = await service.submit({
-				type: 'scope_columns',
-				raw: { get_scope_columns: true, sql, dialect, schema_mapping: schemaMapping },
-				priority: Priority.Provider,
-				origin: 'provider',
-				label: 'get scope columns',
-			});
+			// Phase 2: Use ScopeColumnsCache — returns cached result when SQL
+			// and schema mapping haven't changed, avoiding a queue round-trip.
+			const aliases = await scopeColumnsCache.scopeColumns(sql, dialect, schemaMapping);
 
-			const data = result.data as Record<string, unknown> | undefined;
 			// Update the model in-place — all existing references see the enriched result.
-			entry.model.aliases = (data?.aliases as Record<string, string[]>) ?? {};
+			entry.model.aliases = aliases;
 
 			this._logger.debug(
 				`[parse-service] enriched ${document.fileName} — `
 				+ `${Object.keys(entry.model.aliases).length} aliases`,
 			);
+
+			// Notify listeners (e.g. diagnostics provider) so they can re-validate.
+			this._onEnrichmentComplete.fire(document.uri);
 		} catch (err) {
 			this._logger.debug(`[parse-service] enrichment failed for ${document.fileName}: ${err}`);
 			// Leave aliases as undefined — next call will retry enrichment.

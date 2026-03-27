@@ -4,6 +4,7 @@ import type { DbtExecutionService } from '../dbt/execution-service';
 import { Priority } from '../dbt/execution-service';
 import { ManifestLoader } from '../dbt/manifest-loader';
 import { ManifestIndexer } from './manifest-indexer';
+import type { ParseService } from '../services/parse-service';
 
 /**
  * Watches dbt target/manifest.json for changes and rebuilds the index.
@@ -18,6 +19,7 @@ export class ManifestWatcher {
 	private _parseDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 	private _suppressed = false;
 	private _executionService: DbtExecutionService | null = null;
+	private _parseService: ParseService | null = null;
 	private readonly _contentHashes = new Map<string, string>();
 	private readonly _onIndexRebuild = new vscode.EventEmitter<ManifestIndexer>();
 
@@ -63,6 +65,9 @@ export class ManifestWatcher {
 				const evicted = this.indexer.invalidateModel(uniqueId);
 				if (evicted.size > 0) {
 					this.logger.info(`Model saved: ${uniqueId} — evicted ${evicted.size} column store entries`);
+					// Surgical enrichment invalidation: only clear aliases for
+					// documents that reference evicted nodes, not all documents.
+					this._parseService?.invalidateEnrichmentFor(evicted);
 				}
 			}
 			this._debouncedParse();
@@ -118,6 +123,10 @@ export class ManifestWatcher {
 
 	setExecutionService(service: DbtExecutionService): void {
 		this._executionService = service;
+	}
+
+	setParseService(service: ParseService): void {
+		this._parseService = service;
 	}
 
 	private _debouncedParse(): void {
