@@ -9,7 +9,7 @@ import type { DbtExecutionService } from '../dbt/execution-service';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { StatusBarManager } from '../views/status-bar';
 import type { ILogger } from '../types/logger';
-import type { ColumnResolver } from './column-resolver';
+import { ParseService } from '../services/parse-service';
 import type { SqlglotWarning } from '../services/parse-service';
 import { computeCommentRanges, isOffsetInComment } from './comment-utils';
 import type { CommentRange } from './comment-utils';
@@ -38,7 +38,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		private readonly statusBar: StatusBarManager,
 		private readonly projectDir: string,
 		private readonly logger: ILogger,
-		private readonly columnResolver?: ColumnResolver,
+		private readonly parseService?: ParseService,
 		onAliasesReady?: vscode.Event<vscode.Uri>,
 		onIndexRebuild?: vscode.Event<ManifestIndexer>,
 		onSqlglotWarnings?: vscode.Event<{ uri: vscode.Uri; warnings: SqlglotWarning[] }>,
@@ -100,7 +100,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		// Re-validate column diagnostics when background enrichment completes.
 		// Enrichment runs asynchronously after parse — without this, column
 		// diagnostics stay stale until the user edits the file again.
-		if (onAliasesReady && this.columnResolver) {
+		if (onAliasesReady && this.parseService) {
 			this._disposables.push(
 				onAliasesReady((uri) => {
 					if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) return;
@@ -128,7 +128,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 					for (const doc of openSqlDocs) {
 						this._validateRefsOnly(doc);					// Re-validate column diagnostics too — per-doc debounce ensures
 						// each file gets its own timer, so no file cancels another.
-						if (this.columnResolver) this._validateColumnsDebounced(doc);					}
+						if (this.parseService) this._validateColumnsDebounced(doc);					}
 					this._updateStatusBar();
 				}),
 			);
@@ -187,7 +187,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		this._updateStatusBar();
 
 		// Async column validation (longer debounce, separate collection)
-		if (this.columnResolver) {
+		if (this.parseService) {
 			this._validateColumnsDebounced(document);
 		}
 	}
@@ -298,7 +298,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 	}
 
 	private async _validateColumnsAsync(document: vscode.TextDocument): Promise<void> {
-		if (!this.columnResolver) return;
+		if (!this.parseService) return;
 
 		const key = document.uri.toString();
 		this._columnCtsSources.get(key)?.cancel();
@@ -306,7 +306,10 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		this._columnCtsSources.set(key, cts);
 		const token = cts.token;
 
-		const { tokens, aliases } = await this.columnResolver.getTokensAndAliases(document, token);
+		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const model = await this.parseService.getDocumentModel(document, dialect);
+		const tokens = model?.tokens ?? [];
+		const aliases = model ? ParseService.resolveAliases(model) : {};
 		if (token.isCancellationRequested) return;
 
 		const aliasInfo = Object.entries(aliases).map(([k, v]) => `${k}:${v.length}`).join(', ');

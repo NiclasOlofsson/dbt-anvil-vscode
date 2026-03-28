@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as vscode from 'vscode';
 import { DbtHoverProvider } from '../providers/hover-provider';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import type { ColumnResolver } from '../providers/column-resolver';
 import type { ParseService, DocumentModel, TokenInfo } from '../services/parse-service';
 import { createMockLogger } from './helpers';
 
@@ -116,7 +115,7 @@ describe('DbtHoverProvider — CTE hover via ParseService', () => {
 		const parseService = createMockParseService(model);
 		const provider = new DbtHoverProvider(
 			createMockIndexer(), createMockLogger(),
-			undefined, parseService,
+			parseService,
 		);
 		const doc = createMockDocument(sql);
 		// Line 6: "  FROM base" — cursor on 'base'
@@ -138,7 +137,7 @@ describe('DbtHoverProvider — CTE hover via ParseService', () => {
 		const parseService = createMockParseService(model);
 		const provider = new DbtHoverProvider(
 			createMockIndexer(), createMockLogger(),
-			undefined, parseService,
+			parseService,
 		);
 		const doc = createMockDocument(sql);
 		// Line 8: "SELECT * FROM enriched"
@@ -152,11 +151,11 @@ describe('DbtHoverProvider — CTE hover via ParseService', () => {
 		expect(content).toContain('2 columns');
 	});
 
-	it('does not trigger CTE hover when not after FROM/JOIN', async () => {
+	it('does not trigger CTE table hover when hovering a column in SELECT', async () => {
 		const parseService = createMockParseService(model);
 		const provider = new DbtHoverProvider(
 			createMockIndexer(), createMockLogger(),
-			undefined, parseService,
+			parseService,
 		);
 		const doc = createMockDocument(sql);
 		// Line 1: "  SELECT id, name, email" — cursor on 'id'
@@ -164,8 +163,12 @@ describe('DbtHoverProvider — CTE hover via ParseService', () => {
 
 		const result = await provider.provideHover(doc, pos, mockToken);
 
-		// No CTE hover for id in SELECT (not after FROM/JOIN)
-		expect(result).toBeUndefined();
+		// No CTE table hover for 'id' in SELECT — if anything fires it must be a column hover
+		if (result) {
+			const content = (result.contents as unknown as vscode.MarkdownString).value;
+			expect(content).not.toMatch(/— CTE\b/);
+			expect(content).toContain('— column');
+		}
 	});
 
 	it('returns undefined when ParseService has no matching CTE', async () => {
@@ -180,7 +183,7 @@ describe('DbtHoverProvider — CTE hover via ParseService', () => {
 		const parseService = createMockParseService(emptyModel);
 		const provider = new DbtHoverProvider(
 			createMockIndexer(), createMockLogger(),
-			undefined, parseService,
+			parseService,
 		);
 		const doc = createMockDocument(sql);
 		// Line 6: "  FROM base" but model has no CTEs

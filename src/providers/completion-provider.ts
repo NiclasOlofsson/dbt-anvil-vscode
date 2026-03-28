@@ -1,8 +1,7 @@
 import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
-import type { ParseService } from '../services/parse-service';
-import type { ColumnResolver } from './column-resolver';
+import { ParseService } from '../services/parse-service';
 import { isLinePositionInComment } from './comment-utils';
 
 /**
@@ -13,7 +12,6 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
-		private readonly columnResolver?: ColumnResolver,
 		private readonly parseService?: ParseService,
 	) {}
 
@@ -61,14 +59,14 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 
 		// alias. — column completions (requires bridge)
 		const aliasMatch = /(\w+)\.\s*$/.exec(linePrefix);
-		if (aliasMatch && this.columnResolver) {
+		if (aliasMatch && this.parseService) {
 			this.logger.debug(`Completion: column for alias '${aliasMatch[1]}'`);
 			return this._completeColumns(document, aliasMatch[1], token);
 		}
 
 		// Bare word in SQL context — offer all in-scope columns merged from all aliases
 		// Match after whitespace/open-paren with zero or more word chars (covers empty trigger)
-		if (this.columnResolver && /(?:^|[\s,(])\w*$/.test(linePrefix)) {
+		if (this.parseService && /(?:^|[\s,(])\w*$/.test(linePrefix)) {
 			// Skip if inside an unclosed Jinja expression
 			const insideJinja = /\{\{[^}]*$/.test(linePrefix) || /\{%[^%]*$/.test(linePrefix);
 			// After a table keyword — offer CTE names and model names
@@ -151,8 +149,10 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 	}
 
 	private async _getScopeAliases(document: vscode.TextDocument, token: vscode.CancellationToken): Promise<Record<string, string[]>> {
-		if (!this.columnResolver) return {};
-		return this.columnResolver.getScopeAliases(document, token);
+		if (!this.parseService) return {};
+		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const model = await this.parseService.getDocumentModel(document, dialect);
+		return model ? ParseService.resolveAliases(model) : {};
 	}
 
 	// -----------------------------------------------------------------------

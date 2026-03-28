@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import type { ColumnResolver } from '../providers/column-resolver';
 import type { ParseService } from '../services/parse-service';
 import type { DocumentModel } from '../services/parse-service';
 
@@ -29,11 +28,20 @@ function makeIndexer(): ManifestIndexer {
 	} as unknown as ManifestIndexer;
 }
 
-function makeColumnResolver(aliases: Record<string, string[]>): ColumnResolver {
+function makeParseServiceWithAliases(aliases: Record<string, string[]>): ParseService {
+	const model = {
+		ctes: [],
+		refs: [],
+		sources: [],
+		finalColumns: [],
+		tokens: [],
+		aliases,
+		timing: { parseMs: 0, totalMs: 0 },
+	} as unknown as DocumentModel;
 	return {
-		getScopeAliases: vi.fn().mockResolvedValue(aliases),
-		getCachedAliases: vi.fn().mockReturnValue(aliases),
-	} as unknown as ColumnResolver;
+		getDocumentModel: vi.fn().mockResolvedValue(model),
+		evict: vi.fn(),
+	} as unknown as ParseService;
 }
 
 
@@ -51,7 +59,7 @@ describe('DbtCompletionProvider — bare column completions', () => {
 	};
 
 	beforeEach(() => {
-		provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), makeColumnResolver(aliases));
+		provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), makeParseServiceWithAliases(aliases));
 	});
 
 	it('returns merged column list when typing a bare word in SELECT', async () => {
@@ -129,8 +137,7 @@ describe('DbtCompletionProvider — bare column completions', () => {
 	});
 
 	it('returns [] (not undefined) when no aliases resolved', async () => {
-		const emptyResolver = makeColumnResolver({});
-		const p = new DbtCompletionProvider(makeIndexer(), createMockLogger(), emptyResolver);
+		const p = new DbtCompletionProvider(makeIndexer(), createMockLogger(), makeParseServiceWithAliases({}));
 
 		const linePrefix = 'SELECT na';
 		const doc = mockDocument([linePrefix]);
@@ -146,7 +153,7 @@ describe('DbtCompletionProvider — bare column completions', () => {
 describe('DbtCompletionProvider — alias.column completions (existing)', () => {
 	it('still works for alias. prefix', async () => {
 		const aliases = { c: ['id', 'name'] };
-		const provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), makeColumnResolver(aliases));
+		const provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), makeParseServiceWithAliases(aliases));
 
 		const linePrefix = 'SELECT c.';
 		const doc = mockDocument([linePrefix]);
@@ -200,7 +207,7 @@ describe('DbtCompletionProvider — FROM/JOIN with ParseService', () => {
 	it('returns CTE names before model names after FROM', async () => {
 		const indexer = makeIndexerWithModels();
 		const parseService = makeParseService(docModel);
-		const provider = new DbtCompletionProvider(indexer, createMockLogger(), makeColumnResolver({}), parseService);
+		const provider = new DbtCompletionProvider(indexer, createMockLogger(), parseService);
 
 		const linePrefix = 'FROM ';
 		const doc = mockDocument([linePrefix]);
@@ -223,7 +230,7 @@ describe('DbtCompletionProvider — FROM/JOIN with ParseService', () => {
 
 	it('shows CTE column count in detail', async () => {
 		const parseService = makeParseService(docModel);
-		const provider = new DbtCompletionProvider(makeIndexerWithModels(), createMockLogger(), makeColumnResolver({}), parseService);
+		const provider = new DbtCompletionProvider(makeIndexerWithModels(), createMockLogger(), parseService);
 
 		const linePrefix = 'JOIN ';
 		const doc = mockDocument([linePrefix]);
