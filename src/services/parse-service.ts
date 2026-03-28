@@ -332,6 +332,19 @@ export class ParseService {
 	}
 
 	/**
+	 * Return the column list for the table that `ref` points to.
+	 * Checks CTE projections first, then manifest-enriched aliases.
+	 * Returns `undefined` when the table is not locally defined (e.g. an
+	 * externally-defined CTE passed in by the macro caller).
+	 */
+	static columnsForRef(ref: TableRefToken, model: DocumentModel): string[] | undefined {
+		const nameLc = ref.name.toLowerCase();
+		const cte = model.ctes.find(c => c.name.toLowerCase() === nameLc);
+		if (cte) return cte.columns.map(c => c.name);
+		return model.aliases?.[ref.name] ?? model.aliases?.[nameLc];
+	}
+
+	/**
 	 * Compute the combined alias → column-name map from a parsed model.
 	 * Merges bridge-resolved upstream aliases (model.aliases) with CTE aliases
 	 * and any FROM/JOIN aliases that point to CTEs.

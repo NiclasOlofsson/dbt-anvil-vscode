@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
 import { ParseService } from '../services/parse-service';
-import type { DocumentModel } from '../services/parse-service';
+import type { ColumnRefToken, DocumentModel } from '../services/parse-service';
 import { isLinePositionInComment } from './comment-utils';
 import { SQL_KEYWORDS } from './sql-keywords';
 import { resolvePositionContext } from './position-context';
@@ -179,10 +179,10 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 			}
 			case 'table_qualifier': {
 				// Alias prefix of a column ref (e.g. the `o` in `o.order_id`)
-				const alias = resolved.token.table!;
-				const aliases = ParseService.resolveAliases(model);
-				const cols = aliases[alias] ?? aliases[alias.toLowerCase()];
-				if (cols) return this._buildAliasHover(alias, cols);
+				const refTok = resolved.token.resolvedTableRef;
+				if (!refTok) return null;
+				const cols = ParseService.columnsForRef(refTok, model);
+				if (cols) return this._buildAliasHover(resolved.token.table!, cols);
 				return null;
 			}
 			case 'column_def':
@@ -191,11 +191,10 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 			case 'column': {
 				// Column reference — show column info with source
 				const colToken = resolved.token;
-				const aliases = ParseService.resolveAliases(model);
+				const refTok = colToken.resolvedTableRef;
 				if (colToken.table) {
-					const refTok = colToken.resolvedTableRef;
-					const cols = aliases[colToken.table] ?? aliases[colToken.table.toLowerCase()];
-					this.logger.trace(`Hover: column '${colToken.table}.${colToken.name}' — aliases has '${colToken.table}': ${cols ? `[${cols.join(', ')}]` : 'not found'} (${Object.keys(aliases).length} aliases total)`);
+					const cols = refTok ? ParseService.columnsForRef(refTok, model) : undefined;
+					this.logger.trace(`Hover: column '${colToken.table}.${colToken.name}' — resolvedTableRef: ${refTok?.name ?? 'none'}, cols: ${cols ? `[${cols.join(', ')}]` : 'none'}`);
 					if (cols && cols.some(c => c.toLowerCase() === colToken.name.toLowerCase())) {
 						return this._buildColumnHover(colToken.name, colToken.table);
 					}
@@ -207,23 +206,15 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 						md.appendMarkdown('_Column list unavailable — `' + refTok.name + '` is not defined in this file._');
 						return new vscode.Hover(md);
 					}
-					// Qualified column whose qualifier wasn't resolved — suppress fallback
-					// to avoid spurious matches from unrelated tables in the alias map.
+					// Qualified column with no resolvedTableRef — qualifier not locally defined
 					return null;
 				}
-				// Bare column (no table qualifier) — search all aliases
-				const sources: string[] = [];
-				for (const [alias, cols] of Object.entries(aliases)) {
-					if (cols.some(c => c.toLowerCase() === colToken.name.toLowerCase())) {
-						sources.push(alias);
+				// Bare column (qualify-resolved) — resolvedTableRef tells us the exact source
+				if (refTok) {
+					const cols = ParseService.columnsForRef(refTok, model);
+					if (cols && cols.some(c => c.toLowerCase() === colToken.name.toLowerCase())) {
+						return this._buildColumnHover(colToken.name, refTok.alias ?? refTok.name);
 					}
-				}
-				if (sources.length > 0) {
-					return this._buildColumnHover(
-						colToken.name,
-						sources.length === 1 ? sources[0] : undefined,
-						sources,
-					);
 				}
 				return null;
 			}
@@ -248,18 +239,15 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		const word = document.getText(wordRange);
 		if (SQL_KEYWORDS.has(word.toUpperCase())) return undefined;
 
-		const aliases = ParseService.resolveAliases(model);
-		if (Object.keys(aliases).length === 0) return undefined;
-
-		// Bare column name — search all aliases
-		const sources: string[] = [];
-		for (const [alias, cols] of Object.entries(aliases)) {
-			if (cols.some(c => c.toLowerCase() === word.toLowerCase())) {
-				sources.push(alias);
+		// Find the column_ref token at this position, use resolvedTableRef if available
+		const colTok = model.tokens.find(
+			(t): t is ColumnRefToken => t.type === 'column_ref' && t.name.toLowerCase() === word.toLowerCase() && t.line === position.line,
+		);
+		if (colTok?.resolvedTableRef) {
+			const cols = ParseService.columnsForRef(colTok.resolvedTableRef, model);
+			if (cols && cols.some(c => c.toLowerCase() === word.toLowerCase())) {
+				return this._buildColumnHover(word, colTok.resolvedTableRef.alias ?? colTok.resolvedTableRef.name);
 			}
-		}
-		if (sources.length > 0) {
-			return this._buildColumnHover(word, sources.length === 1 ? sources[0] : undefined, sources);
 		}
 
 		return undefined;
