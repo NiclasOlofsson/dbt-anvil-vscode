@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
-import type { ParseService, TokenInfo } from '../services/parse-service';
+import { ParseService } from '../services/parse-service';
+import type { TokenInfo } from '../services/parse-service';
 
 /**
  * Shared column resolution service.  Resolves alias → column-name mappings
@@ -20,20 +21,19 @@ export class ColumnResolver {
 
 	async getScopeAliases(
 		document: vscode.TextDocument,
-		token: vscode.CancellationToken,
+		_token: vscode.CancellationToken,
 	): Promise<Record<string, string[]>> {
 		const dialect = this.indexer.index?.adapterType ?? 'ansi';
-		return this.parseService.getAliases(document, dialect, token);
+		const model = await this.parseService.getDocumentModel(document, dialect);
+		return model ? ParseService.resolveAliases(model) : {};
 	}
 
 	async getTokensAndAliases(
 		document: vscode.TextDocument,
-		token: vscode.CancellationToken,
+		_token: vscode.CancellationToken,
 	): Promise<{ tokens: TokenInfo[]; aliases: Record<string, string[]> }> {
 		const dialect = this.indexer.index?.adapterType ?? 'ansi';
-		// getDocumentModel is cached — second call in getAliases is free.
 		const model = await this.parseService.getDocumentModel(document, dialect);
-		const aliases = await this.parseService.getAliases(document, dialect, token);
-		return { tokens: model?.tokens ?? [], aliases };
+		return { tokens: model?.tokens ?? [], aliases: model ? ParseService.resolveAliases(model) : {} };
 	}
 }
