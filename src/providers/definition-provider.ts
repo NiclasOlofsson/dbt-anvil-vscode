@@ -126,6 +126,7 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 	private _resolveMacro(macroName: string): vscode.Location | undefined {
 		const macro = this.indexer.findMacroByName(macroName);
 		if (!macro) return undefined;
+		if (!macro.filePath) return undefined;
 		try {
 			return new vscode.Location(vscode.Uri.file(macro.filePath), new vscode.Position(0, 0));
 		} catch {
@@ -199,14 +200,12 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 				return undefined;
 			}
 			case 'table_qualifier': {
-				const alias = resolved.token.table!;
-				const refTok = model.tokens.find((t): t is TableRefToken =>
-					t.type === 'table_ref' && t.alias?.toLowerCase() === alias.toLowerCase(),
-				);
+				const colToken = resolved.token;
+				const refTok = colToken.resolvedTableRef;
 				if (refTok && refTok.aliasLine !== undefined && refTok.aliasCol !== undefined) {
 					return new vscode.Location(document.uri, new vscode.Position(refTok.aliasLine, refTok.aliasCol));
 				}
-				return this._jumpToCte(document, model, alias);
+				return this._jumpToCte(document, model, colToken.table!);
 			}
 			case 'column': {
 				const colToken = resolved.token;
