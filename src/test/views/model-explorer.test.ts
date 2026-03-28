@@ -52,6 +52,7 @@ function createTestIndex(): ManifestIndex {
 	return {
 		models,
 		sources,
+		macros: new Map(),
 		nodesByName: new Map(),
 		parentMap: new Map(),
 		childMap: new Map(),

@@ -312,9 +312,9 @@ describe('DbtDocumentSymbolProvider', () => {
 		].join('\n');
 
 		const doc = createMockDocument(sql);
-		const symbols = await provider.provideDocumentSymbols(doc, mockToken);
+		const symbols = (await provider.provideDocumentSymbols(doc, mockToken))!;
 
-		const names = symbols.map(s => s.name);
+		const names = (symbols as vscode.DocumentSymbol[]).map(s => s.name);
 		expect(names).toContain('cte_orders');
 		expect(names).toContain('cte_customers');
 	});
@@ -329,7 +329,7 @@ describe('DbtDocumentSymbolProvider', () => {
 		].join('\n');
 
 		const doc = createMockDocument(sql, { fileName: '/project/models/customers.sql' });
-		const symbols = await provider.provideDocumentSymbols(doc, mockToken);
+		const symbols = (await provider.provideDocumentSymbols(doc, mockToken))! as vscode.DocumentSymbol[];
 
 		const modelSymbol = symbols.find(s => s.name === 'customers');
 		expect(modelSymbol).toBeDefined();
@@ -338,7 +338,7 @@ describe('DbtDocumentSymbolProvider', () => {
 
 	it('returns empty for SQL without WITH keyword', async () => {
 		const doc = createMockDocument('select * from orders');
-		const symbols = await provider.provideDocumentSymbols(doc, mockToken);
+		const symbols = (await provider.provideDocumentSymbols(doc, mockToken)) ?? [];
 		expect(symbols).toEqual([]);
 	});
 
@@ -356,7 +356,7 @@ describe('DbtDocumentSymbolProvider', () => {
 			languageId: 'yaml',
 			fileName: '/project/models/schema.yml',
 		});
-		const symbols = provider.provideDocumentSymbols(doc, mockToken);
+		const symbols = provider.provideDocumentSymbols(doc, mockToken) as vscode.DocumentSymbol[];
 
 		expect(symbols.length).toBe(1);
 		expect(symbols[0].name).toBe('customers');

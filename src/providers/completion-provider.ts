@@ -148,7 +148,7 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 		}
 	}
 
-	private async _getScopeAliases(document: vscode.TextDocument, token: vscode.CancellationToken): Promise<Record<string, string[]>> {
+	private async _getScopeAliases(document: vscode.TextDocument, _token: vscode.CancellationToken): Promise<Record<string, string[]>> {
 		if (!this.parseService) return {};
 		const dialect = this.indexer.index?.adapterType ?? 'ansi';
 		const model = await this.parseService.getDocumentModel(document, dialect);
