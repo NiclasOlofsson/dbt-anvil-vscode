@@ -1,0 +1,25 @@
+{
+	// --- Editor ---
+	"[typescript]": {
+		"editor.formatOnSave": true
+	},
+	"[javascript]": {
+		"editor.formatOnSave": true
+	},
+	"files.trimTrailingWhitespace": true,
+	"files.insertFinalNewline": true,
+	// --- TypeScript ---
+	"js/ts.tsserver.experimental.enableProjectDiagnostics": true,
+	"js/ts.tsdk.path": "node_modules/typescript/lib",
+	"js/ts.preferences.importModuleSpecifier": "relative",
+	"js/ts.preferences.quoteStyle": "single",
+	"js/ts.tsc.autoDetect": "off",
+	// --- Search ---
+	"search.exclude": {
+		"**/node_modules": true,
+		"out/**": true,
+		"dist/**": true
+	},
+	// --- ESLint ---
+	"eslint.useFlatConfig": true
+}
