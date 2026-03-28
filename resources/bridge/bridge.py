@@ -1593,6 +1593,34 @@ def handle_parse_document(request: dict[str, Any]) -> None:
                     token_entry["aliasEndCol"] = a_end_0
         tokens.append(token_entry)
 
+    # Post-processing: for each column_ref with a table qualifier, embed the
+    # resolved table_ref object directly so providers never need to search.
+    # Strategy: for each qualified column_ref, find the table_ref whose alias
+    # matches and whose line is the closest preceding one (same proximity logic
+    # that was previously duplicated in every TypeScript provider).
+    _table_refs = [t for t in tokens if t["type"] == "table_ref" and "alias" in t]
+    for tok in tokens:
+        if tok["type"] != "column_ref" or "table" not in tok:
+            continue
+        qualifier_lc = tok["table"].lower()
+        col_line = tok["line"]
+        best: dict[str, Any] | None = None
+        for tr in _table_refs:
+            if tr.get("alias", "").lower() != qualifier_lc:
+                continue
+            if tr["line"] > col_line:
+                continue
+            if best is None or tr["line"] > best["line"]:
+                best = tr
+        if best is None:
+            # fallback: any match (e.g. alias defined after column in a CTE)
+            for tr in _table_refs:
+                if tr.get("alias", "").lower() == qualifier_lc:
+                    best = tr
+                    break
+        if best is not None:
+            tok["resolvedTableRef"] = best
+
     total_ms = (time.perf_counter() - t0) * 1000
 
     print(

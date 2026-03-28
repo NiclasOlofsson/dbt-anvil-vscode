@@ -747,4 +747,134 @@ describe('definition-provider integration (real bridge)', () => {
 		});
 	});
 
+	// ---- Duplicate alias scoping ----
+	//
+	// Regression for: F12 on a qualifier always jumped to the *first* table_ref token
+	// with that alias name, regardless of cursor position. Fix: pick the closest
+	// preceding table_ref token (by line number) rather than using Array.find().
+	//
+	// SQL2 uses 'addr' as an alias in two separate CTEs. Clicking on addr.col_b in
+	// cte_second must jump to the cte_second alias definition, not cte_first's.
+
+	describe('duplicate alias — F12 picks closest preceding alias definition', () => {
+		// Line 0: with cte_first as (
+		// Line 1:     select a.col_a
+		// Line 2:     from {{ ref('model_a') }} as addr
+		// Line 3:     where addr.col_a = 1
+		// Line 4: ),
+		// Line 5: cte_second as (
+		// Line 6:     select b.col_b
+		// Line 7:     from {{ ref('model_b') }} as addr
+		// Line 8:     where addr.col_b = 2
+		// Line 9: )
+		// Line 10: select * from cte_first join cte_second using (col_a)
+		const SQL2 = [
+			'with cte_first as (',
+			'    select a.col_a',
+			"    from {{ ref('model_a') }} as addr",
+			'    where addr.col_a = 1',
+			'),',
+			'cte_second as (',
+			'    select b.col_b',
+			"    from {{ ref('model_b') }} as addr",
+			'    where addr.col_b = 2',
+			')',
+			'select * from cte_first join cte_second using (col_a)',
+		].join('\n');
+
+		let model2: DocumentModel;
+
+		beforeAll(async () => {
+			const result = await bridge.invokeRaw({
+				parse_document: true,
+				sql: SQL2,
+				dialect: 'ansi',
+				schema: { model_a: { col_a: 'TEXT' }, model_b: { col_b: 'TEXT' } },
+			});
+			expect(result.success, 'bridge parse failed for SQL2').toBe(true);
+			const data = result.data as Record<string, unknown>;
+			model2 = {
+				ctes: (data['ctes'] ?? []) as DocumentModel['ctes'],
+				refs: (data['refs'] ?? []) as DocumentModel['refs'],
+				sources: (data['sources'] ?? []) as DocumentModel['sources'],
+				finalColumns: (data['finalColumns'] ?? []) as DocumentModel['finalColumns'],
+				tokens: (data['tokens'] ?? []) as DocumentModel['tokens'],
+				timing: (data['timing'] ?? { parseMs: 0, totalMs: 0 }) as DocumentModel['timing'],
+			};
+		}, 30_000);
+
+		it('bridge emits two table_ref tokens with alias addr at different lines', () => {
+			const addrRefs = model2.tokens
+				.filter((t): t is TableRefToken => t.type === 'table_ref' && t.alias === 'addr');
+			expect(addrRefs).toHaveLength(2);
+			const lines = addrRefs.map(t => t.line).sort((a, b) => a - b);
+			expect(lines[0]).toBe(2); // cte_first alias
+			expect(lines[1]).toBe(7); // cte_second alias
+		});
+
+		it('proximity fix: cursor on line 8 (cte_second) selects the line-7 addr definition, not line-2', () => {
+			// Simulate the fix logic from definition-provider.ts _resolveToken 'table_qualifier':
+			// reduce over all candidates, picking the one with highest line ≤ cursorLine.
+			const addrRefs = model2.tokens
+				.filter((t): t is TableRefToken => t.type === 'table_ref' && t.alias?.toLowerCase() === 'addr');
+			const cursorLine = 8; // hovering addr.col_b on line 8
+
+			const chosen = addrRefs.reduce<TableRefToken | undefined>((best, t) => {
+				if (t.line > cursorLine) return best;
+				if (!best || t.line > best.line) return t;
+				return best;
+			}, undefined) ?? addrRefs[0];
+
+			expect(chosen.line).toBe(7); // must pick cte_second's definition, not cte_first's
+		});
+
+		it('F12 on addr.col_b (cte_second, line 8) → alias site at line 7, not line 2', async () => {
+			const lines2 = SQL2.split('\n');
+			const doc2 = {
+				languageId: 'jinja-sql',
+				fileName: '/project/models/test2.sql',
+				getText: () => SQL2,
+				lineAt: (n: number) => ({ text: lines2[n] ?? '', range: new vscode.Range(n, 0, n, (lines2[n] ?? '').length) }),
+				positionAt: () => new vscode.Position(0, 0),
+				getWordRangeAtPosition: () => undefined,
+				lineCount: lines2.length,
+				uri: vscode.Uri.file('/project/models/test2.sql'),
+				version: 1,
+			} as unknown as vscode.TextDocument;
+
+			const addrColBTok = model2.tokens
+				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
+				.find(t => t.name === 'col_b' && t.table === 'addr')!;
+			expect(addrColBTok).toBeDefined();
+			expect(addrColBTok.tableLine).toBe(8);
+
+			const indexer2 = {
+				index: { adapterType: 'ansi' },
+				findModelsByName: () => [],
+				findSourceByKey: () => undefined,
+				getRawNode: () => null,
+				getColumns: () => null,
+				setColumns: vi.fn(),
+				buildSchemaMapping: () => ({}),
+			};
+			const parseService2 = { getDocumentModel: vi.fn().mockResolvedValue(model2), evict: vi.fn() };
+			const provider2 = new DbtDefinitionProvider(
+				indexer2 as never,
+				{ projectDir: '/project' } as never,
+				createMockLogger(),
+				parseService2 as never,
+			);
+
+			const result = await provider2.provideDefinition(
+				doc2,
+				new vscode.Position(addrColBTok.tableLine!, addrColBTok.tableCol! + 1),
+				{ isCancellationRequested: false, onCancellationRequested: vi.fn() },
+			);
+
+			expect(result).toBeDefined();
+			const loc = (Array.isArray(result) ? result[0] : result) as vscode.Location;
+			expect(loc.range.start.line).toBe(7); // cte_second's alias site — NOT line 2
+		});
+	});
+
 });

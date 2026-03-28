@@ -193,10 +193,19 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 				const colToken = resolved.token;
 				const aliases = ParseService.resolveAliases(model);
 				if (colToken.table) {
+					const refTok = colToken.resolvedTableRef;
 					const cols = aliases[colToken.table] ?? aliases[colToken.table.toLowerCase()];
 					this.logger.trace(`Hover: column '${colToken.table}.${colToken.name}' — aliases has '${colToken.table}': ${cols ? `[${cols.join(', ')}]` : 'not found'} (${Object.keys(aliases).length} aliases total)`);
 					if (cols && cols.some(c => c.toLowerCase() === colToken.name.toLowerCase())) {
 						return this._buildColumnHover(colToken.name, colToken.table);
+					}
+					// Qualifier resolves to a known alias but its column list is unavailable
+					// (e.g. a CTE defined in the caller of a macro, not in this file).
+					if (!cols && refTok) {
+						const md = new vscode.MarkdownString();
+						md.appendMarkdown(`**${colToken.table}** (alias for \`${refTok.name}\`)\n\n`);
+						md.appendMarkdown('_Column list unavailable — `' + refTok.name + '` is not defined in this file._');
+						return new vscode.Hover(md);
 					}
 					// Qualified column whose qualifier wasn't resolved — suppress fallback
 					// to avoid spurious matches from unrelated tables in the alias map.

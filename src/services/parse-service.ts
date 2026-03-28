@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import type { BridgeRunner } from '../dbt/bridge-runner';
 import type { DescribeCache } from '../dbt/describe-cache';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
+import { generateVariants } from '../dbt/sql-variant-generator';
 import { stripJinja } from '../providers/jinja-utils';
 import type { ILogger } from '../types/logger';
 
@@ -77,6 +78,12 @@ export interface ColumnRefToken {
 	tableLine?: number;
 	tableCol?: number;
 	tableEndCol?: number;
+	/**
+	 * The table_ref token that this column's qualifier resolves to.
+	 * Populated by the bridge post-processing pass — avoids every provider
+	 * having to re-implement alias → definition-site lookup logic.
+	 */
+	resolvedTableRef?: TableRefToken;
 }
 
 export interface TableRefToken {
@@ -164,6 +171,103 @@ interface CacheEntry {
 	model: DocumentModel;
 	/** Dialect used for this parse. */
 	dialect: string;
+}
+
+/**
+ * Merge N DocumentModels produced by separate bridge parse calls (one per SQL
+ * variant) into a single model. All positions in each model are expressed in
+ * original-source coordinates (generateVariants is length-preserving), so
+ * tokens from different variants can be combined without any remapping.
+ */
+export function mergeModels(models: DocumentModel[]): DocumentModel {
+	if (models.length === 1) return models[0];
+
+	// CTEs: union by name; within the same CTE merge column lists by name
+	const cteMap = new Map<string, CteInfo>();
+	for (const m of models) {
+		for (const cte of m.ctes) {
+			const existing = cteMap.get(cte.name);
+			if (!existing) {
+				cteMap.set(cte.name, { ...cte, columns: [...cte.columns] });
+			} else {
+				const known = new Set(existing.columns.map(c => c.name));
+				for (const col of cte.columns) {
+					if (!known.has(col.name)) {
+						existing.columns.push(col);
+						known.add(col.name);
+					}
+				}
+			}
+		}
+	}
+
+	// refs: dedup by model:line:col
+	const refKeys = new Set<string>();
+	const refs: RefInfo[] = [];
+	for (const m of models) {
+		for (const ref of m.refs) {
+			const k = ref.model + ':' + ref.line + ':' + ref.col;
+			if (!refKeys.has(k)) { refKeys.add(k); refs.push(ref); }
+		}
+	}
+
+	// sources: dedup by sourceName:tableName:line:col
+	const srcKeys = new Set<string>();
+	const sources: SourceInfo[] = [];
+	for (const m of models) {
+		for (const src of m.sources) {
+			const k = src.sourceName + ':' + src.tableName + ':' + src.line + ':' + src.col;
+			if (!srcKeys.has(k)) { srcKeys.add(k); sources.push(src); }
+		}
+	}
+
+	// tokens: dedup by type:line:col
+	const tokKeys = new Set<string>();
+	const tokens: TokenInfo[] = [];
+	for (const m of models) {
+		for (const tok of m.tokens) {
+			const k = tok.type + ':' + tok.line + ':' + tok.col;
+			if (!tokKeys.has(k)) { tokKeys.add(k); tokens.push(tok); }
+		}
+	}
+
+	// finalColumns: dedup by name
+	const finalNames = new Set<string>();
+	const finalColumns: ColumnInfo[] = [];
+	for (const m of models) {
+		for (const col of m.finalColumns) {
+			if (!finalNames.has(col.name)) { finalNames.add(col.name); finalColumns.push(col); }
+		}
+	}
+
+	// aliases: union per key
+	const aliases: Record<string, string[]> = {};
+	for (const m of models) {
+		for (const [alias, cols] of Object.entries(m.aliases ?? {})) {
+			if (!(alias in aliases)) {
+				aliases[alias] = [...cols];
+			} else {
+				const seen = new Set(aliases[alias]);
+				for (const c of cols) { if (!seen.has(c)) { aliases[alias].push(c); seen.add(c); } }
+			}
+		}
+	}
+
+	// sqlglotWarnings: dedup by message
+	const warnMessages = new Set<string>();
+	const sqlglotWarnings: SqlglotWarning[] = [];
+	for (const m of models) {
+		for (const w of (m.sqlglotWarnings ?? [])) {
+			if (!warnMessages.has(w.message)) { warnMessages.add(w.message); sqlglotWarnings.push(w); }
+		}
+	}
+
+	const timing = {
+		parseMs: models.reduce((s, m) => s + m.timing.parseMs, 0),
+		totalMs: models.reduce((s, m) => s + m.timing.totalMs, 0),
+	};
+
+	return { ctes: [...cteMap.values()], refs, sources, finalColumns, tokens, timing, sqlglotWarnings, aliases };
 }
 
 /**
@@ -439,25 +543,51 @@ export class ParseService {
 			parseRequest['schema'] = qualifySchema;
 		}
 
-		const result = await this._bridge.invokeRaw(parseRequest);
-
-		if (!result.success || !result.data) {
-			const errMsg = (result.data as Record<string, unknown>)?.['error'] ?? 'no response';
-			this._logger.debug(`[parse-service] parse_document failed for ${document.fileName}: ${String(errMsg)}`);
-			return null;
+		function buildModel(raw: unknown): DocumentModel {
+			const d = raw as unknown as (DocumentModel & { success: boolean; sqlglotWarnings?: SqlglotWarning[]; aliases?: Record<string, string[]> });
+			return {
+				ctes: d.ctes ?? [],
+				refs: d.refs ?? [],
+				sources: d.sources ?? [],
+				finalColumns: d.finalColumns ?? [],
+				tokens: (d as unknown as Record<string, unknown>).tokens as TokenInfo[] ?? [],
+				timing: d.timing ?? { parseMs: 0, totalMs: 0 },
+				sqlglotWarnings: d.sqlglotWarnings ?? [],
+				aliases: d.aliases ?? {},
+			};
 		}
 
-		const data = result.data as unknown as (DocumentModel & { success: boolean; sqlglotWarnings?: SqlglotWarning[]; aliases?: Record<string, string[]> });
-		const model: DocumentModel = {
-			ctes: data.ctes ?? [],
-			refs: data.refs ?? [],
-			sources: data.sources ?? [],
-			finalColumns: data.finalColumns ?? [],
-			tokens: (data as unknown as Record<string, unknown>).tokens as TokenInfo[] ?? [],
-			timing: data.timing ?? { parseMs: 0, totalMs: 0 },
-			sqlglotWarnings: data.sqlglotWarnings ?? [],
-			aliases: data.aliases ?? {},
-		};
+		// Generate one SQL string per branch-combination so every conditional code
+		// path gets parsed. generateVariants is length-preserving — all positions
+		// in the returned models are in original-source coordinates.
+		const variants = generateVariants(rawText);
+		let model: DocumentModel;
+
+		if (variants.length <= 1) {
+			// Fast path: no Jinja conditionals, single bridge call.
+			const result = await this._bridge.invokeRaw(parseRequest);
+			if (!result.success || !result.data) {
+				const errMsg = (result.data as Record<string, unknown>)?.['error'] ?? 'no response';
+				this._logger.debug('[parse-service] parse_document failed for ' + document.fileName + ': ' + String(errMsg));
+				return null;
+			}
+			model = buildModel(result.data);
+		} else {
+			// Multi-variant path: parse each branch combination and merge.
+			const variantModels: DocumentModel[] = [];
+			for (const variant of variants) {
+				const variantRequest = { ...parseRequest, sql: variant.sql };
+				const result = await this._bridge.invokeRaw(variantRequest);
+				if (result.success && result.data) {
+					variantModels.push(buildModel(result.data));
+				}
+			}
+			if (variantModels.length === 0) {
+				this._logger.debug('[parse-service] all ' + variants.length + ' variants failed for ' + document.fileName);
+				return null;
+			}
+			model = mergeModels(variantModels);
+		}
 
 		const entry: CacheEntry = { version: document.version, model, dialect: dialect || 'ansi' };
 		this._cache.set(key, entry);

@@ -1,6 +1,7 @@
 {
 	// --- Editor ---
 	"[typescript]": {
+		"editor.defaultFormatter": "dbaeumer.vscode-eslint",
 		"editor.formatOnSave": true,
 		"editor.insertSpaces": false,
 		"editor.tabSize": 4

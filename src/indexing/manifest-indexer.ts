@@ -46,7 +46,7 @@ export interface IndexedMacro {
 	uniqueId: string;
 	name: string;
 	packageName: string;
-	filePath: string;
+	filePath?: string;
 	description?: string;
 	arguments: DbtMacroArgument[];
 }
@@ -183,7 +183,9 @@ export class ManifestIndexer {
 				uniqueId: uid,
 				name: macro.name,
 				packageName: macro.package_name,
-				filePath: path.join(this.loader.projectDir, macro.original_file_path),
+				filePath: macro.original_file_path
+					? path.join(this.loader.projectDir, macro.original_file_path)
+					: undefined,
 				description: macro.description,
 				arguments: macro.arguments ?? [],
 			});
