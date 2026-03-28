@@ -2,8 +2,10 @@ import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
 import { ParseService } from '../services/parse-service';
+import type { DocumentModel } from '../services/parse-service';
 import { isLinePositionInComment } from './comment-utils';
 import { SQL_KEYWORDS } from './sql-keywords';
+import { resolvePositionContext } from './position-context';
 
 /**
  * Hover tooltips for ref('model'), source('src','table'), macro references,
@@ -27,50 +29,34 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		// Skip comments
 		if (isLinePositionInComment(line, position.character)) return undefined;
 
-		// Match ref('model_name')
-		const refMatch = /ref\(\s*['"]([^'"]+)['"]\s*\)/g;
-		let match;
-		while ((match = refMatch.exec(line)) !== null) {
-			const start = match.index;
-			const end = start + match[0].length;
-			if (position.character >= start && position.character <= end) {
-				const hover = this._hoverRef(match[1]);
-				this.logger.trace(`Hover: ref('${match[1]}') → ${hover ? 'found' : 'not found'}`);
-				return hover;
-			}
+		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const model = await this.parseService.getDocumentModel(document, dialect);
+		if (token.isCancellationRequested || !model) return undefined;
+
+		const ctx = resolvePositionContext(model, line, position);
+
+		if (ctx?.kind === 'ref') {
+			const hover = this._hoverRef(ctx.ref.model);
+			this.logger.trace(`Hover: ref('${ctx.ref.model}') → ${hover ? 'found' : 'not found'}`);
+			return hover;
+		}
+		if (ctx?.kind === 'source') {
+			const hover = this._hoverSource(ctx.source.sourceName, ctx.source.tableName);
+			this.logger.trace(`Hover: source('${ctx.source.sourceName}', '${ctx.source.tableName}') → ${hover ? 'found' : 'not found'}`);
+			return hover;
+		}
+		if (ctx?.kind === 'macro') {
+			return this._hoverMacro(ctx.name);
+		}
+		if (ctx?.kind === 'token') {
+			// null = AST recognised the token but has nothing to show; suppress fallback
+			const hover = this._hoverResolvedToken(model, ctx.resolved, token);
+			if (hover !== undefined) return hover ?? undefined;
+			return undefined;
 		}
 
-		// Match source('source_name', 'table_name')
-		const sourceMatch = /source\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*\)/g;
-		while ((match = sourceMatch.exec(line)) !== null) {
-			const start = match.index;
-			const end = start + match[0].length;
-			if (position.character >= start && position.character <= end) {
-				const hover = this._hoverSource(match[1], match[2]);
-				this.logger.trace(`Hover: source('${match[1]}', '${match[2]}') → ${hover ? 'found' : 'not found'}`);
-				return hover;
-			}
-		}
-
-		// Match macro-like calls inside {{ }}: some_macro(...)
-		const macroMatch = /\{\{[^}]*?\b([a-zA-Z_]\w*)\s*\(/g;
-		while ((match = macroMatch.exec(line)) !== null) {
-			const nameStart = match.index + match[0].length - match[1].length - 1;
-			const nameEnd = nameStart + match[1].length;
-			if (position.character >= nameStart && position.character <= nameEnd) {
-				return this._hoverMacro(match[1]);
-			}
-		}
-
-		// Token-based resolution: CTE names, columns, table aliases.
-		// Returns null (not undefined) when the AST recognised the token but had
-		// nothing to show — in that case skip the fallback to avoid spurious matches.
-		const tokenHover = await this._hoverToken(document, position, token);
-		if (tokenHover !== undefined) return tokenHover ?? undefined;
-
-		// Column hover via alias resolution when cursor is on an
-		// unrecognised word (AST returned no token for this position).
-		return this._hoverColumnFallback(document, position, line, token);
+		// No token match — try bare-word column fallback
+		return this._hoverColumnFallback(document, position, line, model, token);
 	}
 
 	private _hoverRef(modelName: string): vscode.Hover | undefined {
@@ -131,11 +117,6 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 	}
 
 	private _hoverMacro(macroName: string): vscode.Hover | undefined {
-		// Skip built-in Jinja/dbt functions
-		if (['ref', 'source', 'config', 'set', 'if', 'for', 'block', 'macro', 'call'].includes(macroName)) {
-			return undefined;
-		}
-
 		const macro = this.indexer.findMacroByName(macroName);
 		if (!macro) return undefined;
 
@@ -162,27 +143,18 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		return new vscode.Hover(md);
 	}
 
-	// ---- Token-based hover (AST position resolution) ----
+	// ---- Token-based hover (AST resolution already done by resolvePositionContext) ----
 
 	// Returns:
 	//   Hover  — show this tooltip
 	//   null   — AST recognised the token but has nothing to show; suppress fallback
-	//   undefined — AST found no token here; caller may run the generic fallback
-	private async _hoverToken(
-		document: vscode.TextDocument,
-		position: vscode.Position,
+	private _hoverResolvedToken(
+		model: DocumentModel,
+		resolved: NonNullable<ReturnType<typeof ParseService.resolveAtPosition>>,
 		token: vscode.CancellationToken,
-	): Promise<vscode.Hover | null | undefined> {
-		const dialect = this.indexer.index?.adapterType ?? 'ansi';
-		const model = await this.parseService!.getDocumentModel(document, dialect);
-		if (token.isCancellationRequested || !model) return undefined;
-
-		const resolved = ParseService.resolveAtPosition(model, position.line, position.character);
-		if (!resolved) {
-			this.logger.trace(`Hover: no token at ${position.line}:${position.character} (${model.tokens.length} tokens in model)`);
-			return undefined;
-		}
-		this.logger.trace(`Hover: token at ${position.line}:${position.character} → kind='${resolved.kind}' name='${resolved.token.name}'`);
+	): vscode.Hover | null | undefined {
+		if (token.isCancellationRequested) return undefined;
+		this.logger.trace(`Hover: token kind='${resolved.kind}' name='${resolved.token.name}'`);
 
 		switch (resolved.kind) {
 			case 'table_ref': {
@@ -208,8 +180,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 			case 'table_qualifier': {
 				// Alias prefix of a column ref (e.g. the `o` in `o.order_id`)
 				const alias = resolved.token.table!;
-				const aliases = await this._getScopeAliases(document, token);
-				if (token.isCancellationRequested) return undefined;
+				const aliases = ParseService.resolveAliases(model);
 				const cols = aliases[alias] ?? aliases[alias.toLowerCase()];
 				if (cols) return this._buildAliasHover(alias, cols);
 				return null;
@@ -220,9 +191,8 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 			case 'column': {
 				// Column reference — show column info with source
 				const colToken = resolved.token;
+				const aliases = ParseService.resolveAliases(model);
 				if (colToken.table) {
-					const aliases = await this._getScopeAliases(document, token);
-					if (token.isCancellationRequested) return undefined;
 					const cols = aliases[colToken.table] ?? aliases[colToken.table.toLowerCase()];
 					this.logger.trace(`Hover: column '${colToken.table}.${colToken.name}' — aliases has '${colToken.table}': ${cols ? `[${cols.join(', ')}]` : 'not found'} (${Object.keys(aliases).length} aliases total)`);
 					if (cols && cols.some(c => c.toLowerCase() === colToken.name.toLowerCase())) {
@@ -233,8 +203,6 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 					return null;
 				}
 				// Bare column (no table qualifier) — search all aliases
-				const aliases = await this._getScopeAliases(document, token);
-				if (token.isCancellationRequested) return undefined;
 				const sources: string[] = [];
 				for (const [alias, cols] of Object.entries(aliases)) {
 					if (cols.some(c => c.toLowerCase() === colToken.name.toLowerCase())) {
@@ -255,21 +223,14 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 
 	// ---- Fallback column hover (no token match) ----
 
-	private async _getScopeAliases(
-		document: vscode.TextDocument,
-		_token: vscode.CancellationToken,
-	): Promise<Record<string, string[]>> {
-		const dialect = this.indexer.index?.adapterType ?? 'ansi';
-		const model = await this.parseService.getDocumentModel(document, dialect);
-		return model ? ParseService.resolveAliases(model) : {};
-	}
-
-	private async _hoverColumnFallback(
+	private _hoverColumnFallback(
 		document: vscode.TextDocument,
 		position: vscode.Position,
 		line: string,
+		model: DocumentModel,
 		token: vscode.CancellationToken,
-	): Promise<vscode.Hover | undefined> {
+	): vscode.Hover | undefined {
+		if (token.isCancellationRequested) return undefined;
 		const prefix = line.substring(0, position.character);
 		if (/\{\{[^}]*$/.test(prefix) || /\{%[^%]*$/.test(prefix)) return undefined;
 
@@ -278,8 +239,8 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		const word = document.getText(wordRange);
 		if (SQL_KEYWORDS.has(word.toUpperCase())) return undefined;
 
-		const aliases = await this._getScopeAliases(document, token);
-		if (token.isCancellationRequested || Object.keys(aliases).length === 0) return undefined;
+		const aliases = ParseService.resolveAliases(model);
+		if (Object.keys(aliases).length === 0) return undefined;
 
 		// Bare column name — search all aliases
 		const sources: string[] = [];

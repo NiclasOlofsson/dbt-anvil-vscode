@@ -6,6 +6,7 @@ import type { ILogger } from '../types/logger';
 import { ParseService } from '../services/parse-service';
 import type { CteInfo, DocumentModel, RefInfo, SourceInfo, TableRefToken } from '../services/parse-service';
 import { isLinePositionInComment } from './comment-utils';
+import { resolvePositionContext } from './position-context';
 
 /**
  * Resolve what a SQL alias refers to in a DocumentModel.
@@ -98,32 +99,38 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 		const model = await this.parseService.getDocumentModel(document, dialect);
 		if (token.isCancellationRequested || !model) return undefined;
 
-		// Check refs: full {{ ref(...) }} jinja span is clickable
-		const ref = model.refs.find(r =>
-			r.line === position.line &&
-			r.jinjaCol !== undefined && r.jinjaEndCol !== undefined &&
-			position.character >= r.jinjaCol && position.character < r.jinjaEndCol,
-		);
-		if (ref) {
-			const def = this._resolveRef(ref.model);
-			this.logger.trace(`Definition: ref('${ref.model}') → ${def ? 'resolved' : 'not found'}`);
+		const ctx = resolvePositionContext(model, line, position);
+
+		if (ctx?.kind === 'ref') {
+			const def = this._resolveRef(ctx.ref.model);
+			this.logger.trace(`Definition: ref('${ctx.ref.model}') → ${def ? 'resolved' : 'not found'}`);
 			return def;
 		}
-
-		// Check sources: only the table name identifier is clickable
-		const src = model.sources.find(s =>
-			s.line === position.line &&
-			s.tableNameCol !== undefined && s.tableNameEndCol !== undefined &&
-			position.character >= s.tableNameCol && position.character < s.tableNameEndCol,
-		);
-		if (src) {
-			const def = this._resolveSource(src.sourceName, src.tableName);
-			this.logger.trace(`Definition: source('${src.sourceName}', '${src.tableName}') → ${def ? 'resolved' : 'not found'}`);
+		if (ctx?.kind === 'source') {
+			const def = this._resolveSource(ctx.source.sourceName, ctx.source.tableName);
+			this.logger.trace(`Definition: source('${ctx.source.sourceName}', '${ctx.source.tableName}') → ${def ? 'resolved' : 'not found'}`);
 			return def;
 		}
+		if (ctx?.kind === 'macro') {
+			const def = this._resolveMacro(ctx.name);
+			this.logger.trace(`Definition: macro '${ctx.name}' → ${def ? 'resolved' : 'not found'}`);
+			return def;
+		}
+		if (ctx?.kind === 'token') {
+			return this._resolveToken(document, position, token, model);
+		}
 
-		// Token-based resolution: CTE navigation, column definitions, qualifiers
-		return this._resolveToken(document, position, token, model);
+		return undefined;
+	}
+
+	private _resolveMacro(macroName: string): vscode.Location | undefined {
+		const macro = this.indexer.findMacroByName(macroName);
+		if (!macro) return undefined;
+		try {
+			return new vscode.Location(vscode.Uri.file(macro.filePath), new vscode.Position(0, 0));
+		} catch {
+			return undefined;
+		}
 	}
 
 	private _resolveRef(modelName: string): vscode.Definition | undefined {

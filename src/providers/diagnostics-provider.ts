@@ -128,7 +128,8 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 					for (const doc of openSqlDocs) {
 						this._validateRefsOnly(doc);					// Re-validate column diagnostics too — per-doc debounce ensures
 						// each file gets its own timer, so no file cancels another.
-						if (this.parseService) this._validateColumnsDebounced(doc);					}
+						if (this.parseService) this._validateColumnsDebounced(doc);
+					}
 					this._updateStatusBar();
 				}),
 			);
@@ -323,9 +324,18 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 
 		const diagnostics: vscode.Diagnostic[] = [];
 		let firstMiss: string | undefined;
+		const docLines = document.getText().split('\n');
 
 		for (const t of tokens) {
 			if (t.type !== 'column_ref' || !t.table) continue;
+
+			// Skip column_ref tokens that originated inside a Jinja {{ }} expression.
+			// The blanker is length-preserving, so t.col maps to the same offset in
+			// the original source. If the original character at that position is '{'
+			// the identifier came from a macro call (e.g. {{ my_macro(...) }}) and
+			// is not a real column reference.
+			const origChar = (docLines[t.line] ?? '')[t.col];
+			if (origChar === '{') continue;
 
 			const cols = aliases[t.table] ?? aliases[t.table.toLowerCase()];
 			// Skip if: alias unknown, no columns resolved, or list contains '*'
