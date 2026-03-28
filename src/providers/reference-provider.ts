@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
+import { ParseService } from '../services/parse-service';
 import { isLinePositionInComment, computeCommentRanges, isOffsetInComment } from './comment-utils';
 
 /**
@@ -12,6 +13,7 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
+		private readonly parseService?: ParseService,
 	) {}
 
 	async provideReferences(
@@ -46,7 +48,7 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 		}
 
 		// Column references within the same file
-		if (this.columnResolver) {
+		if (this.parseService) {
 			return this._findColumnReferences(document, position, line, token);
 		}
 
@@ -183,7 +185,9 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 		if (REFERENCE_SQL_KEYWORDS.has(word.toUpperCase())) return [];
 
 		// Get scope aliases to verify this is actually a column
-		const aliases = await this.columnResolver!.getScopeAliases(document, token);
+		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const model = await this.parseService!.getDocumentModel(document, dialect);
+		const aliases = model ? ParseService.resolveAliases(model) : {};
 		if (token.isCancellationRequested) return [];
 
 		// Detect alias.column

@@ -227,7 +227,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const completionProvider = new DbtCompletionProvider(manifestIndexer, logger, parseService);
 	const yamlCompletionProvider = new YamlCompletionProvider(manifestIndexer, logger);
 	const yamlHoverProvider = new YamlHoverProvider(manifestIndexer, logger);
-	const referenceProvider = new DbtReferenceProvider(manifestIndexer, logger);
+	const referenceProvider = new DbtReferenceProvider(manifestIndexer, logger, parseService);
 	const renameProvider = new DbtRenameProvider(manifestIndexer, manifestLoader, logger);
 	const codeLensProvider = new DbtCodeLensProvider(manifestIndexer, logger);
 	const documentSymbolProvider = new DbtDocumentSymbolProvider(manifestIndexer, logger, parseService);
