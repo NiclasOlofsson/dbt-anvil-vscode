@@ -310,13 +310,9 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		const dialect = this.indexer.index?.adapterType ?? 'ansi';
 		const model = await this.parseService.getDocumentModel(document, dialect);
 		const tokens = model?.tokens ?? [];
-		const aliases = model ? ParseService.resolveAliases(model) : {};
 		if (token.isCancellationRequested) return;
 
-		const aliasInfo = Object.entries(aliases).map(([k, v]) => `${k}:${v.length}`).join(', ');
-		this.logger.debug(`[diagnostics] column aliases for ${path.basename(document.fileName)}: {${aliasInfo}}`);
-
-		if (Object.keys(aliases).length === 0) {
+		if (!model) {
 			this._columnCollection.delete(document.uri);
 			this._updateStatusBar();
 			return;
@@ -337,7 +333,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 			const origChar = (docLines[t.line] ?? '')[t.col];
 			if (origChar === '{') continue;
 
-			const cols = aliases[t.table] ?? aliases[t.table.toLowerCase()];
+			const cols = t.resolvedTableRef ? ParseService.columnsForRef(t.resolvedTableRef, model) : undefined;
 			// Skip if: alias unknown, no columns resolved, or list contains '*'
 			// (unresolved SELECT * — can't validate without knowing what * expands to)
 			if (!cols || cols.length === 0 || cols.includes('*')) continue;
@@ -351,7 +347,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 				const diag = new vscode.Diagnostic(
 					range,
 					`Column '${t.name}' not found in '${t.table}' (known columns: ${cols.slice(0, 5).join(', ')}${cols.length > 5 ? ', ...' : ''})`,
-					vscode.DiagnosticSeverity.Warning,
+					vscode.DiagnosticSeverity.Error,
 				);
 				diag.source = 'dbt';
 				diag.code = 'unknown-column';
