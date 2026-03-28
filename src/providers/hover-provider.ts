@@ -2,7 +2,6 @@ import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
 import { ParseService } from '../services/parse-service';
-import type { ColumnResolver } from './column-resolver';
 import { isLinePositionInComment } from './comment-utils';
 
 /**
@@ -13,7 +12,6 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
-		private readonly columnResolver?: ColumnResolver,
 		private readonly parseService?: ParseService,
 	) {}
 
@@ -73,7 +71,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 
 		// Fallback: column hover via alias resolution when cursor is on an
 		// unrecognised word (AST returned no token for this position).
-		if (this.columnResolver) {
+		if (this.parseService) {
 			return this._hoverColumnFallback(document, position, line, token);
 		}
 
@@ -227,8 +225,8 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 			case 'table_qualifier': {
 				// Alias prefix of a column ref (e.g. the `o` in `o.order_id`)
 				const alias = resolved.token.table!;
-				if (this.columnResolver) {
-					const aliases = await this.columnResolver.getScopeAliases(document, token);
+				if (this.parseService) {
+					const aliases = await this._getScopeAliases(document, token);
 					if (token.isCancellationRequested) return undefined;
 					const cols = aliases[alias] ?? aliases[alias.toLowerCase()];
 					if (cols) return this._buildAliasHover(alias, cols);
@@ -241,8 +239,8 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 			case 'column': {
 				// Column reference — show column info with source
 				const colToken = resolved.token;
-				if (colToken.table && this.columnResolver) {
-					const aliases = await this.columnResolver.getScopeAliases(document, token);
+				if (colToken.table && this.parseService) {
+					const aliases = await this._getScopeAliases(document, token);
 					if (token.isCancellationRequested) return undefined;
 					const cols = aliases[colToken.table] ?? aliases[colToken.table.toLowerCase()];
 					this.logger.trace(`Hover: column '${colToken.table}.${colToken.name}' — aliases has '${colToken.table}': ${cols ? `[${cols.join(', ')}]` : 'not found'} (${Object.keys(aliases).length} aliases total)`);
@@ -253,12 +251,12 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 					// to avoid spurious matches from unrelated tables in the alias map.
 					return null;
 				} else if (colToken.table) {
-					this.logger.trace(`Hover: column '${colToken.table}.${colToken.name}' — no columnResolver configured`);
+					this.logger.trace(`Hover: column '${colToken.table}.${colToken.name}' — no parseService configured`);
 					return null;
 				}
 				// Bare column (no table qualifier) — search all aliases
-				if (!colToken.table && this.columnResolver) {
-					const aliases = await this.columnResolver.getScopeAliases(document, token);
+				if (!colToken.table && this.parseService) {
+					const aliases = await this._getScopeAliases(document, token);
 					if (token.isCancellationRequested) return undefined;
 					const sources: string[] = [];
 					for (const [alias, cols] of Object.entries(aliases)) {
@@ -282,6 +280,16 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 
 	// ---- Fallback column hover (no token match) ----
 
+	private async _getScopeAliases(
+		document: vscode.TextDocument,
+		_token: vscode.CancellationToken,
+	): Promise<Record<string, string[]>> {
+		if (!this.parseService) return {};
+		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const model = await this.parseService.getDocumentModel(document, dialect);
+		return model ? ParseService.resolveAliases(model) : {};
+	}
+
 	private async _hoverColumnFallback(
 		document: vscode.TextDocument,
 		position: vscode.Position,
@@ -296,7 +304,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		const word = document.getText(wordRange);
 		if (SQL_KEYWORDS.has(word.toUpperCase())) return undefined;
 
-		const aliases = await this.columnResolver!.getScopeAliases(document, token);
+		const aliases = await this._getScopeAliases(document, token);
 		if (token.isCancellationRequested || Object.keys(aliases).length === 0) return undefined;
 
 		// Bare column name — search all aliases

@@ -261,56 +261,6 @@ describe('ParseService — enrichment tier', () => {
 		});
 	});
 
-	// ---- ColumnResolver delegation -----------------------------------------
-
-	describe('ColumnResolver delegation to ParseService', () => {
-		it('getScopeAliases calls getDocumentModel and resolves aliases', async () => {
-			const { ColumnResolver } = await import('../providers/column-resolver');
-
-			const bridge = createMockBridge({ aliases: { customers: ['id', 'email'] } });
-			const parseService = new ParseService(bridge, mockLogger, createEnrichment());
-
-			const resolver = new ColumnResolver(
-				createMockIndexer(),
-				mockLogger,
-				parseService,
-			);
-
-			const doc = createMockDocument('SELECT id FROM customers');
-			const result = await resolver.getScopeAliases(doc, createToken());
-
-			expect(result).toEqual({ customers: ['id', 'email'] });
-		});
-
-		it('getCachedAliases delegates to parseService.getCachedAliases when provided', async () => {
-			const { ColumnResolver } = await import('../providers/column-resolver');
-
-			const bridge = createMockBridge({ aliases: { t: ['col'] } });
-			const parseService = new ParseService(bridge, mockLogger, createEnrichment());
-
-			const resolver = new ColumnResolver(
-				createMockIndexer(),
-				mockLogger,
-				parseService,
-			);
-
-			const doc = createMockDocument('SELECT col FROM t');
-			expect(resolver.getCachedAliases(doc)).toBeNull(); // not yet parsed
-
-			await parseService.getDocumentModel(doc, 'duckdb');
-			expect(resolver.getCachedAliases(doc)).toEqual({ t: ['col'] });
-		});
-
-		it('invalidateEnrichment can be called directly', async () => {
-			const bridge = createMockBridge();
-			const parseService = new ParseService(bridge, mockLogger, createEnrichment());
-			const spy = vi.spyOn(parseService, 'invalidateEnrichment');
-
-			parseService.invalidateEnrichment();
-			expect(spy).toHaveBeenCalledTimes(1);
-		});
-	});
-
 	// ---- evict -------------------------------------------------------------
 
 	describe('evict', () => {

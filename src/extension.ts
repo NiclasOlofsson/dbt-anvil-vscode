@@ -34,7 +34,6 @@ import { DbtCodeActionProvider } from './providers/code-action-provider';
 import { ParseService } from './services/parse-service';
 import { StatusBarManager } from './views/status-bar';
 import { DbtDiagnosticsProvider } from './providers/diagnostics-provider';
-import { ColumnResolver } from './providers/column-resolver';
 import { VsTestController } from './views/vs-test-controller';
 import { CteTestRunner } from './dbt/cte-test-runner';
 
@@ -144,8 +143,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	manifestWatcher.setCompileCache(compileCache);
 
 	// -------- Diagnostics provider --------
-	const columnResolver = new ColumnResolver(manifestIndexer, logger, parseService);
-	const diagnosticsProvider = new DbtDiagnosticsProvider(executionService, manifestIndexer, statusBar, projectDir, logger, columnResolver, parseService.onAliasesReady, manifestWatcher.onIndexRebuild, parseService.onSqlglotWarnings);
+	const diagnosticsProvider = new DbtDiagnosticsProvider(executionService, manifestIndexer, statusBar, projectDir, logger, parseService, parseService.onAliasesReady, manifestWatcher.onIndexRebuild, parseService.onSqlglotWarnings);
 	context.subscriptions.push(diagnosticsProvider);
 
 	// -------- Set workspaceHasDBT context --------
@@ -225,11 +223,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		{ language: 'jinja-yaml', pattern: '**/*.{yml,yaml}' },
 	];
 	const definitionProvider = new DbtDefinitionProvider(manifestIndexer, manifestLoader, logger, parseService);
-	const hoverProvider = new DbtHoverProvider(manifestIndexer, logger, columnResolver, parseService);
-	const completionProvider = new DbtCompletionProvider(manifestIndexer, logger, columnResolver, parseService);
+	const hoverProvider = new DbtHoverProvider(manifestIndexer, logger, parseService);
+	const completionProvider = new DbtCompletionProvider(manifestIndexer, logger, parseService);
 	const yamlCompletionProvider = new YamlCompletionProvider(manifestIndexer, logger);
 	const yamlHoverProvider = new YamlHoverProvider(manifestIndexer, logger);
-	const referenceProvider = new DbtReferenceProvider(manifestIndexer, logger, columnResolver);
+	const referenceProvider = new DbtReferenceProvider(manifestIndexer, logger);
 	const renameProvider = new DbtRenameProvider(manifestIndexer, manifestLoader, logger);
 	const codeLensProvider = new DbtCodeLensProvider(manifestIndexer, logger);
 	const documentSymbolProvider = new DbtDocumentSymbolProvider(manifestIndexer, logger, parseService);

@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
-import type { ColumnResolver } from './column-resolver';
 import { isLinePositionInComment, computeCommentRanges, isOffsetInComment } from './comment-utils';
 
 /**
@@ -13,7 +12,6 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
-		private readonly columnResolver?: ColumnResolver,
 	) {}
 
 	async provideReferences(
