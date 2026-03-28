@@ -30,3 +30,11 @@ This would mean: a hover during a dbt run doesn't have to wait for the run to fi
 C:\Development\dbt_oatanalytics\target\perf_info.json
 
 Have intersting information that we should look into.
+
+## Build profiler
+
+Have something running in the background that can profile models in the database.
+
+## Unit testing
+
+Code action > Generate unit test for this model/CTE.
