@@ -3,6 +3,7 @@ import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
 import { ParseService } from '../services/parse-service';
 import { isLinePositionInComment } from './comment-utils';
+import { SQL_KEYWORDS } from './sql-keywords';
 
 /**
  * Hover tooltips for ref('model'), source('src','table'), macro references,
@@ -12,8 +13,8 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
-		private readonly parseService?: ParseService,
-	) {}
+		private readonly parseService: ParseService,
+	) { }
 
 	async provideHover(
 		document: vscode.TextDocument,
@@ -64,18 +65,12 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		// Token-based resolution: CTE names, columns, table aliases.
 		// Returns null (not undefined) when the AST recognised the token but had
 		// nothing to show — in that case skip the fallback to avoid spurious matches.
-		if (this.parseService) {
-			const tokenHover = await this._hoverToken(document, position, token);
-			if (tokenHover !== undefined) return tokenHover ?? undefined;
-		}
+		const tokenHover = await this._hoverToken(document, position, token);
+		if (tokenHover !== undefined) return tokenHover ?? undefined;
 
-		// Fallback: column hover via alias resolution when cursor is on an
+		// Column hover via alias resolution when cursor is on an
 		// unrecognised word (AST returned no token for this position).
-		if (this.parseService) {
-			return this._hoverColumnFallback(document, position, line, token);
-		}
-
-		return undefined;
+		return this._hoverColumnFallback(document, position, line, token);
 	}
 
 	private _hoverRef(modelName: string): vscode.Hover | undefined {
@@ -108,14 +103,9 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 	}
 
 	private _hoverSource(sourceName: string, tableName: string): vscode.Hover | undefined {
-		const index = this.indexer.index;
-		if (!index) return undefined;
-		const key = `${sourceName}.${tableName}`;
-		const uids = index.nodesByName.get(key);
-		if (!uids || uids.length === 0) return undefined;
-
-		const source = index.sources.get(uids[0]);
-		if (!source) return undefined;
+		const found = this.indexer.findSourceByKey(sourceName, tableName);
+		if (!found) return undefined;
+		const { uid, source } = found;
 
 		const md = new vscode.MarkdownString();
 		md.appendMarkdown(`**${source.sourceName}.${source.name}** — source\n\n`);
@@ -127,7 +117,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		if (source.tags.length > 0) md.appendMarkdown(`- **Tags:** ${source.tags.join(', ')}\n`);
 
 		// Show columns from manifest
-		const raw = this.indexer.getRawNode(uids[0]);
+		const raw = this.indexer.getRawNode(uid);
 		if (raw && raw.columns && Object.keys(raw.columns).length > 0) {
 			md.appendMarkdown('\n**Columns:**\n');
 			for (const col of Object.values(raw.columns)) {
@@ -146,37 +136,30 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 			return undefined;
 		}
 
-		const index = this.indexer.index;
-		if (!index) return undefined;
+		const macro = this.indexer.findMacroByName(macroName);
+		if (!macro) return undefined;
 
-		// Find the macro by name
-		for (const macro of index.macros.values()) {
-			if (macro.name === macroName) {
-				const md = new vscode.MarkdownString();
-				const args = macro.arguments;
-				const sig = args.length > 0
-					? `(${args.map(a => a.name).join(', ')})`
-					: '()';
-				md.appendMarkdown(`**${macro.name}**${sig} — macro\n\n`);
-				if (macro.description) {
-					md.appendMarkdown(`${macro.description}\n\n`);
-				}
-				md.appendMarkdown(`- **Package:** ${macro.packageName}\n`);
+		const md = new vscode.MarkdownString();
+		const args = macro.arguments;
+		const sig = args.length > 0
+			? `(${args.map(a => a.name).join(', ')})`
+			: '()';
+		md.appendMarkdown(`**${macro.name}**${sig} — macro\n\n`);
+		if (macro.description) {
+			md.appendMarkdown(`${macro.description}\n\n`);
+		}
+		md.appendMarkdown(`- **Package:** ${macro.packageName}\n`);
 
-				if (args.length > 0) {
-					md.appendMarkdown('\n**Arguments:**\n');
-					for (const arg of args) {
-						const type = arg.type ? ` \`${arg.type}\`` : '';
-						const desc = arg.description ? ` — ${arg.description}` : '';
-						md.appendMarkdown(`- \`${arg.name}\`${type}${desc}\n`);
-					}
-				}
-
-				return new vscode.Hover(md);
+		if (args.length > 0) {
+			md.appendMarkdown('\n**Arguments:**\n');
+			for (const arg of args) {
+				const type = arg.type ? ` \`${arg.type}\`` : '';
+				const desc = arg.description ? ` — ${arg.description}` : '';
+				md.appendMarkdown(`- \`${arg.name}\`${type}${desc}\n`);
 			}
 		}
 
-		return undefined;
+		return new vscode.Hover(md);
 	}
 
 	// ---- Token-based hover (AST position resolution) ----
@@ -225,12 +208,10 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 			case 'table_qualifier': {
 				// Alias prefix of a column ref (e.g. the `o` in `o.order_id`)
 				const alias = resolved.token.table!;
-				if (this.parseService) {
-					const aliases = await this._getScopeAliases(document, token);
-					if (token.isCancellationRequested) return undefined;
-					const cols = aliases[alias] ?? aliases[alias.toLowerCase()];
-					if (cols) return this._buildAliasHover(alias, cols);
-				}
+				const aliases = await this._getScopeAliases(document, token);
+				if (token.isCancellationRequested) return undefined;
+				const cols = aliases[alias] ?? aliases[alias.toLowerCase()];
+				if (cols) return this._buildAliasHover(alias, cols);
 				return null;
 			}
 			case 'column_def':
@@ -239,7 +220,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 			case 'column': {
 				// Column reference — show column info with source
 				const colToken = resolved.token;
-				if (colToken.table && this.parseService) {
+				if (colToken.table) {
 					const aliases = await this._getScopeAliases(document, token);
 					if (token.isCancellationRequested) return undefined;
 					const cols = aliases[colToken.table] ?? aliases[colToken.table.toLowerCase()];
@@ -250,28 +231,22 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 					// Qualified column whose qualifier wasn't resolved — suppress fallback
 					// to avoid spurious matches from unrelated tables in the alias map.
 					return null;
-				} else if (colToken.table) {
-					this.logger.trace(`Hover: column '${colToken.table}.${colToken.name}' — no parseService configured`);
-					return null;
 				}
 				// Bare column (no table qualifier) — search all aliases
-				if (!colToken.table && this.parseService) {
-					const aliases = await this._getScopeAliases(document, token);
-					if (token.isCancellationRequested) return undefined;
-					const sources: string[] = [];
-					for (const [alias, cols] of Object.entries(aliases)) {
-						if (cols.some(c => c.toLowerCase() === colToken.name.toLowerCase())) {
-							sources.push(alias);
-						}
+				const aliases = await this._getScopeAliases(document, token);
+				if (token.isCancellationRequested) return undefined;
+				const sources: string[] = [];
+				for (const [alias, cols] of Object.entries(aliases)) {
+					if (cols.some(c => c.toLowerCase() === colToken.name.toLowerCase())) {
+						sources.push(alias);
 					}
-					if (sources.length > 0) {
-						return this._buildColumnHover(
-							colToken.name,
-							sources.length === 1 ? sources[0] : undefined,
-							undefined,
-							sources,
-						);
-					}
+				}
+				if (sources.length > 0) {
+					return this._buildColumnHover(
+						colToken.name,
+						sources.length === 1 ? sources[0] : undefined,
+						sources,
+					);
 				}
 				return null;
 			}
@@ -284,7 +259,6 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		document: vscode.TextDocument,
 		_token: vscode.CancellationToken,
 	): Promise<Record<string, string[]>> {
-		if (!this.parseService) return {};
 		const dialect = this.indexer.index?.adapterType ?? 'ansi';
 		const model = await this.parseService.getDocumentModel(document, dialect);
 		return model ? ParseService.resolveAliases(model) : {};
@@ -315,7 +289,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 			}
 		}
 		if (sources.length > 0) {
-			return this._buildColumnHover(word, sources.length === 1 ? sources[0] : undefined, undefined, sources);
+			return this._buildColumnHover(word, sources.length === 1 ? sources[0] : undefined, sources);
 		}
 
 		return undefined;
@@ -341,7 +315,6 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 	private _buildColumnHover(
 		column: string,
 		alias?: string,
-		_aliasCols?: string[],
 		allSources?: string[],
 	): vscode.Hover {
 		const md = new vscode.MarkdownString();
@@ -368,15 +341,4 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 	}
 }
 
-const SQL_KEYWORDS = new Set([
-	'SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'NOT', 'IN', 'ON', 'AS',
-	'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'FULL', 'CROSS',
-	'GROUP', 'BY', 'ORDER', 'HAVING', 'LIMIT', 'OFFSET', 'UNION',
-	'INSERT', 'INTO', 'UPDATE', 'DELETE', 'SET', 'VALUES', 'CREATE',
-	'ALTER', 'DROP', 'TABLE', 'VIEW', 'INDEX', 'WITH', 'CASE', 'WHEN',
-	'THEN', 'ELSE', 'END', 'BETWEEN', 'LIKE', 'IS', 'NULL', 'TRUE',
-	'FALSE', 'DISTINCT', 'ALL', 'EXISTS', 'ANY', 'SOME', 'ASC', 'DESC',
-	'OVER', 'PARTITION', 'ROWS', 'RANGE', 'UNBOUNDED', 'PRECEDING',
-	'FOLLOWING', 'CURRENT', 'ROW', 'WINDOW', 'FILTER', 'WITHIN',
-	'CAST', 'COALESCE', 'NULLIF', 'IF', 'IIF',
-]);
+

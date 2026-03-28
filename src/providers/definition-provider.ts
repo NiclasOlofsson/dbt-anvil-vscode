@@ -80,8 +80,8 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 		private readonly indexer: ManifestIndexer,
 		private readonly loader: ManifestLoader,
 		private readonly logger: ILogger,
-		private readonly parseService?: ParseService,
-	) {}
+		private readonly parseService: ParseService,
+	) { }
 
 	async provideDefinition(
 		document: vscode.TextDocument,
@@ -94,40 +94,36 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 		// Skip comments
 		if (isLinePositionInComment(line, position.character)) return undefined;
 
-		if (this.parseService) {
-			const dialect = this.indexer.index?.adapterType ?? 'ansi';
-			const model = await this.parseService.getDocumentModel(document, dialect);
-			if (token.isCancellationRequested || !model) return undefined;
+		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const model = await this.parseService.getDocumentModel(document, dialect);
+		if (token.isCancellationRequested || !model) return undefined;
 
-			// Check refs: full {{ ref(...) }} jinja span is clickable
-			const ref = model.refs.find(r =>
-				r.line === position.line &&
-				r.jinjaCol !== undefined && r.jinjaEndCol !== undefined &&
-				position.character >= r.jinjaCol && position.character < r.jinjaEndCol,
-			);
-			if (ref) {
-				const def = this._resolveRef(ref.model);
-				this.logger.trace(`Definition: ref('${ref.model}') → ${def ? 'resolved' : 'not found'}`);
-				return def;
-			}
-
-			// Check sources: only the table name identifier is clickable
-			const src = model.sources.find(s =>
-				s.line === position.line &&
-				s.tableNameCol !== undefined && s.tableNameEndCol !== undefined &&
-				position.character >= s.tableNameCol && position.character < s.tableNameEndCol,
-			);
-			if (src) {
-				const def = this._resolveSource(src.sourceName, src.tableName);
-				this.logger.trace(`Definition: source('${src.sourceName}', '${src.tableName}') → ${def ? 'resolved' : 'not found'}`);
-				return def;
-			}
-
-			// Token-based resolution: CTE navigation, column definitions, qualifiers
-			return this._resolveToken(document, position, token, model);
+		// Check refs: full {{ ref(...) }} jinja span is clickable
+		const ref = model.refs.find(r =>
+			r.line === position.line &&
+			r.jinjaCol !== undefined && r.jinjaEndCol !== undefined &&
+			position.character >= r.jinjaCol && position.character < r.jinjaEndCol,
+		);
+		if (ref) {
+			const def = this._resolveRef(ref.model);
+			this.logger.trace(`Definition: ref('${ref.model}') → ${def ? 'resolved' : 'not found'}`);
+			return def;
 		}
 
-		return undefined;
+		// Check sources: only the table name identifier is clickable
+		const src = model.sources.find(s =>
+			s.line === position.line &&
+			s.tableNameCol !== undefined && s.tableNameEndCol !== undefined &&
+			position.character >= s.tableNameCol && position.character < s.tableNameEndCol,
+		);
+		if (src) {
+			const def = this._resolveSource(src.sourceName, src.tableName);
+			this.logger.trace(`Definition: source('${src.sourceName}', '${src.tableName}') → ${def ? 'resolved' : 'not found'}`);
+			return def;
+		}
+
+		// Token-based resolution: CTE navigation, column definitions, qualifiers
+		return this._resolveToken(document, position, token, model);
 	}
 
 	private _resolveRef(modelName: string): vscode.Definition | undefined {
@@ -151,17 +147,11 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 	}
 
 	private _resolveSource(sourceName: string, tableName: string): vscode.Location | undefined {
-		const index = this.indexer.index;
-		if (!index) return undefined;
-		const key = `${sourceName}.${tableName}`;
-		const uids = index.nodesByName.get(key);
-		if (!uids || uids.length === 0) return undefined;
-
-		const source = index.sources.get(uids[0]);
-		if (!source) return undefined;
+		const found = this.indexer.findSourceByKey(sourceName, tableName);
+		if (!found) return undefined;
 
 		// Find the schema.yml that declares this source via its original_file_path
-		const raw = this.indexer.getRawNode(uids[0]);
+		const raw = this.indexer.getRawNode(found.uid);
 		if (raw && raw.original_file_path) {
 			const filePath = path.join(this.loader.projectDir, raw.original_file_path);
 			try {
@@ -222,16 +212,6 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 		}
 	}
 
-	// ---- Resolve what a query alias refers to ----
-
-	private _resolveAlias(
-		model: DocumentModel,
-		alias: string,
-		atLine?: number,
-	): { kind: 'cte'; cte: CteInfo } | { kind: 'ref'; ref: RefInfo } | { kind: 'source'; source: SourceInfo } | undefined {
-		return resolveAlias(model, alias, atLine);
-	}
-
 	// ---- Navigate to alias.column ----
 
 	private async _jumpToColumn(
@@ -241,7 +221,7 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 		column: string,
 		atLine?: number,
 	): Promise<vscode.Definition | undefined> {
-		const target = this._resolveAlias(model, alias, atLine);
+		const target = resolveAlias(model, alias, atLine);
 		if (!target) {
 			this.logger.trace(`Definition: qualifier '${alias}' not found in CTEs, refs, or sources → undefined`);
 			return undefined;

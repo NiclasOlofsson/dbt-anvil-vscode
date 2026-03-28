@@ -84,7 +84,7 @@ export class ManifestIndexer {
 	constructor(
 		private readonly loader: ManifestLoader,
 		private readonly logger: ILogger,
-	) {}
+	) { }
 
 	/**
 	 * Build or rebuild the index from the current manifest.
@@ -345,6 +345,34 @@ export class ManifestIndexer {
 	getRawNode(uniqueId: string): DbtNode | DbtSource | undefined {
 		const { manifest } = this.loader.load();
 		return manifest.nodes[uniqueId] ?? manifest.sources[uniqueId];
+	}
+
+	/**
+	 * Find a source by (sourceName, tableName) key.
+	 * Returns the uid and the indexed source, or undefined if not found.
+	 */
+	findSourceByKey(sourceName: string, tableName: string): { uid: string; source: IndexedSource } | undefined {
+		const index = this._index;
+		if (!index) return undefined;
+		const key = `${sourceName}.${tableName}`;
+		const uids = index.nodesByName.get(key);
+		if (uids && uids.length > 0) {
+			const source = index.sources.get(uids[0]);
+			if (source) return { uid: uids[0], source };
+		}
+		return undefined;
+	}
+
+	/**
+	 * Find a macro by exact name (case-sensitive).
+	 */
+	findMacroByName(name: string): IndexedMacro | undefined {
+		const index = this._index;
+		if (!index) return undefined;
+		for (const macro of index.macros.values()) {
+			if (macro.name === name) return macro;
+		}
+		return undefined;
 	}
 
 	/**

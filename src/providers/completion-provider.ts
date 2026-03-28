@@ -12,8 +12,8 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
-		private readonly parseService?: ParseService,
-	) {}
+		private readonly parseService: ParseService,
+	) { }
 
 	async provideCompletionItems(
 		document: vscode.TextDocument,
@@ -57,16 +57,16 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 			return items;
 		}
 
-		// alias. — column completions (requires bridge)
+		// alias. — column completions
 		const aliasMatch = /(\w+)\.\s*$/.exec(linePrefix);
-		if (aliasMatch && this.parseService) {
+		if (aliasMatch) {
 			this.logger.debug(`Completion: column for alias '${aliasMatch[1]}'`);
 			return this._completeColumns(document, aliasMatch[1], token);
 		}
 
 		// Bare word in SQL context — offer all in-scope columns merged from all aliases
 		// Match after whitespace/open-paren with zero or more word chars (covers empty trigger)
-		if (this.parseService && /(?:^|[\s,(])\w*$/.test(linePrefix)) {
+		if (/(?:^|[\s,(])\w*$/.test(linePrefix)) {
 			// Skip if inside an unclosed Jinja expression
 			const insideJinja = /\{\{[^}]*$/.test(linePrefix) || /\{%[^%]*$/.test(linePrefix);
 			// After a table keyword — offer CTE names and model names
@@ -149,7 +149,6 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 	}
 
 	private async _getScopeAliases(document: vscode.TextDocument, _token: vscode.CancellationToken): Promise<Record<string, string[]>> {
-		if (!this.parseService) return {};
 		const dialect = this.indexer.index?.adapterType ?? 'ansi';
 		const model = await this.parseService.getDocumentModel(document, dialect);
 		return model ? ParseService.resolveAliases(model) : {};
@@ -167,17 +166,15 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 		let sortIndex = 0;
 
 		// CTE names from ParseService (highest priority)
-		if (this.parseService) {
-			const dialect = this.indexer.index?.adapterType ?? 'ansi';
-			const model = await this.parseService.getDocumentModel(document, dialect);
-			if (token.isCancellationRequested) return [];
-			if (model) {
-				for (const cte of model.ctes) {
-					const item = new vscode.CompletionItem(cte.name, vscode.CompletionItemKind.Struct);
-					item.detail = `CTE (${cte.columns.length} columns)`;
-					item.sortText = String(sortIndex++).padStart(4, '0');
-					items.push(item);
-				}
+		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const model = await this.parseService.getDocumentModel(document, dialect);
+		if (token.isCancellationRequested) return [];
+		if (model) {
+			for (const cte of model.ctes) {
+				const item = new vscode.CompletionItem(cte.name, vscode.CompletionItemKind.Struct);
+				item.detail = `CTE (${cte.columns.length} columns)`;
+				item.sortText = String(sortIndex++).padStart(4, '0');
+				items.push(item);
 			}
 		}
 

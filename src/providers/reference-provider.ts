@@ -3,6 +3,7 @@ import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
 import { ParseService } from '../services/parse-service';
 import { isLinePositionInComment, computeCommentRanges, isOffsetInComment } from './comment-utils';
+import { SQL_KEYWORDS } from './sql-keywords';
 
 /**
  * Find All References for ref('model'), source('src', 'table'), and column
@@ -13,8 +14,8 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
-		private readonly parseService?: ParseService,
-	) {}
+		private readonly parseService: ParseService,
+	) { }
 
 	async provideReferences(
 		document: vscode.TextDocument,
@@ -28,6 +29,37 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 		// Skip comments
 		if (isLinePositionInComment(line, position.character)) return [];
 
+		if (this.parseService) {
+			const dialect = this.indexer.index?.adapterType ?? 'ansi';
+			const model = await this.parseService.getDocumentModel(document, dialect);
+			if (!token.isCancellationRequested && model) {
+				// Check refs: full {{ ref(...) }} jinja span is clickable
+				const ref = model.refs.find(r =>
+					r.line === position.line &&
+					r.jinjaCol !== undefined && r.jinjaEndCol !== undefined &&
+					position.character >= r.jinjaCol && position.character < r.jinjaEndCol,
+				);
+				if (ref) return this._findRefUsages(ref.model, token);
+
+				// Check sources: only the table name identifier span
+				const src = model.sources.find(s =>
+					s.line === position.line &&
+					s.tableNameCol !== undefined && s.tableNameEndCol !== undefined &&
+					position.character >= s.tableNameCol && position.character < s.tableNameEndCol,
+				);
+				if (src) return this._findSourceUsages(src.sourceName, src.tableName, token);
+
+				// Token-based: column references within this file
+				const resolved = ParseService.resolveAtPosition(model, position.line, position.character);
+				if (resolved?.kind === 'column' || resolved?.kind === 'column_def') {
+					return this._findColumnReferences(document, resolved.token.name, token);
+				}
+
+				return [];
+			}
+		}
+
+		// Fallback when parseService is not available
 		const refRe = /ref\(\s*['"]([^'"]+)['"]\s*\)/g;
 		let match;
 		while ((match = refRe.exec(line)) !== null) {
@@ -45,11 +77,6 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 			if (position.character >= start && position.character <= end) {
 				return this._findSourceUsages(match[1], match[2], token);
 			}
-		}
-
-		// Column references within the same file
-		if (this.parseService) {
-			return this._findColumnReferences(document, position, line, token);
 		}
 
 		return [];
@@ -90,9 +117,8 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 		const index = this.indexer.index;
 		if (!index) return [];
 
-		// Find the source's uniqueId
-		const sourceUid = this._findSourceUid(sourceName, tableName, index);
-		if (!sourceUid) return [];
+		const found = this.indexer.findSourceByKey(sourceName, tableName);
+		if (!found) return [];
 
 		const locations: vscode.Location[] = [];
 		const pattern = new RegExp(
@@ -100,7 +126,7 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 			'g',
 		);
 
-		const childIds = index.childMap.get(sourceUid) ?? [];
+		const childIds = index.childMap.get(found.uid) ?? [];
 		const filePaths = this._resolveFilePaths(childIds, index);
 
 		for (const filePath of filePaths) {
@@ -130,18 +156,6 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 		return paths;
 	}
 
-	/** Find the source uniqueId by source name + table name. */
-	private _findSourceUid(
-		sourceName: string,
-		tableName: string,
-		index: import('../indexing/manifest-indexer').ManifestIndex,
-	): string | undefined {
-		for (const [uid, src] of index.sources) {
-			if (src.sourceName === sourceName && src.name === tableName) return uid;
-		}
-		return undefined;
-	}
-
 	/** Open a single file and find all positions matching the pattern. */
 	private async _findPatternInFile(fileUri: vscode.Uri, pattern: RegExp): Promise<vscode.Location[]> {
 		const locations: vscode.Location[] = [];
@@ -169,59 +183,11 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 
 	// ---- Column references within the current file ----
 
-	private async _findColumnReferences(
+	private _findColumnReferences(
 		document: vscode.TextDocument,
-		position: vscode.Position,
-		line: string,
+		columnName: string,
 		token: vscode.CancellationToken,
-	): Promise<vscode.Location[]> {
-		// Skip Jinja blocks
-		const prefix = line.substring(0, position.character);
-		if (/\{\{[^}]*$/.test(prefix) || /\{%[^%]*$/.test(prefix)) return [];
-
-		const wordRange = document.getWordRangeAtPosition(position, /[a-zA-Z_]\w*/);
-		if (!wordRange) return [];
-		const word = document.getText(wordRange);
-		if (REFERENCE_SQL_KEYWORDS.has(word.toUpperCase())) return [];
-
-		// Get scope aliases to verify this is actually a column
-		const dialect = this.indexer.index?.adapterType ?? 'ansi';
-		const model = await this.parseService!.getDocumentModel(document, dialect);
-		const aliases = model ? ParseService.resolveAliases(model) : {};
-		if (token.isCancellationRequested) return [];
-
-		// Detect alias.column
-		const nearby = line.substring(Math.max(0, wordRange.start.character - 40), wordRange.end.character + 40);
-		const dotMatch = /(\w+)\.(\w+)/.exec(nearby);
-		let columnName: string | undefined;
-
-		if (dotMatch) {
-			const dotOffset = nearby.indexOf(dotMatch[0]);
-			const absStart = Math.max(0, wordRange.start.character - 40) + dotOffset;
-			const colStart = absStart + dotMatch[1].length + 1;
-			const colEnd = colStart + dotMatch[2].length;
-			if (position.character >= colStart && position.character <= colEnd) {
-				const alias = dotMatch[1];
-				const cols = aliases[alias] ?? aliases[alias.toLowerCase()];
-				if (cols && cols.some(c => c.toLowerCase() === dotMatch[2].toLowerCase())) {
-					columnName = dotMatch[2];
-				}
-			}
-		}
-
-		// Try bare column name
-		if (!columnName) {
-			for (const cols of Object.values(aliases)) {
-				if (cols.some(c => c.toLowerCase() === word.toLowerCase())) {
-					columnName = word;
-					break;
-				}
-			}
-		}
-
-		if (!columnName) return [];
-
-		// Find all occurrences of the column name in this file
+	): vscode.Location[] {
 		const text = document.getText();
 		const commentRanges = computeCommentRanges(text);
 		const pattern = new RegExp(`\\b${this._escapeRegex(columnName)}\\b`, 'gi');
@@ -230,26 +196,15 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 		while ((m = pattern.exec(text)) !== null) {
 			if (token.isCancellationRequested) break;
 			if (isOffsetInComment(m.index, commentRanges)) continue;
+			if (SQL_KEYWORDS.has(m[0].toUpperCase())) continue;
 			const pos = document.positionAt(m.index);
-			const endPos = document.positionAt(m.index + m[0].length);
 			// Skip occurrences inside Jinja blocks
 			const matchLine = document.lineAt(pos.line).text;
 			const beforeMatch = matchLine.substring(0, pos.character);
 			if (/\{\{[^}]*$/.test(beforeMatch) || /\{%[^%]*$/.test(beforeMatch)) continue;
-			// Skip SQL keywords that happen to match
-			if (REFERENCE_SQL_KEYWORDS.has(m[0].toUpperCase())) continue;
-			locations.push(new vscode.Location(document.uri, new vscode.Range(pos, endPos)));
+			locations.push(new vscode.Location(document.uri, new vscode.Range(pos, document.positionAt(m.index + m[0].length))));
 		}
-
 		this.logger.debug(`ReferenceProvider: found ${locations.length} column references for '${columnName}'`);
 		return locations;
 	}
 }
-
-const REFERENCE_SQL_KEYWORDS = new Set([
-	'SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'NOT', 'IN', 'ON', 'AS',
-	'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'FULL', 'CROSS',
-	'GROUP', 'BY', 'ORDER', 'HAVING', 'LIMIT', 'OFFSET', 'UNION',
-	'WITH', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'BETWEEN',
-	'LIKE', 'IS', 'NULL', 'TRUE', 'FALSE', 'DISTINCT', 'ALL',
-]);

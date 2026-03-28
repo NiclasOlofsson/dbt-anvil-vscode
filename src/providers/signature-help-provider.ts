@@ -10,7 +10,7 @@ export class DbtSignatureHelpProvider implements vscode.SignatureHelpProvider {
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
-	) {}
+	) { }
 
 	provideSignatureHelp(
 		document: vscode.TextDocument,
@@ -34,17 +34,7 @@ export class DbtSignatureHelpProvider implements vscode.SignatureHelpProvider {
 			return undefined;
 		}
 
-		const index = this.indexer.index;
-		if (!index) return undefined;
-
-		// Find the macro
-		let macro;
-		for (const m of index.macros.values()) {
-			if (m.name === macroName) {
-				macro = m;
-				break;
-			}
-		}
+		const macro = this.indexer.findMacroByName(macroName);
 
 		if (!macro || macro.arguments.length === 0) return undefined;
 
