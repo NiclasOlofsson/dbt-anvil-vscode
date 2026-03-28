@@ -142,7 +142,7 @@ export interface DocumentModel {
 	/** Structural warnings emitted by sqlglot during scope building. */
 	sqlglotWarnings?: SqlglotWarning[];
 	/**
-	 * Alias → column-name map populated during the parse alongside structural info.
+	 * Alias → column-name map returned by the bridge after schema-aware parsing.
 	 * `undefined` only when enrichment is not configured; otherwise always a dict
 	 * (empty when schema_mapping had no entries for the upstream tables).
 	 */
@@ -150,9 +150,9 @@ export interface DocumentModel {
 }
 
 /**
- * Optional enrichment dependencies that enable Tier-2 alias resolution.
- * When provided, ParseService will describe upstream tables concurrently
- * and resolve alias → column mappings as part of each parse.
+ * Optional dependencies for schema-aware parsing.
+ * When provided, ParseService will describe upstream tables before calling
+ * the bridge, so the bridge can resolve alias → column mappings in a single pass.
  */
 export interface EnrichmentConfig {
 	describeCache: DescribeCache;
@@ -162,7 +162,7 @@ export interface EnrichmentConfig {
 interface CacheEntry {
 	version: number;
 	model: DocumentModel;
-	/** Dialect used for this parse — needed for re-use during enrichment. */
+	/** Dialect used for this parse. */
 	dialect: string;
 }
 
@@ -198,9 +198,8 @@ export class ParseService {
 	 * Return the DocumentModel for the given document.
 	 * Re-parses via the bridge only when the version has changed.
 	 *
-	 * Returns immediately with `model.aliases === undefined` while Tier-2
-	 * enrichment runs in the background. Callers that need aliases should use
-	 * `getAliases()` to await the enriched result.
+	 * When enrichment is configured, describes all upstream refs before calling
+	 * the bridge so aliases are fully populated in the returned model.
 	 */
 	async getDocumentModel(
 		document: vscode.TextDocument,
@@ -229,17 +228,11 @@ export class ParseService {
 	}
 
 	/**
-	 * Return the alias → column-name map for the given document.
-	 * Awaits Tier-2 enrichment if it is in progress; triggers it if not yet started.
-	 * Returns `{}` when enrichment is not configured or yields no results.
+	 * Compute the combined alias → column-name map from a parsed model.
+	 * Merges bridge-resolved upstream aliases (model.aliases) with CTE aliases
+	 * and any FROM/JOIN aliases that point to CTEs.
 	 */
-	async getAliases(
-		document: vscode.TextDocument,
-		dialect: string,
-		_token: vscode.CancellationToken,
-	): Promise<Record<string, string[]>> {
-		const model = await this.getDocumentModel(document, dialect);
-		if (!model) return {};
+	static resolveAliases(model: DocumentModel): Record<string, string[]> {
 		const cteAliases: Record<string, string[]> = {};
 		for (const cte of model.ctes) {
 			const cols = cte.columns.map(c => c.name);
@@ -260,8 +253,8 @@ export class ParseService {
 	}
 
 	/**
-	 * Return cached aliases synchronously without triggering resolution.
-	 * Returns `null` when the model is not parsed yet or aliases are still pending.
+	 * Return cached aliases synchronously without triggering a parse.
+	 * Returns `null` when the model is not yet cached for the current version.
 	 */
 	getCachedAliases(document: vscode.TextDocument): Record<string, string[]> | null {
 		const cached = this._cache.get(document.uri.toString());
@@ -272,9 +265,8 @@ export class ParseService {
 	}
 
 	/**
-	 * Clear enriched alias caches for all documents.
-	 * Call after manifest reload — table schemas may have changed but
-	 * structural positions (CTEs, refs) remain valid.
+	 * Clear the parse cache for all documents.
+	 * Call after manifest reload — table schemas may have changed.
 	 */
 	invalidateEnrichment(): void {
 		this._cache.clear();
@@ -282,9 +274,8 @@ export class ParseService {
 	}
 
 	/**
-	 * Clear enriched aliases only for documents that reference any of the given
-	 * unique IDs. Documents that don't reference any of the affected nodes keep
-	 * their cached aliases intact.
+	 * Clear cached models only for documents that reference any of the given
+	 * unique IDs. Unaffected documents keep their cached model.
 	 */
 	invalidateEnrichmentFor(affectedIds: Set<string>): void {
 		if (affectedIds.size === 0) return;
@@ -392,9 +383,9 @@ export class ParseService {
 	): Promise<DocumentModel | null> {
 		const rawText = document.getText();
 
-		// Build qualify schema hint from already-cached indexer columns (fast, synchronous).
-		// Also fire describe requests concurrently to populate schema_mapping for alias resolution
-		// in a single bridge round-trip. DescribeCache deduplicates inflight requests.
+		// Build qualify schema hint from indexer columns (synchronous, fast path).
+		// Then describe all upstream refs so the bridge receives a full schema_mapping
+		// and can resolve alias → column mappings in a single round-trip.
 		const qualifySchema: Record<string, Record<string, string>> = {};
 		const parseRequest: Record<string, unknown> = {
 			parse_document: true,

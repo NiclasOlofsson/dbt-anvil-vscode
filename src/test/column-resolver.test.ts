@@ -29,7 +29,7 @@ function createMockIndexer(): ManifestIndexer {
 
 function createMockParseService(overrides?: Partial<ParseService>): ParseService {
 	return {
-		getAliases: vi.fn().mockResolvedValue({}),
+		getDocumentModel: vi.fn().mockResolvedValue({ ctes: [], refs: [], sources: [], finalColumns: [], tokens: [], timing: { parseMs: 0, totalMs: 0 }, aliases: {} }),
 		getCachedAliases: vi.fn().mockReturnValue(null),
 		invalidateEnrichment: vi.fn(),
 		...overrides,
@@ -37,17 +37,18 @@ function createMockParseService(overrides?: Partial<ParseService>): ParseService
 }
 
 describe('ColumnResolver', () => {
-	it('getScopeAliases delegates to parseService.getAliases', async () => {
+	it('getScopeAliases calls getDocumentModel and resolves aliases', async () => {
 		const aliases = { orders: ['id', 'status'] };
-		const parseService = createMockParseService({ getAliases: vi.fn().mockResolvedValue(aliases) });
+		const model = { ctes: [], refs: [], sources: [], finalColumns: [], tokens: [], timing: { parseMs: 0, totalMs: 0 }, aliases };
+		const parseService = createMockParseService({ getDocumentModel: vi.fn().mockResolvedValue(model) });
 		const resolver = new ColumnResolver(createMockIndexer(), mockLogger, parseService);
 		const doc = createMockDocument('SELECT id FROM orders');
 		const token = new CancellationTokenSource().token;
 
 		const result = await resolver.getScopeAliases(doc, token);
 
-		expect(result).toEqual(aliases);
-		expect(parseService.getAliases).toHaveBeenCalledWith(doc, 'duckdb', token);
+		expect(result).toMatchObject(aliases);
+		expect(parseService.getDocumentModel).toHaveBeenCalledWith(doc, 'duckdb');
 	});
 
 	it('getCachedAliases delegates to parseService.getCachedAliases', () => {

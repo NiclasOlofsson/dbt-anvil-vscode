@@ -173,74 +173,49 @@ describe('ParseService — enrichment tier', () => {
 		});
 	});
 
-	// ---- getAliases --------------------------------------------------------
+	// ---- resolveAliases (static) ------------------------------------------
 
-	describe('getAliases', () => {
-		it('returns {} when no enrichment configured and bridge returns no aliases', async () => {
-			const bridge = createMockBridge();
-			const service = new ParseService(bridge, mockLogger);
+	describe('resolveAliases', () => {
+		function makeModel(overrides?: Partial<import('../services/parse-service').DocumentModel>): import('../services/parse-service').DocumentModel {
+			return {
+				ctes: [],
+				refs: [],
+				sources: [],
+				finalColumns: [],
+				tokens: [],
+				timing: { parseMs: 0, totalMs: 0 },
+				aliases: {},
+				...overrides,
+			};
+		}
 
-			const result = await service.getAliases(
-				createMockDocument('SELECT 1'),
-				'duckdb',
-				createToken(),
-			);
-
-			expect(result).toEqual({});
+		it('returns {} for empty model', () => {
+			expect(ParseService.resolveAliases(makeModel())).toEqual({});
 		});
 
-		it('returns aliases from bridge response', async () => {
-			const bridge = createMockBridge({ aliases: { customers: ['id', 'name'] } });
-			const service = new ParseService(bridge, mockLogger, createEnrichment());
-
-			const result = await service.getAliases(
-				createMockDocument('SELECT id FROM customers'),
-				'duckdb',
-				createToken(),
-			);
-
-			expect(result).toEqual({ customers: ['id', 'name'] });
+		it('includes bridge-resolved upstream aliases', () => {
+			const model = makeModel({ aliases: { customers: ['id', 'name'] } });
+			expect(ParseService.resolveAliases(model)).toEqual({ customers: ['id', 'name'] });
 		});
 
-		it('returns cached aliases on second call without additional bridge hits', async () => {
-			const bridge = createMockBridge({ aliases: { t: ['id'] } });
-			const service = new ParseService(bridge, mockLogger, createEnrichment());
-			const doc = createMockDocument('SELECT id FROM t');
-
-			const first = await service.getAliases(doc, 'duckdb', createToken());
-			const second = await service.getAliases(doc, 'duckdb', createToken());
-
-			expect(first).toEqual({ t: ['id'] });
-			expect(second).toEqual({ t: ['id'] });
-			// Bridge should only be called once (cache hit on second call)
-			expect(bridge.invokeRaw).toHaveBeenCalledTimes(1);
+		it('includes CTE column lists', () => {
+			const model = makeModel({
+				ctes: [{ name: 'orders', columns: [{ name: 'id', line: 0 }, { name: 'status', line: 1 }], line: 0, endLine: 5 }],
+			});
+			expect(ParseService.resolveAliases(model)['orders']).toEqual(['id', 'status']);
 		});
 
-		it('aliases are available immediately on the model returned by getDocumentModel', async () => {
-			const bridge = createMockBridge({ aliases: { orders: ['id', 'status'] } });
-			const service = new ParseService(bridge, mockLogger, createEnrichment());
-			const doc = createMockDocument('SELECT id FROM orders');
-
-			const model = await service.getDocumentModel(doc, 'duckdb');
-
-			// No separate getAliases call needed — aliases are set during the single parse.
-			expect(model!.aliases).toEqual({ orders: ['id', 'status'] });
+		it('resolves FROM/JOIN alias pointing to a CTE', () => {
+			const model = makeModel({
+				ctes: [{ name: 'orders', columns: [{ name: 'id', line: 0 }], line: 0, endLine: 5 }],
+				tokens: [{ type: 'table_ref' as const, name: 'orders', alias: 'o', line: 1, col: 0, endCol: 6 }],
+			});
+			expect(ParseService.resolveAliases(model)['o']).toEqual(['id']);
 		});
 
-		it('token parameter is accepted but not required to unblock result', async () => {
-			const bridge = createMockBridge({ aliases: { t: ['col'] } });
-			const service = new ParseService(bridge, mockLogger, createEnrichment());
-
-			const cancelledToken = { isCancellationRequested: true } as import('vscode').CancellationToken;
-			// With the new single-pass design, aliases are already in the model.
-			// A cancelled token should not prevent the result from being returned.
-			const result = await service.getAliases(
-				createMockDocument('SELECT 1'),
-				'duckdb',
-				cancelledToken,
-			);
-
-			expect(result).toEqual({ t: ['col'] });
+		it('is a pure function — repeated calls return equal results', () => {
+			const model = makeModel({ aliases: { t: ['id'] } });
+			expect(ParseService.resolveAliases(model)).toEqual(ParseService.resolveAliases(model));
 		});
 	});
 
@@ -261,15 +236,6 @@ describe('ParseService — enrichment tier', () => {
 
 			// Aliases are set as part of the parse — no need to call getAliases first.
 			expect(service.getCachedAliases(doc)).toEqual({ t: ['col'] });
-		});
-
-		it('returns populated aliases after getAliases completes', async () => {
-			const bridge = createMockBridge({ aliases: { t: ['col'] } });
-			const parseService = new ParseService(bridge, mockLogger, createEnrichment());
-			const doc = createMockDocument('SELECT col FROM t');
-
-			await parseService.getAliases(doc, 'duckdb', createToken());
-			expect(parseService.getCachedAliases(doc)).toEqual({ t: ['col'] });
 		});
 	});
 
@@ -298,7 +264,7 @@ describe('ParseService — enrichment tier', () => {
 	// ---- ColumnResolver delegation -----------------------------------------
 
 	describe('ColumnResolver delegation to ParseService', () => {
-		it('getScopeAliases delegates to parseService.getAliases when provided', async () => {
+		it('getScopeAliases calls getDocumentModel and resolves aliases', async () => {
 			const { ColumnResolver } = await import('../providers/column-resolver');
 
 			const bridge = createMockBridge({ aliases: { customers: ['id', 'email'] } });
@@ -331,7 +297,7 @@ describe('ParseService — enrichment tier', () => {
 			const doc = createMockDocument('SELECT col FROM t');
 			expect(resolver.getCachedAliases(doc)).toBeNull(); // not yet parsed
 
-			await parseService.getAliases(doc, 'duckdb', createToken());
+			await parseService.getDocumentModel(doc, 'duckdb');
 			expect(resolver.getCachedAliases(doc)).toEqual({ t: ['col'] });
 		});
 
