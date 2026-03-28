@@ -530,6 +530,11 @@ describe('definition-provider integration (real bridge)', () => {
 					const p = modelPaths[name];
 					return p ? [{ path: p }] : [];
 				},
+				findSourceByKey: (sourceName: string, tableName: string) => {
+					const key = `${sourceName}.${tableName}`;
+					const entry = sourcePaths[key];
+					return entry ? { uid: entry.uid, source: {} } : undefined;
+				},
 				getRawNode: (uid: string) => {
 					const entry = Object.values(sourcePaths).find(v => v.uid === uid);
 					return entry ? { original_file_path: entry.schemaYml } : null;

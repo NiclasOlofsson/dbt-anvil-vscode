@@ -10,6 +10,11 @@ import { DbtCodeActionProvider } from '../providers/code-action-provider';
 import { createMockLogger } from './helpers';
 import type { ManifestIndexer, ManifestIndex, IndexedModel, IndexedSource, IndexedMacro } from '../indexing/manifest-indexer';
 import type { ManifestLoader } from '../dbt/manifest-loader';
+import type { ParseService } from '../services/parse-service';
+
+function createMockParseService(): ParseService {
+	return { getDocumentModel: vi.fn().mockResolvedValue(null) } as unknown as ParseService;
+}
 
 // --------------- Helpers ---------------
 
@@ -90,6 +95,20 @@ function createMockIndexer(overrides?: Partial<ManifestIndex>): ManifestIndexer 
 		getRawNode: vi.fn(),
 		getLineage: vi.fn(),
 		findMacrosByPrefix: vi.fn(),
+		findMacroByName: vi.fn((name: string) => {
+			for (const macro of index.macros.values()) {
+				if (macro.name === name) return macro;
+			}
+			return undefined;
+		}),
+		findSourceByKey: vi.fn((sourceName: string, tableName: string) => {
+			for (const [uid, src] of index.sources) {
+				if (src.sourceName === sourceName && src.name === tableName) {
+					return { uid, source: src };
+				}
+			}
+			return undefined;
+		}),
 		findByTag: vi.fn(),
 		findModelByFilePath: vi.fn(),
 		build: vi.fn(),
@@ -144,7 +163,7 @@ describe('DbtReferenceProvider', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		indexer = createMockIndexer();
-		provider = new DbtReferenceProvider(indexer, createMockLogger());
+		provider = new DbtReferenceProvider(indexer, createMockLogger(), createMockParseService());
 	});
 
 	it('returns empty array when cursor is not on a ref or source', async () => {
@@ -296,50 +315,7 @@ describe('DbtDocumentSymbolProvider', () => {
 
 	beforeEach(() => {
 		vi.clearAllMocks();
-		provider = new DbtDocumentSymbolProvider(createMockIndexer(), createMockLogger());
-	});
-
-	it('extracts CTE names from SQL file', async () => {
-		const sql = [
-			'with',
-			'cte_orders as (',
-			'    select * from orders',
-			'),',
-			'cte_customers as (',
-			'    select * from customers',
-			')',
-			'select * from cte_orders',
-		].join('\n');
-
-		const doc = createMockDocument(sql);
-		const symbols = (await provider.provideDocumentSymbols(doc, mockToken))!;
-
-		const names = (symbols as vscode.DocumentSymbol[]).map(s => s.name);
-		expect(names).toContain('cte_orders');
-		expect(names).toContain('cte_customers');
-	});
-
-	it('adds final SELECT symbol with model name', async () => {
-		const sql = [
-			'with',
-			'my_cte as (',
-			'    select 1',
-			')',
-			'select * from my_cte',
-		].join('\n');
-
-		const doc = createMockDocument(sql, { fileName: '/project/models/customers.sql' });
-		const symbols = (await provider.provideDocumentSymbols(doc, mockToken))! as vscode.DocumentSymbol[];
-
-		const modelSymbol = symbols.find(s => s.name === 'customers');
-		expect(modelSymbol).toBeDefined();
-		expect(modelSymbol?.detail).toBe('final query');
-	});
-
-	it('returns empty for SQL without WITH keyword', async () => {
-		const doc = createMockDocument('select * from orders');
-		const symbols = (await provider.provideDocumentSymbols(doc, mockToken)) ?? [];
-		expect(symbols).toEqual([]);
+		provider = new DbtDocumentSymbolProvider(createMockIndexer(), createMockLogger(), createMockParseService());
 	});
 
 	it('extracts model/column hierarchy from YAML', () => {

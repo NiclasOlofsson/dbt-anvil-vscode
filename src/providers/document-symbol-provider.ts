@@ -5,17 +5,16 @@ import type { ILogger } from '../types/logger';
 
 /**
  * Document symbols for the Outline panel.
- * SQL files: CTEs shown as named symbols, backed by bridge-parsed DocumentModel
- *            with accurate line ranges and column children (falls back to regex
- *            if the bridge hasn't started yet or parsing fails).
+ * SQL files: CTEs and final SELECT shown as named symbols with column children,
+ *            backed by the bridge-parsed DocumentModel.
  * YAML files: model → columns → tests hierarchy.
  */
 export class DbtDocumentSymbolProvider implements vscode.DocumentSymbolProvider {
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
-		private readonly parseService: ParseService | null = null,
-	) {}
+		private readonly parseService: ParseService,
+	) { }
 
 	provideDocumentSymbols(
 		document: vscode.TextDocument,
@@ -34,16 +33,10 @@ export class DbtDocumentSymbolProvider implements vscode.DocumentSymbolProvider 
 	}
 
 	private async _sqlSymbols(document: vscode.TextDocument): Promise<vscode.DocumentSymbol[]> {
-		if (this.parseService) {
-			const dialect = this.indexer.index?.adapterType ?? 'ansi';
-			const model = await this.parseService.getDocumentModel(document, dialect);
-			if (model) {
-				return this._symbolsFromModel(document, model);
-			}
-		}
-
-		// Fallback: regex-based extraction
-		return this._sqlSymbolsRegex(document);
+		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const model = await this.parseService.getDocumentModel(document, dialect);
+		if (!model) return [];
+		return this._symbolsFromModel(document, model);
 	}
 
 	private _symbolsFromModel(
@@ -131,65 +124,6 @@ export class DbtDocumentSymbolProvider implements vscode.DocumentSymbolProvider 
 			'[parse-service] DocumentSymbol: '
 			+ symbols.length + ' symbols from DocumentModel in ' + document.fileName,
 		);
-		return symbols;
-	}
-
-	private _sqlSymbolsRegex(document: vscode.TextDocument): vscode.DocumentSymbol[] {
-		const text = document.getText();
-		const symbols: vscode.DocumentSymbol[] = [];
-
-		// Extract CTE names: `name AS (` pattern — handles Jinja-heavy SQL
-		const cteRe = /\b(\w+)\s+as\s*\(/gi;
-		// First check if there's a WITH keyword
-		const withRe = /\bwith\b/i;
-		if (!withRe.test(text)) return symbols;
-
-		let match;
-		while ((match = cteRe.exec(text)) !== null) {
-			const name = match[1];
-			// Skip SQL keywords that look like CTEs
-			if (/^(select|from|where|join|left|right|inner|outer|full|cross|on|and|or|not|in|as|case|when|then|else|end|group|order|having|limit|union|intersect|except|with|values|insert|update|delete|set|into|create|alter|drop|table|view|index|if|exists|between|like|is|null|true|false|asc|desc|by|distinct|all|any|some)$/i.test(name)) {
-				continue;
-			}
-
-			const pos = document.positionAt(match.index);
-			const endPos = document.positionAt(match.index + match[0].length);
-			const range = new vscode.Range(pos, endPos);
-
-			symbols.push(new vscode.DocumentSymbol(
-				name,
-				'CTE',
-				vscode.SymbolKind.Function,
-				range,
-				range,
-			));
-		}
-
-		// Add the final SELECT as a symbol if CTEs were found
-		if (symbols.length > 0) {
-			const modelName = this._getModelName(document);
-			if (modelName) {
-				// Find the last SELECT that isn't inside a CTE
-				const lastSelectRe = /\bselect\b/gi;
-				let lastSelect;
-				while ((match = lastSelectRe.exec(text)) !== null) {
-					lastSelect = match;
-				}
-				if (lastSelect) {
-					const pos = document.positionAt(lastSelect.index);
-					const range = new vscode.Range(pos, pos);
-					symbols.push(new vscode.DocumentSymbol(
-						modelName,
-						'final query',
-						vscode.SymbolKind.Class,
-						range,
-						range,
-					));
-				}
-			}
-		}
-
-		this.logger.debug('DocumentSymbol: ' + symbols.length + ' SQL symbols (regex) in ' + document.fileName);
 		return symbols;
 	}
 
