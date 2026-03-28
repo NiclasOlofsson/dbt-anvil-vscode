@@ -143,6 +143,9 @@ def _get_output_columns(
     except ImportError:
         return []
 
+    # TODO(refactor): parse_one + build_scope is called here, in _get_scope_columns,
+    # and again in handle_parse_document — the same SQL is parsed 3 times per request.
+    # Pass a shared AST instead to avoid the redundant work and triple warning logs.
     try:
         ast = parse_one(compiled_sql, dialect=dialect)
     except Exception:
@@ -186,32 +189,18 @@ def _get_output_columns(
     return [p.alias_or_name for p in projections if p.alias_or_name]
 
 
-def _get_scope_columns(
-    sql: str,
-    dialect: str,
+def _aliases_from_scope(
+    root_scope: Any,
     schema_mapping: dict[str, Any],
 ) -> dict[str, list[str]]:
-    """Return {alias: [col, ...]} for every alias/CTE reachable in the SQL.
+    """Return {alias: [col, ...]} for every alias/CTE reachable in a sqlglot scope tree.
 
-    Walks all scopes (root + CTEs) built by sqlglot and resolves each alias to
-    its column list — either from the CTE's own projections, or from the
-    schema_mapping for external table references.
+    Accepts an already-built root_scope so that handle_parse_document can reuse
+    the scope computed during the single parse pass instead of re-parsing the SQL.
     """
     try:
-        from sqlglot import exp, parse_one  # type: ignore[import-not-found]
-        from sqlglot.optimizer.scope import (
-            build_scope,  # type: ignore[import-not-found]
-        )
+        from sqlglot import exp  # type: ignore[import-not-found]
     except ImportError:
-        return {}
-
-    try:
-        ast = parse_one(sql, dialect=dialect)
-    except Exception:
-        return {}
-
-    root_scope = build_scope(ast)
-    if not root_scope:
         return {}
 
     aliases: dict[str, list[str]] = {}
@@ -247,50 +236,58 @@ def _get_scope_columns(
             return []
         return [p.alias_or_name for p in projs if p.alias_or_name]
 
-    # Walk all scopes (root + nested CTEs / subqueries)
-    for scope in root_scope.traverse():
-        # Register CTE definitions — CTE name → its output columns
-        if hasattr(scope, "cte_scopes"):
-            for cte_scope in scope.cte_scopes:
+    # Step 1: Register CTE output columns (CTE name → what it SELECTs).
+    # Traverse all scopes to find cte_scopes, but only record the CTE's output
+    # columns — not the internal aliases used inside the CTE body.
+    # Use a cycle-safe manual traversal — sqlglot's build_scope can create
+    # circular union_scopes references when the SQL contains a jinja macro stub
+    # (e.g. __jinja__) in a UNION-level position, causing traverse() to loop.
+    _visited_scopes: set[int] = set()
+    _scope_stack: list[Any] = [root_scope]
+    while _scope_stack:
+        _scope = _scope_stack.pop()
+        _scope_id = id(_scope)
+        if _scope_id in _visited_scopes:
+            continue
+        _visited_scopes.add(_scope_id)
+        if hasattr(_scope, "cte_scopes"):
+            for cte_scope in _scope.cte_scopes:
                 cte_name = cte_scope.expression.parent.alias
                 if cte_name:
                     cols = _cols_from_scope_select(cte_scope)
                     if cols:
                         aliases[cte_name] = cols
+            _scope_stack.extend(_scope.cte_scopes)
+        for _child_attr in ("union_scopes", "subquery_scopes", "table_scopes"):
+            if hasattr(_scope, _child_attr):
+                _scope_stack.extend(getattr(_scope, _child_attr))
 
-        # Register selected sources — alias → columns
-        for alias, (_, source) in scope.selected_sources.items():
-            if isinstance(source, exp.Table):
-                # External table: first try schema_mapping, then check if alias
-                # matches a CTE we already resolved
-                table_name = source.name
-                cols = _find_table_columns(schema_mapping, table_name)
-                if cols:
-                    _merge_alias(aliases, alias, cols)
-                    # Also register the unaliased table name
-                    if alias != table_name.lower():
-                        _merge_alias(aliases, table_name.lower(), cols)
-                elif table_name in aliases:
-                    # Table name matches a CTE — propagate for the alias
-                    _merge_alias(aliases, alias, aliases[table_name])
-                elif alias in aliases:
-                    # Already resolved as a CTE name — leave it unchanged
-                    pass
-            else:
-                # CTE/subquery reference — read its projection
-                cols = (
-                    _cols_from_scope_select(source)
-                    if hasattr(source, "expression")
-                    else []
-                )
-                if not cols and hasattr(source, "expression"):
-                    # Try via parent alias (CTE name)
-                    parent = getattr(source.expression, "parent", None)
-                    parent_alias = getattr(parent, "alias", None) if parent else None
-                    if parent_alias and parent_alias in aliases:
-                        cols = aliases[parent_alias]
-                if cols:
-                    _merge_alias(aliases, alias, cols)
+    # Step 2: Register selected sources from the ROOT scope only.
+    # CTE-internal aliases must NOT pollute the top-level alias dict — they are
+    # local to that CTE's scope and merging them causes false positives when the
+    # same alias name is reused in the outer query.
+    for alias, (_, source) in root_scope.selected_sources.items():
+        if isinstance(source, exp.Table):
+            table_name = source.name
+            cols = _find_table_columns(schema_mapping, table_name)
+            if cols:
+                aliases[alias] = cols
+                if alias != table_name.lower():
+                    aliases[table_name.lower()] = cols
+            elif table_name in aliases:
+                aliases[alias] = aliases[table_name]
+        else:
+            # CTE/subquery reference — use the already-registered CTE output
+            cols = aliases.get(alias) or (
+                _cols_from_scope_select(source) if hasattr(source, "expression") else []
+            )
+            if not cols and hasattr(source, "expression"):
+                parent = getattr(source.expression, "parent", None)
+                parent_alias = getattr(parent, "alias", None) if parent else None
+                if parent_alias:
+                    cols = aliases.get(parent_alias, [])
+            if cols:
+                aliases[alias] = cols
 
     return aliases
 
@@ -1317,9 +1314,116 @@ def handle_parse_document(request: dict[str, Any]) -> None:
         )
 
     # Final output columns from the root SELECT (outside any CTE).
+    # Also capture any sqlglot warnings emitted during scope building (e.g.
+    # "Cannot traverse scope X with type Aliases") — these indicate structural
+    # SQL issues that dbt itself won't detect because it doesn't compile the SQL
+    # during `dbt parse`.  We return them so the extension can surface them as
+    # diagnostics in the Problems tab.
+    # NOTE: sqlglot uses Python's logging module (not warnings.warn), so we
+    # install a temporary logging.Handler on the 'sqlglot' logger to intercept
+    # the messages before they reach stderr.
     final_columns: list[dict[str, Any]] = []
+    scope_aliases: dict[str, list[str]] = {}
+    sqlglot_warnings: list[dict[str, Any]] = []
     try:
-        root_scope = build_scope(ast)
+        import logging as _logging_mod
+
+        _captured_log_messages: list[str] = []
+
+        class _LogCapture(_logging_mod.Handler):
+            def emit(self, record: _logging_mod.LogRecord) -> None:
+                if record.levelno == _logging_mod.WARNING:
+                    _captured_log_messages.append(record.getMessage())
+
+        # TODO(refactor): this is parse #3 of 3 — see note in _get_output_columns_from_sql.
+        _sqlglot_logger = _logging_mod.getLogger("sqlglot")
+        _capture_handler = _LogCapture()
+        _sqlglot_logger.addHandler(_capture_handler)
+        try:
+            root_scope = build_scope(ast)
+        finally:
+            _sqlglot_logger.removeHandler(_capture_handler)
+
+        _seen_scope_names: set[str] = set()
+        for msg in _captured_log_messages:
+            # Extract the CTE / scope name from the warning message so we can
+            # point the diagnostic at the right line in the document.
+            # Message format: "Cannot traverse scope <name> AS () with type <type>"
+            # sqlglot may emit the same warning multiple times (once per traversal
+            # pass), so deduplicate by scope name.
+            _scope_name: str | None = None
+            _cte_line: int | None = None
+            _scope_match = re.search(r'Cannot traverse scope "?([^"<>\s]+)"? AS', msg)
+            if _scope_match:
+                _scope_name = _scope_match.group(1)
+                if _scope_name.lower() in _seen_scope_names:
+                    continue
+                _seen_scope_names.add(_scope_name.lower())
+                # Look up the CTE line we already recorded
+                for _cte in ctes:
+                    if _cte["name"].lower() == _scope_name.lower():
+                        _cte_line = _cte["line"]
+                        break
+            entry: dict[str, Any] = {"message": msg}
+            if _scope_name:
+                entry["cteName"] = _scope_name
+            if _cte_line is not None:
+                entry["line"] = _cte_line
+            sqlglot_warnings.append(entry)
+
+        # Re-parse with ErrorLevel.RAISE to get structured error positions.
+        # The first parse used error_level=None which silently produces Aliases
+        # nodes instead of raising. Re-parsing with RAISE throws ParseError whose
+        # .errors list contains {line, col, highlight} for each bad token.
+        if sqlglot_warnings:
+            try:
+                from sqlglot.errors import (
+                    ErrorLevel as _EL,  # type: ignore[import-not-found]
+                )
+
+                parse_one(parse_sql, dialect=sqlglot_dialect, error_level=_EL.RAISE)
+            except Exception as _rerr:
+                print(
+                    f"[bridge] re-parse errors: {getattr(_rerr, 'errors', None)}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                if hasattr(_rerr, "errors"):
+                    # For each warning about a scope (e.g. "sales_orders_enriched"),
+                    # find the parse error whose highlight IS that scope name.
+                    # That error says "Expecting (" — meaning the token BEFORE it
+                    # is the actual stray bad token (e.g. "aadsf"), which is the
+                    # last word in the error's start_context.
+                    # Once we have the bad token text, search parse_sql for it (
+                    # bounded to before the error line) to get the exact position.
+                    for _warn in sqlglot_warnings:
+                        _cte_name = (_warn.get("cteName") or "").lower()
+                        for _ed in _rerr.errors:  # type: ignore[union-attr]
+                            if (_ed.get("highlight") or "").lower() != _cte_name:
+                                continue
+                            _sc = (_ed.get("start_context") or "").rstrip()
+                            _bad_match = re.search(r"\b(\w+)\s*$", _sc)
+                            if not _bad_match:
+                                break
+                            _bad_tok = _bad_match.group(1)
+                            _err_line_1b = _ed.get("line") or 1
+                            _search_end = parse_line_starts[
+                                min(_err_line_1b - 1, len(parse_line_starts) - 1)
+                            ]
+                            _bt_re = re.search(
+                                r"\b" + re.escape(_bad_tok) + r"\b",
+                                parse_sql[:_search_end],
+                                re.IGNORECASE,
+                            )
+                            if _bt_re:
+                                _ts = _bt_re.start()
+                                _tl = parse_offset_to_line(_ts)
+                                _tc = _ts - parse_line_starts[_tl]
+                                _warn["line"] = to_raw_line(_tl)
+                                _warn["col"] = _tc
+                                _warn["endCol"] = _tc + len(_bad_tok)
+                            break
+
         if root_scope:
             sel = (
                 root_scope.expression
@@ -1333,6 +1437,12 @@ def handle_parse_document(request: dict[str, Any]) -> None:
                         final_columns.append(
                             {"name": col, "line": to_raw_line(_projection_line(proj))}
                         )
+        # Alias resolution — replaces the separate get_scope_columns round-trip.
+        scope_aliases = (
+            _aliases_from_scope(root_scope, request.get("schema_mapping", {}))
+            if root_scope
+            else {}
+        )
     except Exception:
         pass
 
@@ -1494,6 +1604,8 @@ def handle_parse_document(request: dict[str, Any]) -> None:
                 "sources": sources,
                 "finalColumns": final_columns,
                 "tokens": tokens,
+                "aliases": scope_aliases,
+                "sqlglotWarnings": sqlglot_warnings,
                 "timing": {
                     "parseMs": round(parse_ms, 2),
                     "totalMs": round(total_ms, 2),
@@ -1566,26 +1678,6 @@ def handle_get_columns(request: dict[str, Any]) -> None:
         )
 
 
-def handle_get_scope_columns(request: dict[str, Any]) -> None:
-    """Handle a get_scope_columns request and print the JSON response."""
-    sql: str = request.get("sql", "")
-    schema_mapping: dict[str, Any] = request.get("schema_mapping", {})
-    dialect: str = request.get("dialect", "ansi")
-
-    if not sql:
-        print(json.dumps({"success": True, "aliases": {}}), flush=True)
-        return
-
-    try:
-        aliases = _get_scope_columns(sql, dialect, schema_mapping)
-        print(json.dumps({"success": True, "aliases": aliases}), flush=True)
-    except Exception as exc:
-        print(
-            json.dumps({"success": True, "aliases": {}, "warning": str(exc)}),
-            flush=True,
-        )
-
-
 def main() -> None:
     configure_stdio()
     configure_dbt_env()
@@ -1648,8 +1740,6 @@ def main() -> None:
             handle_parse_document(request)
         elif "get_column_lineage" in request:
             handle_get_column_lineage(request)
-        elif "get_scope_columns" in request:
-            handle_get_scope_columns(request)
         elif "describe_table" in request:
             d = get_dbt()
             if d is None:

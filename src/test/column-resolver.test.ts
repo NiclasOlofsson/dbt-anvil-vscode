@@ -68,14 +68,5 @@ describe('ColumnResolver', () => {
 
 		expect(resolver.getCachedAliases(createMockDocument('SELECT 1'))).toBeNull();
 	});
-
-	it('invalidateCache calls parseService.invalidateEnrichment', () => {
-		const parseService = createMockParseService();
-		const resolver = new ColumnResolver(createMockIndexer(), mockLogger, parseService);
-
-		resolver.invalidateCache();
-
-		expect(parseService.invalidateEnrichment).toHaveBeenCalled();
-	});
 });
 

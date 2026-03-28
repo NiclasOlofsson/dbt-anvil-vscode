@@ -33,7 +33,6 @@ function makeColumnResolver(aliases: Record<string, string[]>): ColumnResolver {
 	return {
 		getScopeAliases: vi.fn().mockResolvedValue(aliases),
 		getCachedAliases: vi.fn().mockReturnValue(aliases),
-		invalidateCache: vi.fn(),
 	} as unknown as ColumnResolver;
 }
 

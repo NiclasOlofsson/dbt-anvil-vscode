@@ -30,6 +30,7 @@ interface CacheEntry {
  */
 export class CompileCache {
 	private readonly _cache = new Map<string, CacheEntry>();
+	private readonly _inflight = new Map<string, Promise<string | undefined>>();
 
 	constructor(
 		private readonly service: DbtExecutionService,
@@ -74,6 +75,27 @@ export class CompileCache {
 
 		this.logger.trace(`CompileCache: miss for ${uniqueId}, compiling`);
 
+		// Deduplicate concurrent compile requests for the same model
+		const existing = this._inflight.get(uniqueId);
+		if (existing) {
+			this.logger.trace(`CompileCache: awaiting inflight compile for ${uniqueId}`);
+			return existing;
+		}
+
+		const promise = this._compile(uniqueId, modelName, projectDir);
+		this._inflight.set(uniqueId, promise);
+		try {
+			return await promise;
+		} finally {
+			this._inflight.delete(uniqueId);
+		}
+	}
+
+	private async _compile(
+		uniqueId: string,
+		modelName: string,
+		projectDir: string,
+	): Promise<string | undefined> {
 		// Run dbt compile for this model
 		try {
 			const result = await this.service.submit({

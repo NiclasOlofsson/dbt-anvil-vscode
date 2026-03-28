@@ -10,6 +10,7 @@ import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { StatusBarManager } from '../views/status-bar';
 import type { ILogger } from '../types/logger';
 import type { ColumnResolver } from './column-resolver';
+import type { SqlglotWarning } from '../services/parse-service';
 import { computeCommentRanges, isOffsetInComment } from './comment-utils';
 import type { CommentRange } from './comment-utils';
 
@@ -23,10 +24,13 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 	private readonly _parseCollection: vscode.DiagnosticCollection;
 	private readonly _refCollection: vscode.DiagnosticCollection;
 	private readonly _columnCollection: vscode.DiagnosticCollection;
+	/** Structural SQL warnings from sqlglot (e.g. Aliases node type from a dangling identifier). */
+	private readonly _sqlglotCollection: vscode.DiagnosticCollection;
 	private readonly _disposables: vscode.Disposable[] = [];
 	private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
-	private _columnDebounceTimer: ReturnType<typeof setTimeout> | undefined;
-	private _columnCts: vscode.CancellationTokenSource | undefined;
+	// Per-document maps so one file's validation never cancels another file's timer/request.
+	private readonly _columnDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	private readonly _columnCtsSources = new Map<string, vscode.CancellationTokenSource>();
 
 	constructor(
 		service: DbtExecutionService,
@@ -35,11 +39,14 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		private readonly projectDir: string,
 		private readonly logger: ILogger,
 		private readonly columnResolver?: ColumnResolver,
-		onEnrichmentComplete?: vscode.Event<vscode.Uri>,
+		onAliasesReady?: vscode.Event<vscode.Uri>,
+		onIndexRebuild?: vscode.Event<ManifestIndexer>,
+		onSqlglotWarnings?: vscode.Event<{ uri: vscode.Uri; warnings: SqlglotWarning[] }>,
 	) {
 		this._parseCollection = vscode.languages.createDiagnosticCollection('dbt-studio');
 		this._refCollection = vscode.languages.createDiagnosticCollection('dbt-studio-refs');
 		this._columnCollection = vscode.languages.createDiagnosticCollection('dbt-studio-columns');
+		this._sqlglotCollection = vscode.languages.createDiagnosticCollection('dbt-studio-sqlglot');
 
 		// Parse-based diagnostics
 		this._disposables.push(
@@ -74,6 +81,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 			vscode.workspace.onDidCloseTextDocument((doc) => {
 				this._refCollection.delete(doc.uri);
 				this._columnCollection.delete(doc.uri);
+				this._sqlglotCollection.delete(doc.uri);
 			}),
 			vscode.workspace.onDidChangeConfiguration((e) => {
 				if (e.affectsConfiguration('dbt-studio.providers.sql.diagnostics')) {
@@ -92,12 +100,60 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		// Re-validate column diagnostics when background enrichment completes.
 		// Enrichment runs asynchronously after parse — without this, column
 		// diagnostics stay stale until the user edits the file again.
-		if (onEnrichmentComplete && this.columnResolver) {
+		if (onAliasesReady && this.columnResolver) {
 			this._disposables.push(
-				onEnrichmentComplete((uri) => {
+				onAliasesReady((uri) => {
 					if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) return;
 					const doc = vscode.workspace.textDocuments.find(d => d.uri.toString() === uri.toString());
 					if (doc) this._validateColumnsDebounced(doc);
+				}),
+			);
+		}
+
+		// Re-validate ref/source diagnostics when the manifest index is rebuilt.
+		// Without this, stale "unknown ref/source" errors linger until the user edits the file.
+		// NOTE: _columnCollection is intentionally NOT touched here — column diagnostics are
+		// managed independently by the onAliasesReady path (fast SQL parse + enrichment).
+		// Clearing columns here would wipe correctly-set diagnostics and the single debounce
+		// timer means only the last document in the loop would ever get them restored.
+		if (onIndexRebuild) {
+			this._disposables.push(
+				onIndexRebuild(() => {
+					if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) return;
+					const openSqlDocs = vscode.workspace.textDocuments.filter(d => d.languageId === 'jinja-sql');
+					this.logger.debug(`[diagnostics] onIndexRebuild: re-validating refs/sources for ${openSqlDocs.length} open jinja-sql docs`);
+					// Flush stale ref/source diagnostics for ALL documents (including closed ones).
+					// Then immediately repopulate for all currently open documents.
+					this._refCollection.clear();
+					for (const doc of openSqlDocs) {
+						this._validateRefsOnly(doc);					// Re-validate column diagnostics too — per-doc debounce ensures
+						// each file gets its own timer, so no file cancels another.
+						if (this.columnResolver) this._validateColumnsDebounced(doc);					}
+					this._updateStatusBar();
+				}),
+			);
+		}
+
+		// Surface sqlglot structural warnings (e.g. Aliases node type from a dangling
+		// identifier) as Warning diagnostics.  These fire on every parse — empty list
+		// clears stale diagnostics, non-empty list replaces them.
+		if (onSqlglotWarnings) {
+			this._disposables.push(
+				onSqlglotWarnings(({ uri, warnings }) => {
+					const diagnostics = warnings.map((w) => {
+						const line = w.line ?? 0;
+						const startCol = w.col ?? 0;
+						const endCol = w.endCol ?? Number.MAX_SAFE_INTEGER;
+						const diag = new vscode.Diagnostic(
+							new vscode.Range(line, startCol, line, endCol),
+							`SQL structure warning: ${w.message}`,
+							vscode.DiagnosticSeverity.Warning,
+						);
+						diag.source = 'dbt-studio (sqlglot)';
+						diag.code = 'sqlglot-scope-warning';
+						return diag;
+					});
+					this._sqlglotCollection.set(uri, diagnostics);
 				}),
 			);
 		}
@@ -134,6 +190,22 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		if (this.columnResolver) {
 			this._validateColumnsDebounced(document);
 		}
+	}
+
+	/** Re-validate only ref/source diagnostics (no column validation). Used by onIndexRebuild. */
+	private _validateRefsOnly(document: vscode.TextDocument): void {
+		if (document.languageId !== 'jinja-sql') return;
+		if (!this.indexer.index) return;
+
+		const text = document.getText();
+		const commentRanges = computeCommentRanges(text);
+		const diagnostics: vscode.Diagnostic[] = [];
+
+		this._validateRefs(document, text, commentRanges, diagnostics);
+		this._validateSources(document, text, commentRanges, diagnostics);
+
+		this._refCollection.set(document.uri, diagnostics);
+		this.logger.debug(`[diagnostics] ref validation: ${diagnostics.length} issues in ${path.basename(document.fileName)}`);
 	}
 
 	private _validateRefs(
@@ -213,24 +285,33 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 	// ---- Column validation (async) ----
 
 	private _validateColumnsDebounced(document: vscode.TextDocument): void {
-		if (this._columnDebounceTimer) clearTimeout(this._columnDebounceTimer);
-		this._columnCts?.cancel();
-		this._columnDebounceTimer = setTimeout(() => {
+		const key = document.uri.toString();
+		const existing = this._columnDebounceTimers.get(key);
+		if (existing) clearTimeout(existing);
+		const timer = setTimeout(() => {
+			this._columnDebounceTimers.delete(key);
 			this._validateColumnsAsync(document).catch(err => {
 				this.logger.debug(`Column validation error: ${err}`);
 			});
 		}, 500);
+		this._columnDebounceTimers.set(key, timer);
 	}
 
 	private async _validateColumnsAsync(document: vscode.TextDocument): Promise<void> {
 		if (!this.columnResolver) return;
 
-		this._columnCts?.cancel();
-		this._columnCts = new vscode.CancellationTokenSource();
-		const token = this._columnCts.token;
+		const key = document.uri.toString();
+		this._columnCtsSources.get(key)?.cancel();
+		const cts = new vscode.CancellationTokenSource();
+		this._columnCtsSources.set(key, cts);
+		const token = cts.token;
 
 		const { tokens, aliases } = await this.columnResolver.getTokensAndAliases(document, token);
 		if (token.isCancellationRequested) return;
+
+		const aliasInfo = Object.entries(aliases).map(([k, v]) => `${k}:${v.length}`).join(', ');
+		this.logger.debug(`[diagnostics] column aliases for ${path.basename(document.fileName)}: {${aliasInfo}}`);
+
 		if (Object.keys(aliases).length === 0) {
 			this._columnCollection.delete(document.uri);
 			this._updateStatusBar();
@@ -238,14 +319,18 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		}
 
 		const diagnostics: vscode.Diagnostic[] = [];
+		let firstMiss: string | undefined;
 
 		for (const t of tokens) {
 			if (t.type !== 'column_ref' || !t.table) continue;
 
 			const cols = aliases[t.table] ?? aliases[t.table.toLowerCase()];
-			if (!cols) continue; // alias not in scope map — unresolvable, skip
+			// Skip if: alias unknown, no columns resolved, or list contains '*'
+			// (unresolved SELECT * — can't validate without knowing what * expands to)
+			if (!cols || cols.length === 0 || cols.includes('*')) continue;
 
 			if (!cols.some(c => c.toLowerCase() === t.name.toLowerCase())) {
+				if (!firstMiss) firstMiss = `${t.table}.${t.name} (known: ${cols.slice(0, 3).join(', ')})`;
 				const range = new vscode.Range(
 					new vscode.Position(t.line, t.col),
 					new vscode.Position(t.line, t.endCol),
@@ -262,10 +347,9 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		}
 
 		this._columnCollection.set(document.uri, diagnostics);
+		this.logger.debug(`[diagnostics] column validation: ${diagnostics.length} issues in ${path.basename(document.fileName)}`);
 		this._updateStatusBar();
 	}
-
-	// ---- Parse-based diagnostics ----
 
 	private _handleParseOutput(output: string, success: boolean): void {
 		this._parseCollection.clear();
@@ -330,28 +414,33 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 	}
 
 	private _updateStatusBar(): void {
-		let count = 0;
-		this._parseCollection.forEach((_, diags) => { count += diags.length; });
-		this._refCollection.forEach((_, diags) => { count += diags.length; });
-		this._columnCollection.forEach((_, diags) => { count += diags.length; });
-		this.statusBar.setErrorCount(count);
+		let parseCount = 0, refCount = 0, colCount = 0, sqlglotCount = 0;
+		this._parseCollection.forEach((_, diags) => { parseCount += diags.length; });
+		this._refCollection.forEach((_, diags) => { refCount += diags.length; });
+		this._columnCollection.forEach((_, diags) => { colCount += diags.length; });
+		this._sqlglotCollection.forEach((_, diags) => { sqlglotCount += diags.length; });
+		const total = parseCount + refCount + colCount + sqlglotCount;
+		this.logger.debug(`[diagnostics] counts — parse:${parseCount} refs:${refCount} columns:${colCount} sqlglot:${sqlglotCount} total:${total}`);
+		this.statusBar.setErrorCount(total);
 	}
 
 	clearAll(): void {
 		this._parseCollection.clear();
 		this._refCollection.clear();
 		this._columnCollection.clear();
+		this._sqlglotCollection.clear();
 		this.statusBar.setErrorCount(0);
 	}
 
 	dispose(): void {
 		if (this._debounceTimer) clearTimeout(this._debounceTimer);
-		if (this._columnDebounceTimer) clearTimeout(this._columnDebounceTimer);
-		this._columnCts?.cancel();
+		for (const timer of this._columnDebounceTimers.values()) clearTimeout(timer);
+		for (const cts of this._columnCtsSources.values()) cts.cancel();
 		for (const d of this._disposables) d.dispose();
 		this._parseCollection.dispose();
 		this._refCollection.dispose();
 		this._columnCollection.dispose();
+		this._sqlglotCollection.dispose();
 	}
 }
 

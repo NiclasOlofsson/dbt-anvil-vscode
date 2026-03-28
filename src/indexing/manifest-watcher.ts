@@ -5,6 +5,7 @@ import { Priority } from '../dbt/execution-service';
 import { ManifestLoader } from '../dbt/manifest-loader';
 import { ManifestIndexer } from './manifest-indexer';
 import type { ParseService } from '../services/parse-service';
+import type { CompileCache } from '../dbt/compile-cache';
 
 /**
  * Watches dbt target/manifest.json for changes and rebuilds the index.
@@ -20,6 +21,7 @@ export class ManifestWatcher {
 	private _suppressed = false;
 	private _executionService: DbtExecutionService | null = null;
 	private _parseService: ParseService | null = null;
+	private _compileCache: CompileCache | null = null;
 	private readonly _contentHashes = new Map<string, string>();
 	private readonly _onIndexRebuild = new vscode.EventEmitter<ManifestIndexer>();
 
@@ -63,6 +65,8 @@ export class ManifestWatcher {
 			const uniqueId = this.indexer.findModelByFilePath(doc.fileName);
 			if (uniqueId) {
 				const evicted = this.indexer.invalidateModel(uniqueId);
+				// Invalidate compile cache for the saved model
+				this._compileCache?.invalidate(uniqueId);
 				if (evicted.size > 0) {
 					this.logger.info(`Model saved: ${uniqueId} — evicted ${evicted.size} column store entries`);
 					// Surgical enrichment invalidation: only clear aliases for
@@ -127,6 +131,10 @@ export class ManifestWatcher {
 
 	setParseService(service: ParseService): void {
 		this._parseService = service;
+	}
+
+	setCompileCache(cache: CompileCache): void {
+		this._compileCache = cache;
 	}
 
 	private _debouncedParse(): void {

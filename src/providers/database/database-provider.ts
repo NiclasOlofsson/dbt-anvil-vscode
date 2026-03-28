@@ -40,11 +40,14 @@ export interface DatabaseProvider {
 
 	/**
 	 * Return the column definitions for a dbt model or source.
-	 * @param name       Model name (for ref) or table name (for source).
-	 * @param opts.isSource    True when describing a source node.
-	 * @param opts.sourceName  Source name (required when isSource is true).
+	 * @param name                 Model name (for ref) or table name (for source).
+	 * @param opts.isSource        True when describing a source node.
+	 * @param opts.sourceName      Source name (required when isSource is true).
+	 * @param opts.qualifiedName   Pre-built fully-qualified relation name (e.g. catalog.schema.table).
+	 *                             Adapter-specific providers that bypass dbt should use this instead of
+	 *                             relying on the session catalog/schema to resolve an unqualified name.
 	 */
-	describe(name: string, opts?: { isSource?: boolean; sourceName?: string }): Promise<ColumnDefinition[]>;
+	describe(name: string, opts?: { isSource?: boolean; sourceName?: string; qualifiedName?: string }): Promise<ColumnDefinition[]>;
 
 	/**
 	 * List schemas available in the connected database/catalog.

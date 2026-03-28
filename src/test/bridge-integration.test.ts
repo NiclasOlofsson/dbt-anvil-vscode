@@ -1,6 +1,6 @@
 /**
  * Bridge integration tests — spawns a real bridge.py process against the
- * jaffle_shop fixture and exercises the describe_table and get_scope_columns
+ * jaffle_shop fixture and exercises the describe_table and parse_document
  * handlers end-to-end.
  *
  * These tests require dbt to be installed in the Python environment detected
@@ -87,10 +87,10 @@ describe('bridge integration', () => {
 		expect(cols).toContain('order_id');
 	}, 60_000);
 
-	it('get_scope_columns resolves aliases in customers.sql with describe fallback', async () => {
+	it('parse_document with schema_mapping resolves aliases in customers.sql', async () => {
 		// customers.sql has CTEs referencing stg_customers and stg_orders which
 		// have no YAML columns — describe_table must be called first to populate
-		// schema_mapping, then get_scope_columns can resolve the aliases.
+		// schema_mapping, then parse_document can resolve the aliases in a single call.
 
 		// Step 1: describe both upstream refs
 		const descCustomers = await bridge.invokeRaw({ describe_table: true, name: 'stg_customers' });
@@ -109,7 +109,7 @@ describe('bridge integration', () => {
 			},
 		};
 
-		// Step 3: call get_scope_columns with the jaffle customers.sql (Jinja stripped to plain SQL)
+		// Step 3: parse_document with schema_mapping — aliases resolved in one call
 		const sql = `
 with customers as (
     select * from main.stg_customers
@@ -141,14 +141,15 @@ select * from final
 `;
 
 		const result = await bridge.invokeRaw({
-			get_scope_columns: true,
+			parse_document: true,
 			sql,
 			dialect: 'duckdb',
 			schema_mapping: schemaMapping,
 		});
 
 		expect(result.success).toBe(true);
-		const aliases = (result.data as Record<string, unknown>)['aliases'] as Record<string, string[]>;
+		const data = result.data as Record<string, unknown>;
+		const aliases = data['aliases'] as Record<string, string[]>;
 		expect(aliases).toBeDefined();
 		expect(aliases['customers']).toContain('customer_id');
 		expect(aliases['customers']).toContain('first_name');

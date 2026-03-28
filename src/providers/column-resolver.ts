@@ -14,11 +14,6 @@ export class ColumnResolver {
 		private readonly parseService: ParseService,
 	) {}
 
-	invalidateCache(): void {
-		this.parseService.invalidateEnrichment();
-		this.logger.debug('ColumnResolver: cache invalidated');
-	}
-
 	getCachedAliases(document: vscode.TextDocument): Record<string, string[]> | null {
 		return this.parseService.getCachedAliases(document);
 	}
