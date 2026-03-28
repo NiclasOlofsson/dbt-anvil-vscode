@@ -1,8 +1,6 @@
 import * as vscode from 'vscode';
 import type { BridgeRunner } from '../dbt/bridge-runner';
 import type { DescribeCache } from '../dbt/describe-cache';
-import type { DbtExecutionService } from '../dbt/execution-service';
-import type { ScopeColumnsCache } from '../dbt/scope-columns-cache';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import { stripJinja } from '../providers/jinja-utils';
 import type { ILogger } from '../types/logger';
@@ -115,6 +113,25 @@ export type PositionResolution =
 	| { kind: 'table_alias'; token: TableRefToken }
 	| { kind: 'column_def'; token: ColumnDefToken };
 
+/**
+ * A structural issue detected by sqlglot during parsing — e.g. a CTE whose
+ * body cannot be scope-analysed because it uses an unsupported construct
+ * (typically an `Aliases` node produced by a dangling identifier before the CTE).
+ * dbt itself won't detect this because `dbt parse` does not compile the SQL.
+ */
+export interface SqlglotWarning {
+	/** Full sqlglot warning message */
+	message: string;
+	/** CTE name the warning refers to, if extractable */
+	cteName?: string;
+	/** 0-based line number to point the diagnostic at */
+	line?: number;
+	/** 0-based start column of the bad token (when available) */
+	col?: number;
+	/** 0-based end column of the bad token (when available) */
+	endCol?: number;
+}
+
 export interface DocumentModel {
 	ctes: CteInfo[];
 	refs: RefInfo[];
@@ -122,23 +139,24 @@ export interface DocumentModel {
 	finalColumns: ColumnInfo[];
 	tokens: TokenInfo[];
 	timing: { parseMs: number; totalMs: number };
+	/** Structural warnings emitted by sqlglot during scope building. */
+	sqlglotWarnings?: SqlglotWarning[];
 	/**
-	 * Alias → column-name map populated asynchronously after the initial parse.
-	 * `undefined` while enrichment is pending or not configured.
+	 * Alias → column-name map populated during the parse alongside structural info.
+	 * `undefined` only when enrichment is not configured; otherwise always a dict
+	 * (empty when schema_mapping had no entries for the upstream tables).
 	 */
 	aliases?: Record<string, string[]>;
 }
 
 /**
  * Optional enrichment dependencies that enable Tier-2 alias resolution.
- * When provided, ParseService will asynchronously describe upstream tables
- * and resolve alias → column mappings after the fast structural parse.
+ * When provided, ParseService will describe upstream tables concurrently
+ * and resolve alias → column mappings as part of each parse.
  */
 export interface EnrichmentConfig {
-	service: DbtExecutionService;
 	describeCache: DescribeCache;
 	indexer: ManifestIndexer;
-	scopeColumnsCache: ScopeColumnsCache;
 }
 
 interface CacheEntry {
@@ -162,10 +180,13 @@ interface CacheEntry {
 export class ParseService {
 	private readonly _cache = new Map<string, CacheEntry>();
 	private readonly _inflight = new Map<string, Promise<DocumentModel | null>>();
-	private readonly _enrichInflight = new Map<string, Promise<void>>();
 
-	private readonly _onEnrichmentComplete = new vscode.EventEmitter<vscode.Uri>();
-	readonly onEnrichmentComplete = this._onEnrichmentComplete.event;
+	private readonly _onAliasesReady = new vscode.EventEmitter<vscode.Uri>();
+	readonly onAliasesReady = this._onAliasesReady.event;
+
+	private readonly _onSqlglotWarnings = new vscode.EventEmitter<{ uri: vscode.Uri; warnings: SqlglotWarning[] }>();
+	/** Fired after each parse when sqlglot reported structural warnings (e.g. Aliases node type). */
+	readonly onSqlglotWarnings = this._onSqlglotWarnings.event;
 
 	constructor(
 		private readonly _bridge: BridgeRunner,
@@ -188,7 +209,6 @@ export class ParseService {
 		const key = document.uri.toString();
 		const cached = this._cache.get(key);
 		if (cached && cached.version === document.version) {
-			this._triggerEnrichment(document, key, cached);
 			return cached.model;
 		}
 
@@ -216,53 +236,25 @@ export class ParseService {
 	async getAliases(
 		document: vscode.TextDocument,
 		dialect: string,
-		token: vscode.CancellationToken,
+		_token: vscode.CancellationToken,
 	): Promise<Record<string, string[]>> {
 		const model = await this.getDocumentModel(document, dialect);
 		if (!model) return {};
-		// Always include CTE columns (by CTE name and alias) so alias.column works
-		// without waiting for async enrichment.
 		const cteAliases: Record<string, string[]> = {};
 		for (const cte of model.ctes) {
 			const cols = cte.columns.map(c => c.name);
 			cteAliases[cte.name] = cols;
 			if (cte.alias) cteAliases[cte.alias] = cols;
 		}
-		// Also resolve FROM/JOIN aliases that point to CTEs.
-		// e.g. `LEFT JOIN address_with_country AS addr` where address_with_country
-		// is a CTE — `addr` must map to that CTE's columns.
-		for (const token of model.tokens) {
-			if (token.type === 'table_ref' && token.alias) {
-				const aliasLc = token.alias.toLowerCase();
+		// Resolve FROM/JOIN aliases that point to CTEs.
+		// e.g. `LEFT JOIN address_with_country AS addr` — `addr` maps to that CTE's columns.
+		for (const tok of model.tokens) {
+			if (tok.type === 'table_ref' && tok.alias) {
+				const aliasLc = tok.alias.toLowerCase();
 				if (aliasLc in cteAliases) continue;
-				const targetCols = cteAliases[token.name.toLowerCase()];
+				const targetCols = cteAliases[tok.name.toLowerCase()];
 				if (targetCols) cteAliases[aliasLc] = targetCols;
 			}
-		}
-		if (model.aliases !== undefined) return { ...cteAliases, ...model.aliases };
-		if (!this._enrichment) return cteAliases;
-		if (token.isCancellationRequested) return cteAliases;
-
-		const key = document.uri.toString();
-		const enrichKey = `${key}@${document.version}`;
-
-		// If background enrichment was already triggered, await it.
-		const inflight = this._enrichInflight.get(enrichKey);
-		if (inflight) {
-			await inflight;
-			return model.aliases ?? {};
-		}
-
-		// Trigger enrichment ourselves (with cancellation support).
-		const cached = this._cache.get(key);
-		if (!cached) return {};
-
-		const promise = this._enrich(document, key, cached, token);
-		this._enrichInflight.set(enrichKey, promise);
-		try {
-			await promise;
-		} finally {
-			this._enrichInflight.delete(enrichKey);
 		}
 		return { ...cteAliases, ...(model.aliases ?? {}) };
 	}
@@ -285,11 +277,8 @@ export class ParseService {
 	 * structural positions (CTEs, refs) remain valid.
 	 */
 	invalidateEnrichment(): void {
-		for (const entry of this._cache.values()) {
-			entry.model.aliases = undefined;
-		}
-		this._enrichment?.scopeColumnsCache.clear();
-		this._logger.debug('[parse-service] enrichment cache invalidated');
+		this._cache.clear();
+		this._logger.debug('[parse-service] parse cache cleared (schema change)');
 	}
 
 	/**
@@ -302,12 +291,10 @@ export class ParseService {
 		if (!this._enrichment) return;
 		const { indexer } = this._enrichment;
 		let count = 0;
-		for (const [uri, entry] of this._cache) {
-			if (entry.model.aliases === undefined) continue;
-			// Check if any ref in this document's model points to an affected node
-			const text = entry.model.refs;
+		const toEvict: string[] = [];
+		for (const [entryKey, entry] of this._cache) {
 			let affected = false;
-			for (const ref of text) {
+			for (const ref of entry.model.refs) {
 				const uids = indexer.findModelsByName(ref.model);
 				if (uids.some(m => affectedIds.has(m.uniqueId))) {
 					affected = true;
@@ -316,9 +303,6 @@ export class ParseService {
 			}
 			if (!affected) {
 				for (const src of entry.model.sources) {
-					const key = `source.${src.sourceName}.${src.tableName}`;
-					// Source unique IDs follow the pattern source.<project>.<source_name>.<table_name>
-					// Check if any affected ID matches this source
 					for (const id of affectedIds) {
 						if (id.endsWith(`.${src.sourceName}.${src.tableName}`)) {
 							affected = true;
@@ -329,14 +313,15 @@ export class ParseService {
 				}
 			}
 			if (affected) {
-				entry.model.aliases = undefined;
+				toEvict.push(entryKey);
 				count++;
 			}
 		}
+		for (const k of toEvict) {
+			this._cache.delete(k);
+		}
 		if (count > 0) {
-			// Also clear scope_columns cache since schema mapping may have changed
-			this._enrichment.scopeColumnsCache.clear();
-			this._logger.debug(`[parse-service] enrichment invalidated for ${count} document(s) affected by ${affectedIds.size} node(s)`);
+			this._logger.debug(`[parse-service] parse cache evicted ${count} document(s) affected by ${affectedIds.size} node(s)`);
 		}
 	}
 
@@ -407,29 +392,60 @@ export class ParseService {
 	): Promise<DocumentModel | null> {
 		const rawText = document.getText();
 
-		// Build a schema hint from any already-cached describe results so that
-		// sqlglot qualify() can resolve bare (unqualified) column references in
-		// the very first parse when the describe cache is warm.  This is purely
-		// opportunistic — if the cache is cold the dict stays empty and behaviour
-		// is identical to before.
-		const schema: Record<string, Record<string, string>> = {};
-		if (this._enrichment) {
-			const { refs } = stripJinja(rawText, this._enrichment.indexer);
-			for (const [tableName, uniqueId] of refs) {
-				const cols = this._enrichment.indexer.getColumns(uniqueId);
-				if (cols && cols.length > 0) {
-					schema[tableName.toLowerCase()] = Object.fromEntries(cols.map(c => [c.toLowerCase(), 'varchar']));
-				}
-			}
-		}
-
+		// Build qualify schema hint from already-cached indexer columns (fast, synchronous).
+		// Also fire describe requests concurrently to populate schema_mapping for alias resolution
+		// in a single bridge round-trip. DescribeCache deduplicates inflight requests.
+		const qualifySchema: Record<string, Record<string, string>> = {};
 		const parseRequest: Record<string, unknown> = {
 			parse_document: true,
 			sql: rawText,
 			dialect: dialect || 'ansi',
 		};
-		if (Object.keys(schema).length > 0) {
-			parseRequest['schema'] = schema;
+
+		if (this._enrichment) {
+			const { indexer, describeCache } = this._enrichment;
+			const { refs } = stripJinja(rawText, indexer);
+
+			for (const [tableName, uniqueId] of refs) {
+				const cols = indexer.getColumns(uniqueId);
+				if (cols && cols.length > 0) {
+					qualifySchema[tableName.toLowerCase()] = Object.fromEntries(cols.map(c => [c.toLowerCase(), 'varchar']));
+				}
+			}
+
+			const schemaMapping = indexer.buildSchemaMapping();
+			await Promise.all([...refs].map(async ([tableName, uniqueId]) => {
+				const node = indexer.getRawNode(uniqueId);
+				const isSource = uniqueId.startsWith('source.');
+				const modelName = node && 'name' in node ? String(node.name) : tableName;
+				const sourceName = isSource && node && 'source_name' in node ? String(node.source_name) : undefined;
+
+				let qualifiedName: string | undefined;
+				if (node) {
+					const db = 'database' in node ? (node.database as string | undefined) : undefined;
+					const schema = 'schema' in node ? (node.schema as string | undefined) : undefined;
+					const identifier = isSource
+						? ('identifier' in node ? String((node as { identifier: string }).identifier) : undefined)
+						: (('alias' in node ? String((node as { alias?: string }).alias) : undefined) ?? modelName);
+					const parts = [db, schema, identifier].filter(Boolean);
+					if (parts.length > 1) qualifiedName = parts.join('.');
+				}
+
+				const cols = await describeCache.describeTable(uniqueId, modelName, sourceName, qualifiedName);
+				if (cols && cols.length > 0) {
+					const schDb = (schemaMapping['__described__'] ??= {});
+					const schSch = (schDb['__described__'] ??= {});
+					schSch[tableName.toLowerCase()] = Object.fromEntries(cols.map(c => [c, {}]));
+				}
+			}));
+
+			if (Object.keys(schemaMapping).length > 0) {
+				parseRequest['schema_mapping'] = schemaMapping;
+			}
+		}
+
+		if (Object.keys(qualifySchema).length > 0) {
+			parseRequest['schema'] = qualifySchema;
 		}
 
 		const result = await this._bridge.invokeRaw(parseRequest);
@@ -440,7 +456,7 @@ export class ParseService {
 			return null;
 		}
 
-		const data = result.data as unknown as (DocumentModel & { success: boolean });
+		const data = result.data as unknown as (DocumentModel & { success: boolean; sqlglotWarnings?: SqlglotWarning[]; aliases?: Record<string, string[]> });
 		const model: DocumentModel = {
 			ctes: data.ctes ?? [],
 			refs: data.refs ?? [],
@@ -448,99 +464,24 @@ export class ParseService {
 			finalColumns: data.finalColumns ?? [],
 			tokens: (data as unknown as Record<string, unknown>).tokens as TokenInfo[] ?? [],
 			timing: data.timing ?? { parseMs: 0, totalMs: 0 },
+			sqlglotWarnings: data.sqlglotWarnings ?? [],
+			aliases: data.aliases ?? {},
 		};
 
 		const entry: CacheEntry = { version: document.version, model, dialect: dialect || 'ansi' };
 		this._cache.set(key, entry);
 		this._logger.debug(
 			`[parse-service] parsed ${document.fileName} — ${model.ctes.length} CTEs, `
-			+ `${model.refs.length} refs in ${model.timing.totalMs}ms (sqlglot: ${model.timing.parseMs}ms)`,
+			+ `${model.refs.length} refs, ${Object.keys(model.aliases ?? {}).length} aliases in ${model.timing.totalMs}ms`,
 		);
 
-		// Kick off background enrichment immediately after parsing.
-		this._triggerEnrichment(document, key, entry);
+		if (model.sqlglotWarnings && model.sqlglotWarnings.length > 0) {
+			this._logger.debug(`[parse-service] ${model.sqlglotWarnings.length} sqlglot warning(s) in ${document.fileName}`);
+		}
+		this._onSqlglotWarnings.fire({ uri: document.uri, warnings: model.sqlglotWarnings ?? [] });
+		this._onAliasesReady.fire(document.uri);
 
 		return model;
-	}
-
-	/** Fire-and-forget background enrichment. No-op if already running or done. */
-	private _triggerEnrichment(
-		document: vscode.TextDocument,
-		key: string,
-		entry: CacheEntry,
-	): void {
-		if (entry.model.aliases !== undefined) return;
-		if (!this._enrichment) return;
-
-		const enrichKey = `${key}@${entry.version}`;
-		if (this._enrichInflight.has(enrichKey)) return;
-
-		const promise = this._enrich(document, key, entry);
-		this._enrichInflight.set(enrichKey, promise);
-		void promise.finally(() => {
-			this._enrichInflight.delete(enrichKey);
-		});
-	}
-
-	private async _enrich(
-		document: vscode.TextDocument,
-		_key: string,
-		entry: CacheEntry,
-		token?: vscode.CancellationToken,
-	): Promise<void> {
-		if (!this._enrichment) return;
-		const { describeCache, indexer, scopeColumnsCache } = this._enrichment;
-
-		try {
-			const { sql, refs } = stripJinja(document.getText(), indexer);
-			if (!sql.trim()) {
-				entry.model.aliases = {};
-				return;
-			}
-
-			const schemaMapping = indexer.buildSchemaMapping();
-			const dialect = entry.dialect;
-
-			// Phase 3: Fire all describe requests concurrently.
-			// DescribeCache already has inflight dedup — concurrent calls for the
-			// same uniqueId share one Promise. Cache hits return immediately.
-			const describePromises = [...refs].map(async ([tableName, uniqueId]) => {
-				if (token?.isCancellationRequested) return;
-
-				const node = indexer.getRawNode(uniqueId);
-				const isSource = uniqueId.startsWith('source.');
-				const modelName = node && 'name' in node ? String(node.name) : tableName;
-				const sourceName = isSource && node && 'source_name' in node ? String(node.source_name) : undefined;
-
-				const cols = await describeCache.describeTable(uniqueId, modelName, sourceName);
-				if (cols && cols.length > 0) {
-					const db = (schemaMapping['__described__'] ??= {});
-					const schema = (db['__described__'] ??= {});
-					schema[tableName.toLowerCase()] = Object.fromEntries(cols.map(c => [c, {}]));
-				}
-			});
-			await Promise.all(describePromises);
-
-			if (token?.isCancellationRequested) return;
-
-			// Phase 2: Use ScopeColumnsCache — returns cached result when SQL
-			// and schema mapping haven't changed, avoiding a queue round-trip.
-			const aliases = await scopeColumnsCache.scopeColumns(sql, dialect, schemaMapping);
-
-			// Update the model in-place — all existing references see the enriched result.
-			entry.model.aliases = aliases;
-
-			this._logger.debug(
-				`[parse-service] enriched ${document.fileName} — `
-				+ `${Object.keys(entry.model.aliases).length} aliases`,
-			);
-
-			// Notify listeners (e.g. diagnostics provider) so they can re-validate.
-			this._onEnrichmentComplete.fire(document.uri);
-		} catch (err) {
-			this._logger.debug(`[parse-service] enrichment failed for ${document.fileName}: ${err}`);
-			// Leave aliases as undefined — next call will retry enrichment.
-		}
 	}
 
 	/** Remove cached entry when a document is closed. */

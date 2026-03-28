@@ -10,7 +10,6 @@ import { DbtExecutionService, Priority } from './dbt/execution-service';
 import { CompileCache } from './dbt/compile-cache';
 import { CompileCachePersistence } from './dbt/compile-cache-persistence';
 import { DescribeCache } from './dbt/describe-cache';
-import { ScopeColumnsCache } from './dbt/scope-columns-cache';
 import { loadProjectConfig } from './dbt/project-config';
 import { createDatabaseProvider } from './providers/database/database-provider-factory';
 import { ColumnStorePersistence } from './indexing/column-store-persistence';
@@ -139,14 +138,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// were restored from disk (mtime validation happens on first access per entry).
 	void compileCache.warmAll(projectDir, restoredCompileEntries);
 
-	// -------- Parse service (structural parse + background alias enrichment) --------
-	const scopeColumnsCache = new ScopeColumnsCache(executionService, logger);
-	const parseService = new ParseService(bridgeRunner, logger, { service: executionService, describeCache, indexer: manifestIndexer, scopeColumnsCache });
+	// -------- Parse service (structural parse + alias resolution in single bridge call) --------
+	const parseService = new ParseService(bridgeRunner, logger, { describeCache, indexer: manifestIndexer });
 	manifestWatcher.setParseService(parseService);
+	manifestWatcher.setCompileCache(compileCache);
 
 	// -------- Diagnostics provider --------
 	const columnResolver = new ColumnResolver(manifestIndexer, logger, parseService);
-	const diagnosticsProvider = new DbtDiagnosticsProvider(executionService, manifestIndexer, statusBar, projectDir, logger, columnResolver, parseService.onEnrichmentComplete);
+	const diagnosticsProvider = new DbtDiagnosticsProvider(executionService, manifestIndexer, statusBar, projectDir, logger, columnResolver, parseService.onAliasesReady, manifestWatcher.onIndexRebuild, parseService.onSqlglotWarnings);
 	context.subscriptions.push(diagnosticsProvider);
 
 	// -------- Set workspaceHasDBT context --------
@@ -261,7 +260,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	context.subscriptions.push(
 		vscode.commands.registerCommand('dbt-studio.refreshManifest', () => {
 			manifestLoader.invalidate();
-			columnResolver.invalidateCache();
+			parseService.invalidateEnrichment();
 			try {
 				manifestIndexer.build(true);
 				modelExplorerProvider.refresh();

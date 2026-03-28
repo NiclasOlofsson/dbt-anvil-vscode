@@ -19,9 +19,9 @@ export function stripJinja(text: string, indexer: ManifestIndexer): StrippedSql 
 	const refs = new Map<string, string>();
 	const commentRanges = computeCommentRanges(text);
 
-	// Replace {{ ref('model') }} and {{ ref('package', 'model') }}
+	// Replace {{ ref('model') }}, {{ ref("model") }} and two-arg variants (single or double quotes)
 	let sql = text.replace(
-		/\{\{\s*ref\(\s*(?:'([^']+)'\s*,\s*)?'([^']+)'\s*\)\s*\}\}/g,
+		/\{\{\s*ref\(\s*(?:['"]([^'"]+)['"]\s*,\s*)?['"]([^'"]+)['"]\s*\)\s*\}\}/g,
 		(fullMatch, _pkg: string | undefined, modelName: string, offset: number) => {
 			if (isOffsetInComment(offset, commentRanges)) return fullMatch;
 			const models = indexer.findModelsByName(modelName);
@@ -40,9 +40,9 @@ export function stripJinja(text: string, indexer: ManifestIndexer): StrippedSql 
 		},
 	);
 
-	// Replace {{ source('source_name', 'table_name') }}
+	// Replace {{ source('source_name', 'table_name') }} and double-quote variants
 	sql = sql.replace(
-		/\{\{\s*source\(\s*'([^']+)'\s*,\s*'([^']+)'\s*\)\s*\}\}/g,
+		/\{\{\s*source\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*\)\s*\}\}/g,
 		(fullMatch, sourceName: string, tableName: string, offset: number) => {
 			if (isOffsetInComment(offset, commentRanges)) return fullMatch;
 			const index = indexer.index;

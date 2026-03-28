@@ -106,11 +106,11 @@ export class DatabricksProvider implements DatabaseProvider {
 		return this._executeStatement(compiled, limit < 0 ? undefined : limit, signal);
 	}
 
-	async describe(name: string, opts?: { isSource?: boolean; sourceName?: string }): Promise<ColumnDefinition[]> {
-		// Resolve the fully-qualified name for sources vs. models
-		const qualifiedName = opts?.isSource && opts.sourceName
-			? `${opts.sourceName}.${name}`
-			: name;
+	async describe(name: string, opts?: { isSource?: boolean; sourceName?: string; qualifiedName?: string }): Promise<ColumnDefinition[]> {
+		// Use the pre-built fully-qualified relation name when available (avoids relying on
+		// the session catalog/schema to resolve a model that lives in a different schema).
+		const qualifiedName = opts?.qualifiedName
+			?? (opts?.isSource && opts.sourceName ? `${opts.sourceName}.${name}` : name);
 
 		const sql = `DESCRIBE TABLE ${qualifiedName}`;
 		this.logger.trace(`DatabricksProvider: describe ${qualifiedName}`);

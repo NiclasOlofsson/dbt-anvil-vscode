@@ -560,10 +560,13 @@ export class ManifestIndexer {
 	private _evictDownstream(uniqueId: string, visited: Set<string>, evicted: Set<string>): void {
 		if (visited.has(uniqueId)) return;
 		visited.add(uniqueId);
-		if (this._columnStore.delete(uniqueId)) {
+		const hadColumns = this._columnStore.delete(uniqueId);
+		if (hadColumns) {
 			evicted.add(uniqueId);
 		}
 		const children = this._index?.childMap.get(uniqueId) ?? [];
+		// Only recurse if this node had columns or has children that might
+		if (children.length === 0) return;
 		for (const child of children) {
 			this._evictDownstream(child, visited, evicted);
 		}

@@ -52,6 +52,7 @@ export class DescribeCache {
 		uniqueId: string,
 		name: string,
 		sourceName?: string,
+		qualifiedName?: string,
 	): Promise<string[] | undefined> {
 		const cached = this.indexer.getColumns(uniqueId);
 		if (cached) {
@@ -65,7 +66,7 @@ export class DescribeCache {
 			return inflight;
 		}
 
-		const promise = this._fetch(uniqueId, name, sourceName);
+		const promise = this._fetch(uniqueId, name, sourceName, qualifiedName);
 		this._inflight.set(uniqueId, promise);
 		try {
 			return await promise;
@@ -78,12 +79,13 @@ export class DescribeCache {
 		uniqueId: string,
 		name: string,
 		sourceName?: string,
+		qualifiedName?: string,
 	): Promise<string[] | undefined> {
 		this.logger.trace(`DescribeCache: miss for ${uniqueId}, fetching from bridge`);
 		try {
 			// Prefer the DatabaseProvider when available (may bypass the dbt bridge queue)
 			if (this._provider) {
-				const defs = await this._provider.describe(name, { isSource: !!sourceName, sourceName });
+				const defs = await this._provider.describe(name, { isSource: !!sourceName, sourceName, qualifiedName });
 				const cols = defs.map(d => d.name).filter(Boolean);
 				if (cols.length > 0) {
 					this.indexer.setColumns(uniqueId, cols);

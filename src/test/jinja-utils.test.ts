@@ -78,6 +78,14 @@ describe('stripJinja', () => {
 		expect(result.refs.get('stg_customers')).toBe('model.project.stg_customers');
 	});
 
+	it('should replace ref() with double-quoted argument', () => {
+		const input = 'SELECT * FROM {{ ref("stg_customers") }}';
+		const result = stripJinja(input, indexer);
+
+		expect(result.sql).toBe('SELECT * FROM main.stg_customers');
+		expect(result.refs.get('stg_customers')).toBe('model.project.stg_customers');
+	});
+
 	it('should replace multiple ref() calls', () => {
 		const input = [
 			'SELECT c.*, o.order_count',
