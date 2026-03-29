@@ -1,3 +1,5 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { ILogger } from '../types/logger';
 import type { DbtExecutionService } from '../dbt/execution-service';
@@ -16,6 +18,7 @@ export class ManifestWatcher {
 	private _manifestWatcher: vscode.FileSystemWatcher | null = null;
 	private _projectWatcher: vscode.FileSystemWatcher | null = null;
 	private _sqlSaveDisposable: vscode.Disposable | null = null;
+	private _projectDir: string | null = null;
 	private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
 	private _parseDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 	private _suppressed = false;
@@ -34,6 +37,7 @@ export class ManifestWatcher {
 	) {}
 
 	start(projectDir: string): void {
+		this._projectDir = projectDir;
 		const manifestPattern = new vscode.RelativePattern(projectDir, '**/target/manifest.json');
 		this._manifestWatcher = vscode.workspace.createFileSystemWatcher(manifestPattern);
 
@@ -53,11 +57,15 @@ export class ManifestWatcher {
 				&& !doc.fileName.endsWith('.yml') && !doc.fileName.endsWith('.yaml')) return;
 
 			// Skip if content hasn't changed since last save
-			const content = doc.getText();
 			const prevHash = this._contentHashes.get(doc.fileName);
-			const currentHash = this._simpleHash(content);
+			let currentHash: string;
+			try {
+				currentHash = this._simpleHash(fs.readFileSync(doc.fileName, 'utf8'));
+			} catch {
+				return; // unreadable — let parse proceed
+			}
 			if (prevHash === currentHash) {
-				this.logger.debug(`Save without content change, skipping parse: ${doc.fileName}`);
+				this.logger.trace(`Save without content change, skipping parse: ${doc.fileName}`);
 				return;
 			}
 			this._contentHashes.set(doc.fileName, currentHash);
@@ -82,7 +90,7 @@ export class ManifestWatcher {
 
 	private _debouncedRebuild(reason: string): void {
 		if (this._suppressed) {
-			this.logger.debug(`Manifest watcher suppressed, ignoring: ${reason}`);
+			this.logger.trace(`Manifest watcher suppressed, ignoring: ${reason}`);
 			return;
 		}
 		if (this._debounceTimer) {
@@ -99,6 +107,7 @@ export class ManifestWatcher {
 		try {
 			this.indexer.build(true);
 			this._onIndexRebuild.fire(this.indexer);
+			if (this._projectDir) this._populateHashesFromManifest(this._projectDir);
 		} catch (err) {
 			this.logger.warn(`Failed to rebuild manifest index: ${err}`);
 		}
@@ -156,6 +165,31 @@ export class ManifestWatcher {
 		}).catch(() => {
 			// Superseded or cancelled — that's fine
 		});
+	}
+
+	/**
+	 * Walk the manifest and populate content hashes for all model/source files
+	 * not already tracked. This ensures that after a parse, the first auto-save
+	 * of any file does not falsely trigger another parse.
+	 */
+	private _populateHashesFromManifest(projectDir: string): void {
+		try {
+			const { manifest } = this.loader.load();
+			let added = 0;
+			for (const node of Object.values(manifest.nodes)) {
+				const absPath = path.join(projectDir, node.original_file_path);
+				if (this._contentHashes.has(absPath)) continue;
+				try {
+					this._contentHashes.set(absPath, this._simpleHash(fs.readFileSync(absPath, 'utf8')));
+					added++;
+				} catch {
+					// file unreadable — skip
+				}
+			}
+			if (added > 0) this.logger.debug(`ManifestWatcher: populated ${added} content hashes from manifest`);
+		} catch (err) {
+			this.logger.warn(`ManifestWatcher: failed to populate hashes from manifest: ${err}`);
+		}
 	}
 
 	/** Fast non-cryptographic hash for content-change detection. */

@@ -9,6 +9,10 @@ interface CacheEntry {
 	compiledCode: string;
 	/** mtime of the source SQL file at time of compilation */
 	sourceMtimeMs: number;
+	/** djb2 content hash of the source SQL file at time of compilation */
+	sourceContentHash: string;
+	/** relative path from project root (original_file_path from manifest) */
+	originalFilePath: string;
 }
 
 /**
@@ -56,9 +60,18 @@ export class CompileCache {
 
 		// Cache hit — source file unchanged
 		const cached = this._cache.get(uniqueId);
-		if (cached && currentMtime !== undefined && cached.sourceMtimeMs === currentMtime) {
-			this.logger.trace(`CompileCache: hit for ${uniqueId}`);
-			return cached.compiledCode;
+		if (cached && currentMtime !== undefined) {
+			if (cached.sourceMtimeMs === currentMtime) {
+				this.logger.trace(`CompileCache: hit for ${uniqueId} (mtime)`);
+				return cached.compiledCode;
+			}
+			// mtime changed — check content hash before declaring a miss
+			const currentHash = this._fileHash(absPath);
+			if (currentHash !== undefined && currentHash === cached.sourceContentHash) {
+				this._cache.set(uniqueId, { ...cached, sourceMtimeMs: currentMtime });
+				this.logger.trace(`CompileCache: hit for ${uniqueId} (content hash, mtime updated)`);
+				return cached.compiledCode;
+			}
 		}
 
 		// Warm path — compiled_code already in the manifest (e.g. after full `dbt compile`).
@@ -66,8 +79,14 @@ export class CompileCache {
 		const { manifest } = this.loader.load();
 		const manifestNode = manifest.nodes[uniqueId];
 		if (manifestNode?.compiled_code) {
-			if (currentMtime !== undefined) {
-				this._cache.set(uniqueId, { compiledCode: manifestNode.compiled_code, sourceMtimeMs: currentMtime });
+			const hash = this._fileHash(absPath);
+			if (currentMtime !== undefined && hash !== undefined) {
+				this._cache.set(uniqueId, {
+					compiledCode: manifestNode.compiled_code,
+					sourceMtimeMs: currentMtime,
+					sourceContentHash: hash,
+					originalFilePath,
+				});
 			}
 			this.logger.trace(`CompileCache: warm from manifest for ${uniqueId}`);
 			return manifestNode.compiled_code;
@@ -159,17 +178,32 @@ export class CompileCache {
 	}
 
 	/**
-	 * Seed the in-memory cache from persisted data, validating each entry's
-	 * sourceMtimeMs against the current file on disk. Stale entries are dropped.
-	 * Returns the number of valid entries loaded.
+	 * Seed the in-memory cache from persisted data. Each entry's mtime is checked
+	 * first (fast path); if the mtime changed, the content hash is checked — if
+	 * content is unchanged the entry is accepted with the updated mtime. Entries
+	 * whose content has changed are dropped. Returns the count of valid entries.
 	 */
-	seedFromPersisted(entries: Record<string, { compiledCode: string; sourceMtimeMs: number }>): number {
+	seedFromPersisted(
+		entries: Record<string, { compiledCode: string; sourceMtimeMs: number; sourceContentHash: string; originalFilePath: string }>,
+		projectDir: string,
+	): number {
 		let loaded = 0;
 		for (const [uid, entry] of Object.entries(entries)) {
-			// We don't have projectDir here so we can't resolve the file path —
-			// store as-is and let ensureCompiled() do the mtime validation on first access.
-			this._cache.set(uid, entry);
-			loaded++;
+			const absPath = path.join(projectDir, entry.originalFilePath);
+			const currentMtime = this._fileMtime(absPath);
+			if (currentMtime === undefined) continue; // file gone
+			if (currentMtime === entry.sourceMtimeMs) {
+				this._cache.set(uid, entry);
+				loaded++;
+				continue;
+			}
+			// mtime changed — verify content before accepting
+			const currentHash = this._fileHash(absPath);
+			if (currentHash !== undefined && currentHash === entry.sourceContentHash) {
+				this._cache.set(uid, { ...entry, sourceMtimeMs: currentMtime });
+				loaded++;
+			}
+			// else: content changed — drop entry
 		}
 		return loaded;
 	}
@@ -177,7 +211,7 @@ export class CompileCache {
 	/**
 	 * Export all current cache entries for persistence.
 	 */
-	exportForPersistence(): Record<string, { compiledCode: string; sourceMtimeMs: number }> {
+	exportForPersistence(): Record<string, { compiledCode: string; sourceMtimeMs: number; sourceContentHash: string; originalFilePath: string }> {
 		return Object.fromEntries(this._cache);
 	}
 
@@ -213,7 +247,14 @@ export class CompileCache {
 				const absPath = path.join(projectDir, node.original_file_path);
 				const mtime = this._fileMtime(absPath);
 				if (mtime === undefined) continue;
-				this._cache.set(node.unique_id, { compiledCode: node.compiled_code, sourceMtimeMs: mtime });
+				const hash = this._fileHash(absPath);
+				if (hash === undefined) continue;
+				this._cache.set(node.unique_id, {
+					compiledCode: node.compiled_code,
+					sourceMtimeMs: mtime,
+					sourceContentHash: hash,
+					originalFilePath: node.original_file_path,
+				});
 				count++;
 			}
 			this.logger.trace(`CompileCache: populated ${count} entries from manifest`);
@@ -225,6 +266,20 @@ export class CompileCache {
 	private _fileMtime(absPath: string): number | undefined {
 		try {
 			return fs.statSync(absPath).mtimeMs;
+		} catch {
+			return undefined;
+		}
+	}
+
+	/** djb2-variant hash of file content, returned as a base-36 string. */
+	private _fileHash(absPath: string): string | undefined {
+		try {
+			const content = fs.readFileSync(absPath, 'utf8');
+			let hash = 5381;
+			for (let i = 0; i < content.length; i++) {
+				hash = Math.imul(hash, 33) ^ content.charCodeAt(i);
+			}
+			return (hash >>> 0).toString(36);
 		} catch {
 			return undefined;
 		}
