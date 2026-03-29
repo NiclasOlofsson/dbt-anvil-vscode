@@ -103,14 +103,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	context.subscriptions.push({ dispose: () => contentHashPersistence.save(manifestWatcher.getHashes()) });
 	context.subscriptions.push({ dispose: () => columnStorePersistence.save(manifestIndexer) });
 
-	// -------- Python bridge (lazy-started on first use) --------
+	// -------- Python bridges --------
+	// Two separate processes: one for dbt commands (slow, blocks on dbt parse/run),
+	// one for fast sqlglot operations (parse_document, describe_table).
+	// This lets hover/completion run in parallel with a dbt parse on save.
 	const bridgePyPath = vscode.Uri.joinPath(context.extensionUri, 'resources', 'bridge', 'bridge.py').fsPath;
-	const bridgeRunner = new BridgeRunner(bridgePyPath, projectDir, pythonEnv, logger);
-	container.setBridgeRunner(bridgeRunner);
-	context.subscriptions.push({ dispose: () => void bridgeRunner.shutdown() });
+	const dbtBridgeRunner = new BridgeRunner(bridgePyPath, projectDir, pythonEnv, logger);
+	const sqlglotBridgeRunner = new BridgeRunner(bridgePyPath, projectDir, pythonEnv, logger);
+	container.setBridgeRunner(dbtBridgeRunner);
+	context.subscriptions.push({ dispose: () => void dbtBridgeRunner.shutdown() });
+	context.subscriptions.push({ dispose: () => void sqlglotBridgeRunner.shutdown() });
 
-	// -------- Execution service (priority queue around bridge) --------
-	const executionService = new DbtExecutionService(bridgeRunner, manifestLoader, manifestWatcher, logger);
+	// -------- Execution service (priority queue around dbt bridge) --------
+	const executionService = new DbtExecutionService(dbtBridgeRunner, manifestLoader, manifestWatcher, logger);
 	container.setExecutionService(executionService);
 	context.subscriptions.push({ dispose: () => executionService.dispose() });
 
@@ -143,8 +148,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// were restored from disk (mtime validation happens on first access per entry).
 	void compileCache.warmAll(projectDir, restoredCompileEntries);
 
-	// -------- Parse service (structural parse + alias resolution in single bridge call) --------
-	const parseService = new ParseService(bridgeRunner, logger, { describeCache, indexer: manifestIndexer });
+	// -------- Parse service (uses sqlglot bridge — runs in parallel with dbt commands) --------
+	const parseService = new ParseService(sqlglotBridgeRunner, logger, { describeCache, indexer: manifestIndexer });
 	manifestWatcher.setParseService(parseService);
 	manifestWatcher.setCompileCache(compileCache);
 
