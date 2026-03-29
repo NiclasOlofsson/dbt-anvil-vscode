@@ -125,7 +125,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// -------- Compile cache (shared across all tools) --------
 	const compileCache = new CompileCache(executionService, manifestLoader, logger);
 	const compileCachePersistence = new CompileCachePersistence(context, logger);
-	const restoredCompileEntries = compileCachePersistence.restore(compileCache);
+	const restoredCompileEntries = compileCachePersistence.restore(compileCache, projectDir);
 	context.subscriptions.push({ dispose: () => compileCachePersistence.save(compileCache) });
 
 	// -------- Describe cache (shared across providers and tools) --------

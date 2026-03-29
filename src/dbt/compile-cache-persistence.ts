@@ -4,9 +4,16 @@ import type * as vscode from 'vscode';
 import type { CompileCache } from './compile-cache';
 import type { ILogger } from '../types/logger';
 
+interface PersistedEntry {
+	compiledCode: string;
+	sourceMtimeMs: number;
+	sourceContentHash: string;
+	originalFilePath: string;
+}
+
 interface PersistedCompileCache {
-	version: 1;
-	entries: Record<string, { compiledCode: string; sourceMtimeMs: number }>;
+	version: 2;
+	entries: Record<string, PersistedEntry>;
 }
 
 const FILE_NAME = 'compile-cache.json';
@@ -29,16 +36,17 @@ export class CompileCachePersistence {
 	}
 
 	/**
-	 * Load persisted entries, validate each mtime, and seed the cache.
+	 * Load persisted entries, validate each entry against the file on disk
+	 * (mtime first, content hash as fallback), and seed the cache.
 	 * Returns the number of valid entries restored.
 	 */
-	restore(cache: CompileCache): number {
+	restore(cache: CompileCache, projectDir: string): number {
 		try {
 			if (!fs.existsSync(this._filePath)) return 0;
 			const raw = fs.readFileSync(this._filePath, 'utf8');
 			const data = JSON.parse(raw) as PersistedCompileCache;
-			if (data.version !== 1) return 0;
-			const loaded = cache.seedFromPersisted(data.entries);
+			if (data.version !== 2) return 0;
+			const loaded = cache.seedFromPersisted(data.entries, projectDir);
 			this.logger.info(`CompileCache: restored ${loaded} entries from disk`);
 			return loaded;
 		} catch (err) {
@@ -55,7 +63,7 @@ export class CompileCachePersistence {
 			const entries = cache.exportForPersistence();
 			if (Object.keys(entries).length === 0) return;
 			fs.mkdirSync(path.dirname(this._filePath), { recursive: true });
-			const payload: PersistedCompileCache = { version: 1, entries };
+			const payload: PersistedCompileCache = { version: 2, entries };
 			fs.writeFileSync(this._filePath, JSON.stringify(payload), 'utf8');
 			this.logger.debug(`CompileCache: saved ${Object.keys(entries).length} entries to disk`);
 		} catch (err) {
