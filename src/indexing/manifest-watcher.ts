@@ -167,6 +167,22 @@ export class ManifestWatcher {
 		return h.toString(36);
 	}
 
+	/**
+	 * Seed content hashes from a previously persisted snapshot so that the
+	 * first save after a restart does not falsely trigger a dbt parse.
+	 */
+	restoreHashes(hashes: Record<string, string>): void {
+		for (const [fileName, hash] of Object.entries(hashes)) {
+			this._contentHashes.set(fileName, hash);
+		}
+		this.logger.debug(`ManifestWatcher: restored ${Object.keys(hashes).length} content hashes`);
+	}
+
+	/** Returns the current content hash map for persistence. */
+	getHashes(): ReadonlyMap<string, string> {
+		return this._contentHashes;
+	}
+
 	dispose(): void {
 		if (this._debounceTimer) {
 			clearTimeout(this._debounceTimer);
