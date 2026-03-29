@@ -120,7 +120,7 @@ export class DbtDocumentSymbolProvider implements vscode.DocumentSymbolProvider 
 			symbols.push(finalSym);
 		}
 
-		this.logger.debug(
+		this.logger.trace(
 			'[parse-service] DocumentSymbol: '
 			+ symbols.length + ' symbols from DocumentModel in ' + document.fileName,
 		);
