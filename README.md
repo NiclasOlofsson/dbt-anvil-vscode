@@ -1,6 +1,6 @@
 # dbt Studio
 
-A VS Code extension that gives dbt the same kind of language support that most programming languages have had for years.
+A VS Code extension that gives dbt the same kind of language support that most programming languages have had for years. Now it's here, for dbt Core.
 
 If you work with TypeScript or Python in VS Code, you take column completions, go-to-definition, and inline diagnostics for granted. dbt projects haven't had any of that. dbt Studio changes that — column intelligence, interactive lineage, an integrated test runner, and Copilot tools that can query your warehouse and trace your DAG.
 
@@ -11,6 +11,12 @@ No configuration. Open a dbt project and everything works.
 dbt Studio parses your models and knows their columns. Type in a SELECT and you get completions from the actual columns defined upstream. Hover over a column name to see where it comes from. Rename it and every reference updates.
 
 This works through refs, sources, CTEs, and joins — across your entire project.
+
+## Jinja
+
+Most SQL tooling treats Jinja as noise and breaks the moment it hits a `{% if %}` block. dbt Studio understands Jinja as a distinct layer on top of SQL and keeps working correctly underneath it — completions, hover, diagnostics, and go-to-definition all function normally inside conditional blocks and loop bodies.
+
+Macro calls get signature help as you type. Both Jinja-SQL and Jinja-in-YAML have dedicated grammars, so highlighting is accurate in model files and schema definitions alike.
 
 ## Lineage
 
@@ -69,6 +75,10 @@ Copilot uses the tools to actually query your project and run commands — these
 dbt Studio runs a Python bridge process that talks to your project over JSON stdin/stdout. It auto-detects your Python environment — venv, uv, poetry, pipenv, conda, or system Python — and bundles sqlglot for column-level lineage parsing.
 
 Parsing is two-layered: a fast structural pass on save, plus async database enrichment for column metadata. Everything is cached to disk and survives restarts. When the cache is valid, startup is near-instant.
+
+If your project targets Databricks, queries go directly through the SQL Statement API instead of routing through `dbt show`. Faster, and no dbt invocation needed per describe or inline execution. Direct adapters for other warehouses are on the way.
+
+Every feature area can be turned on or off individually from Settings — completions, hover, diagnostics, go-to-definition, and the rest. Changes take effect immediately without reloading the window.
 
 ## Getting Started
 
