@@ -1,5 +1,5 @@
 import type { ILogger } from '../../types/logger';
-import type { DbtExecutionService } from '../../dbt/execution-service';
+import type { DbtExecutionService, DbtJobPriority } from '../../dbt/execution-service';
 import { Priority } from '../../dbt/execution-service';
 import type { CancelSignal, ColumnDefinition, DatabaseProvider, QueryResult } from './database-provider';
 
@@ -23,18 +23,20 @@ export class DbtDatabaseProvider implements DatabaseProvider {
 		this.adapterType = adapterType;
 	}
 
-	async query(sql: string, limit: number, _signal?: CancelSignal): Promise<QueryResult> {
+	async query(sql: string, limit: number, _signal?: CancelSignal, priority: DbtJobPriority = Priority.Tool): Promise<QueryResult> {
 		const limitArg = limit < 0 ? '-1' : String(limit);
-		const args = ['show', '--inline', sql, '--limit', limitArg, '--output', 'json', '--no-populate-cache'];
-		this.logger.debug(`DbtDatabaseProvider: query via dbt show (limit=${limitArg})`);
+		const args = ['--no-populate-cache', 'show', '--inline', sql, '--limit', limitArg, '--output', 'json'];
+		this.logger.debug(`DbtDatabaseProvider: query via dbt show (limit=${limitArg}, priority=${priority})`);
 
+		const t0 = performance.now();
 		const result = await this.service.submit({
 			type: 'show',
 			args,
-			priority: Priority.Tool,
+			priority,
 			origin: 'provider',
 			label: 'db query',
 		});
+		const executionTimeMs = performance.now() - t0;
 
 		if (!result.success) {
 			throw new Error(result.stderr || result.stdout || 'dbt show failed');
@@ -48,7 +50,7 @@ export class DbtDatabaseProvider implements DatabaseProvider {
 				const rows = data['show'];
 				if (Array.isArray(rows)) {
 					const columns = rows.length > 0 ? Object.keys(rows[0] as Record<string, unknown>) : [];
-					return { columns, rows: rows as Record<string, unknown>[], rowCount: rows.length };
+					return { columns, rows: rows as Record<string, unknown>[], rowCount: rows.length, executionTimeMs };
 				}
 			} catch (err) {
 				this.logger.warn(`DbtDatabaseProvider: failed to parse dbt show output: ${err}`);

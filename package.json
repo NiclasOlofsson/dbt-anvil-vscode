@@ -190,6 +190,25 @@
 				"command": "dbt-studio.openSettings",
 				"title": "dbt Studio: Open Settings",
 				"icon": "$(gear)"
+			},
+			{
+				"command": "dbt-studio.profiler.profileModel",
+				"title": "dbt Studio: Profile Model",
+				"icon": "$(clock)"
+			},
+			{
+				"command": "dbt-studio.profiler.clearResults",
+				"title": "dbt Studio: Clear Profile Results",
+				"icon": "$(clear-all)"
+			},
+			{
+				"command": "dbt-studio.profiler.cancelProfiling",
+				"title": "dbt Studio: Stop Profiling",
+				"icon": "$(stop-circle)"
+			},
+			{
+				"command": "dbt-studio.profiler.goToCte",
+				"title": "dbt Studio: Go to CTE Definition"
 			}
 		],
 		"viewsContainers": {
@@ -225,6 +244,12 @@
 					"name": "Test Results",
 					"when": "workspaceHasDBT",
 					"visibility": "collapsed"
+				},
+				{
+					"id": "dbt-studio.profilerResults",
+					"name": "Profile Results",
+					"when": "workspaceHasDBT",
+					"visibility": "collapsed"
 				}
 			],
 			"dbt-studio-panel": [
@@ -232,6 +257,12 @@
 					"type": "webview",
 					"id": "dbt-studio.lineageGraph",
 					"name": "Lineage",
+					"when": "workspaceHasDBT"
+				},
+				{
+					"type": "webview",
+					"id": "dbt-studio.profilerWaterfall",
+					"name": "Profile Waterfall",
 					"when": "workspaceHasDBT"
 				}
 			]
@@ -257,6 +288,16 @@
 					"command": "dbt-studio.compileModel",
 					"when": "resourceLangId == jinja-sql && workspaceHasDBT",
 					"group": "navigation@4"
+				},
+				{
+					"command": "dbt-studio.profiler.profileModel",
+					"when": "resourceLangId == jinja-sql && workspaceHasDBT && !dbt-studio.profilingActive",
+					"group": "navigation@5"
+				},
+				{
+					"command": "dbt-studio.profiler.cancelProfiling",
+					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-studio.profilingActive",
+					"group": "navigation@5"
 				}
 			],
 			"view/title": [

@@ -39,8 +39,8 @@ export function isPositionInComment(sql: string, pos: number): boolean {
  * Returns null if no non-comment match found.
  */
 export function findCteDef(sql: string, cteName: string): { matchStart: number; parenPos: number } | null {
-	// cteName [AS] (  — AS optional (Spark/Databricks), require whitespace before '('
-	const pattern = new RegExp(`\\b${escapeRegExp(cteName)}(?:\\s+AS)?\\s+\\(`, 'gi');
+	// cteName [AS] (  — AS optional (Spark/Databricks); space before '(' optional when AS is present
+	const pattern = new RegExp(`\\b${escapeRegExp(cteName)}(?:\\s+AS\\s*|\\s+)\\(`, 'gi');
 	let match: RegExpExecArray | null;
 	while ((match = pattern.exec(sql)) !== null) {
 		if (!isPositionInComment(sql, match.index)) {

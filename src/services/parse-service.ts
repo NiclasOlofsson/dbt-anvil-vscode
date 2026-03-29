@@ -304,10 +304,13 @@ export class ParseService {
 	 *
 	 * When enrichment is configured, describes all upstream refs before calling
 	 * the bridge so aliases are fully populated in the returned model.
+	 * Pass `skipEnrichment: true` to skip database describe calls (e.g. for
+	 * structural-only use cases like profiling where only CTE positions matter).
 	 */
 	async getDocumentModel(
 		document: vscode.TextDocument,
 		dialect: string,
+		{ skipEnrichment = false }: { skipEnrichment?: boolean } = {},
 	): Promise<DocumentModel | null> {
 		const key = document.uri.toString();
 		const cached = this._cache.get(key);
@@ -322,7 +325,7 @@ export class ParseService {
 			return existing;
 		}
 
-		const promise = this._parse(document, key, dialect);
+		const promise = this._parse(document, key, dialect, skipEnrichment);
 		this._inflight.set(inflightKey, promise);
 		try {
 			return await promise;
@@ -581,6 +584,7 @@ export class ParseService {
 		document: vscode.TextDocument,
 		key: string,
 		dialect: string,
+		skipEnrichment = false,
 	): Promise<DocumentModel | null> {
 		const rawText = document.getText();
 
@@ -594,7 +598,7 @@ export class ParseService {
 			dialect: dialect || 'ansi',
 		};
 
-		if (this._enrichment) {
+		if (this._enrichment && !skipEnrichment) {
 			const { indexer, describeCache } = this._enrichment;
 			const { refs } = stripJinja(rawText, indexer);
 

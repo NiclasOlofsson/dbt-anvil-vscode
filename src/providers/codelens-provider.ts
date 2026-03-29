@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
+import type { ModelProfiler } from '../dbt/model-profiler';
 import type { ILogger } from '../types/logger';
 
 /**
@@ -10,10 +11,17 @@ export class DbtCodeLensProvider implements vscode.CodeLensProvider {
 	private _onDidChangeCodeLenses = new vscode.EventEmitter<void>();
 	readonly onDidChangeCodeLenses = this._onDidChangeCodeLenses.event;
 
+	private _profiler?: ModelProfiler;
+
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
 	) {}
+
+	setProfiler(profiler: ModelProfiler): void {
+		this._profiler = profiler;
+		profiler.onProfileComplete(() => this.refresh());
+	}
 
 	refresh(): void {
 		this._onDidChangeCodeLenses.fire();
@@ -67,7 +75,43 @@ export class DbtCodeLensProvider implements vscode.CodeLensProvider {
 				command: 'dbt-studio.compileModel',
 				tooltip: `dbt compile -s ${modelName}`,
 			}),
+			...this._profileLens(document, modelName, topRange),
 		];
+	}
+
+	private _profileLens(
+		document: vscode.TextDocument,
+		modelName: string,
+		range: vscode.Range,
+	): vscode.CodeLens[] {
+		const result = this._profiler?.getResultForFile(document.fileName);
+		if (result?.status === 'running') {
+			const n = result.cteProfiles.length;
+			const total = result.totalCtes ?? '?';
+			return [
+				new vscode.CodeLens(range, {
+					title: `$(loading~spin) Profiling (${n}/${total})`,
+					command: 'dbt-studio.profiler.profileModel',
+					tooltip: `Profiling ${modelName} — ${n} of ${total} CTEs done`,
+				}),
+				new vscode.CodeLens(range, {
+					title: '$(stop-circle) Stop',
+					command: 'dbt-studio.profiler.cancelProfiling',
+					tooltip: 'Cancel profiling',
+				}),
+			];
+		}
+		let title = '$(clock) Profile';
+		if (result?.status === 'complete') {
+			const ms = result.totalTimeMs;
+			const timeStr = ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms.toFixed(0)}ms`;
+			title = `$(clock) Profile (${timeStr})`;
+		}
+		return [new vscode.CodeLens(range, {
+			title,
+			command: 'dbt-studio.profiler.profileModel',
+			tooltip: `Profile all CTEs in ${modelName}`,
+		})];
 	}
 
 	private _yamlCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {
