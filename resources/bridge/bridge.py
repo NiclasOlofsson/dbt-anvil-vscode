@@ -699,6 +699,156 @@ def _wrap_final_select(
     return ast
 
 
+def _collect_union_selects(expr: Any) -> list[Any]:
+    """Recursively collect all SELECT leaf nodes from a UNION tree."""
+    from sqlglot import exp  # type: ignore[import-not-found]
+
+    if isinstance(expr, exp.Union):
+        return _collect_union_selects(expr.this) + _collect_union_selects(
+            expr.args.get("expression") or expr.right
+        )
+    if isinstance(expr, exp.Select):
+        return [expr]
+    return []
+
+
+def _get_source_name(node: Any) -> str | None:
+    """Extract the table/CTE name from a FROM-clause source node."""
+    if node is None:
+        return None
+    alias = getattr(node, "alias", None)
+    if alias:
+        return str(alias).lower()
+    name = getattr(node, "name", None)
+    if name:
+        return str(name).lower()
+    return None
+
+
+def _trace_col_in_select(
+    sel: Any,
+    col: str,
+    ctes: dict[str, Any],
+    visited: set[str],
+    queue: list[tuple[str, str]],
+    dependencies: list[dict[str, Any]],
+    via_ctes: list[str],
+) -> None:
+    """Trace *col* within a single SELECT node, enqueuing sources for further traversal."""
+    from sqlglot import exp  # type: ignore[import-not-found]
+
+    exprs = sel.expressions
+    from_clause = sel.args.get("from_")
+    from_name = _get_source_name(from_clause.this) if from_clause else None
+
+    # SELECT * — treat as passthrough: same column name, continue into source
+    if any(
+        isinstance(e, (exp.Star, exp.Column))
+        and getattr(e, "name", None) == "*"
+        or isinstance(e, exp.Star)
+        for e in exprs
+    ):
+        if from_name:
+            if from_name in ctes and from_name not in visited:
+                if from_name not in via_ctes:
+                    via_ctes.append(from_name)
+                queue.append((from_name, col))
+            elif from_name not in ctes:
+                dependencies.append({"column": col, "table": from_name})
+        return
+
+    # Explicit column list — find the expression that defines *col*
+    for expr in exprs:
+        if isinstance(expr, exp.Alias) and expr.alias.lower() == col:
+            inner: Any = expr.this
+        elif isinstance(expr, exp.Column) and expr.name.lower() == col:
+            inner = expr
+        else:
+            continue
+
+        if isinstance(inner, exp.Column):
+            src_table = (str(inner.table) if inner.table else "").lower()
+            src_col = inner.name.lower()
+            if not src_table and from_name:
+                src_table = from_name
+            if src_table and src_table in ctes and src_table not in visited:
+                if src_table not in via_ctes:
+                    via_ctes.append(src_table)
+                queue.append((src_table, src_col))
+            elif src_table:
+                dependencies.append({"column": src_col, "table": src_table})
+        # Found the target column — stop scanning this SELECT
+        break
+
+
+def _trace_column_simple(
+    compiled_sql: str,
+    column_name: str,
+    dialect: str,
+) -> dict[str, Any]:
+    """Simple CTE-walking fallback for column lineage.
+
+    Used when sqlglot.lineage() fails. Traces *column_name* through the CTE
+    chain by inspecting SELECT lists.  SELECT * is treated as a column
+    passthrough so unknown-schema tables don't cause crashes.
+    """
+    try:
+        from sqlglot import exp, parse_one  # type: ignore[import-not-found]
+
+        ast = parse_one(compiled_sql, dialect=dialect)
+        if not isinstance(ast, exp.Select):
+            return {"dependencies": [], "via_ctes": [], "transformations": []}
+
+        # Build CTE name → expression index
+        ctes: dict[str, Any] = {}
+        with_ = ast.args.get("with_")
+        if with_:
+            for cte in with_.expressions:
+                ctes[cte.alias.lower()] = cte.this
+
+        outer_from = ast.args.get("from_")
+        if not outer_from:
+            return {"dependencies": [], "via_ctes": [], "transformations": []}
+
+        root_name = _get_source_name(outer_from.this)
+        if not root_name:
+            return {"dependencies": [], "via_ctes": [], "transformations": []}
+
+        dependencies: list[dict[str, Any]] = []
+        via_ctes: list[str] = []
+        visited: set[str] = set()
+        queue: list[tuple[str, str]] = [(root_name, column_name.lower())]
+
+        while queue:
+            name, col = queue.pop(0)
+            if name not in ctes:
+                dependencies.append({"column": col, "table": name})
+                continue
+            if name in visited:
+                continue
+            visited.add(name)
+
+            cte_body = ctes[name]
+            selects = (
+                _collect_union_selects(cte_body)
+                if not isinstance(cte_body, exp.Select)
+                else [cte_body]
+            )
+
+            for sel in selects:
+                _trace_col_in_select(
+                    sel, col, ctes, visited, queue, dependencies, via_ctes
+                )
+
+        return {
+            "dependencies": dependencies,
+            "via_ctes": list(dict.fromkeys(via_ctes)),
+            "transformations": [],
+        }
+    except Exception:
+        return {"dependencies": [], "via_ctes": [], "transformations": []}
+
+
 def _trace_column_lineage(
     compiled_sql: str,
     column_name: str,
@@ -736,9 +886,10 @@ def _trace_column_lineage(
                 )
 
     if result is None:
-        raise last_error or RuntimeError(
-            f"Could not trace lineage for column '{column_name}'"
-        )
+        # sqlglot.lineage() failed after all retries — fall back to simple CTE walking.
+        # This handles cases where SELECT * propagation causes IndexError inside sqlglot
+        # because an upstream table is absent from the schema mapping.
+        return _trace_column_simple(compiled_sql, column_name, dialect)
 
     # Extract dependencies (table nodes) and via_ctes
     dependencies: list[dict[str, Any]] = []
