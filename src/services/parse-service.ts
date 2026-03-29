@@ -598,33 +598,11 @@ export class ParseService {
 			const { indexer, describeCache } = this._enrichment;
 			const { refs } = stripJinja(rawText, indexer);
 
-			for (const [tableName, uniqueId] of refs) {
-				const cols = indexer.getColumns(uniqueId);
-				if (cols && cols.length > 0) {
-					qualifySchema[tableName.toLowerCase()] = Object.fromEntries(cols.map(c => [c.toLowerCase(), 'varchar']));
-				}
-			}
-
 			const schemaMapping = indexer.buildSchemaMapping();
 			await Promise.all([...refs].map(async ([tableName, uniqueId]) => {
-				const node = indexer.getRawNode(uniqueId);
-				const isSource = uniqueId.startsWith('source.');
-				const modelName = node && 'name' in node ? String(node.name) : tableName;
-				const sourceName = isSource && node && 'source_name' in node ? String(node.source_name) : undefined;
-
-				let qualifiedName: string | undefined;
-				if (node) {
-					const db = 'database' in node ? (node.database as string | undefined) : undefined;
-					const schema = 'schema' in node ? (node.schema as string | undefined) : undefined;
-					const identifier = isSource
-						? ('identifier' in node ? String((node as { identifier: string }).identifier) : undefined)
-						: (('alias' in node ? String((node as { alias?: string }).alias) : undefined) ?? modelName);
-					const parts = [db, schema, identifier].filter(Boolean);
-					if (parts.length > 1) qualifiedName = parts.join('.');
-				}
-
-				const cols = await describeCache.describeTable(uniqueId, modelName, sourceName, qualifiedName);
+				const cols = await describeCache.columns(uniqueId);
 				if (cols && cols.length > 0) {
+					qualifySchema[tableName.toLowerCase()] = Object.fromEntries(cols.map(c => [c.toLowerCase(), 'varchar']));
 					const schDb = (schemaMapping['__described__'] ??= {});
 					const schSch = (schDb['__described__'] ??= {});
 					schSch[tableName.toLowerCase()] = Object.fromEntries(cols.map(c => [c, {}]));

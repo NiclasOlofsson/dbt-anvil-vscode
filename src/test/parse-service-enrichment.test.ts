@@ -72,6 +72,7 @@ function createMockDescribeCache(
 ): DescribeCache {
 	return {
 		describeTable: vi.fn().mockResolvedValue(columns),
+		columns: vi.fn().mockResolvedValue(columns),
 	} as unknown as DescribeCache;
 }
 
@@ -164,8 +165,8 @@ describe('ParseService — enrichment tier', () => {
 				'duckdb',
 			);
 
-			// describeTable should have been called with the orders uniqueId
-			expect(describeCache.describeTable).toHaveBeenCalled();
+			// columns() should have been called with the orders uniqueId
+			expect(describeCache.columns).toHaveBeenCalled();
 
 			// bridge request should include schema_mapping (from buildSchemaMapping)
 			// Note: with empty mock buildSchemaMapping returning {} and empty describe columns,

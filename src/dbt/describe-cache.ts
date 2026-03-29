@@ -41,12 +41,36 @@ export class DescribeCache {
 	}
 
 	/**
+	 * Return the columns for the given dbt resource, fetching from the warehouse
+	 * if not already cached. This is the preferred entry point — callers should
+	 * not need to know whether the result comes from cache or a live describe.
+	 */
+	async columns(uniqueId: string): Promise<string[] | undefined> {
+		const node = this.indexer.getRawNode(uniqueId);
+		const isSource = uniqueId.startsWith('source.');
+		const name = node && 'name' in node ? String(node.name) : uniqueId.split('.').pop() ?? uniqueId;
+		const sourceName = isSource && node && 'source_name' in node ? String((node as { source_name: string }).source_name) : undefined;
+
+		let qualifiedName: string | undefined;
+		if (node) {
+			const db = 'database' in node ? (node.database as string | undefined) : undefined;
+			const schema = 'schema' in node ? (node.schema as string | undefined) : undefined;
+			const identifier = isSource
+				? ('identifier' in node ? String((node as { identifier: string }).identifier) : undefined)
+				: (('alias' in node ? String((node as { alias?: string }).alias) : undefined) ?? name);
+			const parts = [db, schema, identifier].filter(Boolean);
+			if (parts.length > 1) qualifiedName = parts.join('.');
+		}
+
+		return this.describeTable(uniqueId, name, sourceName, qualifiedName);
+	}
+
+	/**
 	 * Return the column list for the given resource, describing it via the
 	 * bridge if not already cached.
 	 *
-	 * `uniqueId`   — dbt unique_id (e.g. "model.project.orders" or "source.project.raw.orders")
-	 * `name`       — table/model name used in the describe_table command
-	 * `sourceName` — source name (only for source nodes)
+	 * @deprecated Prefer `columns(uniqueId)` — it derives name/sourceName/qualifiedName
+	 * from the manifest automatically and does not leak describe implementation details.
 	 */
 	async describeTable(
 		uniqueId: string,

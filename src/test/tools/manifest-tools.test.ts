@@ -12,6 +12,7 @@ import { createMockLogger, createMockCompileCache } from '../helpers';
 
 const mockLogger = createMockLogger();
 const mockCompileCache = createMockCompileCache();
+const mockDescribeCache = { columns: vi.fn().mockResolvedValue(undefined) } as never;
 
 function createTestIndex(): ManifestIndex {
 	const models = new Map<string, IndexedModel>();
@@ -191,7 +192,7 @@ describe('GetColumnLineageTool', () => {
 			}),
 		} as unknown as DbtExecutionService;
 
-		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger, mockCompileCache);
+		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger, mockCompileCache, mockDescribeCache);
 		const result = await tool.invoke(
 			{ input: { model: 'customers', column: 'customer_id' }, toolInvocationToken: undefined } as never,
 			token as never,
@@ -228,7 +229,7 @@ describe('GetColumnLineageTool', () => {
 			}),
 		} as unknown as DbtExecutionService;
 
-		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger, mockCompileCache);
+		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger, mockCompileCache, mockDescribeCache);
 		const result = await tool.invoke(
 			{ input: { model: 'customers', column: 'nonexistent' }, toolInvocationToken: undefined } as never,
 			token as never,
@@ -243,7 +244,7 @@ describe('GetColumnLineageTool', () => {
 		const index = createTestIndex();
 		const indexer = createMockIndexer(index);
 		const mockService = { submit: vi.fn() } as unknown as DbtExecutionService;
-		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger, mockCompileCache);
+		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger, mockCompileCache, mockDescribeCache);
 
 		const result = await tool.invoke(
 			{ input: { model: 'nonexistent', column: 'id' }, toolInvocationToken: undefined } as never,
@@ -266,7 +267,7 @@ describe('GetColumnLineageTool', () => {
 		});
 
 		const mockService = { submit: vi.fn() } as unknown as DbtExecutionService;
-		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger, mockCompileCache);
+		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger, mockCompileCache, mockDescribeCache);
 
 		const result = await tool.invoke(
 			{ input: { model: 'customers', column: 'id' }, toolInvocationToken: undefined } as never,
@@ -313,7 +314,7 @@ describe('GetColumnLineageTool', () => {
 			}),
 		} as unknown as DbtExecutionService;
 
-		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger, mockCompileCache);
+		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger, mockCompileCache, mockDescribeCache);
 		const result = await tool.invoke(
 			{ input: { model: 'customers', column: 'customer_id' }, toolInvocationToken: undefined } as never,
 			token as never,

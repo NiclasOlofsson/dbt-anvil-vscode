@@ -19,6 +19,7 @@ const mockLogger = createMockLogger();
 // The mock raw node has this compiled_code — the mock compile cache returns it so traceColumnDirect works
 const DEFAULT_COMPILED_SQL = 'SELECT customer_id, first_name FROM orders';
 const mockCompileCache = createMockCompileCache(DEFAULT_COMPILED_SQL);
+const mockDescribeCache = { columns: vi.fn().mockResolvedValue(undefined) } as never;
 const token = { isCancellationRequested: false, onCancellationRequested: vi.fn() };
 
 // ---------------------------------------------------------------------------
@@ -194,7 +195,7 @@ describe('GetColumnLineageTool upstream response shape', () => {
 			transformations: [],
 		});
 
-		const tool = new GetColumnLineageTool(indexer, service, mockLogger, mockCompileCache);
+		const tool = new GetColumnLineageTool(indexer, service, mockLogger, mockCompileCache, mockDescribeCache);
 		const result = await tool.invoke(
 			{ input: { model: 'customers', column: 'customer_id', direction: 'upstream' }, toolInvocationToken: undefined } as never,
 			token as never,
@@ -213,7 +214,7 @@ describe('GetColumnLineageTool upstream response shape', () => {
 		const indexer = createMockIndexer(index);
 		const service = makeService(['customer_id']);
 
-		const tool = new GetColumnLineageTool(indexer, service, mockLogger, mockCompileCache);
+		const tool = new GetColumnLineageTool(indexer, service, mockLogger, mockCompileCache, mockDescribeCache);
 		const result = await tool.invoke(
 			{ input: { model: 'customers', column: 'customer_id' }, toolInvocationToken: undefined } as never,
 			token as never,
@@ -239,7 +240,7 @@ describe('GetColumnLineageTool upstream response shape', () => {
 		};
 		const service = makeService(['customer_id'], lineageData);
 
-		const tool = new GetColumnLineageTool(indexer, service, mockLogger, mockCompileCache);
+		const tool = new GetColumnLineageTool(indexer, service, mockLogger, mockCompileCache, mockDescribeCache);
 		const result = await tool.invoke(
 			{ input: { model: 'customers', column: 'customer_id' }, toolInvocationToken: undefined } as never,
 			token as never,
@@ -263,7 +264,7 @@ describe('GetColumnLineageTool upstream response shape', () => {
 			transformations: [],
 		});
 
-		const tool = new GetColumnLineageTool(indexer, service, mockLogger, mockCompileCache);
+		const tool = new GetColumnLineageTool(indexer, service, mockLogger, mockCompileCache, mockDescribeCache);
 		const result = await tool.invoke(
 			{ input: { model: 'customers', column: 'customer_id' }, toolInvocationToken: undefined } as never,
 			token as never,
@@ -284,7 +285,7 @@ describe('GetColumnLineageTool downstream response shape', () => {
 		const indexer = createMockIndexer(index);
 		const service = makeService(['customer_id']);
 
-		const tool = new GetColumnLineageTool(indexer, service, mockLogger, mockCompileCache);
+		const tool = new GetColumnLineageTool(indexer, service, mockLogger, mockCompileCache, mockDescribeCache);
 		const result = await tool.invoke(
 			{ input: { model: 'customers', column: 'customer_id', direction: 'downstream' }, toolInvocationToken: undefined } as never,
 			token as never,
@@ -309,7 +310,7 @@ describe('GetColumnLineageTool error paths', () => {
 		// Bridge returns only 'customer_id', not 'unknown_col'
 		const service = makeService(['customer_id'], { success: true, columns: ['customer_id'] });
 
-		const tool = new GetColumnLineageTool(indexer, service, mockLogger, mockCompileCache);
+		const tool = new GetColumnLineageTool(indexer, service, mockLogger, mockCompileCache, mockDescribeCache);
 		const result = await tool.invoke(
 			{ input: { model: 'customers', column: 'unknown_col' }, toolInvocationToken: undefined } as never,
 			token as never,
@@ -325,7 +326,7 @@ describe('GetColumnLineageTool error paths', () => {
 		const indexer = createMockIndexer(index);
 		const service = makeService(['customer_id', 'first_name'], { success: true, columns: ['customer_id', 'first_name'] });
 
-		const tool = new GetColumnLineageTool(indexer, service, mockLogger, mockCompileCache);
+		const tool = new GetColumnLineageTool(indexer, service, mockLogger, mockCompileCache, mockDescribeCache);
 		const result = await tool.invoke(
 			{ input: { model: 'customers', column: 'missing' }, toolInvocationToken: undefined } as never,
 			token as never,

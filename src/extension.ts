@@ -161,18 +161,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	void vscode.commands.executeCommand('setContext', 'workspaceHasDBT', manifestLoader.manifestExists());
 
 	// -------- Register Copilot language model tools --------
-	registerLanguageModelTools(context, manifestIndexer, executionService, manifestLoader, logger, compileCache, databaseProvider);
+	registerLanguageModelTools(context, manifestIndexer, executionService, manifestLoader, logger, compileCache, databaseProvider, describeCache);
 
 	// -------- Register tree views --------
-	const modelExplorerProvider = new ModelExplorerProvider(manifestIndexer, logger, projectDir);
+	const modelExplorerProvider = new ModelExplorerProvider(manifestIndexer, logger, projectDir, context.globalState);
 	const testResultsProvider = new TestResultsProvider(logger);
-	const lineageGraphProvider = new LineageGraphProvider(manifestIndexer, logger);
-	const columnLineageTool = new GetColumnLineageTool(manifestIndexer, executionService, logger, compileCache);
+	const lineageGraphProvider = new LineageGraphProvider(manifestIndexer, logger, context.globalState);
+	const columnLineageTool = new GetColumnLineageTool(manifestIndexer, executionService, logger, compileCache, describeCache);
 	lineageGraphProvider.setColumnLineageTool(columnLineageTool);
 	lineageGraphProvider.setExecutionService(executionService);
 	// Initialise context keys so the correct toolbar icons show from the start
 	void vscode.commands.executeCommand('setContext', 'dbt-studio.lineageFollowActive', lineageGraphProvider.followActive);
 	void vscode.commands.executeCommand('setContext', 'dbt-studio.lineageShowTests', lineageGraphProvider.showTests);
+	void vscode.commands.executeCommand('setContext', 'dbt-studio.explorerFollowActive', modelExplorerProvider.followActive);
 	const testExplorerProvider = new TestExplorerProvider(manifestIndexer, manifestLoader, logger);
 
 	const modelExplorerView = vscode.window.createTreeView('dbt-studio.modelExplorer', {
@@ -208,7 +209,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		if (!uid) return;
 
 		const item = modelExplorerProvider.findModelItemForReveal(uid);
-		if (item) {
+		if (item && modelExplorerView.visible && modelExplorerProvider.followActive) {
 			void modelExplorerView.reveal(item, { select: true, focus: false });
 		}
 
@@ -267,6 +268,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	// -------- Register commands --------
 	context.subscriptions.push(
+		vscode.commands.registerCommand('dbt-studio.goToLine', async (args: { uri: string; line: number }) => {
+			const uri = vscode.Uri.parse(args.uri);
+			const pos = new vscode.Position(args.line, 0);
+			await vscode.window.showTextDocument(uri, { selection: new vscode.Range(pos, pos), preserveFocus: false });
+		}),
+
 		vscode.commands.registerCommand('dbt-studio.refreshManifest', () => {
 			manifestLoader.invalidate();
 			parseService.invalidateEnrichment();
@@ -383,6 +390,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 		vscode.commands.registerCommand('dbt-studio.toggleLineageFollowOff', () => {
 			lineageGraphProvider.toggleFollow();
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.toggleExplorerFollow', () => {
+			modelExplorerProvider.toggleFollow();
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.toggleExplorerFollowOff', () => {
+			modelExplorerProvider.toggleFollow();
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.showLineageTests', () => {
