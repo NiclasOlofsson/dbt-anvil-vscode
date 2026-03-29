@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { ManifestIndexer, IndexedModel, IndexedSource, ManifestIndex } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
+import { materializationIcon } from '../providers/icons';
 
 // ---- Tree item types ----
 
@@ -17,17 +18,7 @@ export class GroupItem extends vscode.TreeItem {
 	}
 }
 
-function materialisationIcon(mat: string): vscode.ThemeIcon {
-	switch (mat) {
-		case 'table': return new vscode.ThemeIcon('symbol-class');
-		case 'view': return new vscode.ThemeIcon('eye');
-		case 'incremental': return new vscode.ThemeIcon('diff-added');
-		case 'ephemeral': return new vscode.ThemeIcon('symbol-reference');
-		case 'seed': return new vscode.ThemeIcon('list-flat');
-		case 'snapshot': return new vscode.ThemeIcon('history');
-		default: return new vscode.ThemeIcon('file-code');
-	}
-}
+
 
 export class ModelItem extends vscode.TreeItem {
 	constructor(public readonly model: IndexedModel) {
@@ -35,7 +26,7 @@ export class ModelItem extends vscode.TreeItem {
 		this.description = model.materialisation;
 		this.tooltip = `${model.uniqueId}\n${model.description ?? ''}`.trim();
 		this.contextValue = 'modelItem';
-		this.iconPath = materialisationIcon(model.materialisation);
+		this.iconPath = materializationIcon(model.materialisation);
 		if (model.path) {
 			this.command = {
 				command: 'vscode.open',
@@ -71,12 +62,26 @@ export class ModelExplorerProvider implements vscode.TreeDataProvider<ExplorerIt
 	private _rootItems: ExplorerItem[] = [];
 	private _parentMap = new Map<ExplorerItem, ExplorerItem | undefined>();
 	private _modelItemMap = new Map<string, ModelItem>();
+	private _followActive: boolean;
 
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
 		private readonly projectDir: string,
-	) {}
+		private readonly globalState: vscode.Memento,
+	) {
+		this._followActive = globalState.get<boolean>('dbt-studio.explorerFollowActive', true);
+	}
+
+	get followActive(): boolean {
+		return this._followActive;
+	}
+
+	toggleFollow(): void {
+		this._followActive = !this._followActive;
+		void this.globalState.update('dbt-studio.explorerFollowActive', this._followActive);
+		void vscode.commands.executeCommand('setContext', 'dbt-studio.explorerFollowActive', this._followActive);
+	}
 
 	refresh(): void {
 		this._rebuildTree();

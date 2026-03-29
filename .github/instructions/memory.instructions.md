@@ -4,6 +4,10 @@ description: Workspace rules for dbt-studio-vscode
 ---
 # Workspace Rules
 
+## Do less defensive coding
+The codebase is small and well-typed. Avoid defensive coding patterns (e.g. `if (!x) return null`) that add noise and reduce readability. If a value is unexpectedly null/undefined, it's better to throw an error than to silently return null. This also helps surface bugs during development, as the error will point to the exact line of code that needs to be fixed.
+Also avoid defensive fallback patterns like actual codeflows. Its a bit try-hard attitude and it hides bugs. So if the codepath risk not returning a value rather return undefined and surface the potiental bug instead of trying to be clever and returning some fallback value.
+
 ## Work Loop
 
 Follow this cycle for every change:
