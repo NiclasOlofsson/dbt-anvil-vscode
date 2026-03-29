@@ -2,7 +2,7 @@
 	"name": "dbt-studio-vscode",
 	"displayName": "dbt Studio",
 	"description": "A full-featured development environment and an AI-powered assistant — the best of both worlds for analytics engineering",
-	"version": "0.1.4",
+	"version": "0.1.5",
 	"publisher": "nickeolofsson",
 	"license": "MIT",
 	"icon": "resources/icons/dbt-studio-128.png",
