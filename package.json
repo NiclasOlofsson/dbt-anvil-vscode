@@ -44,7 +44,11 @@
 				"extensions": [
 					".sql"
 				],
-				"configuration": "./language-configuration.json"
+				"configuration": "./language-configuration.json",
+				"icon": {
+					"light": "./resources/icons/file-sql-light.svg",
+					"dark": "./resources/icons/file-sql-dark.svg"
+				}
 			}
 		],
 		"grammars": [
@@ -110,6 +114,16 @@
 			{
 				"command": "dbt-studio.toggleLineageFollowOff",
 				"title": "dbt Studio: Toggle Lineage Follow Active Editor",
+				"icon": "$(eye-closed)"
+			},
+			{
+				"command": "dbt-studio.toggleExplorerFollow",
+				"title": "dbt Studio: Toggle Explorer Follow Active Editor",
+				"icon": "$(eye)"
+			},
+			{
+				"command": "dbt-studio.toggleExplorerFollowOff",
+				"title": "dbt Studio: Toggle Explorer Follow Active Editor",
 				"icon": "$(eye-closed)"
 			},
 			{
@@ -249,6 +263,16 @@
 				{
 					"command": "dbt-studio.refreshExplorer",
 					"when": "view == dbt-studio.modelExplorer",
+					"group": "navigation"
+				},
+				{
+					"command": "dbt-studio.toggleExplorerFollow",
+					"when": "view == dbt-studio.modelExplorer && dbt-studio.explorerFollowActive",
+					"group": "navigation"
+				},
+				{
+					"command": "dbt-studio.toggleExplorerFollowOff",
+					"when": "view == dbt-studio.modelExplorer && !dbt-studio.explorerFollowActive",
 					"group": "navigation"
 				},
 				{

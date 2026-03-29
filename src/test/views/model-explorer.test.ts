@@ -2,6 +2,13 @@ import { describe, it, expect, vi } from 'vitest';
 import { ModelExplorerProvider } from '../../views/model-explorer-provider';
 import type { ManifestIndexer, ManifestIndex, IndexedModel, IndexedSource } from '../../indexing/manifest-indexer';
 import { createMockLogger } from '../helpers';
+import type * as vscode from 'vscode';
+
+const mockGlobalState: vscode.Memento = {
+	get: vi.fn().mockReturnValue(false),
+	update: vi.fn().mockResolvedValue(undefined),
+	keys: vi.fn().mockReturnValue([]),
+} as unknown as vscode.Memento;
 
 const mockLogger = createMockLogger();
 
@@ -65,7 +72,7 @@ function createTestIndex(): ManifestIndex {
 describe('ModelExplorerProvider', () => {
 	it('should return empty array when no index exists', () => {
 		const indexer = createMockIndexer(null);
-		const provider = new ModelExplorerProvider(indexer, mockLogger, '/project');
+		const provider = new ModelExplorerProvider(indexer, mockLogger, '/project', mockGlobalState);
 		const children = provider.getChildren();
 		expect(children).toHaveLength(0);
 	});
@@ -73,7 +80,7 @@ describe('ModelExplorerProvider', () => {
 	it('should show model groups when index exists', () => {
 		const index = createTestIndex();
 		const indexer = createMockIndexer(index);
-		const provider = new ModelExplorerProvider(indexer, mockLogger, '/project');
+		const provider = new ModelExplorerProvider(indexer, mockLogger, '/project', mockGlobalState);
 		const root = provider.getChildren();
 
 		// Should have Models and Sources groups
@@ -82,7 +89,7 @@ describe('ModelExplorerProvider', () => {
 
 	it('should fire onDidChangeTreeData on refresh', () => {
 		const indexer = createMockIndexer(null);
-		const provider = new ModelExplorerProvider(indexer, mockLogger, '/project');
+		const provider = new ModelExplorerProvider(indexer, mockLogger, '/project', mockGlobalState);
 		const listener = vi.fn();
 		provider.onDidChangeTreeData(listener);
 		provider.refresh();

@@ -49,7 +49,9 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
+		private readonly globalState: vscode.Memento,
 	) {
+		this._followActive = globalState.get<boolean>('dbt-studio.lineageFollowActive', true);
 		this._showTests = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('lineageShowTests', true);
 		vscode.workspace.onDidChangeConfiguration(e => {
 			if (e.affectsConfiguration('dbt-studio.lineageShowTests')) {
@@ -74,6 +76,7 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 
 	toggleFollow(): void {
 		this._followActive = !this._followActive;
+		void this.globalState.update('dbt-studio.lineageFollowActive', this._followActive);
 		void vscode.commands.executeCommand(
 			'setContext',
 			'dbt-studio.lineageFollowActive',
