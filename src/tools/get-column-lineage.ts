@@ -4,6 +4,7 @@ import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import { Priority } from '../dbt/execution-service';
 import type { DbtExecutionService } from '../dbt/execution-service';
 import type { CompileCache } from '../dbt/compile-cache';
+import type { DescribeCache } from '../dbt/describe-cache';
 import { toolResult } from './tool-helpers';
 
 interface GetColumnLineageInput {
@@ -94,6 +95,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		private readonly service: DbtExecutionService,
 		private readonly logger: ILogger,
 		private readonly compileCache: CompileCache,
+		private readonly describeCache: DescribeCache,
 	) {}
 
 	/**
@@ -102,7 +104,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 	 * Format: {database: {schema: {table: {column: type}}}}
 	 * Ported from dbt-core-mcp get_column_lineage._build_schema_mapping.
 	 */
-	private _buildSchemaMapping(upstreamIds: string[]): SchemaMapping {
+	private async _buildSchemaMapping(upstreamIds: string[]): Promise<SchemaMapping> {
 		const mapping: SchemaMapping = {};
 		for (const uid of upstreamIds) {
 			const raw = this.indexer.getRawNode(uid);
@@ -119,8 +121,8 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 
 			let columnMap: Record<string, string> | undefined;
 
-			// Prefer the DescribeCache column store (populated from live warehouse describes)
-			const describedCols = this.indexer.getColumns(uid);
+			// Prefer live warehouse columns via DescribeCache (describes on miss, cached on hit)
+			const describedCols = await this.describeCache.columns(uid);
 			if (describedCols && describedCols.length > 0) {
 				columnMap = Object.fromEntries(describedCols.map(c => [c.toLowerCase(), 'unknown']));
 			}
@@ -344,7 +346,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		if (!compiledCode) return null;
 
 		const lineage = this.indexer.getLineage(modelUniqueId, 5, 0);
-		const schemaMapping = this._buildSchemaMapping(lineage.upstream.map(n => n.uniqueId));
+		const schemaMapping = await this._buildSchemaMapping(lineage.upstream.map(n => n.uniqueId));
 
 		try {
 			const result = await this.service.submit({
@@ -596,7 +598,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		const index = this.indexer.index;
 		const dialect = mapAdapterToDialect(index?.adapterType ?? 'ansi');
 		const upstreamLineage = this.indexer.getLineage(uniqueId, 5, 0);
-		const schemaMapping = this._buildSchemaMapping(upstreamLineage.upstream.map(n => n.uniqueId));
+		const schemaMapping = await this._buildSchemaMapping(upstreamLineage.upstream.map(n => n.uniqueId));
 
 		const { columns } = await this._resolveOutputColumns(
 			rawNode.resource_type,
@@ -642,7 +644,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		const dialect = mapAdapterToDialect(index?.adapterType ?? 'ansi');
 
 		const upstreamLineage = this.indexer.getLineage(uniqueId, 5, 0);
-		const schemaMapping = this._buildSchemaMapping(upstreamLineage.upstream.map(n => n.uniqueId));
+		const schemaMapping = await this._buildSchemaMapping(upstreamLineage.upstream.map(n => n.uniqueId));
 		const { columns: outputColumns } = await this._resolveOutputColumns(
 			rawNode.resource_type,
 			rawNode,
