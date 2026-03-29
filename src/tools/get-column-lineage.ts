@@ -119,19 +119,27 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 
 			let columnMap: Record<string, string> | undefined;
 
-			// Try database_columns first (list format: [{col_name, type}])
-			const dbCols = r['database_columns'];
-			if (Array.isArray(dbCols) && dbCols.length > 0) {
-				columnMap = {};
-				for (const col of dbCols) {
-					if (col !== null && col !== undefined && typeof col === 'object' && 'col_name' in col) {
-						const c = col as { col_name: string; type?: string };
-						columnMap[c.col_name.toLowerCase()] = (c.type ?? 'unknown').toLowerCase();
+			// Prefer the DescribeCache column store (populated from live warehouse describes)
+			const describedCols = this.indexer.getColumns(uid);
+			if (describedCols && describedCols.length > 0) {
+				columnMap = Object.fromEntries(describedCols.map(c => [c.toLowerCase(), 'unknown']));
+			}
+
+			// Fall back to database_columns on raw node (list format: [{col_name, type}])
+			if (!columnMap || Object.keys(columnMap).length === 0) {
+				const dbCols = r['database_columns'];
+				if (Array.isArray(dbCols) && dbCols.length > 0) {
+					columnMap = {};
+					for (const col of dbCols) {
+						if (col !== null && col !== undefined && typeof col === 'object' && 'col_name' in col) {
+							const c = col as { col_name: string; type?: string };
+							columnMap[c.col_name.toLowerCase()] = (c.type ?? 'unknown').toLowerCase();
+						}
 					}
 				}
 			}
 
-			// Fall back to manifest columns dict: {name: {data_type}}
+			// Final fall back to manifest columns dict: {name: {data_type}}
 			if (!columnMap || Object.keys(columnMap).length === 0) {
 				const columns = raw.columns ?? {};
 				if (Object.keys(columns).length > 0) {
@@ -415,15 +423,28 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		visited: Set<string>,
 		columnEdges: Array<{ sourceModel: string; sourceColumn: string; targetModel: string; targetColumn: string }>,
 	): Promise<ColumnDependency[]> {
-		if (currentDepth >= maxDepth) return [];
+		if (currentDepth >= maxDepth) {
+			this.logger.info(`[lineage] depth limit reached at depth=${currentDepth} for ${modelName}.${columnName}`);
+			return [];
+		}
 		if (columnName === '*') return [];
 
 		const visitKey = `${modelUniqueId}.${columnName}`;
-		if (visited.has(visitKey)) return [];
+		if (visited.has(visitKey)) {
+			this.logger.trace(`[lineage] already visited ${visitKey}, skipping`);
+			return [];
+		}
 		visited.add(visitKey);
 
+		this.logger.info(`[lineage] depth=${currentDepth} tracing ${modelName}.${columnName} (${modelUniqueId})`);
+
 		const lineageResult = await this._traceColumn(modelUniqueId, modelName, columnName, dialect);
-		if (!lineageResult) return [];
+		if (!lineageResult) {
+			this.logger.warn(`[lineage] _traceColumn returned null for ${modelName}.${columnName} — compiled SQL missing or bridge error`);
+			return [];
+		}
+
+		this.logger.info(`[lineage] bridge returned ${lineageResult.dependencies.length} deps for ${modelName}.${columnName}: ${lineageResult.dependencies.map(d => `${d.table}.${d.column}`).join(', ') || '(none)'}`);
 
 		const allDeps: ColumnDependency[] = [];
 
@@ -431,6 +452,9 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 			const resolvedId = this._resolveDependency(dep, relationLookup);
 			if (resolvedId) {
 				dep.dbt_resource = resolvedId;
+				this.logger.trace(`[lineage] resolved ${dep.table} → ${resolvedId}`);
+			} else {
+				this.logger.warn(`[lineage] could not resolve table "${dep.table}" to a dbt resource (schema=${dep.schema}, db=${dep.database})`);
 			}
 
 			// Try to resolve wildcard column before recursing
@@ -459,6 +483,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 				});
 				const node = this.indexer.getRawNode(resolvedId);
 				if (node && node.resource_type === 'model') {
+					this.logger.info(`[lineage] recursing into model ${node.name}.${effectiveColumn} at depth=${currentDepth + 1}`);
 					const deeper = await this._traceUpstreamRecursive(
 						resolvedId,
 						node.name,
@@ -471,6 +496,8 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 						columnEdges,
 					);
 					allDeps.push(...deeper);
+				} else if (node) {
+					this.logger.info(`[lineage] stopping at ${resolvedId} — resource_type=${node.resource_type} (terminal node)`);
 				}
 			}
 		}
@@ -486,15 +513,22 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		dependencies: ColumnDependency[],
 		dialect: string,
 	): Promise<void> {
+		const cache = new Map<string, Pick<ColumnDependency, 'transformations' | 'via_ctes'>>();
 		for (const dep of dependencies) {
 			if (!dep.dbt_resource || !dep.column || dep.column === '*') continue;
 			const raw = this.indexer.getRawNode(dep.dbt_resource);
 			if (!raw || raw.resource_type !== 'model') continue;
+			const key = `${dep.dbt_resource}::${dep.column}`;
+			if (cache.has(key)) {
+				const cached = cache.get(key)!;
+				if (cached.transformations) dep.transformations = cached.transformations;
+				if (cached.via_ctes) dep.via_ctes = cached.via_ctes;
+				continue;
+			}
 			try {
 				const result = await this._traceColumn(dep.dbt_resource, raw.name, dep.column, dialect);
 				if (result && result.transformations.length > 0) {
 					dep.transformations = result.transformations;
-					// Derive via_ctes from new-format transformations
 					dep.via_ctes = result.transformations
 						.filter(t => t.type === 'cte' && t.id.startsWith('cte:'))
 						.map(t => t.id.slice(4));
@@ -502,6 +536,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 			} catch {
 				// Keep dep without internal transforms on failure
 			}
+			cache.set(key, { transformations: dep.transformations, via_ctes: dep.via_ctes });
 		}
 	}
 
@@ -586,7 +621,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		column: string,
 		direction: 'upstream' | 'downstream' | 'both' = 'upstream',
 		depth?: number,
-	): Promise<{ error?: string; dependencies: Array<{ column: string; dbt_resource?: string }>; columnEdges: Array<{ sourceModel: string; sourceColumn: string; targetModel: string; targetColumn: string }> }> {
+	): Promise<{ error?: string; dependencies: ColumnDependency[]; columnEdges: Array<{ sourceModel: string; sourceColumn: string; targetModel: string; targetColumn: string }> }> {
 		const rawNode = this.indexer.getRawNode(uniqueId);
 		if (!rawNode) {
 			return { error: `Raw manifest data not found for "${uniqueId}"`, dependencies: [], columnEdges: GetColumnLineageTool._emptyColumnEdges };
@@ -600,7 +635,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		// _ensureCompiled: free if compiled_code already in manifest, compiles if missing
 		const compiledCode = await this._ensureCompiled(uniqueId);
 		if (!compiledCode) {
-			return { error: 'Could not resolve compiled SQL for this model.', dependencies: [], columnEdges: GetColumnLineageTool._emptyColumnEdges };
+			return { error: `No compiled SQL found for "${rawNode.name}". Run "dbt compile" first.`, dependencies: [], columnEdges: GetColumnLineageTool._emptyColumnEdges };
 		}
 
 		const index = this.indexer.index;
@@ -617,7 +652,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		);
 
 		if (outputColumns.length > 0 && !outputColumns.includes('*') && !outputColumns.includes(column)) {
-			return { error: `Column "${column}" not found in output`, dependencies: [], columnEdges: GetColumnLineageTool._emptyColumnEdges };
+			return { error: `Column "${column}" not found in output of model "${rawNode.name}". Available columns: ${outputColumns.join(', ')}`, dependencies: [], columnEdges: GetColumnLineageTool._emptyColumnEdges };
 		}
 
 		if (direction === 'downstream') {
@@ -663,62 +698,20 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 			return toolResult({ error: `Raw manifest data not found for "${model}"` });
 		}
 
-		const compiledCode = 'compiled_code' in rawNode ? rawNode.compiled_code : undefined;
-		if (!compiledCode) {
-			return toolResult({ error: `No compiled SQL found for "${model}". Run "dbt compile" first.` });
+		const traced = await this.traceColumnDirect(modelInfo.uniqueId, column, direction, depth);
+		if (traced.error) {
+			return toolResult({ error: traced.error });
 		}
-
-		const index = this.indexer.index;
-		const dialect = mapAdapterToDialect(index?.adapterType ?? 'ansi');
-
-		// Resolve output columns using type-aware strategy
-		const resourceType = modelInfo.uniqueId.split('.')[0];
-		const upstreamLineage = this.indexer.getLineage(modelInfo.uniqueId, 5, 0);
-		const schemaMapping = this._buildSchemaMapping(upstreamLineage.upstream.map(n => n.uniqueId));
-		const { columns: outputColumns } = await this._resolveOutputColumns(
-			resourceType,
-			rawNode,
-			compiledCode,
-			dialect,
-			schemaMapping,
-		);
-
-		if (outputColumns.length > 0 && !outputColumns.includes('*') && !outputColumns.includes(column)) {
-			return toolResult({
-				error: `Column "${column}" not found in output of model "${model}". Available columns: ${outputColumns.join(', ')}`,
-			});
-		}
-
-		const maxDepth = depth ?? 10;
-		const relationLookup = this._buildRelationLookup();
-		const visited = new Set<string>();
 
 		if (direction === 'upstream' || direction === 'both') {
-			const _invokeEdges: Array<{ sourceModel: string; sourceColumn: string; targetModel: string; targetColumn: string }> = [];
-			const dependencies = await this._traceUpstreamRecursive(
-				modelInfo.uniqueId,
-				modelInfo.name,
-				column,
-				dialect,
-				maxDepth,
-				0,
-				relationLookup,
-				visited,
-				_invokeEdges,
-			);
-
-			// Enrich model dependencies with their internal CTE transformations
-			await this._enrichDependencyTransformations(dependencies, dialect);
-
-			// Get root model's lineage for transformations and via_ctes
+			const dialect = mapAdapterToDialect(this.indexer.index?.adapterType ?? 'ansi');
 			const rootLineage = await this._traceColumn(modelInfo.uniqueId, modelInfo.name, column, dialect);
-
 			return toolResult(this._formatLineageResponse(
 				modelInfo.name,
 				modelInfo.uniqueId,
 				column,
 				direction,
-				dependencies,
+				traced.dependencies,
 				rootLineage,
 			));
 		}
