@@ -195,12 +195,19 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 				if (colToken.table) {
 					const cols = refTok ? ParseService.columnsForRef(refTok, model) : undefined;
 					this.logger.trace(`Hover: column '${colToken.table}.${colToken.name}' — resolvedTableRef: ${refTok?.name ?? 'none'}, cols: ${cols ? `[${cols.join(', ')}]` : 'none'}`);
-					if (cols && cols.some(c => c.toLowerCase() === colToken.name.toLowerCase())) {
-						return this._buildColumnHover(colToken.name, colToken.table);
+					if (cols && (cols.includes('*') || cols.some(c => c.toLowerCase() === colToken.name.toLowerCase()))) {
+						const chain = ParseService.traceCteLineage(refTok!, model);
+						return this._buildColumnHover(colToken.name, colToken.table, chain);
 					}
-					// Qualifier resolves to a known alias but its column list is unavailable
-					// (e.g. a CTE defined in the caller of a macro, not in this file).
+					// Qualifier resolves to a known alias but its column list is unavailable.
 					if (!cols && refTok) {
+						const isCte = model.ctes.some(c => c.name.toLowerCase() === refTok.name.toLowerCase());
+						if (!isCte) {
+							// Direct external ref (ref() / source) in the same scope — show lineage
+							const chain = ParseService.traceCteLineage(refTok, model);
+							return this._buildColumnHover(colToken.name, colToken.table, chain);
+						}
+						// CTE defined in this file but column list not available (e.g. macro caller)
 						const md = new vscode.MarkdownString();
 						md.appendMarkdown(`**${colToken.table}** (alias for \`${refTok.name}\`)\n\n`);
 						md.appendMarkdown('_Column list unavailable — `' + refTok.name + '` is not defined in this file._');
@@ -212,8 +219,9 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 				// Bare column (qualify-resolved) — resolvedTableRef tells us the exact source
 				if (refTok) {
 					const cols = ParseService.columnsForRef(refTok, model);
-					if (cols && cols.some(c => c.toLowerCase() === colToken.name.toLowerCase())) {
-						return this._buildColumnHover(colToken.name, refTok.alias ?? refTok.name);
+					if (cols && (cols.includes('*') || cols.some(c => c.toLowerCase() === colToken.name.toLowerCase()))) {
+						const chain = ParseService.traceCteLineage(refTok, model);
+						return this._buildColumnHover(colToken.name, refTok.alias ?? refTok.name, chain);
 					}
 				}
 				return null;
@@ -245,8 +253,9 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		);
 		if (colTok?.resolvedTableRef) {
 			const cols = ParseService.columnsForRef(colTok.resolvedTableRef, model);
-			if (cols && cols.some(c => c.toLowerCase() === word.toLowerCase())) {
-				return this._buildColumnHover(word, colTok.resolvedTableRef.alias ?? colTok.resolvedTableRef.name);
+			if (cols && (cols.includes('*') || cols.some(c => c.toLowerCase() === word.toLowerCase()))) {
+				const chain = ParseService.traceCteLineage(colTok.resolvedTableRef, model);
+				return this._buildColumnHover(word, colTok.resolvedTableRef.alias ?? colTok.resolvedTableRef.name, chain);
 			}
 		}
 
@@ -273,14 +282,18 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 	private _buildColumnHover(
 		column: string,
 		alias?: string,
-		allSources?: string[],
+		chain?: string[],
 	): vscode.Hover {
 		const md = new vscode.MarkdownString();
 		md.appendMarkdown(`**\`${column}\`** — column\n\n`);
-		if (alias) {
+		if (chain && chain.length > 0) {
+			for (let i = 0; i < chain.length; i++) {
+				const indent = '&nbsp;&nbsp;'.repeat(i * 2);
+				const arrow = i === 0 ? '' : '→ ';
+				md.appendMarkdown(`${indent}${arrow}\`${chain[i]}\`  \n`);
+			}
+		} else if (alias) {
 			md.appendMarkdown(`- **Source:** \`${alias}\`\n`);
-		} else if (allSources && allSources.length > 0) {
-			md.appendMarkdown(`- **Available in:** ${allSources.map(s => '`' + s + '`').join(', ')}\n`);
 		}
 		return new vscode.Hover(md);
 	}

@@ -1595,17 +1595,42 @@ def handle_parse_document(request: dict[str, Any]) -> None:
 
     # Post-processing: for each column_ref with a table qualifier, embed the
     # resolved table_ref object directly so providers never need to search.
-    # Strategy: for each qualified column_ref, find the table_ref whose alias
-    # matches and whose line is the closest preceding one (same proximity logic
-    # that was previously duplicated in every TypeScript provider).
+    # Strategy: constrain candidates to the same CTE scope as the column_ref,
+    # then pick the closest-preceding table_ref with a matching alias.
+    # This prevents a same-named alias in an outer/earlier CTE from being
+    # mistakenly chosen when the alias is re-used inside a different CTE.
     _table_refs = [t for t in tokens if t["type"] == "table_ref" and "alias" in t]
     for tok in tokens:
         if tok["type"] != "column_ref" or "table" not in tok:
             continue
         qualifier_lc = tok["table"].lower()
         col_line = tok["line"]
+
+        # Find the CTE body that contains this column_ref (if any).
+        containing_cte = next(
+            (c for c in ctes if c["line"] <= col_line <= c["endLine"]),
+            None,
+        )
+
+        # Filter candidates to the same CTE scope, then fall back to global.
+        if containing_cte is not None:
+            scope_refs = [
+                tr
+                for tr in _table_refs
+                if containing_cte["line"] <= tr["line"] <= containing_cte["endLine"]
+            ]
+        else:
+            # column_ref is in the final SELECT (outside all CTEs)
+            scope_refs = [
+                tr
+                for tr in _table_refs
+                if all(
+                    tr["line"] < c["line"] or tr["line"] > c["endLine"] for c in ctes
+                )
+            ]
+
         best: dict[str, Any] | None = None
-        for tr in _table_refs:
+        for tr in scope_refs:
             if tr.get("alias", "").lower() != qualifier_lc:
                 continue
             if tr["line"] > col_line:
@@ -1613,8 +1638,8 @@ def handle_parse_document(request: dict[str, Any]) -> None:
             if best is None or tr["line"] > best["line"]:
                 best = tr
         if best is None:
-            # fallback: any match (e.g. alias defined after column in a CTE)
-            for tr in _table_refs:
+            # fallback: any alias match in scope (e.g. alias defined after column)
+            for tr in scope_refs:
                 if tr.get("alias", "").lower() == qualifier_lc:
                     best = tr
                     break

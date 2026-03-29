@@ -345,6 +345,90 @@ export class ParseService {
 	}
 
 	/**
+	 * Trace intra-model CTE lineage for a given table_ref.
+	 *
+	 * Starting from `ref`, if it resolves to a CTE, follow the chain of
+	 * table_ref tokens inside each CTE body to build an ordered list of names.
+	 * Stops when a node is not a CTE (external ref, source, or plain table).
+	 *
+	 * Returns an empty array when `ref` is not a CTE.
+	 *
+	 * Example result: ['address_with_country', "ref('gold__address')"]
+	 */
+	static traceCteLineage(ref: TableRefToken, model: DocumentModel): string[] {
+		const cteByName = new Map(model.ctes.map(c => [c.name.toLowerCase(), c]));
+		const chain: string[] = [];
+		const visited = new Set<string>();
+
+		let current: TableRefToken | undefined = ref;
+		while (current) {
+			const nameLc = current.name.toLowerCase();
+			if (visited.has(nameLc)) break; // cycle guard
+			visited.add(nameLc);
+
+			const cte = cteByName.get(nameLc);
+			if (!cte) {
+				// Not a CTE — only append if chain is non-empty (we're mid-chain)
+				if (chain.length > 0) chain.push(current.name);
+				break;
+			}
+
+			chain.push(cte.name);
+
+			// Find the first table_ref token inside this CTE's body range
+			const next = (model.tokens as TableRefToken[]).find(
+				t => t.type === 'table_ref'
+					&& t.line >= cte.line
+					&& t.line <= cte.endLine,
+			);
+			if (!next) break;
+			current = next;
+		}
+
+		// If the chain only resolved to the start CTE and nothing else was found,
+		// check if there's an external table (ref/source) to append
+		if (chain.length === 1) {
+			const cte = cteByName.get(ref.name.toLowerCase())!;
+			// Find any table_ref in its body not already in chain
+			const inner = (model.tokens as TableRefToken[]).find(
+				t => t.type === 'table_ref'
+					&& t.line >= cte.line
+					&& t.line <= cte.endLine
+					&& !cteByName.has(t.name.toLowerCase()),
+			);
+			if (inner) {
+				// Check if it's a ref()
+				const refInfo = model.refs.find(r => r.line === inner.line);
+				chain.push(refInfo ? `ref('${inner.name}')` : inner.name);
+			}
+		} else if (chain.length > 1) {
+			// For deeper chains: annotate the last entry if it's a ref()
+			const last = chain[chain.length - 1];
+			const isRef = model.refs.some(r => {
+				const tok = (model.tokens as TableRefToken[]).find(
+					t => t.type === 'table_ref' && t.name === last && r.line === t.line,
+				);
+				return !!tok;
+			});
+			if (isRef && !last.startsWith('ref(')) {
+				chain[chain.length - 1] = `ref('${last}')`;
+			}
+		}
+
+		// ref itself is not a CTE — build a direct chain from the ref token
+		if (chain.length === 0) {
+			const isRef = model.refs.some(r => r.model.toLowerCase() === ref.name.toLowerCase());
+			const refStr = isRef ? `ref('${ref.name}')` : ref.name;
+			if (ref.alias && ref.alias.toLowerCase() !== ref.name.toLowerCase()) {
+				return [ref.alias, refStr];
+			}
+			return [refStr];
+		}
+
+		return chain;
+	}
+
+	/**
 	 * Compute the combined alias → column-name map from a parsed model.
 	 * Merges bridge-resolved upstream aliases (model.aliases) with CTE aliases
 	 * and any FROM/JOIN aliases that point to CTEs.
