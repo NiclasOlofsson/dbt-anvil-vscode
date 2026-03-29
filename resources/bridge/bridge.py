@@ -526,11 +526,11 @@ def _extract_transformations_with_sources(lineage_node: Any) -> list[dict[str, A
         if cte_or_table == "__lineage_final__":
             if hasattr(node, "expression") and node.expression:
                 expr_str = str(node.expression)
-                for potential_ref in expr_str.split():
-                    if "." in potential_ref:
-                        ref_name = potential_ref.split(".")[0].strip("(),")
-                        if ref_name and not ref_name.isdigit():
-                            outer_query_sources.add(ref_name)
+                # Extract `identifier.` patterns — handles function-wrapped refs
+                # like LOWER(omls.fno_id) correctly (yields "omls", not "LOWER(omls").
+                for ref_name in re.findall(r"\b([A-Za-z_]\w*)\.", expr_str):
+                    if not ref_name.isdigit():
+                        outer_query_sources.add(ref_name)
             continue
 
         source_type = type(node.source).__name__ if hasattr(node, "source") else None
@@ -664,6 +664,43 @@ def _wrap_final_select(
 
     ast = parse_one(compiled_sql, dialect=dialect)
 
+    # Handle top-level UNION ALL: the WITH clause lives on the leftmost SELECT
+    # branch but the overall query body is a Union node.  Wrap the full union
+    # (stripped of its WITH) as __lineage_final__ so lineage() sees a single
+    # outer SELECT and can trace the column through all branches.
+    if isinstance(ast, exp.Union):
+        # Walk to the leftmost SELECT to borrow its WITH clause.
+        leftmost: Any = ast
+        while isinstance(leftmost, exp.Union):
+            leftmost = leftmost.this
+        with_clause = None
+        if isinstance(leftmost, exp.Select):
+            with_clause = leftmost.args.get("with_")
+            if with_clause:
+                leftmost.set("with_", None)  # detach; will move to outer SELECT
+        # Wrap the union body (now without WITH) as __lineage_final__.
+        union_cte = exp.CTE(
+            this=ast,
+            alias=exp.TableAlias(this=exp.Identifier(this="__lineage_final__")),
+        )
+        if with_clause:
+            with_clause.expressions.append(union_cte)
+        else:
+            with_clause = exp.With(expressions=[union_cte])
+        # Build: WITH <original CTEs>, __lineage_final__ AS (<union>)
+        #        SELECT <column_name> FROM __lineage_final__
+        outer = exp.Select()
+        outer.set("with_", with_clause)
+        outer.set(
+            "expressions",
+            [exp.Column(this=exp.Identifier(this=column_name))],
+        )
+        outer.set(
+            "from_",
+            exp.From(this=exp.Table(this=exp.Identifier(this="__lineage_final__"))),
+        )
+        return outer
+
     root_select = ast if isinstance(ast, exp.Select) else ast.find(exp.Select)
     if not root_select:
         return ast
@@ -766,9 +803,18 @@ def _trace_col_in_select(
         else:
             continue
 
-        if isinstance(inner, exp.Column):
-            src_table = (str(inner.table) if inner.table else "").lower()
-            src_col = inner.name.lower()
+        # Collect all column references inside the expression.
+        # For a plain column reference this is just [inner]; for expressions like
+        # SUM(amount), COALESCE(a, b), LOWER(x), or CASE WHEN ... THEN amount ...
+        # it walks inside the function/expression and finds every referenced column.
+        col_refs = (
+            [inner]
+            if isinstance(inner, exp.Column)
+            else list(inner.find_all(exp.Column))
+        )
+        for col_ref in col_refs:
+            src_table = (str(col_ref.table) if col_ref.table else "").lower()
+            src_col = col_ref.name.lower()
             if not src_table and from_name:
                 src_table = from_name
             if src_table and src_table in ctes and src_table not in visited:
@@ -796,15 +842,76 @@ def _trace_column_simple(
         from sqlglot import exp, parse_one  # type: ignore[import-not-found]
 
         ast = parse_one(compiled_sql, dialect=dialect)
+
+        # Build CTE name → expression from whichever node carries the WITH clause.
+        # For a top-level UNION the WITH clause lives on the leftmost SELECT branch.
+        def _extract_ctes(node: Any) -> dict[str, Any]:
+            leftmost = node
+            while isinstance(leftmost, exp.Union):
+                leftmost = leftmost.this
+            result: dict[str, Any] = {}
+            if isinstance(leftmost, exp.Select):
+                with_ = leftmost.args.get("with_")
+                if with_:
+                    for cte in with_.expressions:
+                        result[cte.alias.lower()] = cte.this
+            return result
+
+        # Handle a top-level UNION: trace the column through every branch.
+        if isinstance(ast, exp.Union):
+            ctes = _extract_ctes(ast)
+            branches = _collect_union_selects(ast)
+
+            dependencies: list[dict[str, Any]] = []
+            via_ctes: list[str] = []
+            visited: set[str] = set()
+
+            for branch_sel in branches:
+                from_clause = branch_sel.args.get("from_")
+                if not from_clause:
+                    continue
+                from_name = _get_source_name(from_clause.this)
+                if not from_name:
+                    continue
+                branch_queue: list[tuple[str, str]] = [(from_name, column_name.lower())]
+                while branch_queue:
+                    name, col = branch_queue.pop(0)
+                    if name not in ctes:
+                        dep = {"column": col, "table": name}
+                        if dep not in dependencies:
+                            dependencies.append(dep)
+                        continue
+                    if name in visited:
+                        continue
+                    visited.add(name)
+                    cte_body = ctes[name]
+                    sub_selects = (
+                        _collect_union_selects(cte_body)
+                        if not isinstance(cte_body, exp.Select)
+                        else [cte_body]
+                    )
+                    for sub_sel in sub_selects:
+                        _trace_col_in_select(
+                            sub_sel,
+                            col,
+                            ctes,
+                            visited,
+                            branch_queue,
+                            dependencies,
+                            via_ctes,
+                        )
+
+            return {
+                "dependencies": dependencies,
+                "via_ctes": list(dict.fromkeys(via_ctes)),
+                "transformations": [],
+            }
+
         if not isinstance(ast, exp.Select):
             return {"dependencies": [], "via_ctes": [], "transformations": []}
 
         # Build CTE name → expression index
-        ctes: dict[str, Any] = {}
-        with_ = ast.args.get("with_")
-        if with_:
-            for cte in with_.expressions:
-                ctes[cte.alias.lower()] = cte.this
+        ctes = _extract_ctes(ast)
 
         outer_from = ast.args.get("from_")
         if not outer_from:
@@ -814,9 +921,9 @@ def _trace_column_simple(
         if not root_name:
             return {"dependencies": [], "via_ctes": [], "transformations": []}
 
-        dependencies: list[dict[str, Any]] = []
-        via_ctes: list[str] = []
-        visited: set[str] = set()
+        dependencies = []
+        via_ctes = []
+        visited = set()
         queue: list[tuple[str, str]] = [(root_name, column_name.lower())]
 
         while queue:
