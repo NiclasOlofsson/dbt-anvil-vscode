@@ -19,6 +19,8 @@ export class VsTestController implements vscode.Disposable {
 	private readonly _runProfile: vscode.TestRunProfile;
 	/** Maps dbt uniqueId → { native TestItem, sidebar TestNodeItem } */
 	private readonly _itemMap = new Map<string, { item: vscode.TestItem; node: TestNodeItem }>();
+	/** Maps model name → dbt uniqueIds */
+	private readonly _modelMap = new Map<string, string[]>();
 	private readonly _disposables: vscode.Disposable[] = [];
 
 	constructor(
@@ -41,6 +43,18 @@ export class VsTestController implements vscode.Disposable {
 		this._disposables.push(
 			explorerProvider.onDidChangeTreeData(() => this._build()),
 		);
+	}
+
+	/**
+	 * Run all tests belonging to a specific model.
+	 */
+	async runTestsForModel(modelName: string): Promise<void> {
+		const uids = this._modelMap.get(modelName);
+		if (!uids || uids.length === 0) {
+			void vscode.window.showInformationMessage(`No tests found for '${modelName}' in the test tree.`);
+			return;
+		}
+		await this.runTests(uids);
 	}
 
 	/**
@@ -74,6 +88,7 @@ export class VsTestController implements vscode.Disposable {
 
 	private _build(): void {
 		this._itemMap.clear();
+		this._modelMap.clear();
 		this._controller.items.replace([]);
 
 		for (const category of this.explorerProvider.getRoot()) {
@@ -100,6 +115,11 @@ export class VsTestController implements vscode.Disposable {
 				nodeItem.range = node.testRange;
 			}
 			this._itemMap.set(node.uniqueId, { item: nodeItem, node });
+			if (group.rawName) {
+				const existing = this._modelMap.get(group.rawName) ?? [];
+				existing.push(node.uniqueId);
+				this._modelMap.set(group.rawName, existing);
+			}
 			groupItem.children.add(nodeItem);
 		}
 		parent.children.add(groupItem);

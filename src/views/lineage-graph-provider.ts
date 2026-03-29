@@ -501,7 +501,6 @@ svg.edges {
 	position: absolute; top: 0; left: 0;
 	transform-origin: 0 0;
 	pointer-events: none; overflow: visible;
-	z-index: 1;
 }
 svg.edges path {
 	fill: none;
@@ -636,6 +635,7 @@ svg.edges polygon {
 <div id="canvas-wrap" style="display:none">
 	<svg class="edges" id="edges"></svg>
 	<div id="canvas"></div>
+	<svg class="edges" id="edges-fg"></svg>
 </div>
 <div id="empty" class="empty-state">Open a dbt model to see its lineage graph</div>
 
@@ -644,6 +644,7 @@ svg.edges polygon {
 	const vscode = acquireVsCodeApi();
 	const canvas = document.getElementById('canvas');
 	const edgesSvg = document.getElementById('edges');
+	const edgesFgSvg = document.getElementById('edges-fg');
 	const wrapEl = document.getElementById('canvas-wrap');
 	const emptyEl = document.getElementById('empty');
 	const upDepthEl = document.getElementById('up-depth');
@@ -674,6 +675,7 @@ svg.edges polygon {
 	function applyTransform() {
 		canvas.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + scale + ')';
 		edgesSvg.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + scale + ')';
+		edgesFgSvg.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + scale + ')';
 	}
 
 	wrapEl.addEventListener('pointerdown', function(e) {
@@ -772,6 +774,7 @@ svg.edges polygon {
 		wrapEl.style.display = 'block';
 		canvas.innerHTML = '';
 		edgesSvg.innerHTML = '';
+		edgesFgSvg.innerHTML = '';
 
 		const CARD_W = 180;
 
@@ -1099,7 +1102,7 @@ svg.edges polygon {
 		canvas.querySelectorAll('.col-item.highlighted').forEach(function(el) {
 			el.classList.remove('highlighted');
 		});
-		edgesSvg.querySelectorAll('.col-edge').forEach(function(el) {
+		edgesFgSvg.querySelectorAll('.col-edge').forEach(function(el) {
 			el.remove();
 		});
 		if (!msg.columns) return;
@@ -1210,14 +1213,14 @@ svg.edges polygon {
 			path.setAttribute('d', 'M' + x1 + ',' + y1 + ' C' + cx + ',' + y1 + ' ' + cx + ',' + y2 + ' ' + x2 + ',' + y2);
 			path.setAttribute('class', 'col-edge');
 			path.style.stroke = 'var(--vscode-charts-blue, #5B8DEF)';
-			edgesSvg.appendChild(path);
+			edgesFgSvg.appendChild(path);
 		}
 	}
 
 	function redrawColumnEdges() {
 		if (!lastHighlightMsg || !graphData) return;
 		canvas.querySelectorAll('.col-item.highlighted').forEach(function(el) { el.classList.remove('highlighted'); });
-		edgesSvg.querySelectorAll('.col-edge').forEach(function(el) { el.remove(); });
+		edgesFgSvg.querySelectorAll('.col-edge').forEach(function(el) { el.remove(); });
 		const highlightedEls = [];
 		for (const c of (lastHighlightMsg.columns || [])) {
 			const sel = '.col-item[data-model="' + CSS.escape(c.model) + '"][data-col="' + CSS.escape(c.column) + '"]';

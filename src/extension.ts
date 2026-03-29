@@ -302,15 +302,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.commands.registerCommand('dbt-studio.testModel', async () => {
 			const model = getActiveModelName();
 			if (!model) return;
-			const result = await executionService.submit({
-				type: 'test', args: ['test', '-s', model],
-				priority: Priority.User, origin: 'user', label: `test ${model}`,
-			});
-			if (result.success) {
-				void vscode.window.showInformationMessage(`dbt test ${model}: success`);
-			} else {
-				void vscode.window.showErrorMessage(`dbt test ${model}: failed — ${result.stderr}`);
-			}
+			await vsTestController.runTestsForModel(model);
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.buildModel', async () => {
@@ -466,37 +458,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.testNamedModel', async (modelName: string) => {
-			const result = await executionService.submit({
-				type: 'test', args: ['test', '-s', modelName],
-				priority: Priority.User, origin: 'user', label: `test ${modelName}`,
-			});
-			if (result.success) {
-				void vscode.window.showInformationMessage(`dbt test ${modelName}: success`);
-			} else {
-				void vscode.window.showErrorMessage(`dbt test ${modelName}: failed — ${result.stderr}`);
-			}
+			await vsTestController.runTestsForModel(modelName);
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.runUnitTest', async (modelName: string, testName: string) => {
+		vscode.commands.registerCommand('dbt-studio.runUnitTest', async (_modelName: string, testName: string) => {
 			const uid = testExplorerProvider.resolveUidByName(testName);
 			if (uid) {
 				await vsTestController.runTests([uid]);
-			} else {
-				// Fallback: test not yet indexed — run directly by selector
-				const selector = modelName
-					? `${modelName},test_type:unit,test_name:${testName}`
-					: testName;
-				testExplorerProvider.markRunningByName(testName);
-				const result = await executionService.submit({
-					type: 'test', args: ['test', '--select', selector, '--log-format', 'json'],
-					priority: Priority.User, origin: 'user', label: `unit test ${testName}`,
-				});
-				testExplorerProvider.markResultByName(testName, result.success);
-				if (result.success) {
-					void vscode.window.showInformationMessage(`Unit test ${testName}: passed`);
-				} else {
-					void vscode.window.showErrorMessage(`Unit test ${testName}: failed — ${result.stderr}`);
-				}
 			}
 		}),
 

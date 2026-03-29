@@ -26,6 +26,7 @@ export class TestGroupItem extends vscode.TreeItem {
 	constructor(
 		label: string,
 		public readonly children: TestNodeItem[],
+		public readonly rawName?: string,
 		collapsibleState?: vscode.TreeItemCollapsibleState,
 	) {
 		super(label, collapsibleState ?? vscode.TreeItemCollapsibleState.Collapsed);
@@ -228,6 +229,7 @@ export class TestExplorerProvider implements vscode.TreeDataProvider<TestItem> {
 		return this._rootItems.filter(i => i instanceof TestCategoryItem) as TestCategoryItem[];
 	}
 
+
 	resolveUidByName(testName: string): string | undefined {
 		return this._testNameIndex.get(testName);
 	}
@@ -403,7 +405,7 @@ export class TestExplorerProvider implements vscode.TreeDataProvider<TestItem> {
 
 		for (const [modelName, items] of [...byModel.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
 			const sorted = items.sort((a, b) => (a.label as string).localeCompare(b.label as string));
-			const group = new TestGroupItem(`${modelName} (${sorted.length})`, sorted);
+			const group = new TestGroupItem(`${modelName} (${sorted.length})`, sorted, modelName);
 			group.iconPath = new vscode.ThemeIcon(modelIcon);
 			groups.push(group);
 		}
@@ -500,7 +502,7 @@ export class TestExplorerProvider implements vscode.TreeDataProvider<TestItem> {
 			const groups: TestGroupItem[] = [];
 			for (const [modelName, items] of [...byModel.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
 				const sorted = items.sort((a, b) => (a.label as string).localeCompare(b.label as string));
-				const group = new TestGroupItem(`${modelName} (${sorted.length})`, sorted);
+				const group = new TestGroupItem(`${modelName} (${sorted.length})`, sorted, modelName);
 				group.iconPath = new vscode.ThemeIcon('symbol-method');
 				groups.push(group);
 			}
@@ -525,7 +527,7 @@ export class TestExplorerProvider implements vscode.TreeDataProvider<TestItem> {
 		const merged: TestGroupItem[] = [];
 		for (const [modelName, items] of [...byModel.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
 			const sorted = items.sort((a, b) => (a.label as string).localeCompare(b.label as string));
-			const group = new TestGroupItem(`${modelName} (${sorted.length})`, sorted);
+			const group = new TestGroupItem(`${modelName} (${sorted.length})`, sorted, modelName);
 			group.iconPath = new vscode.ThemeIcon('symbol-method');
 			merged.push(group);
 		}
