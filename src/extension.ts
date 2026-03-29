@@ -13,6 +13,7 @@ import { DescribeCache } from './dbt/describe-cache';
 import { loadProjectConfig } from './dbt/project-config';
 import { createDatabaseProvider } from './providers/database/database-provider-factory';
 import { ColumnStorePersistence } from './indexing/column-store-persistence';
+import { ContentHashPersistence } from './indexing/content-hash-persistence';
 import { registerLanguageModelTools } from './tools';
 import { GetColumnLineageTool } from './tools/get-column-lineage';
 import { ModelExplorerProvider } from './views/model-explorer-provider';
@@ -91,10 +92,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	}
 
 	// -------- File watcher --------
+	// Restore content hashes before start() so the first save after a restart
+	// does not falsely trigger a dbt parse for files that haven't changed.
+	const contentHashPersistence = new ContentHashPersistence(context, logger);
 	const manifestWatcher = new ManifestWatcher(manifestLoader, manifestIndexer, logger);
+	manifestWatcher.restoreHashes(contentHashPersistence.restore());
 	manifestWatcher.start(projectDir);
 	container.setManifestWatcher(manifestWatcher);
 	context.subscriptions.push({ dispose: () => manifestWatcher.dispose() });
+	context.subscriptions.push({ dispose: () => contentHashPersistence.save(manifestWatcher.getHashes()) });
 	context.subscriptions.push({ dispose: () => columnStorePersistence.save(manifestIndexer) });
 
 	// -------- Python bridge (lazy-started on first use) --------
