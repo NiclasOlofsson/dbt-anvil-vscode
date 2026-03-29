@@ -2,10 +2,12 @@ import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
 import { ParseService } from '../services/parse-service';
-import type { ColumnRefToken, DocumentModel } from '../services/parse-service';
+import type { ColumnRefToken, DocumentModel, TableRefToken } from '../services/parse-service';
 import { isLinePositionInComment } from './comment-utils';
 import { SQL_KEYWORDS } from './sql-keywords';
 import { resolvePositionContext } from './position-context';
+import { resolveAlias } from './definition-provider';
+import { DbtMaterializationIcons, SqlIcons } from './icons';
 
 /**
  * Hover tooltips for ref('model'), source('src','table'), macro references,
@@ -50,7 +52,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		}
 		if (ctx?.kind === 'token') {
 			// null = AST recognised the token but has nothing to show; suppress fallback
-			const hover = this._hoverResolvedToken(model, ctx.resolved, token);
+			const hover = this._hoverResolvedToken(model, ctx.resolved, token, document.uri);
 			if (hover !== undefined) return hover ?? undefined;
 			return undefined;
 		}
@@ -59,29 +61,90 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		return this._hoverColumnFallback(document, position, line, model, token);
 	}
 
+	private _md(): vscode.MarkdownString {
+		const md = new vscode.MarkdownString();
+		md.supportThemeIcons = true;
+		md.isTrusted = { enabledCommands: ['dbt-studio.goToLine'] };
+		return md;
+	}
+
+	private _lineLink(uri: vscode.Uri, line: number, label: string): string {
+		const args = encodeURIComponent(JSON.stringify({ uri: uri.toString(), line }));
+		return `[\`${label}\`](command:dbt-studio.goToLine?${args})`;
+	}
+
+	private _externalRefLabel(modelName: string, docUri?: vscode.Uri): string {
+		const models = this.indexer.findModelsByName(modelName);
+		let resolved = models[0];
+
+		// When multiple packages define the same model name, use the current
+		// document's depends_on.nodes to pick the exact edge being traversed.
+		if (models.length > 1 && docUri) {
+			const uid = this.indexer.findModelByFilePath(docUri.fsPath);
+			if (uid) {
+				const raw = this.indexer.getRawNode(uid);
+				if (raw && 'depends_on' in raw) {
+					const dep = models.find(m => raw.depends_on.nodes.includes(m.uniqueId));
+					if (dep) resolved = dep;
+				}
+			}
+		}
+
+		const iconName = resolved
+			? (DbtMaterializationIcons[resolved.materialisation] ?? DbtMaterializationIcons['default'])
+			: DbtMaterializationIcons['default'];
+		if (resolved?.path) {
+			try {
+				const uri = vscode.Uri.file(resolved.path);
+				return `$(${iconName}) ${this._lineLink(uri, 0, modelName)}`;
+			} catch { /* no-op */ }
+		}
+		return `$(${iconName}) \`${modelName}\``;
+	}
+
+	private _chainEntryLabel(
+		entry: string,
+		cteByName: Map<string, { name: string; line: number }>,
+		docUri?: vscode.Uri,
+	): string {
+		const refMatch = entry.match(/^ref\('(.+)'\)$/);
+		if (refMatch) return this._externalRefLabel(refMatch[1], docUri);
+		const cte = cteByName.get(entry.toLowerCase());
+		if (cte && docUri) return `$(${SqlIcons.cte}) ${this._lineLink(docUri, cte.line, cte.name)}`;
+		// Plain name — raw hardcoded table reference (not a ref(), not a CTE)
+		return `$(${SqlIcons.file}) \`${entry}\``;
+	}
+
 	private _hoverRef(modelName: string): vscode.Hover | undefined {
 		const models = this.indexer.findModelsByName(modelName);
 		if (models.length === 0) return undefined;
 		const model = models[0];
 
-		const md = new vscode.MarkdownString();
-		md.appendMarkdown(`**${model.name}** — \`${model.materialisation}\`\n\n`);
+		const md = this._md();
+		const qualifiedName = model.schema ? `${model.schema}.${model.name}` : model.name;
+		const icon = DbtMaterializationIcons[model.materialisation] ?? DbtMaterializationIcons.default;
+		md.appendMarkdown(`$(${icon}) **\`${qualifiedName}\`** — model · _${model.materialisation}_`);
 		if (model.description) {
-			md.appendMarkdown(`${model.description}\n\n`);
+			md.appendMarkdown(`\n\n${model.description}`);
 		}
-		md.appendMarkdown(`- **Package:** ${model.packageName}\n`);
-		md.appendMarkdown(`- **Path:** ${model.path}\n`);
-		if (model.schema) md.appendMarkdown(`- **Schema:** ${model.schema}\n`);
-		if (model.tags.length > 0) md.appendMarkdown(`- **Tags:** ${model.tags.join(', ')}\n`);
 
-		// Show columns if available from manifest
+		const metaLines: string[] = [
+			`$(${SqlIcons.package}) \`${model.packageName}\``,
+			`$(${SqlIcons.file}) \`${model.path}\``,
+		];
+		if (model.schema) metaLines.push(`$(${SqlIcons.database}) \`${model.schema}\``);
+		if (model.tags.length > 0) {
+			metaLines.push(`$(${SqlIcons.tag}) ${model.tags.map(t => `\`${t}\``).join(' ')}`);
+		}
+		md.appendMarkdown('\n\n---\n\n' + metaLines.join('  \n'));
+
 		const raw = this.indexer.getRawNode(model.uniqueId);
 		if (raw && raw.columns && Object.keys(raw.columns).length > 0) {
-			md.appendMarkdown('\n**Columns:**\n');
+			md.appendMarkdown('\n\n---\n\n**Columns**  \n');
 			for (const col of Object.values(raw.columns)) {
-				const type = col.data_type ? ` \`${col.data_type}\`` : '';
+				const type = col.data_type ? ` _${col.data_type}_` : '';
 				const desc = col.description ? ` — ${col.description}` : '';
-				md.appendMarkdown(`- \`${col.name}\`${type}${desc}\n`);
+				md.appendMarkdown(`$(${SqlIcons.column}) \`${col.name}\`${type}${desc}  \n`);
 			}
 		}
 
@@ -93,23 +156,26 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		if (!found) return undefined;
 		const { uid, source } = found;
 
-		const md = new vscode.MarkdownString();
-		md.appendMarkdown(`**${source.sourceName}.${source.name}** — source\n\n`);
+		const md = this._md();
+		md.appendMarkdown(`$(${SqlIcons.source}) **\`${source.sourceName}.${source.name}\`** — source`);
 		if (source.description) {
-			md.appendMarkdown(`${source.description}\n\n`);
+			md.appendMarkdown(`\n\n${source.description}`);
 		}
-		md.appendMarkdown(`- **Schema:** ${source.schema}\n`);
-		if (source.database) md.appendMarkdown(`- **Database:** ${source.database}\n`);
-		if (source.tags.length > 0) md.appendMarkdown(`- **Tags:** ${source.tags.join(', ')}\n`);
 
-		// Show columns from manifest
+		const metaLines: string[] = [`$(${SqlIcons.schema}) \`${source.schema}\``];
+		if (source.database) metaLines.push(`$(${SqlIcons.database}) \`${source.database}\``);
+		if (source.tags.length > 0) {
+			metaLines.push(`$(${SqlIcons.tag}) ${source.tags.map(t => `\`${t}\``).join(' ')}`);
+		}
+		md.appendMarkdown('\n\n---\n\n' + metaLines.join('  \n'));
+
 		const raw = this.indexer.getRawNode(uid);
 		if (raw && raw.columns && Object.keys(raw.columns).length > 0) {
-			md.appendMarkdown('\n**Columns:**\n');
+			md.appendMarkdown('\n\n---\n\n**Columns**  \n');
 			for (const col of Object.values(raw.columns)) {
-				const type = col.data_type ? ` \`${col.data_type}\`` : '';
+				const type = col.data_type ? ` _${col.data_type}_` : '';
 				const desc = col.description ? ` — ${col.description}` : '';
-				md.appendMarkdown(`- \`${col.name}\`${type}${desc}\n`);
+				md.appendMarkdown(`$(${SqlIcons.column}) \`${col.name}\`${type}${desc}  \n`);
 			}
 		}
 
@@ -120,23 +186,23 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		const macro = this.indexer.findMacroByName(macroName);
 		if (!macro) return undefined;
 
-		const md = new vscode.MarkdownString();
+		const md = this._md();
 		const args = macro.arguments;
 		const sig = args.length > 0
 			? `(${args.map(a => a.name).join(', ')})`
 			: '()';
-		md.appendMarkdown(`**${macro.name}**${sig} — macro\n\n`);
+		md.appendMarkdown(`$(${SqlIcons.macro}) **\`${macro.name}${sig}\`** — macro`);
 		if (macro.description) {
-			md.appendMarkdown(`${macro.description}\n\n`);
+			md.appendMarkdown(`\n\n${macro.description}`);
 		}
-		md.appendMarkdown(`- **Package:** ${macro.packageName}\n`);
 
+		md.appendMarkdown(`\n\n---\n\n$(${SqlIcons.package}) \`${macro.packageName}\``);
 		if (args.length > 0) {
-			md.appendMarkdown('\n**Arguments:**\n');
+			md.appendMarkdown('\n\n---\n\n**Arguments**  \n');
 			for (const arg of args) {
-				const type = arg.type ? ` \`${arg.type}\`` : '';
+				const type = arg.type ? ` _${arg.type}_` : '';
 				const desc = arg.description ? ` — ${arg.description}` : '';
-				md.appendMarkdown(`- \`${arg.name}\`${type}${desc}\n`);
+				md.appendMarkdown(`$(${SqlIcons.macroArg}) \`${arg.name}\`${type}${desc}  \n`);
 			}
 		}
 
@@ -152,6 +218,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		model: DocumentModel,
 		resolved: NonNullable<ReturnType<typeof ParseService.resolveAtPosition>>,
 		token: vscode.CancellationToken,
+		docUri: vscode.Uri,
 	): vscode.Hover | null | undefined {
 		if (token.isCancellationRequested) return undefined;
 		this.logger.trace(`Hover: token kind='${resolved.kind}' name='${resolved.token.name}'`);
@@ -164,7 +231,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 					c.name.toLowerCase() === name.toLowerCase()
 					|| c.alias?.toLowerCase() === name.toLowerCase(),
 				);
-				if (cte) return this._buildCteHover(cte);
+				if (cte) return this._buildCteHover(cte, resolved.token, model, docUri);
 				return null;
 			}
 			case 'table_alias': {
@@ -174,16 +241,33 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 					c.name.toLowerCase() === resolved.token.name.toLowerCase()
 					|| c.alias?.toLowerCase() === name.toLowerCase(),
 				);
-				if (cte) return this._buildCteHover(cte);
+				if (cte) return this._buildCteHover(cte, resolved.token, model, docUri);
 				return null;
 			}
 			case 'table_qualifier': {
 				// Alias prefix of a column ref (e.g. the `o` in `o.order_id`)
-				const refTok = resolved.token.resolvedTableRef;
-				if (!refTok) return null;
-				const cols = ParseService.columnsForRef(refTok, model);
-				if (cols) return this._buildAliasHover(resolved.token.table!, cols);
-				return null;
+				const alias = resolved.token.table!;
+				const target = resolveAlias(model, alias, resolved.token.line);
+				if (!target) return null;
+				switch (target.kind) {
+					case 'cte': {
+						const refTok = resolved.token.resolvedTableRef;
+						const inner = refTok
+							? this._buildCteHover(target.cte, refTok, model, docUri)
+							: this._buildAliasHover(alias, target.cte.columns, docUri);
+						return this._wrapWithAliasHeader(alias, target.cte.name, inner);
+					}
+					case 'ref': {
+						const inner = this._hoverRef(target.ref.model);
+						if (!inner) return null;
+						return this._wrapWithAliasHeader(alias, target.ref.model, inner);
+					}
+					case 'source': {
+						const inner = this._hoverSource(target.source.sourceName, target.source.tableName);
+						if (!inner) return null;
+						return this._wrapWithAliasHeader(alias, `${target.source.sourceName}.${target.source.tableName}`, inner);
+					}
+				}
 			}
 			case 'column_def':
 				// Column definition (e.g. in a CTE select list) — nothing to hover
@@ -197,7 +281,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 					this.logger.trace(`Hover: column '${colToken.table}.${colToken.name}' — resolvedTableRef: ${refTok?.name ?? 'none'}, cols: ${cols ? `[${cols.join(', ')}]` : 'none'}`);
 					if (cols && (cols.includes('*') || cols.some(c => c.toLowerCase() === colToken.name.toLowerCase()))) {
 						const chain = ParseService.traceCteLineage(refTok!, model);
-						return this._buildColumnHover(colToken.name, colToken.table, chain);
+						return this._buildColumnHover(colToken.name, colToken.table, chain, model, docUri);
 					}
 					// Qualifier resolves to a known alias but its column list is unavailable.
 					if (!cols && refTok) {
@@ -205,13 +289,13 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 						if (!isCte) {
 							// Direct external ref (ref() / source) in the same scope — show lineage
 							const chain = ParseService.traceCteLineage(refTok, model);
-							return this._buildColumnHover(colToken.name, colToken.table, chain);
+							return this._buildColumnHover(colToken.name, colToken.table, chain, model, docUri);
 						}
 						// CTE defined in this file but column list not available (e.g. macro caller)
-						const md = new vscode.MarkdownString();
-						md.appendMarkdown(`**${colToken.table}** (alias for \`${refTok.name}\`)\n\n`);
-						md.appendMarkdown('_Column list unavailable — `' + refTok.name + '` is not defined in this file._');
-						return new vscode.Hover(md);
+						const unavail = this._md();
+						unavail.appendMarkdown(`**${colToken.table}** (alias for \`${refTok.name}\`)\n\n`);
+						unavail.appendMarkdown('_Column list unavailable — `' + refTok.name + '` is not defined in this file._');
+						return new vscode.Hover(unavail);
 					}
 					// Qualified column with no resolvedTableRef — qualifier not locally defined
 					return null;
@@ -221,7 +305,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 					const cols = ParseService.columnsForRef(refTok, model);
 					if (cols && (cols.includes('*') || cols.some(c => c.toLowerCase() === colToken.name.toLowerCase()))) {
 						const chain = ParseService.traceCteLineage(refTok, model);
-						return this._buildColumnHover(colToken.name, refTok.alias ?? refTok.name, chain);
+						return this._buildColumnHover(colToken.name, refTok.alias ?? refTok.name, chain, model, docUri);
 					}
 				}
 				return null;
@@ -255,27 +339,58 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 			const cols = ParseService.columnsForRef(colTok.resolvedTableRef, model);
 			if (cols && (cols.includes('*') || cols.some(c => c.toLowerCase() === word.toLowerCase()))) {
 				const chain = ParseService.traceCteLineage(colTok.resolvedTableRef, model);
-				return this._buildColumnHover(word, colTok.resolvedTableRef.alias ?? colTok.resolvedTableRef.name, chain);
+				return this._buildColumnHover(word, colTok.resolvedTableRef.alias ?? colTok.resolvedTableRef.name, chain, model, document.uri);
 			}
 		}
 
 		return undefined;
 	}
 
-	private _buildCteHover(cte: { name: string; line: number; endLine: number; columns: { name: string; line: number }[] }): vscode.Hover {
-		const md = new vscode.MarkdownString();
-		md.appendMarkdown(`**\`${cte.name}\`** — CTE (${cte.columns.length} columns)\n\n`);
-		md.appendMarkdown(`- **Lines:** ${cte.line + 1}–${cte.endLine + 1}\n\n`);
-		if (cte.columns.length > 0) {
-			md.appendMarkdown('**Columns:**\n');
-			const display = cte.columns.slice(0, 30);
-			for (const col of display) {
-				md.appendMarkdown(`- \`${col.name}\` _(line ${col.line + 1})_\n`);
-			}
-			if (cte.columns.length > 30) {
-				md.appendMarkdown(`- _...and ${cte.columns.length - 30} more_\n`);
+	private _wrapWithAliasHeader(alias: string, targetName: string, inner: vscode.Hover): vscode.Hover {
+		const md = this._md();
+		md.appendMarkdown(`$(${SqlIcons.tableAlias}) **\`${alias}\`** \u2014 alias for \`${targetName}\``);
+		md.appendMarkdown('\n\n---\n\n');
+		const raw = inner.contents as unknown as vscode.MarkdownString | vscode.MarkdownString[];
+		const innerMd = Array.isArray(raw) ? raw[0] : raw;
+		md.appendMarkdown(innerMd.value);
+		return new vscode.Hover(md);
+	}
+
+	private _buildCteHover(
+		cte: { name: string; line: number; endLine: number; columns: { name: string; line: number }[] },
+		refToken: TableRefToken,
+		model: DocumentModel,
+		docUri: vscode.Uri,
+	): vscode.Hover {
+		const md = this._md();
+		const cteLink = this._lineLink(docUri, cte.line, cte.name);
+		md.appendMarkdown(`$(${SqlIcons.cte}) **${cteLink}** — CTE (${cte.columns.length} columns, lines ${cte.line + 1}–${cte.endLine + 1})`);
+
+		const cteByName = new Map(model.ctes.map(c => [c.name.toLowerCase(), c]));
+		const chain = ParseService.traceCteLineage(refToken, model);
+		const upstream = chain.slice(1);
+		if (upstream.length > 0) {
+			md.appendMarkdown('\n\n---\n\n**Lineage**  \n');
+			for (let i = 0; i < upstream.length; i++) {
+				const indent = '&nbsp;&nbsp;'.repeat(i * 2);
+				const arrow = i === 0 ? '' : `$(${SqlIcons.lineage}) `;
+				const label = this._chainEntryLabel(upstream[i], cteByName, docUri);
+				md.appendMarkdown(`${indent}${arrow}${label}  \n`);
 			}
 		}
+
+		if (cte.columns.length > 0) {
+			md.appendMarkdown('\n\n---\n\n**Columns**  \n');
+			const display = cte.columns.slice(0, 30);
+			for (const col of display) {
+				const label = this._lineLink(docUri, col.line, col.name);
+				md.appendMarkdown(`$(${SqlIcons.column}) ${label}  \n`);
+			}
+			if (cte.columns.length > 30) {
+				md.appendMarkdown(`\n_...and ${cte.columns.length - 30} more_`);
+			}
+		}
+
 		return new vscode.Hover(md);
 	}
 
@@ -283,31 +398,46 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		column: string,
 		alias?: string,
 		chain?: string[],
+		model?: DocumentModel,
+		docUri?: vscode.Uri,
 	): vscode.Hover {
-		const md = new vscode.MarkdownString();
-		md.appendMarkdown(`**\`${column}\`** — column\n\n`);
+		const md = this._md();
+		md.appendMarkdown(`$(${SqlIcons.column}) **\`${column}\`** — column`);
+
 		if (chain && chain.length > 0) {
+			md.appendMarkdown('\n\n---\n\n**Lineage**  \n');
+			const cteMap = new Map(model?.ctes.map(c => [c.name.toLowerCase(), c]) ?? []);
 			for (let i = 0; i < chain.length; i++) {
 				const indent = '&nbsp;&nbsp;'.repeat(i * 2);
-				const arrow = i === 0 ? '' : '→ ';
-				md.appendMarkdown(`${indent}${arrow}\`${chain[i]}\`  \n`);
+				const arrow = i === 0 ? '' : `$(${SqlIcons.lineage}) `;
+				const label = this._chainEntryLabel(chain[i], cteMap, docUri);
+				md.appendMarkdown(`${indent}${arrow}${label}  \n`);
 			}
 		} else if (alias) {
-			md.appendMarkdown(`- **Source:** \`${alias}\`\n`);
+			const cteMap = new Map(model?.ctes.map(c => [c.name.toLowerCase(), c]) ?? []);
+			const label = this._chainEntryLabel(alias, cteMap, docUri);
+			md.appendMarkdown(`\n\n---\n\n$(${SqlIcons.lineage}) ${label}`);
 		}
+
 		return new vscode.Hover(md);
 	}
 
-	private _buildAliasHover(alias: string, cols: string[]): vscode.Hover {
-		const md = new vscode.MarkdownString();
-		md.appendMarkdown(`**\`${alias}\`** — CTE / table alias (${cols.length} columns)\n\n`);
-		const display = cols.slice(0, 20);
-		for (const col of display) {
-			md.appendMarkdown(`- \`${col}\`\n`);
+	private _buildAliasHover(alias: string, cols: { name: string; line: number }[], docUri?: vscode.Uri): vscode.Hover {
+		const md = this._md();
+		md.appendMarkdown(`$(${SqlIcons.tableAlias}) **\`${alias}\`** — alias (${cols.length} columns)`);
+
+		if (cols.length > 0) {
+			md.appendMarkdown('\n\n---\n\n');
+			const display = cols.slice(0, 20);
+			for (const col of display) {
+				const label = docUri ? this._lineLink(docUri, col.line, col.name) : `\`${col.name}\``;
+				md.appendMarkdown(`$(${SqlIcons.column}) ${label}  \n`);
+			}
+			if (cols.length > 20) {
+				md.appendMarkdown(`\n_...and ${cols.length - 20} more_`);
+			}
 		}
-		if (cols.length > 20) {
-			md.appendMarkdown(`- _...and ${cols.length - 20} more_\n`);
-		}
+
 		return new vscode.Hover(md);
 	}
 }

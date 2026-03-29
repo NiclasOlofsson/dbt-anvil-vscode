@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!-- Document shape with folded top-right corner -->
+  <path d="M2 1 L10 1 L14 5 L14 15 L2 15 Z" fill="#d4a017" opacity="0.9"/>
+  <path d="M10 1 L10 5 L14 5 Z" fill="#b8870e"/>
+  <!-- SQL label -->
+  <text x="8" y="11.5" font-family="Arial,sans-serif" font-size="4.5" font-weight="700" fill="#1e1e1e" text-anchor="middle" dominant-baseline="middle" letter-spacing="0.2">SQL</text>
+</svg>

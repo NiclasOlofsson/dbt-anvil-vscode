@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
+import { DbtSymbolKind } from '../providers/icons';
 
 /**
  * Workspace-wide symbol search (Ctrl+T / Cmd+T).
@@ -28,7 +29,7 @@ export class DbtWorkspaceSymbolProvider implements vscode.WorkspaceSymbolProvide
 			if (model.name.toLowerCase().includes(lowerQuery)) {
 				results.push(new vscode.SymbolInformation(
 					model.name,
-					vscode.SymbolKind.Class,
+					DbtSymbolKind.model,
 					`${model.materialisation} — ${model.packageName}`,
 					new vscode.Location(
 						vscode.Uri.file(model.path),
@@ -44,7 +45,7 @@ export class DbtWorkspaceSymbolProvider implements vscode.WorkspaceSymbolProvide
 			if (displayName.toLowerCase().includes(lowerQuery) || source.name.toLowerCase().includes(lowerQuery)) {
 				results.push(new vscode.SymbolInformation(
 					displayName,
-					vscode.SymbolKind.Interface,
+					DbtSymbolKind.source,
 					`source — ${source.schema}`,
 					new vscode.Location(
 						// Sources don't have a file path, use a placeholder
@@ -61,7 +62,7 @@ export class DbtWorkspaceSymbolProvider implements vscode.WorkspaceSymbolProvide
 				const args = macro.arguments.map(a => a.name).join(', ');
 				results.push(new vscode.SymbolInformation(
 					macro.name,
-					vscode.SymbolKind.Function,
+					DbtSymbolKind.macro,
 					`${macro.packageName}${args ? ` — (${args})` : ''}`,
 					new vscode.Location(
 						vscode.Uri.file(''),
