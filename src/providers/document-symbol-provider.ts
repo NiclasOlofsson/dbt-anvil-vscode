@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ParseService } from '../services/parse-service';
 import type { ILogger } from '../types/logger';
+import { SqlSymbolKind } from './icons';
 
 /**
  * Document symbols for the Outline panel.
@@ -59,7 +60,7 @@ export class DbtDocumentSymbolProvider implements vscode.DocumentSymbolProvider 
 			const sym = new vscode.DocumentSymbol(
 				cte.name,
 				'CTE',
-				vscode.SymbolKind.Function,
+				SqlSymbolKind.cte,
 				range,
 				selectionRange,
 			);

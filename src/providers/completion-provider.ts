@@ -3,6 +3,7 @@ import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
 import { ParseService } from '../services/parse-service';
 import { isLinePositionInComment } from './comment-utils';
+import { DbtCompletionKind } from './icons';
 
 /**
  * Completions for ref(), source(), macros, columns, and CTE/table names
@@ -105,7 +106,7 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 
 			this.logger.debug(`Completion: ${cols.length} columns for '${alias}': [${cols.slice(0, 5).join(', ')}${cols.length > 5 ? ', ...' : ''}]`);
 			return cols.map((col, i) => {
-				const item = new vscode.CompletionItem(col, vscode.CompletionItemKind.Field);
+			const item = new vscode.CompletionItem(col, DbtCompletionKind.column);
 				item.detail = `column of ${alias}`;
 				item.sortText = String(i).padStart(4, '0');
 				return item;
@@ -137,7 +138,7 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 
 			let i = 0;
 			return Array.from(colSources.entries()).map(([col, sources]) => {
-				const item = new vscode.CompletionItem(col, vscode.CompletionItemKind.Field);
+				const item = new vscode.CompletionItem(col, DbtCompletionKind.column);
 				item.detail = sources.length === 1 ? `column of ${sources[0]}` : sources.join(', ');
 				item.sortText = String(i++).padStart(4, '0');
 				return item;
@@ -171,7 +172,7 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 		if (token.isCancellationRequested) return [];
 		if (model) {
 			for (const cte of model.ctes) {
-				const item = new vscode.CompletionItem(cte.name, vscode.CompletionItemKind.Struct);
+				const item = new vscode.CompletionItem(cte.name, DbtCompletionKind.cte);
 				item.detail = `CTE (${cte.columns.length} columns)`;
 				item.sortText = String(sortIndex++).padStart(4, '0');
 				items.push(item);
@@ -204,7 +205,7 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 			if (!byName.has(model.name)) {
 				byName.set(model.name, []);
 			}
-			const item = new vscode.CompletionItem(model.name, vscode.CompletionItemKind.Reference);
+			const item = new vscode.CompletionItem(model.name, DbtCompletionKind.modelRef);
 			item.detail = `${model.materialisation} — ${model.packageName}`;
 			if (model.description) {
 				item.documentation = new vscode.MarkdownString(model.description);
@@ -238,7 +239,7 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 		}
 
 		return [...names].sort().map(name => {
-			const item = new vscode.CompletionItem(name, vscode.CompletionItemKind.Module);
+			const item = new vscode.CompletionItem(name, DbtCompletionKind.sourceName);
 			item.detail = 'dbt source';
 			return item;
 		});
@@ -251,7 +252,7 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 		const items: vscode.CompletionItem[] = [];
 		for (const source of index.sources.values()) {
 			if (source.sourceName === sourceName) {
-				const item = new vscode.CompletionItem(source.name, vscode.CompletionItemKind.Field);
+				const item = new vscode.CompletionItem(source.name, DbtCompletionKind.sourceTable);
 				item.detail = `${source.schema}`;
 				if (source.description) {
 					item.documentation = new vscode.MarkdownString(source.description);
@@ -268,7 +269,7 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 
 		const items: vscode.CompletionItem[] = [];
 		for (const macro of index.macros.values()) {
-			const item = new vscode.CompletionItem(macro.name, vscode.CompletionItemKind.Function);
+			const item = new vscode.CompletionItem(macro.name, DbtCompletionKind.macro);
 			item.detail = macro.packageName;
 
 			const args = macro.arguments;

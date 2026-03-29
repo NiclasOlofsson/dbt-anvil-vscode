@@ -125,7 +125,7 @@ describe('DbtHoverProvider — CTE hover via ParseService', () => {
 		const result = await provider.provideHover(doc, pos, mockToken);
 
 		expect(result).toBeDefined();
-		const content = (result!.contents as unknown as vscode.MarkdownString).value;
+		const content = (result!.contents as vscode.MarkdownString).value;
 		expect(content).toContain('base');
 		expect(content).toContain('CTE');
 		expect(content).toContain('3 columns');
@@ -147,7 +147,7 @@ describe('DbtHoverProvider — CTE hover via ParseService', () => {
 		const result = await provider.provideHover(doc, pos, mockToken);
 
 		expect(result).toBeDefined();
-		const content = (result!.contents as unknown as vscode.MarkdownString).value;
+		const content = (result!.contents as vscode.MarkdownString).value;
 		expect(content).toContain('enriched');
 		expect(content).toContain('2 columns');
 	});
@@ -250,7 +250,7 @@ describe('DbtHoverProvider — wildcard column list (*)', () => {
 		const result = await provider.provideHover(doc, pos, mockToken);
 
 		expect(result).toBeDefined();
-		const content = (result!.contents as unknown as vscode.MarkdownString).value;
+		const content = (result!.contents as vscode.MarkdownString).value;
 		expect(content).toContain('street');
 		expect(content).toContain('— column');
 		expect(content).toContain('addr_cte'); // lineage chain shows CTE name
