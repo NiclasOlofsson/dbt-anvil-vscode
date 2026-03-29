@@ -37,6 +37,11 @@ import { StatusBarManager } from './views/status-bar';
 import { DbtDiagnosticsProvider } from './providers/diagnostics-provider';
 import { VsTestController } from './views/vs-test-controller';
 import { CteTestRunner } from './dbt/cte-test-runner';
+import { ModelProfiler } from './dbt/model-profiler';
+import { ProfileResultPersistence } from './dbt/profile-result-persistence';
+import { ProfilerDecorationProvider } from './providers/profiler-decoration-provider';
+import { ProfilerResultsProvider } from './views/profiler-results-provider';
+import { ProfilerWaterfallProvider } from './views/profiler-waterfall-provider';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
 	// -------- Bootstrap logging & service container --------
@@ -153,6 +158,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	manifestWatcher.setParseService(parseService);
 	manifestWatcher.setCompileCache(compileCache);
 
+	// -------- Model profiler --------
+	const modelProfiler = new ModelProfiler(parseService, databaseProvider, manifestIndexer, logger);
+	const profileResultPersistence = new ProfileResultPersistence(context, logger);
+	modelProfiler.initPersistence(profileResultPersistence);
+	container.setModelProfiler(modelProfiler);
+	context.subscriptions.push(modelProfiler);
+
 	// -------- Diagnostics provider --------
 	const diagnosticsProvider = new DbtDiagnosticsProvider(executionService, manifestIndexer, statusBar, projectDir, logger, parseService, parseService.onAliasesReady, manifestWatcher.onIndexRebuild, parseService.onSqlglotWarnings);
 	context.subscriptions.push(diagnosticsProvider);
@@ -186,6 +198,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.window.registerTreeDataProvider('dbt-studio.testResults', testResultsProvider),
 		vscode.window.registerWebviewViewProvider(LineageGraphProvider.viewId, lineageGraphProvider),
 		vscode.window.registerTreeDataProvider('dbt-studio.testExplorer', testExplorerProvider),
+	);
+
+	// -------- Profiler views --------
+	const profilerResultsProvider = new ProfilerResultsProvider(modelProfiler);
+	const profilerWaterfallProvider = new ProfilerWaterfallProvider(modelProfiler, context.extensionUri);
+	const profilerDecorationProvider = new ProfilerDecorationProvider(modelProfiler);
+	context.subscriptions.push(
+		profilerResultsProvider,
+		profilerDecorationProvider,
+		profilerWaterfallProvider,
+		vscode.window.registerTreeDataProvider(ProfilerResultsProvider.viewId, profilerResultsProvider),
+		vscode.window.registerWebviewViewProvider(ProfilerWaterfallProvider.viewId, profilerWaterfallProvider),
 	);
 
 	// -------- Native VS Code Testing panel --------
@@ -242,6 +266,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const referenceProvider = new DbtReferenceProvider(manifestIndexer, logger, parseService);
 	const renameProvider = new DbtRenameProvider(manifestIndexer, manifestLoader, logger);
 	const codeLensProvider = new DbtCodeLensProvider(manifestIndexer, logger);
+	codeLensProvider.setProfiler(modelProfiler);
 	const documentSymbolProvider = new DbtDocumentSymbolProvider(manifestIndexer, logger, parseService);
 	const workspaceSymbolProvider = new DbtWorkspaceSymbolProvider(manifestIndexer, logger);
 	const signatureHelpProvider = new DbtSignatureHelpProvider(manifestIndexer, logger);
@@ -517,6 +542,47 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 		vscode.commands.registerCommand('dbt-studio.openSettings', () => {
 			void vscode.commands.executeCommand('workbench.action.openSettings', '@ext:nickeolofsson.dbt-studio-vscode');
+		}),
+
+		// ---- Profiler commands ----
+
+		vscode.commands.registerCommand('dbt-studio.profiler.profileModel', async () => {
+			const editor = vscode.window.activeTextEditor;
+			if (!editor || editor.document.languageId !== 'jinja-sql') {
+				void vscode.window.showWarningMessage('Open a dbt SQL model file to profile it.');
+				return;
+			}
+			void vscode.commands.executeCommand('setContext', 'dbt-studio.profilingActive', true);
+			void vscode.commands.executeCommand(`${ProfilerWaterfallProvider.viewId}.focus`);
+			try {
+				await modelProfiler.profileDocument(editor.document);
+			} catch (err) {
+				void vscode.window.showErrorMessage(`Profile failed: ${err}`);
+			} finally {
+				void vscode.commands.executeCommand('setContext', 'dbt-studio.profilingActive', false);
+			}
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.profiler.clearResults', () => {
+			modelProfiler.clearAll();
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.profiler.cancelProfiling', () => {
+			const editor = vscode.window.activeTextEditor;
+			if (!editor) return;
+			const result = modelProfiler.getResultForFile(editor.document.fileName);
+			if (result?.status === 'running') {
+				modelProfiler.cancelProfiling(result.modelId);
+			}
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.profiler.goToCte', async (filePath: string, line: number) => {
+			const doc = await vscode.workspace.openTextDocument(filePath);
+			const pos = new vscode.Position(line, 0);
+			await vscode.window.showTextDocument(doc, {
+				selection: new vscode.Range(pos, pos),
+				preserveFocus: false,
+			});
 		}),
 	);
 

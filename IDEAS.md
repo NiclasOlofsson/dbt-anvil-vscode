@@ -6,6 +6,8 @@ However,it can't visualize aggregations correctly, like count(orders). It should
 
 ## Process bridge improvment considerations
 
+(DONE)
+
 They're completely separable. The four sqlglot handlers (parse_document, get_column_lineage, get_scope_columns, get_columns) are:
 
 Zero dbt imports
@@ -38,3 +40,8 @@ Have something running in the background that can profile models in the database
 ## Unit testing
 
 Code action > Generate unit test for this model/CTE.
+
+## copilot tools
+
+It's a pretty big difference between running the copilot tools in the extension vs how they felt when running them with MCP. The progress reporting was way better with the old MCP tools. However, now that we are INSIDE vscode, with an extension I expect us to be able to improve on the visual feedback of the tools. Lets investigate this and figure out a good progress reporting for the tools like test/run/build etc.
+

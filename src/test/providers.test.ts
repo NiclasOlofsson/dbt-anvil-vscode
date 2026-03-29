@@ -270,13 +270,14 @@ describe('DbtCodeLensProvider', () => {
 		});
 
 		const result = provider.provideCodeLenses(doc, mockToken);
-		expect(result.length).toBe(4);
+		expect(result.length).toBe(5);
 
 		const titles = result.map(l => l.command?.title);
 		expect(titles).toContain('$(run) Run');
 		expect(titles).toContain('$(package) Build');
 		expect(titles).toContain('$(beaker) Test');
 		expect(titles).toContain('$(gear) Compile');
+		expect(titles).toContain('$(clock) Profile');
 
 		expect(result[0].command?.command).toBe('dbt-studio.runModel');
 	});

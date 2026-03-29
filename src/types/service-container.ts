@@ -6,6 +6,7 @@ import type { ManifestLoader } from '../dbt/manifest-loader';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ManifestWatcher } from '../indexing/manifest-watcher';
 import type { DatabaseProvider } from '../providers/database/database-provider';
+import type { ModelProfiler } from '../dbt/model-profiler';
 
 export interface ServiceContainerOptions {
 	extensionContext: vscode.ExtensionContext;
@@ -34,6 +35,7 @@ export class ServiceContainer {
 	private _manifestIndexer: ManifestIndexer | null = null;
 	private _manifestWatcher: ManifestWatcher | null = null;
 	private _executionService: DbtExecutionService | null = null;
+	private _modelProfiler: ModelProfiler | null = null;
 
 	private constructor(options: ServiceContainerOptions) {
 		this._context = options.extensionContext;
@@ -146,5 +148,16 @@ export class ServiceContainer {
 			throw new Error('DatabaseProvider is not yet initialized.');
 		}
 		return this._databaseProvider;
+	}
+
+	setModelProfiler(profiler: ModelProfiler): void {
+		this._modelProfiler = profiler;
+	}
+
+	getModelProfiler(): ModelProfiler {
+		if (!this._modelProfiler) {
+			throw new Error('ModelProfiler is not yet initialized.');
+		}
+		return this._modelProfiler;
 	}
 }

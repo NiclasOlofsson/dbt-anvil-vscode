@@ -309,11 +309,13 @@ def handle_compile_inline(
         return
 
     args = [
+        "--no-populate-cache",
         "compile",
         "--inline",
         sql,
         "--output",
         "json",
+        "--no-introspect",
         "--project-dir",
         project_dir,
         "--profiles-dir",

@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 import type { ILogger } from '../../types/logger';
-import type { DbtExecutionService } from '../../dbt/execution-service';
+import type { DbtExecutionService, DbtJobPriority } from '../../dbt/execution-service';
 import type { DatabricksConnection } from './profiles-reader';
 import type { CancelSignal, ColumnDefinition, DatabaseProvider, QueryResult } from './database-provider';
 
@@ -100,10 +100,13 @@ export class DatabricksProvider implements DatabaseProvider {
 	// DatabaseProvider interface
 	// -------------------------------------------------------------------------
 
-	async query(sql: string, limit: number, signal?: CancelSignal): Promise<QueryResult> {
+	async query(sql: string, limit: number, signal?: CancelSignal, _priority?: DbtJobPriority): Promise<QueryResult> {
+		const t0 = performance.now();
 		const compiled = await this._maybeCompile(sql);
 		this.logger.debug('DatabricksProvider: executing query directly (bypassing dbt)');
-		return this._executeStatement(compiled, limit < 0 ? undefined : limit, signal);
+		const result = await this._executeStatement(compiled, limit < 0 ? undefined : limit, signal);
+		result.executionTimeMs = performance.now() - t0;
+		return result;
 	}
 
 	async describe(name: string, opts?: { isSource?: boolean; sourceName?: string; qualifiedName?: string }): Promise<ColumnDefinition[]> {
@@ -234,6 +237,7 @@ export class DatabricksProvider implements DatabaseProvider {
 			columns,
 			rows,
 			rowCount: response.manifest?.total_row_count ?? rows.length,
+			executionTimeMs: 0, // overwritten by query() after measuring round-trip
 		};
 	}
 

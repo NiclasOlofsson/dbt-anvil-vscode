@@ -1,3 +1,5 @@
+import type { DbtJobPriority } from '../../dbt/execution-service';
+
 /** Minimal AbortSignal surface area used by database provider implementations. */
 export interface CancelSignal {
 	readonly aborted: boolean;
@@ -9,6 +11,8 @@ export interface QueryResult {
 	columns: string[];
 	rows: Record<string, unknown>[];
 	rowCount: number;
+	/** Wall-clock milliseconds from sending the request to receiving the full response. */
+	executionTimeMs: number;
 }
 
 export interface ColumnDefinition {
@@ -32,11 +36,13 @@ export interface DatabaseProvider {
 	 * Execute a SQL query and return rows.
 	 * The SQL may contain Jinja templating; implementations are responsible for
 	 * compiling it before execution when bypassing dbt show.
-	 * @param sql    Raw or Jinja SQL to execute.
-	 * @param limit  Row limit (-1 for no limit).
-	 * @param signal Optional AbortSignal to cancel the query in-flight.
+	 * @param sql      Raw or Jinja SQL to execute.
+	 * @param limit    Row limit (-1 for no limit).
+	 * @param signal   Optional AbortSignal to cancel the query in-flight.
+	 * @param priority Queue priority for bridge-routed adapters. Defaults to Tool.
+	 *                 Pass Priority.Background for low-priority background tasks.
 	 */
-	query(sql: string, limit: number, signal?: CancelSignal): Promise<QueryResult>;
+	query(sql: string, limit: number, signal?: CancelSignal, priority?: DbtJobPriority): Promise<QueryResult>;
 
 	/**
 	 * Return the column definitions for a dbt model or source.
