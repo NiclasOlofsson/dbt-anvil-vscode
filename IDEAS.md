@@ -1,6 +1,9 @@
 # Features to add
 
 ## Graph lineage, for aggregations
+
+(DONE)
+
 Currently it can provide a trace through the model on a column level for "asdfsf" + "adsaf" columns. Looks fancy. Example fullname -> firstname, lastname.
 However,it can't visualize aggregations correctly, like count(orders). It should be able to at least visualize these aggregations somehow. Maybe a dotted line or something to the model where it is origin is (like orders for count(orders))
 
@@ -35,6 +38,8 @@ Have intersting information that we should look into.
 
 ## Build profiler
 
+(DONE)
+
 Have something running in the background that can profile models in the database.
 
 ## Unit testing
@@ -45,3 +50,6 @@ Code action > Generate unit test for this model/CTE.
 
 It's a pretty big difference between running the copilot tools in the extension vs how they felt when running them with MCP. The progress reporting was way better with the old MCP tools. However, now that we are INSIDE vscode, with an extension I expect us to be able to improve on the visual feedback of the tools. Lets investigate this and figure out a good progress reporting for the tools like test/run/build etc.
 
+## No more fluff
+
+Make replacement for SQL fluff. Completely. Formatting and .. well we have syntax checks already. However, we might want to see if we can do a semantic or pattern type of checks too .. maybe (otherwise we can just use sqlfluff for some of these checks). But i mean, we have the parser. how hard can it be :D

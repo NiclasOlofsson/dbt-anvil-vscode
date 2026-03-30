@@ -183,7 +183,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	lineageGraphProvider.setExecutionService(executionService);
 	// Initialise context keys so the correct toolbar icons show from the start
 	void vscode.commands.executeCommand('setContext', 'dbt-studio.lineageFollowActive', lineageGraphProvider.followActive);
-	void vscode.commands.executeCommand('setContext', 'dbt-studio.lineageShowTests', lineageGraphProvider.showTests);
+	void vscode.commands.executeCommand('setContext', 'dbt-studio.lineage.showTests', lineageGraphProvider.showTests);
 	void vscode.commands.executeCommand('setContext', 'dbt-studio.explorerFollowActive', modelExplorerProvider.followActive);
 	void vscode.commands.executeCommand('setContext', ProfilerDecorationProvider.contextKey, true);
 	const testExplorerProvider = new TestExplorerProvider(manifestIndexer, manifestLoader, logger);
@@ -294,10 +294,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// -------- Register commands --------
 	context.subscriptions.push(
 		vscode.commands.registerCommand('dbt-studio.suppressSqlFluffWarning', async () => {
-			await vscode.workspace.getConfiguration('dbt-studio').update('suppressSqlFluffWarning', true, vscode.ConfigurationTarget.Global);
+			await vscode.workspace.getConfiguration('dbt-studio').update('notifications.suppressSqlFluffWarning', true, vscode.ConfigurationTarget.Global);
 		}),
 		vscode.commands.registerCommand('dbt-studio.suppressAutoSaveWarning', async () => {
-			await vscode.workspace.getConfiguration('dbt-studio').update('suppressAutoSaveWarning', true, vscode.ConfigurationTarget.Global);
+			await vscode.workspace.getConfiguration('dbt-studio').update('notifications.suppressAutoSaveWarning', true, vscode.ConfigurationTarget.Global);
 		}),
 		vscode.commands.registerCommand('dbt-studio.goToLine', async (args: { uri: string; line: number }) => {
 			const uri = vscode.Uri.parse(args.uri);

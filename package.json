@@ -334,7 +334,7 @@
 					"command": "dbt-studio.toggleLineageTests",
 					"when": "view == dbt-studio.lineageGraph",
 					"group": "navigation@2",
-					"checked": "dbt-studio.lineageShowTests"
+					"checked": "dbt-studio.lineage.showTests"
 				},
 				{
 					"command": "dbt-studio.refreshTestExplorer",
@@ -382,13 +382,9 @@
 		},
 		"configuration": [
 			{
+				"id": "dbt-studio",
 				"title": "dbt Studio",
 				"properties": {
-					"dbt-studio.lineageShowTests": {
-						"type": "boolean",
-						"default": true,
-						"description": "Show test nodes in the lineage graph."
-					},
 					"dbt-studio.profilesDir": {
 						"type": "string",
 						"default": "",
@@ -409,7 +405,19 @@
 				}
 			},
 			{
-				"title": "dbt Studio > Providers",
+				"id": "dbt-studio.lineage",
+				"title": "Lineage",
+				"properties": {
+					"dbt-studio.lineage.showTests": {
+						"type": "boolean",
+						"default": true,
+						"description": "Show test nodes in the lineage graph."
+					}
+				}
+			},
+			{
+				"id": "dbt-studio.providers",
+				"title": "Providers",
 				"properties": {
 					"dbt-studio.providers.codeLens": {
 						"type": "boolean",
@@ -425,12 +433,7 @@
 						"type": "boolean",
 						"default": true,
 						"markdownDescription": "**Enabled**: Include dbt models, sources, and macros in workspace symbol search (Ctrl+T / Cmd+T)."
-					}
-				}
-			},
-			{
-				"title": "dbt Studio > Providers > SQL",
-				"properties": {
+					},
 					"dbt-studio.providers.sql.hover": {
 						"type": "boolean",
 						"default": true,
@@ -471,21 +474,6 @@
 						"default": true,
 						"markdownDescription": "**Enabled**: Show dbt parse errors, unknown `ref()`/`source()` calls, and invalid column names in the Problems panel. Disabling this clears all dbt Studio diagnostics immediately."
 					},
-					"dbt-studio.suppressSqlFluffWarning": {
-						"type": "boolean",
-						"default": false,
-						"markdownDescription": "Suppress the one-time notice about SQLFluff being active alongside dbt Studio."
-					},
-					"dbt-studio.suppressAutoSaveWarning": {
-						"type": "boolean",
-						"default": false,
-						"markdownDescription": "Suppress the warning about auto-save triggering frequent dbt parse runs."
-					}
-				}
-			},
-			{
-				"title": "dbt Studio > Providers > YAML",
-				"properties": {
 					"dbt-studio.providers.yaml.hover": {
 						"type": "boolean",
 						"default": true,
@@ -499,7 +487,24 @@
 				}
 			},
 			{
-				"title": "dbt Studio > Database",
+				"id": "dbt-studio.notifications",
+				"title": "Notifications",
+				"properties": {
+					"dbt-studio.notifications.suppressSqlFluffWarning": {
+						"type": "boolean",
+						"default": false,
+						"markdownDescription": "Suppress the notice about SQLFluff being active alongside dbt Studio."
+					},
+					"dbt-studio.notifications.suppressAutoSaveWarning": {
+						"type": "boolean",
+						"default": false,
+						"markdownDescription": "Suppress the warning about auto-save triggering frequent dbt parse runs."
+					}
+				}
+			},
+			{
+				"id": "dbt-studio.database",
+				"title": "Database",
 				"properties": {
 					"dbt-studio.database.preferNativeAdapter": {
 						"type": "boolean",
