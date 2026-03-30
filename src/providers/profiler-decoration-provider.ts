@@ -13,28 +13,39 @@ export class ProfilerDecorationProvider implements vscode.Disposable {
 
 	private _visible = true;
 
-	// Inline text + gutter icon + optional background + overview ruler — one type per tier
+	// Inline text (+ gutter icon for warm/hot) — range = definition line only
 	private readonly _coolType = vscode.window.createTextEditorDecorationType({
 		after: { margin: '0 0 0 2em' },
-		overviewRulerColor: new vscode.ThemeColor('charts.green'),
-		overviewRulerLane: vscode.OverviewRulerLane.Right,
 		isWholeLine: false,
 		rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
 	});
 
 	private readonly _warmType = vscode.window.createTextEditorDecorationType({
 		after: { margin: '0 0 0 2em' },
-		overviewRulerColor: new vscode.ThemeColor('charts.yellow'),
-		overviewRulerLane: vscode.OverviewRulerLane.Right,
+		gutterIconPath: vscode.Uri.parse('data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M7.56 2L1.46 12.5h12.21L7.56 2zm0 3.5l.44 3.5H7.12l.44-3.5zm0 5.5a.67.67 0 110 1.34.67.67 0 010-1.34z" fill="#cca700"/></svg>')),
+		gutterIconSize: 'contain',
 		isWholeLine: false,
 		rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
 	});
 
 	private readonly _hotType = vscode.window.createTextEditorDecorationType({
 		after: { margin: '0 0 0 2em' },
+		gutterIconPath: vscode.Uri.parse('data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M9 1c0 3-2 4-2 6s1.5 3 3 3c-1 1-2.5 1.5-4 1-2-.7-3-2.5-3-4.5C3 4 6 2 9 1z" fill="#f14c4c"/><path d="M10 8c0 1.5-1 2.5-2 3 .5-1 .5-2-.5-3C8 9.5 7 10 6.5 11 6 9 7 7.5 8 6c0 1 .5 1.5 2 2z" fill="#e8a419"/></svg>')),
+		gutterIconSize: 'contain',
+		isWholeLine: false,
+		rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
+	});
+
+	// Overview ruler only — range = full CTE body (warm/hot only, cool has no ruler)
+	private readonly _warmRulerType = vscode.window.createTextEditorDecorationType({
+		overviewRulerColor: new vscode.ThemeColor('charts.yellow'),
+		overviewRulerLane: vscode.OverviewRulerLane.Right,
+		rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
+	});
+
+	private readonly _hotRulerType = vscode.window.createTextEditorDecorationType({
 		overviewRulerColor: new vscode.ThemeColor('charts.red'),
 		overviewRulerLane: vscode.OverviewRulerLane.Right,
-		isWholeLine: false,
 		rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
 	});
 
@@ -77,6 +88,8 @@ export class ProfilerDecorationProvider implements vscode.Disposable {
 		this._coolType.dispose();
 		this._warmType.dispose();
 		this._hotType.dispose();
+		this._warmRulerType.dispose();
+		this._hotRulerType.dispose();
 		this._totalType.dispose();
 		this._runningType.dispose();
 		for (const d of this._disposables) d.dispose();
@@ -110,6 +123,8 @@ export class ProfilerDecorationProvider implements vscode.Disposable {
 		editor.setDecorations(this._coolType, []);
 		editor.setDecorations(this._warmType, []);
 		editor.setDecorations(this._hotType, []);
+		editor.setDecorations(this._warmRulerType, []);
+		editor.setDecorations(this._hotRulerType, []);
 		editor.setDecorations(this._totalType, []);
 		editor.setDecorations(this._runningType, []);
 	}
@@ -127,6 +142,8 @@ export class ProfilerDecorationProvider implements vscode.Disposable {
 			editor.setDecorations(this._coolType, []);
 			editor.setDecorations(this._warmType, []);
 			editor.setDecorations(this._hotType, []);
+			editor.setDecorations(this._warmRulerType, []);
+			editor.setDecorations(this._hotRulerType, []);
 			editor.setDecorations(this._totalType, []);
 			return;
 		}
@@ -136,7 +153,9 @@ export class ProfilerDecorationProvider implements vscode.Disposable {
 
 		const cool: vscode.DecorationOptions[] = [];
 		const warm: vscode.DecorationOptions[] = [];
+		const warmRuler: vscode.DecorationOptions[] = [];
 		const hot: vscode.DecorationOptions[] = [];
+		const hotRuler: vscode.DecorationOptions[] = [];
 
 		for (const cte of result.cteProfiles) {
 			const line = cte.definitionLine;
@@ -145,17 +164,16 @@ export class ProfilerDecorationProvider implements vscode.Disposable {
 			const endLine = Math.min(cte.endLine, editor.document.lineCount - 1);
 			const defLineLen = editor.document.lineAt(line).text.length;
 
-			// Inline text anchored at definition line end; ruler spans full CTE body
+			// Inline text + gutter icon: range anchored to definition line only
+			// Overview ruler: separate range spanning full CTE body
 			const inlineRange = new vscode.Range(line, defLineLen, line, defLineLen);
 			const rulerRange = new vscode.Range(line, 0, endLine, 0);
 
 			const fraction = cte.queryTimeMs / maxStepMs;
 			const label = _formatLabel(cte);
-			const hover = _hoverTooltip(cte);
 
 			const inlineOpts: vscode.DecorationOptions = {
 				range: inlineRange,
-				hoverMessage: hover,
 				renderOptions: {
 					after: {
 						contentText: label,
@@ -164,20 +182,23 @@ export class ProfilerDecorationProvider implements vscode.Disposable {
 					},
 				},
 			};
-			const rulerOpts: vscode.DecorationOptions = { range: rulerRange, hoverMessage: hover };
 
 			if (fraction >= 0.5) {
-				hot.push(inlineOpts, rulerOpts);
+				hot.push(inlineOpts);
+				hotRuler.push({ range: rulerRange });
 			} else if (fraction >= 0.2) {
-				warm.push(inlineOpts, rulerOpts);
+				warm.push(inlineOpts);
+				warmRuler.push({ range: rulerRange });
 			} else {
-				cool.push(inlineOpts, rulerOpts);
+				cool.push(inlineOpts);
 			}
 		}
 
 		editor.setDecorations(this._coolType, cool);
 		editor.setDecorations(this._warmType, warm);
 		editor.setDecorations(this._hotType, hot);
+		editor.setDecorations(this._warmRulerType, warmRuler);
+		editor.setDecorations(this._hotRulerType, hotRuler);
 
 		// Decorate the final SELECT line (the statement after the closing WITH block)
 		const totalLine = _findFinalSelectLine(editor.document);
@@ -207,19 +228,6 @@ function _formatLabel(cte: CteProfile): string {
 	const ms = cte.queryTimeMs;
 	const timeStr = ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms.toFixed(0)}ms`;
 	return `  ⏱ ${timeStr} · ${_formatRows(cte.rowCount)}`;
-}
-
-function _hoverTooltip(cte: CteProfile): vscode.MarkdownString {
-	const ms = cte.queryTimeMs;
-	const timeStr = ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${ms.toFixed(0)}ms`;
-	return new vscode.MarkdownString(
-		[
-			`**${cte.name}**`, '',
-			'| | |', '|---|---|',
-			`| Query time | \`${timeStr}\` |`,
-			`| Row count | \`${cte.rowCount.toLocaleString()}\` |`,
-		].join('\n'),
-	);
 }
 
 function _formatRows(n: number): string {
