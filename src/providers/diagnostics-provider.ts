@@ -11,8 +11,8 @@ import type { StatusBarManager } from '../views/status-bar';
 import type { ILogger } from '../types/logger';
 import { ParseService } from '../services/parse-service';
 import type { SqlglotWarning } from '../services/parse-service';
-import { computeCommentRanges, isOffsetInComment } from './comment-utils';
-import type { CommentRange } from './comment-utils';
+import { computeCommentRanges, isOffsetInComment } from './common/comment-utils';
+import type { CommentRange } from './common/comment-utils';
 
 interface DbtErrorLocation {
 	filePath: string;

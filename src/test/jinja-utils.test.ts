@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { stripJinja } from '../providers/jinja-utils';
+import { stripJinja } from '../providers/common/jinja-utils';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ManifestIndex } from '../indexing/manifest-indexer';
 

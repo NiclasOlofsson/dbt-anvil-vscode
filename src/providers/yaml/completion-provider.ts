@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import type { ILogger } from '../types/logger';
+import type { ManifestIndexer } from '../../indexing/manifest-indexer';
+import type { ILogger } from '../../types/logger';
 
 /**
  * Completions inside dbt schema.yml files — model names, column names, tags,

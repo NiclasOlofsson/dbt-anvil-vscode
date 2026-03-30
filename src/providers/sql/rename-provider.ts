@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
-import type { ManifestIndexer, ManifestIndex } from '../indexing/manifest-indexer';
-import type { ManifestLoader } from '../dbt/manifest-loader';
-import type { ILogger } from '../types/logger';
+import type { ManifestIndexer, ManifestIndex } from '../../indexing/manifest-indexer';
+import type { ManifestLoader } from '../../dbt/manifest-loader';
+import type { ILogger } from '../../types/logger';
 
 /**
  * Rename ref('model') across the workspace using the manifest dependency graph.

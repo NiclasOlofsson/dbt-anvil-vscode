@@ -21,18 +21,21 @@ import { ModelExplorerProvider } from './views/model-explorer-provider';
 import { TestResultsProvider } from './views/test-results-provider';
 import { LineageGraphProvider } from './views/lineage-graph-provider';
 import { TestExplorerProvider } from './views/test-explorer-provider';
-import { DbtDefinitionProvider } from './providers/definition-provider';
-import { DbtHoverProvider } from './providers/hover-provider';
-import { DbtCompletionProvider } from './providers/completion-provider';
-import { YamlCompletionProvider } from './providers/yaml-completion-provider';
-import { YamlHoverProvider } from './providers/yaml-hover-provider';
-import { DbtReferenceProvider } from './providers/reference-provider';
-import { DbtRenameProvider } from './providers/rename-provider';
-import { DbtCodeLensProvider } from './providers/codelens-provider';
-import { DbtDocumentSymbolProvider } from './providers/document-symbol-provider';
+import { DbtDefinitionProvider } from './providers/sql/definition-provider';
+import { DbtHoverProvider } from './providers/sql/hover-provider';
+import { DbtCompletionProvider } from './providers/sql/completion-provider';
+import { YamlCompletionProvider } from './providers/yaml/completion-provider';
+import { YamlHoverProvider } from './providers/yaml/hover-provider';
+import { DbtReferenceProvider } from './providers/sql/reference-provider';
+import { DbtRenameProvider } from './providers/sql/rename-provider';
+import { SqlCodeLensProvider } from './providers/sql/codelens-provider';
+import { YamlCodeLensProvider } from './providers/yaml/codelens-provider';
+import { SqlDocumentSymbolProvider } from './providers/sql/document-symbol-provider';
+import { YamlDocumentSymbolProvider } from './providers/yaml/document-symbol-provider';
 import { DbtWorkspaceSymbolProvider } from './providers/workspace-symbol-provider';
-import { DbtSignatureHelpProvider } from './providers/signature-help-provider';
-import { DbtCodeActionProvider } from './providers/code-action-provider';
+import { DbtSignatureHelpProvider } from './providers/sql/signature-help-provider';
+import { SqlCodeActionProvider } from './providers/sql/code-action-provider';
+import { ConfigCodeActionProvider } from './providers/common/config-code-action-provider';
 import { ParseService } from './services/parse-service';
 import { StatusBarManager } from './views/status-bar';
 import { DbtDiagnosticsProvider } from './providers/diagnostics-provider';
@@ -264,13 +267,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const yamlHoverProvider = new YamlHoverProvider(manifestIndexer, logger);
 	const referenceProvider = new DbtReferenceProvider(manifestIndexer, logger, parseService);
 	const renameProvider = new DbtRenameProvider(manifestIndexer, manifestLoader, logger);
-	const codeLensProvider = new DbtCodeLensProvider(manifestIndexer, logger);
-	codeLensProvider.setProfiler(modelProfiler);
-	codeLensProvider.setPathResolver(pathResolver);
-	const documentSymbolProvider = new DbtDocumentSymbolProvider(manifestIndexer, logger, parseService);
+	const sqlCodeLensProvider = new SqlCodeLensProvider(manifestIndexer, logger);
+	sqlCodeLensProvider.setProfiler(modelProfiler);
+	sqlCodeLensProvider.setPathResolver(pathResolver);
+	const yamlCodeLensProvider = new YamlCodeLensProvider(manifestIndexer, logger);
+	const sqlDocumentSymbolProvider = new SqlDocumentSymbolProvider(manifestIndexer, logger, parseService);
+	const yamlDocumentSymbolProvider = new YamlDocumentSymbolProvider(logger);
 	const workspaceSymbolProvider = new DbtWorkspaceSymbolProvider(manifestIndexer, logger);
 	const signatureHelpProvider = new DbtSignatureHelpProvider(manifestIndexer, logger);
-	const codeActionProvider = new DbtCodeActionProvider(manifestIndexer, logger);
+	const sqlCodeActionProvider = new SqlCodeActionProvider(manifestIndexer, logger);
+	const configCodeActionProvider = new ConfigCodeActionProvider();
 
 	let providerDisposables: vscode.Disposable[] = [];
 
@@ -289,17 +295,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			vscode.languages.registerHoverProvider(yamlSelector, yamlHoverProvider),
 			vscode.languages.registerReferenceProvider(sqlSelector, referenceProvider),
 			vscode.languages.registerRenameProvider(sqlSelector, renameProvider),
-			vscode.languages.registerCodeLensProvider(sqlSelector, codeLensProvider),
-			vscode.languages.registerCodeLensProvider(yamlSelector, codeLensProvider),
-			vscode.languages.registerDocumentSymbolProvider(sqlSelector, documentSymbolProvider),
-			vscode.languages.registerDocumentSymbolProvider(yamlSelector, documentSymbolProvider),
+			vscode.languages.registerCodeLensProvider(sqlSelector, sqlCodeLensProvider),
+			vscode.languages.registerCodeLensProvider(yamlSelector, yamlCodeLensProvider),
+			vscode.languages.registerDocumentSymbolProvider(sqlSelector, sqlDocumentSymbolProvider),
+			vscode.languages.registerDocumentSymbolProvider(yamlSelector, yamlDocumentSymbolProvider),
 			vscode.languages.registerWorkspaceSymbolProvider(workspaceSymbolProvider),
 			vscode.languages.registerSignatureHelpProvider(sqlSelector, signatureHelpProvider, '(', ','),
-			vscode.languages.registerCodeActionsProvider(sqlSelector, codeActionProvider, {
-				providedCodeActionKinds: DbtCodeActionProvider.providedCodeActionKinds,
+			vscode.languages.registerCodeActionsProvider(sqlSelector, sqlCodeActionProvider, {
+				providedCodeActionKinds: SqlCodeActionProvider.providedCodeActionKinds,
 			}),
-			vscode.languages.registerCodeActionsProvider(yamlSelector, codeActionProvider, {
-				providedCodeActionKinds: DbtCodeActionProvider.providedCodeActionKinds,
+			vscode.languages.registerCodeActionsProvider({ pattern: '**/dbt_project.yml' }, configCodeActionProvider, {
+				providedCodeActionKinds: ConfigCodeActionProvider.providedCodeActionKinds,
 			}),
 		];
 

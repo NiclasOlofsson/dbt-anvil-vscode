@@ -27,7 +27,7 @@ import { BridgeRunner } from '../dbt/bridge-runner';
 import { detectPythonEnvironment } from '../dbt/env-detector';
 import { ParseService } from '../services/parse-service';
 import type { ColumnDefToken, ColumnRefToken, DocumentModel, TableRefToken } from '../services/parse-service';
-import { DbtDefinitionProvider } from '../providers/definition-provider';
+import { DbtDefinitionProvider } from '../providers/sql/definition-provider';
 import * as vscode from 'vscode';
 import { createMockLogger } from './helpers';
 

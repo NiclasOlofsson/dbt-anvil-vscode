@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import type { ILogger } from '../types/logger';
+import type { ManifestIndexer } from '../../indexing/manifest-indexer';
+import type { ILogger } from '../../types/logger';
 
 /**
  * Signature help for dbt macros: shows parameter hints when typing

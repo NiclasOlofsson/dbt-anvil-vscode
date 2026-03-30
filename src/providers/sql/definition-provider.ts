@@ -1,11 +1,11 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import type { ManifestLoader } from '../dbt/manifest-loader';
-import type { ILogger } from '../types/logger';
-import { ParseService } from '../services/parse-service';
-import type { CteInfo, DocumentModel, SourceInfo } from '../services/parse-service';
-import { isLinePositionInComment } from './comment-utils';
+import type { ManifestIndexer } from '../../indexing/manifest-indexer';
+import type { ManifestLoader } from '../../dbt/manifest-loader';
+import type { ILogger } from '../../types/logger';
+import { ParseService } from '../../services/parse-service';
+import type { CteInfo, DocumentModel, SourceInfo } from '../../services/parse-service';
+import { isLinePositionInComment } from '../common/comment-utils';
 import { resolvePositionContext } from './position-context';
 
 /**

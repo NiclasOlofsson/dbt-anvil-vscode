@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { ManifestIndexer, IndexedModel, IndexedSource, ManifestIndex } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
-import { materializationIcon } from '../providers/icons';
+import { materializationIcon } from '../providers/common/icons';
 
 // ---- Tree item types ----
 

@@ -3,7 +3,7 @@ import type { BridgeRunner } from '../dbt/bridge-runner';
 import type { DescribeCache } from '../dbt/describe-cache';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import { generateVariants } from '../dbt/sql-variant-generator';
-import { stripJinja } from '../providers/jinja-utils';
+import { stripJinja } from '../providers/common/jinja-utils';
 import type { ILogger } from '../types/logger';
 
 export interface ColumnInfo {

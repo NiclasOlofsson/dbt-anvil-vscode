@@ -1,12 +1,12 @@
 import * as vscode from 'vscode';
-import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import type { ILogger } from '../types/logger';
-import { ParseService } from '../services/parse-service';
-import type { ColumnRefToken, DocumentModel, TableRefToken } from '../services/parse-service';
-import { isLinePositionInComment } from './comment-utils';
+import type { ManifestIndexer } from '../../indexing/manifest-indexer';
+import type { ILogger } from '../../types/logger';
+import { ParseService } from '../../services/parse-service';
+import type { ColumnRefToken, DocumentModel, TableRefToken } from '../../services/parse-service';
+import { isLinePositionInComment } from '../common/comment-utils';
 import { SQL_KEYWORDS } from './sql-keywords';
 import { resolvePositionContext } from './position-context';
-import { DbtMaterializationIcons, SqlIcons } from './icons';
+import { DbtMaterializationIcons, SqlIcons } from '../common/icons';
 
 /**
  * Hover tooltips for ref('model'), source('src','table'), macro references,

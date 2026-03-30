@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as vscode from 'vscode';
-import { DbtReferenceProvider } from '../providers/reference-provider';
-import { DbtRenameProvider } from '../providers/rename-provider';
-import { DbtCodeLensProvider } from '../providers/codelens-provider';
-import { DbtDocumentSymbolProvider } from '../providers/document-symbol-provider';
+import { DbtReferenceProvider } from '../providers/sql/reference-provider';
+import { DbtRenameProvider } from '../providers/sql/rename-provider';
+import { SqlCodeLensProvider } from '../providers/sql/codelens-provider';
+import { YamlDocumentSymbolProvider } from '../providers/yaml/document-symbol-provider';
 import { DbtWorkspaceSymbolProvider } from '../providers/workspace-symbol-provider';
-import { DbtSignatureHelpProvider } from '../providers/signature-help-provider';
-import { DbtCodeActionProvider } from '../providers/code-action-provider';
+import { DbtSignatureHelpProvider } from '../providers/sql/signature-help-provider';
+import { SqlCodeActionProvider } from '../providers/sql/code-action-provider';
 import { createMockLogger } from './helpers';
 import type { ManifestIndexer, ManifestIndex, IndexedModel, IndexedSource, IndexedMacro } from '../indexing/manifest-indexer';
 import type { ManifestLoader } from '../dbt/manifest-loader';
@@ -261,14 +261,14 @@ describe('DbtRenameProvider', () => {
 
 // --------------- CodeLensProvider ---------------
 
-describe('DbtCodeLensProvider', () => {
-	let provider: DbtCodeLensProvider;
+describe('SqlCodeLensProvider', () => {
+	let provider: SqlCodeLensProvider;
 	let indexer: ManifestIndexer;
 
 	beforeEach(() => {
 		vi.clearAllMocks();
 		indexer = createMockIndexer();
-		provider = new DbtCodeLensProvider(indexer, createMockLogger());
+		provider = new SqlCodeLensProvider(indexer, createMockLogger());
 		provider.setPathResolver(createMockPathResolver({
 			'/project/models/customers.sql': 'model',
 			'/project/models/orders.sql': 'model',
@@ -315,16 +315,6 @@ describe('DbtCodeLensProvider', () => {
 		expect(result[0].command?.command).toBe('dbt-studio.executeStatement');
 	});
 
-	it('returns empty for non-SQL/YAML documents', () => {
-		const doc = createMockDocument('some content', {
-			languageId: 'markdown',
-			fileName: '/project/README.md',
-		});
-
-		const result = provider.provideCodeLenses(doc, mockToken);
-		expect(result).toEqual([]);
-	});
-
 	it('fires onDidChangeCodeLenses when refresh() is called', () => {
 		const listener = vi.fn();
 		provider.onDidChangeCodeLenses(listener);
@@ -335,12 +325,12 @@ describe('DbtCodeLensProvider', () => {
 
 // --------------- DocumentSymbolProvider ---------------
 
-describe('DbtDocumentSymbolProvider', () => {
-	let provider: DbtDocumentSymbolProvider;
+describe('YamlDocumentSymbolProvider', () => {
+	let provider: YamlDocumentSymbolProvider;
 
 	beforeEach(() => {
 		vi.clearAllMocks();
-		provider = new DbtDocumentSymbolProvider(createMockIndexer(), createMockLogger(), createMockParseService());
+		provider = new YamlDocumentSymbolProvider(createMockLogger());
 	});
 
 	it('extracts model/column hierarchy from YAML', () => {
@@ -484,14 +474,14 @@ describe('DbtSignatureHelpProvider', () => {
 
 // --------------- CodeActionProvider ---------------
 
-describe('DbtCodeActionProvider', () => {
-	let provider: DbtCodeActionProvider;
+describe('SqlCodeActionProvider', () => {
+	let provider: SqlCodeActionProvider;
 	let indexer: ManifestIndexer;
 
 	beforeEach(() => {
 		vi.clearAllMocks();
 		indexer = createMockIndexer();
-		provider = new DbtCodeActionProvider(indexer, createMockLogger());
+		provider = new SqlCodeActionProvider(indexer, createMockLogger());
 	});
 
 	it('offers to create missing model file', () => {
@@ -515,19 +505,7 @@ describe('DbtCodeActionProvider', () => {
 		expect(actions).toEqual([]);
 	});
 
-	it('returns empty for non-SQL documents', () => {
-		const doc = createMockDocument('ref(\'test\')', {
-			languageId: 'yaml',
-			fileName: '/project/schema.yml',
-		});
-		const range = new vscode.Range(0, 0, 0, 11);
-		const ctx = { diagnostics: [] } as unknown as vscode.CodeActionContext;
-
-		const actions = provider.provideCodeActions(doc, range, ctx, mockToken);
-		expect(actions).toEqual([]);
-	});
-
 	it('has QuickFix as provided code action kind', () => {
-		expect(DbtCodeActionProvider.providedCodeActionKinds).toContain(vscode.CodeActionKind.QuickFix);
+		expect(SqlCodeActionProvider.providedCodeActionKinds).toContain(vscode.CodeActionKind.QuickFix);
 	});
 });
