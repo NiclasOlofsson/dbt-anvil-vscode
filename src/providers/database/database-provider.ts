@@ -6,13 +6,6 @@ import type { DbtJobPriority } from '../../dbt/execution-service';
  */
 export interface QueryHints {
 	/**
-	 * Fully-qualified table names (catalog.schema.table) whose Delta cache should be
-	 * invalidated before the query runs. Only honoured by providers that support it
-	 * (e.g. DatabricksProvider via REFRESH TABLE). Other providers ignore this.
-	 */
-	invalidateCacheTables?: string[];
-
-	/**
 	 * When true, bypass the native adapter and route through dbt show --inline instead.
 	 * Useful for comparing native vs dbt-show timings during profiling.
 	 * Only meaningful for providers that have a native execution path (e.g. DatabricksProvider).

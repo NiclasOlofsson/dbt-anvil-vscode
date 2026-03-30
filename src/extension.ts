@@ -41,7 +41,6 @@ import { ModelProfiler } from './dbt/model-profiler';
 import { ProfileResultPersistence } from './dbt/profile-result-persistence';
 import { ProfilerDecorationProvider } from './providers/profiler-decoration-provider';
 import { ProfilerResultsProvider } from './views/profiler-results-provider';
-import { ProfilerWaterfallProvider } from './views/profiler-waterfall-provider';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
 	// -------- Bootstrap logging & service container --------
@@ -202,14 +201,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	// -------- Profiler views --------
 	const profilerResultsProvider = new ProfilerResultsProvider(modelProfiler);
-	const profilerWaterfallProvider = new ProfilerWaterfallProvider(modelProfiler, context.extensionUri);
 	const profilerDecorationProvider = new ProfilerDecorationProvider(modelProfiler);
 	context.subscriptions.push(
 		profilerResultsProvider,
 		profilerDecorationProvider,
-		profilerWaterfallProvider,
 		vscode.window.registerTreeDataProvider(ProfilerResultsProvider.viewId, profilerResultsProvider),
-		vscode.window.registerWebviewViewProvider(ProfilerWaterfallProvider.viewId, profilerWaterfallProvider),
 	);
 
 	// -------- Native VS Code Testing panel --------
@@ -553,7 +549,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				return;
 			}
 			void vscode.commands.executeCommand('setContext', 'dbt-studio.profilingActive', true);
-			void vscode.commands.executeCommand(`${ProfilerWaterfallProvider.viewId}.focus`);
 			try {
 				await modelProfiler.profileDocument(editor.document);
 			} catch (err) {

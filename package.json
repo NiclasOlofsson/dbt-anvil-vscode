@@ -258,12 +258,6 @@
 					"id": "dbt-studio.lineageGraph",
 					"name": "Lineage",
 					"when": "workspaceHasDBT"
-				},
-				{
-					"type": "webview",
-					"id": "dbt-studio.profilerWaterfall",
-					"name": "Profile Waterfall",
-					"when": "workspaceHasDBT"
 				}
 			]
 		},

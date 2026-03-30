@@ -1,62 +1,52 @@
 import * as vscode from 'vscode';
 import type { ModelProfiler } from '../dbt/model-profiler';
-import type { ProfileResult, CteProfile } from '../dbt/profiler-types';
+import type { ProfileResult } from '../dbt/profiler-types';
 
-/** TreeItem for a CTE that hasn't been profiled yet (run in progress). */
+/** TreeItem for a CTE or full-model step that hasn't executed yet (run in progress). */
 class PendingCteItem extends vscode.TreeItem {
 	constructor(name: string) {
 		super(name, vscode.TreeItemCollapsibleState.None);
 		this.description = 'pending…';
-		this.iconPath = new vscode.ThemeIcon('circle-large-outline', new vscode.ThemeColor('editorCodeLens.foreground'));
+		this.iconPath = new vscode.ThemeIcon('loading~spin');
 		this.contextValue = 'profilerCtePending';
 	}
 }
 
-/** TreeItem representing one CTE's timing row. */
-class CteProfileItem extends vscode.TreeItem {
+/**
+ * TreeItem for a completed profiling step — either a CTE or the final full-model SELECT.
+ * Heat icon is ranked against the slowest step in the same run (ms / maxStepMs).
+ */
+class StepItem extends vscode.TreeItem {
 	constructor(
-		readonly cte: CteProfile,
-		readonly result: ProfileResult,
+		name: string,
+		ms: number,
+		rowCount: number,
+		maxStepMs: number,
+		navigateArgs?: [string, number],
 	) {
-		// Negative marginal time = measurement noise (server ran faster with more CTEs due to warm cache/JIT).
-		// Clamp to 0 — it means the CTE had no measurable cost, not that time ran backwards.
-		const ms = Math.max(0, cte.marginalTimeMs);
-		const label = `${_formatMs(ms)} — ${cte.name}`;
+		super(`${_formatMs(ms)} — ${name}`, vscode.TreeItemCollapsibleState.None);
 
-		super(label, vscode.TreeItemCollapsibleState.None);
-
-		const pct = Math.max(0, Math.round(cte.fractionOfTotal * 100));
-		const rows = _formatRows(cte.rowCount);
-		this.description = `${rows} · ${pct}%`;
-		this.tooltip = new vscode.MarkdownString(
-			[
-				`**${cte.name}**`,
-				'',
-				'| | |',
-				'|---|---|',
-				`| Marginal time | \`${_formatMs(ms)}\` |`,
-				`| Query time | \`${_formatMs(cte.queryTimeMs)}\` |`,
-				`| Row count | \`${cte.rowCount.toLocaleString()}\` |`,
-				`| Share of total | \`${pct}%\` |`,
-			].join('\n'),
-		);
-		this.iconPath = _tierIcon(cte.fractionOfTotal);
-		this.command = {
-			command: 'dbt-studio.profiler.goToCte',
-			title: 'Go to CTE',
-			arguments: [result.sourceFilePath, cte.definitionLine],
-		};
-		this.contextValue = 'profilerCte';
+		this.description = _formatRows(rowCount);
+		this.tooltip = _tooltipTable(name, [
+			['Query time', _formatMs(ms)],
+			['Row count', rowCount.toLocaleString()],
+		]);
+		this.iconPath = _tierIcon(ms / maxStepMs);
+		if (navigateArgs) {
+			this.command = {
+				command: 'dbt-studio.profiler.goToCte',
+				title: 'Go to CTE',
+				arguments: navigateArgs,
+			};
+		}
+		this.contextValue = navigateArgs ? 'profilerCte' : 'profilerFullModel';
 	}
 }
 
 /** Root item for one profiled model. */
 class ModelProfileItem extends vscode.TreeItem {
 	constructor(readonly result: ProfileResult) {
-		const totalMs = result.status === 'running' && result.cteProfiles.length > 0
-			? result.cteProfiles[result.cteProfiles.length - 1].queryTimeMs
-			: result.totalTimeMs;
-		const label = `${_formatMs(totalMs)} — ${result.modelName}`;
+		const label = result.modelName;
 
 		const collapsed = (result.cteProfiles.length > 0 || (result.pendingCteNames?.length ?? 0) > 0)
 			? vscode.TreeItemCollapsibleState.Expanded
@@ -76,7 +66,7 @@ class ModelProfileItem extends vscode.TreeItem {
 	}
 }
 
-type TreeEntry = ModelProfileItem | CteProfileItem | PendingCteItem;
+type TreeEntry = ModelProfileItem | StepItem | PendingCteItem;
 
 export class ProfilerResultsProvider implements vscode.TreeDataProvider<TreeEntry>, vscode.Disposable {
 	static readonly viewId = 'dbt-studio.profilerResults';
@@ -110,16 +100,32 @@ export class ProfilerResultsProvider implements vscode.TreeDataProvider<TreeEntr
 		}
 
 		if (element instanceof ModelProfileItem) {
-			// Completed CTEs in CTE definition order, followed by still-pending ones
-			const completed = element.result.cteProfiles
-				.map(cte => new CteProfileItem(cte, element.result));
+			const { result } = element;
+			const lastCteMs = result.cteProfiles.length > 0
+				? result.cteProfiles[result.cteProfiles.length - 1].queryTimeMs
+				: 0;
+			const fullModelMs = result.totalTimeMs > 0 ? result.totalTimeMs - lastCteMs : 0;
+			const maxStepMs = Math.max(...result.cteProfiles.map(c => c.queryTimeMs), fullModelMs, 1);
 
-			const completedNames = new Set(element.result.cteProfiles.map(p => p.name));
-			const pending = (element.result.pendingCteNames ?? [])
+			const completed = result.cteProfiles.map(cte => new StepItem(
+				cte.name, cte.queryTimeMs, cte.rowCount, maxStepMs,
+				[result.sourceFilePath, cte.definitionLine],
+			));
+
+			const completedNames = new Set(result.cteProfiles.map(p => p.name));
+			const pending = (result.pendingCteNames ?? [])
 				.filter(n => !completedNames.has(n))
 				.map(n => new PendingCteItem(n));
 
-			return [...completed, ...pending];
+			// Full-model step: spinning while running, timed when complete
+			const allCtesDone = pending.length === 0 && result.status !== 'error';
+			const fullModel: StepItem[] | PendingCteItem[] = allCtesDone
+				? [result.totalTimeMs > 0
+					? new StepItem(`full ${result.modelName}`, fullModelMs, result.totalRowCount, maxStepMs)
+					: new PendingCteItem(`full ${result.modelName}`)]
+				: [];
+
+			return [...completed, ...pending, ...fullModel];
 		}
 
 		return [];
@@ -138,15 +144,24 @@ function _formatMs(ms: number): string {
 	return `${ms.toFixed(0)}ms`;
 }
 
+function _tooltipTable(title: string, rows: [string, string][]): vscode.MarkdownString {
+	const lines = [
+		`**${title}**`, '',
+		'| | |', '|---|---|',
+		...rows.map(([k, v]) => `| ${k} | \`${v}\` |`),
+	];
+	return new vscode.MarkdownString(lines.join('\n'));
+}
+
 function _tierIcon(fraction: number): vscode.ThemeIcon {
 	if (fraction >= 0.5) return new vscode.ThemeIcon('flame', new vscode.ThemeColor('charts.red'));
 	if (fraction >= 0.2) return new vscode.ThemeIcon('warning', new vscode.ThemeColor('charts.yellow'));
-	return new vscode.ThemeIcon('circle-outline', new vscode.ThemeColor('charts.green'));
+	return new vscode.ThemeIcon('testing-passed-icon', new vscode.ThemeColor('charts.green'));
 }
 
 function _modelIcon(result: ProfileResult): vscode.ThemeIcon {
 	if (result.status === 'running') return new vscode.ThemeIcon('loading~spin');
-	if (result.status === 'error') return new vscode.ThemeIcon('error', new vscode.ThemeColor('editorError.foreground'));
-	if (result.status === 'partial') return new vscode.ThemeIcon('warning', new vscode.ThemeColor('editorWarning.foreground'));
-	return new vscode.ThemeIcon('check', new vscode.ThemeColor('charts.green'));
+	if (result.status === 'error') return new vscode.ThemeIcon('testing-error-icon', new vscode.ThemeColor('editorError.foreground'));
+	if (result.status === 'partial') return new vscode.ThemeIcon('testing-skipped-icon', new vscode.ThemeColor('editorWarning.foreground'));
+	return new vscode.ThemeIcon('testing-passed-icon', new vscode.ThemeColor('charts.green'));
 }
