@@ -1,8 +1,9 @@
 /// <reference lib="dom" />
 import type { ILogger } from '../../types/logger';
 import type { DbtExecutionService, DbtJobPriority } from '../../dbt/execution-service';
+import { Priority } from '../../dbt/execution-service';
 import type { DatabricksConnection } from './profiles-reader';
-import type { CancelSignal, ColumnDefinition, DatabaseProvider, QueryResult } from './database-provider';
+import type { CancelSignal, ColumnDefinition, DatabaseProvider, QueryHints, QueryResult } from './database-provider';
 
 /** Databricks SQL Statement Execution API base path */
 const DATABRICKS_STATEMENTS_PATH = '/api/2.0/sql/statements';
@@ -100,10 +101,16 @@ export class DatabricksProvider implements DatabaseProvider {
 	// DatabaseProvider interface
 	// -------------------------------------------------------------------------
 
-	async query(sql: string, limit: number, signal?: CancelSignal, _priority?: DbtJobPriority): Promise<QueryResult> {
-		const t0 = performance.now();
+	async query(sql: string, limit: number, signal?: CancelSignal, _priority?: DbtJobPriority, hints?: QueryHints): Promise<QueryResult> {
+		if (hints?.forceDbtShow) {
+			return this._queryViaDbtShow(sql, limit, _priority ?? Priority.Tool);
+		}
 		const compiled = await this._maybeCompile(sql);
+		if (hints?.invalidateCacheTables?.length) {
+			await this._refreshTables(hints.invalidateCacheTables, signal);
+		}
 		this.logger.debug('DatabricksProvider: executing query directly (bypassing dbt)');
+		const t0 = performance.now();
 		const result = await this._executeStatement(compiled, limit < 0 ? undefined : limit, signal);
 		result.executionTimeMs = performance.now() - t0;
 		return result;
@@ -152,6 +159,51 @@ export class DatabricksProvider implements DatabaseProvider {
 		if (!JINJA_PATTERN.test(sql)) return sql;
 		this.logger.trace('DatabricksProvider: Jinja detected — compiling inline via bridge');
 		return this.executionService.compileInline(sql);
+	}
+
+	/** Invalidate the Delta disk cache for a list of fully-qualified table names. */
+	private async _refreshTables(tables: string[], signal: CancelSignal | undefined): Promise<void> {
+		for (const table of tables) {
+			if (signal?.aborted) return;
+			this.logger.debug(`DatabricksProvider: REFRESH TABLE ${table}`);
+			try {
+				await this._executeStatement(`REFRESH TABLE ${table}`, undefined, signal);
+			} catch (e) {
+				this.logger.warn(`DatabricksProvider: REFRESH TABLE ${table} failed (ignored): ${e}`);
+			}
+		}
+	}
+
+	/**
+	 * Execute via dbt show --inline instead of the native REST API.
+	 * Used when QueryHints.forceDbtShow is true.
+	 */
+	private async _queryViaDbtShow(sql: string, limit: number, priority: DbtJobPriority): Promise<QueryResult> {
+		const limitArg = limit < 0 ? '-1' : String(limit);
+		const args = ['--no-populate-cache', 'show', '--inline', sql, '--limit', limitArg, '--output', 'json'];
+		this.logger.debug(`DatabricksProvider: query via dbt show (forced, limit=${limitArg})`);
+		const t0 = performance.now();
+		const result = await this.executionService.submit({
+			type: 'show',
+			args,
+			priority,
+			origin: 'provider',
+			label: 'db query (forced dbt show)',
+		});
+		const executionTimeMs = performance.now() - t0;
+		if (!result.success) {
+			throw new Error(result.stderr || result.stdout || 'dbt show failed');
+		}
+		const showLine = result.stdout.split('\n').find(l => l.trimStart().startsWith('{"show"'));
+		if (showLine) {
+			const data = JSON.parse(showLine.trim()) as Record<string, unknown>;
+			const rows = data['show'];
+			if (Array.isArray(rows)) {
+				const columns = rows.length > 0 ? Object.keys(rows[0] as Record<string, unknown>) : [];
+				return { columns, rows: rows as Record<string, unknown>[], rowCount: rows.length, executionTimeMs };
+			}
+		}
+		throw new Error(`dbt show output did not contain expected JSON: ${result.stdout.slice(0, 200)}`);
 	}
 
 	/** Submit a SQL statement and poll until it completes, then return the result. */

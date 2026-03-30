@@ -1,11 +1,13 @@
 import * as vscode from 'vscode';
 import type { ParseService } from '../services/parse-service';
-import type { DatabaseProvider, CancelSignal } from '../providers/database/database-provider';
+import type { DatabaseProvider, CancelSignal, QueryHints } from '../providers/database/database-provider';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
+import type { CompileCache } from './compile-cache';
 import { Priority } from './execution-service';
 import type { CteProfile, ProfileResult } from './profiler-types';
 import type { ProfileResultPersistence } from './profile-result-persistence';
+import type { DbtNode, DbtSource } from './manifest-types';
 
 /**
  * Profiles a dbt SQL model by executing cumulative CTE sub-queries and
@@ -42,6 +44,7 @@ export class ModelProfiler implements vscode.Disposable {
 		private readonly _parseService: ParseService,
 		private readonly _dbProvider: DatabaseProvider,
 		private readonly _indexer: ManifestIndexer,
+		private readonly _compileCache: CompileCache,
 		private readonly _logger: ILogger,
 	) {}
 
@@ -169,16 +172,33 @@ export class ModelProfiler implements vscode.Disposable {
 	): Promise<ProfileResult> {
 		const adapterType = this._indexer.index?.adapterType ?? 'ansi';
 
-		// 1. Get CTE list from the source document (names + endLine positions from sqlglot).
-		// skipEnrichment=true: we only need structural CTE positions, not column types.
-		// Skips all database describe calls — the query engine handles compilation.
-		const docModel = await this._parseService.getDocumentModel(document, adapterType, { skipEnrichment: true });
-		const ctes = docModel?.ctes ?? [];
+		// 1. Compile the model once — reuses CompileCache if already compiled.
+		// This gives us clean SQL with all Jinja expanded, which we parse and slice
+		// instead of sending raw Jinja per-query. Eliminates N compile_inline calls.
+		this._logger.info(`Profiler: compiling ${rawNode.name}...`);
+		const compiledSql = await this._compileCache.ensureCompiled(
+			uniqueId, rawNode.name, this._indexer.projectDir, rawNode.original_file_path,
+		);
+		if (!compiledSql) {
+			throw new Error(`Profiler: could not compile '${rawNode.name}'`);
+		}
+
+		// 2. Parse CTE positions.
+		// From compiled SQL: endLine positions for slicing (clean SQL, reliable parse).
+		// From source document: definitionLine for source navigation.
+		const [compiledCtes, sourceCtes] = await Promise.all([
+			this._parseService.parseSqlString(compiledSql, adapterType),
+			this._parseService.getDocumentModel(document, adapterType, { skipEnrichment: true })
+				.then(m => m?.ctes ?? []),
+		]);
+
+		// Zip source line numbers onto compiled CTE entries (same order, same names).
+		const sourceLineByName = new Map(sourceCtes.map(c => [c.name, c.line]));
+		const ctes = compiledCtes.map(c => ({ ...c, line: sourceLineByName.get(c.name) ?? c.line }));
 
 		this._logger.info(`Profiler: ${rawNode.name} has ${ctes.length} CTEs, starting queries`);
 
 		// Update placeholder with the known total so CodeLens can show N/total.
-		// pendingCteNames seeds the tree view so all CTEs are visible from the start.
 		onProgress({ ...placeholder, totalCtes: ctes.length, pendingCteNames: ctes.map(c => c.name) });
 
 		if (token?.isCancellationRequested) {
@@ -186,32 +206,37 @@ export class ModelProfiler implements vscode.Disposable {
 		}
 
 		const cancelSignal = token ? _vscodeCancelToSignal(token) : undefined;
-		const rawSql = document.getText();
-		const lines = rawSql.split('\n');
+		const lines = compiledSql.split('\n');
 		const runTs = String(Date.now());
 
-		// 2. Warmup: run the full model query once before profiling starts.
-		// This primes the Databricks warehouse's IO cache (Delta Parquet files → SSD)
-		// so every CTE query runs on warm data and timings reflect compute, not cold storage scans.
+		// 3. Build cache-invalidation list for adapter-specific providers (e.g. Databricks REFRESH TABLE).
+		// Includes the model itself and all direct upstream refs/sources that are materialised as tables.
+		const queryHints = this._buildQueryHints(uniqueId);
+
+		// 4. Warmup: run the full model query to prime the warehouse's IO cache
+		// (Delta Parquet files → SSD) so CTE timings reflect compute, not cold storage.
+		// Skipped when cache invalidation is active — no point warming data we'll immediately flush.
 		const lastCte = ctes[ctes.length - 1];
 		const fullQuery = lastCte
 			? _buildFullModelQuery(lines, lastCte.endLine, runTs)
-			: _buildNoCteFullModelQuery(rawSql, runTs);
+			: _buildNoCteFullModelQuery(compiledSql, runTs);
 
-		this._logger.info('Profiler: running warmup query to prime Delta table cache...');
-		try {
-			await this._dbProvider.query(fullQuery, 1, cancelSignal, Priority.Background);
-		} catch (e) {
-			this._logger.warn(`Profiler: warmup query failed (continuing): ${e}`);
+		if (!queryHints?.invalidateCacheTables?.length) {
+			this._logger.info('Profiler: running warmup query to prime Delta table cache...');
+			try {
+				await this._dbProvider.query(fullQuery, 1, cancelSignal, Priority.Background);
+			} catch (e) {
+				this._logger.warn(`Profiler: warmup query failed (continuing): ${e}`);
+			}
+		} else {
+			this._logger.info(`Profiler: cache invalidation enabled — skipping warmup (${queryHints.invalidateCacheTables.length} tables)`);
 		}
 
 		if (token?.isCancellationRequested) {
 			throw new Error('Profiling cancelled.');
 		}
 
-		// 3. Execute cumulative profiling queries for each CTE.
-		// Slice the raw source up to the CTE's closing paren line — the query engine
-		// compiles the Jinja. No regex or paren-counting needed.
+		// 5. Execute cumulative profiling queries for each CTE.
 		const cteProfiles: CteProfile[] = [];
 		let prevCumulativeMs = 0;
 
@@ -224,7 +249,7 @@ export class ModelProfiler implements vscode.Disposable {
 			let rowCount = 0;
 			let queryTimeMs = 0;
 			try {
-				const qr = await this._dbProvider.query(profilingQuery, 1, cancelSignal, Priority.Background);
+				const qr = await this._dbProvider.query(profilingQuery, 1, cancelSignal, Priority.Background, queryHints);
 				rowCount = _extractCount(qr.rows[0]);
 				queryTimeMs = qr.executionTimeMs;
 			} catch (e) {
@@ -239,11 +264,9 @@ export class ModelProfiler implements vscode.Disposable {
 				queryTimeMs,
 				marginalTimeMs: queryTimeMs - prevCumulativeMs,
 				rowCount,
-				fractionOfTotal: 0, // computed after totalTimeMs is known
+				fractionOfTotal: 0,
 			});
 
-			// Fire incremental update so decorations and CodeLens show live progress.
-			// Recompute pending list so the tree collapses each row as it finishes.
 			const completedNames = new Set(cteProfiles.map(p => p.name));
 			onProgress({
 				...placeholder,
@@ -255,19 +278,18 @@ export class ModelProfiler implements vscode.Disposable {
 			prevCumulativeMs = queryTimeMs;
 		}
 
-		// 4. Time the full model (fullQuery already built above for the warmup run).
+		// 6. Time the full model (fullQuery already built for the warmup run).
 		this._logger.debug('Profiler: executing full model query');
 		let totalRowCount = 0;
 		let totalTimeMs = 0;
 		try {
-			const fullResult = await this._dbProvider.query(fullQuery, 1, cancelSignal, Priority.Background);
+			const fullResult = await this._dbProvider.query(fullQuery, 1, cancelSignal, Priority.Background, queryHints);
 			totalRowCount = _extractCount(fullResult.rows[0]);
 			totalTimeMs = fullResult.executionTimeMs;
 		} catch (e) {
 			this._logger.warn(`Profiler: full model query failed: ${e}`);
 		}
 
-		// Compute fractions relative to the full model time
 		for (const p of cteProfiles) {
 			p.fractionOfTotal = totalTimeMs > 0 ? p.marginalTimeMs / totalTimeMs : 0;
 		}
@@ -289,6 +311,54 @@ export class ModelProfiler implements vscode.Disposable {
 			timestamp: Date.now(),
 			status,
 		};
+	}
+
+	/**
+	 * Build QueryHints containing the list of tables whose Delta cache should be
+	 * invalidated before each profiling query.
+	 *
+	 * Includes:
+	 * - The model itself (when materialised as table/incremental/snapshot)
+	 * - All direct upstream refs/sources that are tables (not views/ephemeral)
+	 *
+	 * Returns undefined if no tables were found (so callers can skip the hints path entirely).
+	 */
+	private _buildQueryHints(uniqueId: string): QueryHints | undefined {
+		const node = this._indexer.getRawNode(uniqueId);
+		if (!node || node.resource_type !== 'model') return undefined;
+		const modelNode = node as DbtNode;
+
+		const tables: string[] = [];
+
+		const selfMat = modelNode.config?.materialized ?? 'view';
+		if (selfMat !== 'view' && selfMat !== 'ephemeral') {
+			const q = _qualifiedNodeName(modelNode);
+			if (q) tables.push(q);
+		}
+
+		for (const depId of modelNode.depends_on?.nodes ?? []) {
+			const dep = this._indexer.getRawNode(depId);
+			if (!dep) continue;
+
+			if (dep.resource_type === 'source') {
+				const q = _qualifiedSourceName(dep as DbtSource);
+				if (q) tables.push(q);
+			} else if (
+				dep.resource_type === 'model'
+				|| dep.resource_type === 'seed'
+				|| dep.resource_type === 'snapshot'
+			) {
+				const depNode = dep as DbtNode;
+				const mat = depNode.config?.materialized ?? 'view';
+				if (mat !== 'view' && mat !== 'ephemeral') {
+					const q = _qualifiedNodeName(depNode);
+					if (q) tables.push(q);
+				}
+			}
+		}
+
+		const unique = [...new Set(tables)];
+		return unique.length > 0 ? { invalidateCacheTables: unique } : undefined;
 	}
 }
 
@@ -342,4 +412,14 @@ function _extractCount(row: Record<string, unknown> | undefined): number {
 		?? row['count_star()']
 		?? Object.values(row)[0];
 	return Number(val ?? 0);
+}
+
+function _qualifiedNodeName(node: DbtNode): string | undefined {
+	const parts = [node.database, node.schema, node.alias ?? node.name].filter(Boolean);
+	return parts.length >= 2 ? parts.join('.') : undefined;
+}
+
+function _qualifiedSourceName(source: DbtSource): string | undefined {
+	const parts = [source.database, source.schema, source.identifier ?? source.name].filter(Boolean);
+	return parts.length >= 2 ? parts.join('.') : undefined;
 }

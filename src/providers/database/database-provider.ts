@@ -1,5 +1,25 @@
 import type { DbtJobPriority } from '../../dbt/execution-service';
 
+/**
+ * Optional hints passed to DatabaseProvider.query() to influence execution behaviour.
+ * Providers are free to ignore any hint they do not support.
+ */
+export interface QueryHints {
+	/**
+	 * Fully-qualified table names (catalog.schema.table) whose Delta cache should be
+	 * invalidated before the query runs. Only honoured by providers that support it
+	 * (e.g. DatabricksProvider via REFRESH TABLE). Other providers ignore this.
+	 */
+	invalidateCacheTables?: string[];
+
+	/**
+	 * When true, bypass the native adapter and route through dbt show --inline instead.
+	 * Useful for comparing native vs dbt-show timings during profiling.
+	 * Only meaningful for providers that have a native execution path (e.g. DatabricksProvider).
+	 */
+	forceDbtShow?: boolean;
+}
+
 /** Minimal AbortSignal surface area used by database provider implementations. */
 export interface CancelSignal {
 	readonly aborted: boolean;
@@ -41,8 +61,9 @@ export interface DatabaseProvider {
 	 * @param signal   Optional AbortSignal to cancel the query in-flight.
 	 * @param priority Queue priority for bridge-routed adapters. Defaults to Tool.
 	 *                 Pass Priority.Background for low-priority background tasks.
+	 * @param hints    Optional execution hints (e.g. cache invalidation, force dbt show).
 	 */
-	query(sql: string, limit: number, signal?: CancelSignal, priority?: DbtJobPriority): Promise<QueryResult>;
+	query(sql: string, limit: number, signal?: CancelSignal, priority?: DbtJobPriority, hints?: QueryHints): Promise<QueryResult>;
 
 	/**
 	 * Return the column definitions for a dbt model or source.

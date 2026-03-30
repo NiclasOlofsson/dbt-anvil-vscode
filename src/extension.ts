@@ -159,7 +159,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	manifestWatcher.setCompileCache(compileCache);
 
 	// -------- Model profiler --------
-	const modelProfiler = new ModelProfiler(parseService, databaseProvider, manifestIndexer, logger);
+	const modelProfiler = new ModelProfiler(parseService, databaseProvider, manifestIndexer, compileCache, logger);
 	const profileResultPersistence = new ProfileResultPersistence(context, logger);
 	modelProfiler.initPersistence(profileResultPersistence);
 	container.setModelProfiler(modelProfiler);
