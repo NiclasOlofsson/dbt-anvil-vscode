@@ -53,3 +53,35 @@ It's a pretty big difference between running the copilot tools in the extension 
 ## No more fluff
 
 Make replacement for SQL fluff. Completely. Formatting and .. well we have syntax checks already. However, we might want to see if we can do a semantic or pattern type of checks too .. maybe (otherwise we can just use sqlfluff for some of these checks). But i mean, we have the parser. how hard can it be :D
+
+## Cool new provider features
+
+VS Code has a rich context menu of language features. We already cover most of them, but a few are missing or incomplete. Example from VS Code:
+
+![VS Code context menu](images/vscode-context-menu.png)
+
+**Missing providers:**
+
+- **Call Hierarchy** (`CallHierarchyProvider`) — "Show Call Hierarchy" (Shift+Alt+H). Re-invent call stack but for dbt — lineage surfaced the way a coder would have it. Native tree panel with incoming callers (who refs this model) and outgoing calls (what this model refs). Keyboard-driven, not a graph.
+- **Document Highlights** (`DocumentHighlightProvider`) — powers "Change All Occurrences" (Ctrl+F2). Highlights same-symbol occurrences in the file. Without it, Ctrl+F2 falls back to dumb text matching.
+- **Type Definition** (`TypeDefinitionProvider`) — "Go to Type Definition". Cursor on a column → jump to its schema.yml definition. Or cursor on a `ref()` → jump to the YAML model entry instead of the .sql file.
+- **Refactor code actions** (`CodeActionKind.Refactor`) — "Refactor..." sub-menu. Extract selection into a new CTE, inline a CTE, extract model into a separate file.
+
+**Incomplete providers:**
+
+- **Rename** — currently only renames `ref('model')` and the .sql file. Should also rename CTE names (with all in-file references), column aliases, source names, and macro names.
+
+## Structure-aware smart completion
+
+Because we have a real SQL parser (sqlglot), completions can understand query structure and apply coordinated edits — not just insert text at the cursor. VS Code's `CompletionItem.additionalTextEdits` lets a completion atomically edit multiple locations in the document when accepted, exactly like TypeScript auto-imports.
+
+**Examples:**
+
+- **Auto GROUP BY** — complete a non-aggregated column in a SELECT that has a GROUP BY clause → automatically appends the column to the GROUP BY list. Pick the column once, both places update.
+- **Aggregate awareness** — complete `sum(x)` or similar → any non-aggregated columns already in the SELECT get added to GROUP BY automatically.
+- **Alias propagation** — complete a column alias in SELECT → offer to update matching `ORDER BY` / `HAVING` references to use the new alias.
+- **CTE skeleton** — complete a CTE name that doesn't exist yet → auto-insert `with cte_name as (\n  \n)` scaffold at the top of the query.
+
+The code action (lightbulb) variant makes sense for *existing* SQL that already has the problem (e.g. "column in SELECT not in GROUP BY"). Smart completion handles the *as-you-type* case. Both are worth implementing — they cover different moments in the workflow.
+
+

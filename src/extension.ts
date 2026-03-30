@@ -11,6 +11,7 @@ import { CompileCache } from './dbt/compile-cache';
 import { CompileCachePersistence } from './dbt/compile-cache-persistence';
 import { DescribeCache } from './dbt/describe-cache';
 import { loadProjectConfig } from './dbt/project-config';
+import { DbtPathResolver } from './dbt/dbt-path-resolver';
 import { createDatabaseProvider } from './providers/database/database-provider-factory';
 import { ColumnStorePersistence } from './indexing/column-store-persistence';
 import { ContentHashPersistence } from './indexing/content-hash-persistence';
@@ -41,6 +42,8 @@ import { ModelProfiler } from './dbt/model-profiler';
 import { ProfileResultPersistence } from './dbt/profile-result-persistence';
 import { ProfilerDecorationProvider } from './providers/profiler-decoration-provider';
 import { ProfilerResultsProvider } from './views/profiler-results-provider';
+import { QueryRunner } from './dbt/query-runner';
+import { QueryResultPanel } from './views/query-result-panel';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
 	// -------- Bootstrap logging & service container --------
@@ -249,12 +252,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// Trigger immediately for the already-active editor on startup
 	revealModelForEditor(vscode.window.activeTextEditor);
 
-	// -------- Register language providers --------
-	const sqlSelector: vscode.DocumentSelector = { language: 'jinja-sql' };
-	const yamlSelector: vscode.DocumentSelector = [
-		{ language: 'yaml', pattern: '**/*.{yml,yaml}' },
-		{ language: 'jinja-yaml', pattern: '**/*.{yml,yaml}' },
-	];
+	// -------- Path resolver (file classification from dbt_project.yml) --------
+	const pathResolver = new DbtPathResolver(projectDir);
+	pathResolver.refresh(loadProjectConfig(projectDir));
+
+	// -------- Register language providers (dynamic, re-registered on path changes) --------
 	const definitionProvider = new DbtDefinitionProvider(manifestIndexer, manifestLoader, logger, parseService);
 	const hoverProvider = new DbtHoverProvider(manifestIndexer, logger, parseService);
 	const completionProvider = new DbtCompletionProvider(manifestIndexer, logger, parseService);
@@ -264,31 +266,58 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const renameProvider = new DbtRenameProvider(manifestIndexer, manifestLoader, logger);
 	const codeLensProvider = new DbtCodeLensProvider(manifestIndexer, logger);
 	codeLensProvider.setProfiler(modelProfiler);
+	codeLensProvider.setPathResolver(pathResolver);
 	const documentSymbolProvider = new DbtDocumentSymbolProvider(manifestIndexer, logger, parseService);
 	const workspaceSymbolProvider = new DbtWorkspaceSymbolProvider(manifestIndexer, logger);
 	const signatureHelpProvider = new DbtSignatureHelpProvider(manifestIndexer, logger);
 	const codeActionProvider = new DbtCodeActionProvider(manifestIndexer, logger);
 
+	let providerDisposables: vscode.Disposable[] = [];
+
+	const registerProviders = (): void => {
+		// Dispose previous registrations
+		for (const d of providerDisposables) d.dispose();
+
+		const sqlSelector: vscode.DocumentSelector = pathResolver.buildSqlSelector();
+		const yamlSelector: vscode.DocumentSelector = pathResolver.buildYamlSelector();
+
+		providerDisposables = [
+			vscode.languages.registerDefinitionProvider(sqlSelector, definitionProvider),
+			vscode.languages.registerHoverProvider(sqlSelector, hoverProvider),
+			vscode.languages.registerCompletionItemProvider(sqlSelector, completionProvider, '\'', '"', '.'),
+			vscode.languages.registerCompletionItemProvider(yamlSelector, yamlCompletionProvider),
+			vscode.languages.registerHoverProvider(yamlSelector, yamlHoverProvider),
+			vscode.languages.registerReferenceProvider(sqlSelector, referenceProvider),
+			vscode.languages.registerRenameProvider(sqlSelector, renameProvider),
+			vscode.languages.registerCodeLensProvider(sqlSelector, codeLensProvider),
+			vscode.languages.registerCodeLensProvider(yamlSelector, codeLensProvider),
+			vscode.languages.registerDocumentSymbolProvider(sqlSelector, documentSymbolProvider),
+			vscode.languages.registerDocumentSymbolProvider(yamlSelector, documentSymbolProvider),
+			vscode.languages.registerWorkspaceSymbolProvider(workspaceSymbolProvider),
+			vscode.languages.registerSignatureHelpProvider(sqlSelector, signatureHelpProvider, '(', ','),
+			vscode.languages.registerCodeActionsProvider(sqlSelector, codeActionProvider, {
+				providedCodeActionKinds: DbtCodeActionProvider.providedCodeActionKinds,
+			}),
+			vscode.languages.registerCodeActionsProvider(yamlSelector, codeActionProvider, {
+				providedCodeActionKinds: DbtCodeActionProvider.providedCodeActionKinds,
+			}),
+		];
+
+		logger.info(`Registered language providers with ${sqlSelector.length} SQL filters, ${yamlSelector.length} YAML filters`);
+	};
+
+	registerProviders();
+
+	// Re-register providers when dbt_project.yml paths change
 	context.subscriptions.push(
-		vscode.languages.registerDefinitionProvider(sqlSelector, definitionProvider),
-		vscode.languages.registerHoverProvider(sqlSelector, hoverProvider),
-		vscode.languages.registerCompletionItemProvider(sqlSelector, completionProvider, '\'', '"', '.'),
-		vscode.languages.registerCompletionItemProvider(yamlSelector, yamlCompletionProvider),
-		vscode.languages.registerHoverProvider(yamlSelector, yamlHoverProvider),
-		vscode.languages.registerReferenceProvider(sqlSelector, referenceProvider),
-		vscode.languages.registerRenameProvider(sqlSelector, renameProvider),
-		vscode.languages.registerCodeLensProvider(sqlSelector, codeLensProvider),
-		vscode.languages.registerCodeLensProvider(yamlSelector, codeLensProvider),
-		vscode.languages.registerDocumentSymbolProvider(sqlSelector, documentSymbolProvider),
-		vscode.languages.registerDocumentSymbolProvider(yamlSelector, documentSymbolProvider),
-		vscode.languages.registerWorkspaceSymbolProvider(workspaceSymbolProvider),
-		vscode.languages.registerSignatureHelpProvider(sqlSelector, signatureHelpProvider, '(', ','),
-		vscode.languages.registerCodeActionsProvider(sqlSelector, codeActionProvider, {
-			providedCodeActionKinds: DbtCodeActionProvider.providedCodeActionKinds,
+		manifestWatcher.onProjectConfigChanged(() => {
+			pathResolver.refresh(manifestLoader.projectConfig);
 		}),
-		vscode.languages.registerCodeActionsProvider(yamlSelector, codeActionProvider, {
-			providedCodeActionKinds: DbtCodeActionProvider.providedCodeActionKinds,
+		pathResolver.onPathsChanged(() => {
+			logger.info('dbt project paths changed — re-registering language providers');
+			registerProviders();
 		}),
+		{ dispose: () => { for (const d of providerDisposables) d.dispose(); } },
 	);
 
 	// -------- Register commands --------
@@ -592,6 +621,47 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				profilerDecorationProvider.toggle();
 			}
 			void vscode.commands.executeCommand('setContext', ProfilerDecorationProvider.contextKey, false);
+		}),
+	);
+
+	// -------- Query runner (ad-hoc SQL execution) --------
+	const queryResultPanel = QueryResultPanel.getInstance(context.extensionUri);
+	const queryRunner = new QueryRunner(databaseProvider, (results) => {
+		queryResultPanel.showResults(results);
+	});
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('dbt-studio.executeQuery', async () => {
+			const editor = vscode.window.activeTextEditor;
+			if (!editor || editor.document.languageId !== 'jinja-sql') {
+				void vscode.window.showWarningMessage('Open a dbt SQL file to execute queries.');
+				return;
+			}
+			const category = pathResolver.classifyFile(editor.document.fileName);
+			if (category === 'model' || category === 'snapshot' || category === 'seed') {
+				void vscode.window.showInformationMessage('Use the Run / Compile CodeLens to execute model files.');
+				return;
+			}
+			await queryRunner.executeFromEditor(editor);
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.executeAll', async () => {
+			const editor = vscode.window.activeTextEditor;
+			if (!editor || editor.document.languageId !== 'jinja-sql') {
+				void vscode.window.showWarningMessage('Open a dbt SQL file to execute queries.');
+				return;
+			}
+			const category = pathResolver.classifyFile(editor.document.fileName);
+			if (category === 'model' || category === 'snapshot' || category === 'seed') {
+				void vscode.window.showInformationMessage('Use the Run / Compile CodeLens to execute model files.');
+				return;
+			}
+			await queryRunner.executeAll(editor);
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.executeStatement', async (sql: string) => {
+			if (!sql) return;
+			await queryRunner.executeSql(sql);
 		}),
 	);
 

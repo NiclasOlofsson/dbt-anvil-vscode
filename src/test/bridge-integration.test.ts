@@ -335,9 +335,37 @@ select mkey, sourcename from warehouse`);
 		expect(cols.find(c => c.name === 'sourcename')?.line).toBe(3);
 	}, 30_000);
 
-	// Line-number accuracy is tested by the 'parses SQL where a dbt macro appears
-	// in a statement-level position' test above, which asserts ctes[0]['line'] and
-	// per-column line numbers are in raw-SQL coordinates after the jinja2 fallback path.
+	it('alias column positions are exact when a statement-level macro co-exists with {{ ref() }} aliases', async () => {
+		// Regression: when a statement-level macro (e.g. {{generic_is_deleted(...)}})
+		// forces Pass 2 (Jinja2 rendering), every {{ ref('model') }} tag on the
+		// same line as an alias renders to a shorter string (e.g. 'silver__company'
+		// instead of the 28-char Jinja tag).  The line_map only fixed *line* numbers,
+		// not column offsets, so aliasCol was reported as 21 instead of 34.
+		// Pass 1b (_blank_jinja with macro_mode='comment') fixes this: unknown macros
+		// become /* ... */ block comments (same length, valid everywhere) so the
+		// parse succeeds without Jinja rendering and column offsets remain exact.
+		const sql = [
+			'select',
+			'    co.companykey,',
+			'    co.companyname',
+			'from {{ ref(\'silver__company\') }} co',
+			'left join {{ ref(\'gold__sourcesystem\') }} ss',
+			'    on co.sourcesystembkey = ss.sourcename',
+			'{{generic_is_deleted(\'co.is_deleted\',\'where\')}}',
+		].join('\n');
+		const result = await parseSql(sql);
+		expect(result.success).toBe(true);
+		const data = result.data as Record<string, unknown>;
+		type TableRefTok = { type: string; name: string; alias?: string; aliasLine?: number; aliasCol?: number; aliasEndCol?: number };
+		const tokens = data['tokens'] as TableRefTok[];
+		const coTok = tokens.find(t => t.type === 'table_ref' && t.alias === 'co');
+		// 'co' alias appears after '{{ ref(\'silver__company\') }} ' on line 3 (0-based).
+		// raw col = len('from ') + len('{{ ref(\'silver__company\') }}') + len(' ') = 5 + 28 + 1 = 34
+		expect(coTok?.aliasLine).toBe(3);
+		expect(coTok?.aliasCol).toBe(34);
+		expect(coTok?.aliasEndCol).toBe(36);
+	}, 30_000);
+
 });
 
 describe('bridge parse_document – sqlglotWarnings', () => {

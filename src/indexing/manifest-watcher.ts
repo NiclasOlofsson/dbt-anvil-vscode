@@ -28,8 +28,10 @@ export class ManifestWatcher {
 	private readonly _contentHashes = new Map<string, string>();
 	private readonly _nonWsHashes = new Map<string, string>();
 	private readonly _onIndexRebuild = new vscode.EventEmitter<ManifestIndexer>();
+	private readonly _onProjectConfigChanged = new vscode.EventEmitter<void>();
 
 	readonly onIndexRebuild = this._onIndexRebuild.event;
+	readonly onProjectConfigChanged = this._onProjectConfigChanged.event;
 
 	constructor(
 		private readonly loader: ManifestLoader,
@@ -49,6 +51,7 @@ export class ManifestWatcher {
 		this._projectWatcher = vscode.workspace.createFileSystemWatcher(projectPattern);
 		this._projectWatcher.onDidChange(() => {
 			this.loader.reloadProjectConfig();
+			this._onProjectConfigChanged.fire();
 			this._rebuild('dbt_project.yml changed');
 		});
 

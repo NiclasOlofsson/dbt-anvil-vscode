@@ -1060,7 +1060,7 @@ _STATEMENT_MACROS = frozenset(
 )
 
 
-def _blank_jinja(sql: str) -> str:
+def _blank_jinja(sql: str, macro_mode: str = "identifier") -> str:
     """Replace Jinja tags with space-padded SQL-safe placeholders.
 
     Preserves ``len(result) == len(sql)`` so every character offset and line
@@ -1070,11 +1070,24 @@ def _blank_jinja(sql: str) -> str:
     - ``{{ ref('model') }}``               → ``model              `` (real model name)
     - ``{{ source('ns','tbl') }}``         → ``tbl                `` (real table name)
     - ``{{ config(...) }}`` / known no-SQL → all spaces (produces no SQL output)
-    - ``{{ my_macro('arg') }}``            → ``my_macro            `` (macro name as identifier)
-    - ``{{ ns.macro('arg') }}``            → ``macro               `` (last name component)
+    - ``{{ my_macro('arg') }}``            → depends on *macro_mode* (see below)
+    - ``{{ ns.macro('arg') }}``            → last name component (identifier mode)
     - ``{{ arbitrary_expr }}``             → ``_                   `` (safe fallback identifier)
     - ``{% ... %}`` block/statement tags   → all spaces (never expression values)
     - ``{# ... #}`` comment tags           → all spaces
+
+    *macro_mode* controls how unknown callable ``{{ }}`` tags are replaced:
+
+    - ``'identifier'`` (default): replace with the macro name as an identifier
+      padded with spaces (e.g. ``generic_is_deleted             ``).  Works
+      when the macro appears in an *expression* position; fails when it appears
+      at *statement level* (bare identifier after a complete SELECT…JOIN is not
+      valid SQL and sqlglot rejects the file).
+    - ``'comment'``: replace with a ``/* … */`` block comment of the same byte
+      length (e.g. ``/* generic_is_deleted       */``).  SQL block comments are
+      syntactically valid in *every* position — expression or statement level —
+      so sqlglot can always parse the blanked SQL.  Use this as a retry when
+      ``'identifier'`` mode produces an un-parseable file.
 
     Newlines inside tags are always preserved so line numbers stay correct.
     """
@@ -1085,9 +1098,10 @@ def _blank_jinja(sql: str) -> str:
         start, end = m.start(), m.end()
 
         # Determine replacement: an identifier string, or blank_to_spaces=True,
-        # or neither (falls back to ``_`` anchor for unknown expression tags).
+        # or use_comment=True (comment mode for statement-level macros).
         identifier: str | None = None
         blank_to_spaces = not tag.startswith("{{")  # {# #} and {% %} always spaces
+        use_comment = False
 
         if tag.startswith("{{"):
             ref_m = _REF_TAG_RE.fullmatch(tag)
@@ -1106,13 +1120,28 @@ def _blank_jinja(sql: str) -> str:
                             # Do NOT fall through to the ``_`` fallback — a bare
                             # ``_`` before e.g. ``WITH`` causes a parse error.
                             blank_to_spaces = True
+                        elif macro_mode == "comment":
+                            use_comment = True
                         else:
                             identifier = name
 
         # Blank the tag character-by-character, skipping newlines.
         non_nl_positions = [i for i in range(start, end) if sql[i] != "\n"]
 
-        if identifier and non_nl_positions:
+        if use_comment:
+            # SQL block comment of the same length — valid in any syntactic position.
+            n = len(non_nl_positions)
+            if n >= 4:
+                buf[non_nl_positions[0]] = "/"
+                buf[non_nl_positions[1]] = "*"
+                for pos in non_nl_positions[2:-2]:
+                    buf[pos] = " "
+                buf[non_nl_positions[-2]] = "*"
+                buf[non_nl_positions[-1]] = "/"
+            else:
+                for pos in non_nl_positions:
+                    buf[pos] = " "
+        elif identifier and non_nl_positions:
             # Write identifier chars into the first N positions, spaces for the rest.
             for j, pos in enumerate(non_nl_positions):
                 buf[pos] = identifier[j] if j < len(identifier) else " "
@@ -1546,6 +1575,25 @@ def handle_parse_document(request: dict[str, Any]) -> None:
         ast = parse_one(parse_sql, dialect=sqlglot_dialect, error_level=None)
     except Exception:
         pass
+
+    # ------------------------------------------------------------------
+    # Pass 1b: _blank_jinja with comment mode — retried when identifier mode
+    # produced un-parseable SQL.  Macros in statement-level positions (e.g.
+    # ``{{ generic_is_deleted(col, 'where') }}``) become ``/* name... */``
+    # block comments, which are valid SQL in every syntactic position.
+    # Column offsets are still exact (same-length replacement, no line_map
+    # remapping needed), so aliasCol / tableCol are correct in raw coordinates.
+    # ------------------------------------------------------------------
+    if ast is None:
+        try:
+            parse_sql_1b = _blank_jinja(raw_sql, macro_mode="comment")
+            ast_1b = parse_one(parse_sql_1b, dialect=sqlglot_dialect, error_level=None)
+            if ast_1b is not None:
+                parse_sql = parse_sql_1b
+                ast = ast_1b
+                # line_map stays None — positions are still in raw space.
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Pass 2: Jinja2 stub rendering — handles macros emitting SQL fragments.

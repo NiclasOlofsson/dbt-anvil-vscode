@@ -39,3 +39,18 @@ export function resolveMacroPaths(config: DbtProjectConfig | undefined, projectD
 	const dirs = config?.['macro-paths'] ?? ['macros'];
 	return dirs.map(p => path.join(projectDir, p));
 }
+
+export function resolveAnalysisPaths(config: DbtProjectConfig | undefined, projectDir: string): string[] {
+	const dirs = config?.['analysis-paths'] ?? ['analyses'];
+	return dirs.map(p => path.join(projectDir, p));
+}
+
+export function resolveSnapshotPaths(config: DbtProjectConfig | undefined, projectDir: string): string[] {
+	const dirs = config?.['snapshot-paths'] ?? ['snapshots'];
+	return dirs.map(p => path.join(projectDir, p));
+}
+
+export function resolveTestPaths(config: DbtProjectConfig | undefined, projectDir: string): string[] {
+	const dirs = config?.['test-paths'] ?? ['tests'];
+	return dirs.map(p => path.join(projectDir, p));
+}

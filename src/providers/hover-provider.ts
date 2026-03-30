@@ -245,28 +245,41 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 			}
 			case 'table_qualifier': {
 				// Alias prefix of a column ref (e.g. the `o` in `o.order_id`)
+				// Use resolvedTableRef directly — same as definition provider — to avoid
+				// scoping problems in resolveAlias.
 				const alias = resolved.token.table!;
-				const target = ParseService.resolveAlias(model, alias, resolved.token.line);
-				if (!target) return null;
-				switch (target.kind) {
-					case 'cte': {
-						const refTok = resolved.token.resolvedTableRef;
-						const inner = refTok
-							? this._buildCteHover(target.cte, refTok, model, docUri)
-							: this._buildAliasHover(alias, target.cte.columns, docUri);
-						return this._wrapWithAliasHeader(alias, target.cte.name, inner);
-					}
-					case 'ref': {
-						const inner = this._hoverRef(target.ref.model);
-						if (!inner) return null;
-						return this._wrapWithAliasHeader(alias, target.ref.model, inner);
-					}
-					case 'source': {
-						const inner = this._hoverSource(target.source.sourceName, target.source.tableName);
-						if (!inner) return null;
-						return this._wrapWithAliasHeader(alias, `${target.source.sourceName}.${target.source.tableName}`, inner);
-					}
+				const refTok = resolved.token.resolvedTableRef;
+				if (!refTok) return null;
+
+				const cte = model.ctes.find(c => c.name.toLowerCase() === refTok.name.toLowerCase());
+				if (cte) {
+					const inner = this._buildCteHover(cte, refTok, model, docUri);
+					return this._wrapWithAliasHeader(alias, cte.name, inner);
 				}
+
+				const ref = model.refs.find(r => r.model.toLowerCase() === refTok.name.toLowerCase());
+				if (ref) {
+					const inner = this._hoverRef(ref.model);
+					if (!inner) {
+						const md = this._md();
+						md.appendMarkdown(`$(${SqlIcons.tableAlias}) **\`${alias}\`** \u2014 alias for \`${ref.model}\``);
+						return new vscode.Hover(md);
+					}
+					return this._wrapWithAliasHeader(alias, ref.model, inner);
+				}
+
+				const src = model.sources.find(s => s.tableName.toLowerCase() === refTok.name.toLowerCase());
+				if (src) {
+					const inner = this._hoverSource(src.sourceName, src.tableName);
+					if (!inner) {
+						const md = this._md();
+						md.appendMarkdown(`$(${SqlIcons.tableAlias}) **\`${alias}\`** \u2014 alias for \`${src.sourceName}.${src.tableName}\``);
+						return new vscode.Hover(md);
+					}
+					return this._wrapWithAliasHeader(alias, `${src.sourceName}.${src.tableName}`, inner);
+				}
+
+				return null;
 			}
 			case 'column_def':
 				// Column definition (e.g. in a CTE select list) — nothing to hover
