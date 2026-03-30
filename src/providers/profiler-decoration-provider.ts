@@ -175,7 +175,7 @@ export class ProfilerDecorationProvider implements vscode.Disposable {
 }
 
 function _formatLabel(cte: CteProfile, totalTimeMs: number): string {
-	const ms = Math.max(0, cte.marginalTimeMs);
+	const ms = cte.queryTimeMs;
 	const timeStr = ms >= 1000
 		? `${(ms / 1000).toFixed(1)}s`
 		: `${ms.toFixed(0)}ms`;

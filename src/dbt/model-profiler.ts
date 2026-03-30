@@ -7,7 +7,7 @@ import type { CompileCache } from './compile-cache';
 import { Priority } from './execution-service';
 import type { CteProfile, ProfileResult } from './profiler-types';
 import type { ProfileResultPersistence } from './profile-result-persistence';
-import type { DbtNode, DbtSource } from './manifest-types';
+
 
 /**
  * Profiles a dbt SQL model by executing cumulative CTE sub-queries and
@@ -209,34 +209,25 @@ export class ModelProfiler implements vscode.Disposable {
 		const lines = compiledSql.split('\n');
 		const runTs = String(Date.now());
 
-		// 3. Build cache-invalidation list for adapter-specific providers (e.g. Databricks REFRESH TABLE).
-		// Includes the model itself and all direct upstream refs/sources that are materialised as tables.
-		const queryHints = this._buildQueryHints(uniqueId);
-
-		// 4. Warmup: run the full model query to prime the warehouse's IO cache
+		// 3. Warmup: run the full model query once to prime the warehouse's IO cache
 		// (Delta Parquet files → SSD) so CTE timings reflect compute, not cold storage.
-		// Skipped when cache invalidation is active — no point warming data we'll immediately flush.
 		const lastCte = ctes[ctes.length - 1];
 		const fullQuery = lastCte
 			? _buildFullModelQuery(lines, lastCte.endLine, runTs)
 			: _buildNoCteFullModelQuery(compiledSql, runTs);
 
-		if (!queryHints?.invalidateCacheTables?.length) {
-			this._logger.info('Profiler: running warmup query to prime Delta table cache...');
-			try {
-				await this._dbProvider.query(fullQuery, 1, cancelSignal, Priority.Background);
-			} catch (e) {
-				this._logger.warn(`Profiler: warmup query failed (continuing): ${e}`);
-			}
-		} else {
-			this._logger.info(`Profiler: cache invalidation enabled — skipping warmup (${queryHints.invalidateCacheTables.length} tables)`);
+		this._logger.info('Profiler: running warmup query to prime Delta table cache...');
+		try {
+			await this._dbProvider.query(fullQuery, 1, cancelSignal, Priority.Background);
+		} catch (e) {
+			this._logger.warn(`Profiler: warmup query failed (continuing): ${e}`);
 		}
 
 		if (token?.isCancellationRequested) {
 			throw new Error('Profiling cancelled.');
 		}
 
-		// 5. Execute cumulative profiling queries for each CTE.
+		// 4. Execute cumulative profiling queries for each CTE.
 		const cteProfiles: CteProfile[] = [];
 		let prevCumulativeMs = 0;
 
@@ -249,7 +240,7 @@ export class ModelProfiler implements vscode.Disposable {
 			let rowCount = 0;
 			let queryTimeMs = 0;
 			try {
-				const qr = await this._dbProvider.query(profilingQuery, 1, cancelSignal, Priority.Background, queryHints);
+				const qr = await this._dbProvider.query(profilingQuery, 1, cancelSignal, Priority.Background);
 				rowCount = _extractCount(qr.rows[0]);
 				queryTimeMs = qr.executionTimeMs;
 			} catch (e) {
@@ -278,20 +269,22 @@ export class ModelProfiler implements vscode.Disposable {
 			prevCumulativeMs = queryTimeMs;
 		}
 
-		// 6. Time the full model (fullQuery already built for the warmup run).
+		// 5. Time the full model (fullQuery already built for the warmup run).
 		this._logger.debug('Profiler: executing full model query');
 		let totalRowCount = 0;
 		let totalTimeMs = 0;
 		try {
-			const fullResult = await this._dbProvider.query(fullQuery, 1, cancelSignal, Priority.Background, queryHints);
+			const fullResult = await this._dbProvider.query(fullQuery, 1, cancelSignal, Priority.Background);
 			totalRowCount = _extractCount(fullResult.rows[0]);
 			totalTimeMs = fullResult.executionTimeMs;
 		} catch (e) {
 			this._logger.warn(`Profiler: full model query failed: ${e}`);
 		}
 
+		// fractionOfTotal is based on absolute queryTimeMs so heat colors reflect real cost,
+		// not the inaccurate marginal delta (which assumes a linear CTE dependency chain).
 		for (const p of cteProfiles) {
-			p.fractionOfTotal = totalTimeMs > 0 ? p.marginalTimeMs / totalTimeMs : 0;
+			p.fractionOfTotal = totalTimeMs > 0 ? p.queryTimeMs / totalTimeMs : 0;
 		}
 
 		const status = token?.isCancellationRequested ? 'partial' : 'complete';
@@ -313,53 +306,6 @@ export class ModelProfiler implements vscode.Disposable {
 		};
 	}
 
-	/**
-	 * Build QueryHints containing the list of tables whose Delta cache should be
-	 * invalidated before each profiling query.
-	 *
-	 * Includes:
-	 * - The model itself (when materialised as table/incremental/snapshot)
-	 * - All direct upstream refs/sources that are tables (not views/ephemeral)
-	 *
-	 * Returns undefined if no tables were found (so callers can skip the hints path entirely).
-	 */
-	private _buildQueryHints(uniqueId: string): QueryHints | undefined {
-		const node = this._indexer.getRawNode(uniqueId);
-		if (!node || node.resource_type !== 'model') return undefined;
-		const modelNode = node as DbtNode;
-
-		const tables: string[] = [];
-
-		const selfMat = modelNode.config?.materialized ?? 'view';
-		if (selfMat !== 'view' && selfMat !== 'ephemeral') {
-			const q = _qualifiedNodeName(modelNode);
-			if (q) tables.push(q);
-		}
-
-		for (const depId of modelNode.depends_on?.nodes ?? []) {
-			const dep = this._indexer.getRawNode(depId);
-			if (!dep) continue;
-
-			if (dep.resource_type === 'source') {
-				const q = _qualifiedSourceName(dep as DbtSource);
-				if (q) tables.push(q);
-			} else if (
-				dep.resource_type === 'model'
-				|| dep.resource_type === 'seed'
-				|| dep.resource_type === 'snapshot'
-			) {
-				const depNode = dep as DbtNode;
-				const mat = depNode.config?.materialized ?? 'view';
-				if (mat !== 'view' && mat !== 'ephemeral') {
-					const q = _qualifiedNodeName(depNode);
-					if (q) tables.push(q);
-				}
-			}
-		}
-
-		const unique = [...new Set(tables)];
-		return unique.length > 0 ? { invalidateCacheTables: unique } : undefined;
-	}
 }
 
 /**
@@ -414,12 +360,4 @@ function _extractCount(row: Record<string, unknown> | undefined): number {
 	return Number(val ?? 0);
 }
 
-function _qualifiedNodeName(node: DbtNode): string | undefined {
-	const parts = [node.database, node.schema, node.alias ?? node.name].filter(Boolean);
-	return parts.length >= 2 ? parts.join('.') : undefined;
-}
 
-function _qualifiedSourceName(source: DbtSource): string | undefined {
-	const parts = [source.database, source.schema, source.identifier ?? source.name].filter(Boolean);
-	return parts.length >= 2 ? parts.join('.') : undefined;
-}

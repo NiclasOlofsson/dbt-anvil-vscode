@@ -106,9 +106,6 @@ export class DatabricksProvider implements DatabaseProvider {
 			return this._queryViaDbtShow(sql, limit, _priority ?? Priority.Tool);
 		}
 		const compiled = await this._maybeCompile(sql);
-		if (hints?.invalidateCacheTables?.length) {
-			await this._refreshTables(hints.invalidateCacheTables, signal);
-		}
 		this.logger.debug('DatabricksProvider: executing query directly (bypassing dbt)');
 		const t0 = performance.now();
 		const result = await this._executeStatement(compiled, limit < 0 ? undefined : limit, signal);
@@ -159,19 +156,6 @@ export class DatabricksProvider implements DatabaseProvider {
 		if (!JINJA_PATTERN.test(sql)) return sql;
 		this.logger.trace('DatabricksProvider: Jinja detected — compiling inline via bridge');
 		return this.executionService.compileInline(sql);
-	}
-
-	/** Invalidate the Delta disk cache for a list of fully-qualified table names. */
-	private async _refreshTables(tables: string[], signal: CancelSignal | undefined): Promise<void> {
-		for (const table of tables) {
-			if (signal?.aborted) return;
-			this.logger.debug(`DatabricksProvider: REFRESH TABLE ${table}`);
-			try {
-				await this._executeStatement(`REFRESH TABLE ${table}`, undefined, signal);
-			} catch (e) {
-				this.logger.warn(`DatabricksProvider: REFRESH TABLE ${table} failed (ignored): ${e}`);
-			}
-		}
 	}
 
 	/**
