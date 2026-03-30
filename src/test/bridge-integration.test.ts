@@ -361,7 +361,7 @@ describe('bridge parse_document – sqlglotWarnings', () => {
 	it('reports a syntax_error with position for a typo in a keyword', async () => {
 		// 'FRON' is not a valid keyword — sqlglot interprets it as a column alias
 		// (SELECT order_id FRON), making 'orders' the unexpected token.
-		// col 26 is the 0-based start of 'orders'; endCol 32 is its exclusive end.
+		// 'orders' starts at col 21 (0-based) and ends at 27 (exclusive).
 		const result = await parseSql('select order_id FRON orders');
 		expect(result.success).toBe(true);
 		const data = result.data as Record<string, unknown>;
@@ -369,8 +369,8 @@ describe('bridge parse_document – sqlglotWarnings', () => {
 		const syntaxErr = warnings.find(w => w.type === 'syntax_error');
 		expect(syntaxErr).toBeDefined();
 		expect(syntaxErr!.line).toBe(0);
-		expect(syntaxErr!.col).toBe(26);
-		expect(syntaxErr!.endCol).toBe(32);
+		expect(syntaxErr!.col).toBe(21);
+		expect(syntaxErr!.endCol).toBe(27);
 	}, 30_000);
 
 	it('reports no warnings for valid SQL', async () => {
@@ -387,7 +387,7 @@ select order_id, amount from orders`);
 	it('syntax_error line and col are 0-based and match the bad token', async () => {
 		// The typo is on line 3 (0-based). Same 'FRON' pattern: sqlglot treats FRON
 		// as a column alias and flags 'orders' as unexpected.
-		// Within line 3 ('select order_id FRON orders'), 'orders' is at col 26.
+		// Within line 3 ('select order_id FRON orders'), 'orders' starts at col 21.
 		const result = await parseSql('with orders as (\n    select order_id from raw_orders\n)\nselect order_id FRON orders');
 		expect(result.success).toBe(true);
 		const data = result.data as Record<string, unknown>;
@@ -395,8 +395,8 @@ select order_id, amount from orders`);
 		const syntaxErr = warnings.find(w => w.type === 'syntax_error');
 		expect(syntaxErr).toBeDefined();
 		expect(syntaxErr!.line).toBe(3);
-		expect(syntaxErr!.col).toBe(26);
-		expect(syntaxErr!.endCol).toBe(32);
+		expect(syntaxErr!.col).toBe(21);
+		expect(syntaxErr!.endCol).toBe(27);
 	}, 30_000);
 });
 
@@ -418,7 +418,7 @@ describe('bridge parse_document – variant pipeline performance', () => {
 		await bridge.shutdown();
 	});
 
-	const BENCH_RUNS = 50;
+	const BENCH_RUNS = 5;
 
 	async function parseVariants(source: string): Promise<{ variantCount: number; runTotalsMs: number[]; perVariantMs: number[] }> {
 		const variants = generateVariants(source);

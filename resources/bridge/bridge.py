@@ -1794,18 +1794,29 @@ def handle_parse_document(request: dict[str, Any]) -> None:
                 for _i, _ed in enumerate(_rerr.errors):  # type: ignore[union-attr]
                     if _i in _matched_idxs:
                         continue
+                    _highlight = _ed.get("highlight") or ""
+                    _start_ctx = _ed.get("start_context") or ""
+                    # Skip errors caused by Jinja stubs — a macro like
+                    # {{generic_is_deleted(...)}} is rendered to "__jinja__" which
+                    # is a bare identifier in statement-level positions.  The error
+                    # is a false positive; the real dbt-rendered SQL would be valid.
+                    if _SQL_STUB in _highlight or _SQL_STUB in _start_ctx:
+                        continue
                     _err_line_1b = _ed.get("line") or 1
                     _err_col_1b = _ed.get("col") or 1
-                    _highlight = _ed.get("highlight") or ""
                     _line_0 = to_raw_line(_err_line_1b - 1)
-                    _col_0 = _err_col_1b - 1
+                    # token.col is 1-based inclusive end, which equals 0-based
+                    # exclusive end.  Backtrack by len(highlight) to get the
+                    # 0-based start column.
+                    _col_end_0 = _err_col_1b  # 0-based exclusive end
+                    _col_0 = max(0, _col_end_0 - len(_highlight))
                     sqlglot_warnings.append(
                         {
                             "type": "syntax_error",
                             "message": _ed.get("description") or str(_rerr),
                             "line": _line_0,
                             "col": _col_0,
-                            "endCol": _col_0 + len(_highlight),
+                            "endCol": _col_end_0,
                         }
                     )
 

@@ -104,7 +104,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	manifestWatcher.start(projectDir);
 	container.setManifestWatcher(manifestWatcher);
 	context.subscriptions.push({ dispose: () => manifestWatcher.dispose() });
-	context.subscriptions.push({ dispose: () => contentHashPersistence.save(manifestWatcher.getHashes()) });
+	context.subscriptions.push({ dispose: () => { const { hashes, nonWsHashes } = manifestWatcher.getHashes(); contentHashPersistence.save(hashes, nonWsHashes); } });
 	context.subscriptions.push({ dispose: () => columnStorePersistence.save(manifestIndexer) });
 
 	// -------- Python bridges --------
@@ -286,10 +286,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.languages.registerCodeActionsProvider(sqlSelector, codeActionProvider, {
 			providedCodeActionKinds: DbtCodeActionProvider.providedCodeActionKinds,
 		}),
+		vscode.languages.registerCodeActionsProvider(yamlSelector, codeActionProvider, {
+			providedCodeActionKinds: DbtCodeActionProvider.providedCodeActionKinds,
+		}),
 	);
 
 	// -------- Register commands --------
 	context.subscriptions.push(
+		vscode.commands.registerCommand('dbt-studio.suppressSqlFluffWarning', async () => {
+			await vscode.workspace.getConfiguration('dbt-studio').update('suppressSqlFluffWarning', true, vscode.ConfigurationTarget.Global);
+		}),
+		vscode.commands.registerCommand('dbt-studio.suppressAutoSaveWarning', async () => {
+			await vscode.workspace.getConfiguration('dbt-studio').update('suppressAutoSaveWarning', true, vscode.ConfigurationTarget.Global);
+		}),
 		vscode.commands.registerCommand('dbt-studio.goToLine', async (args: { uri: string; line: number }) => {
 			const uri = vscode.Uri.parse(args.uri);
 			const pos = new vscode.Position(args.line, 0);

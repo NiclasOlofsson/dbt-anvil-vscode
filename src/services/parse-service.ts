@@ -125,12 +125,16 @@ export type PositionResolution =
 	| { kind: 'column_def'; token: ColumnDefToken };
 
 /**
- * A structural issue detected by sqlglot during parsing — e.g. a CTE whose
- * body cannot be scope-analysed because it uses an unsupported construct
- * (typically an `Aliases` node produced by a dangling identifier before the CTE).
- * dbt itself won't detect this because `dbt parse` does not compile the SQL.
+ * A structural issue detected by sqlglot during parsing.
+ *
+ * - `scope_warning`: SQL parsed OK but sqlglot cannot analyse a CTE scope
+ *   (e.g. a bare identifier before the CTE body). `cteName` is set.
+ * - `syntax_error`: outright parse failure (typo, missing keyword, etc.).
+ *   `cteName` is absent; `line`/`col`/`endCol` point at the bad token.
  */
 export interface SqlglotWarning {
+	/** Discriminates between structural scope issues and outright syntax errors */
+	type: 'scope_warning' | 'syntax_error';
 	/** Full sqlglot warning message */
 	message: string;
 	/** CTE name the warning refers to, if extractable */

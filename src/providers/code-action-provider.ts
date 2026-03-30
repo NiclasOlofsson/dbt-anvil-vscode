@@ -18,10 +18,37 @@ export class DbtCodeActionProvider implements vscode.CodeActionProvider {
 	provideCodeActions(
 		document: vscode.TextDocument,
 		range: vscode.Range | vscode.Selection,
-		_context: vscode.CodeActionContext,
+		context: vscode.CodeActionContext,
 		_token: vscode.CancellationToken,
 	): vscode.CodeAction[] {
 		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.codeActions', true)) return [];
+
+		// SQLFluff active warning quick fix — available on dbt_project.yml
+		const sqlfluffDiag = context.diagnostics.find(d => d.code === 'sqlfluff-active');
+		if (sqlfluffDiag) {
+			const action = new vscode.CodeAction('Don\'t show this warning', vscode.CodeActionKind.QuickFix);
+			action.diagnostics = [sqlfluffDiag];
+			action.command = {
+				title: 'Suppress SQLFluff warning',
+				command: 'dbt-studio.suppressSqlFluffWarning',
+			};
+			action.isPreferred = true;
+			return [action];
+		}
+
+		// Auto-save warning quick fix — available on dbt_project.yml
+		const autoSaveDiag = context.diagnostics.find(d => d.code === 'autosave-active');
+		if (autoSaveDiag) {
+			const action = new vscode.CodeAction('Don\'t show this warning', vscode.CodeActionKind.QuickFix);
+			action.diagnostics = [autoSaveDiag];
+			action.command = {
+				title: 'Suppress auto-save warning',
+				command: 'dbt-studio.suppressAutoSaveWarning',
+			};
+			action.isPreferred = true;
+			return [action];
+		}
+
 		if (document.languageId !== 'jinja-sql') return [];
 
 		const actions: vscode.CodeAction[] = [];

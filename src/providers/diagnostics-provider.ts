@@ -26,6 +26,14 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 	private readonly _columnCollection: vscode.DiagnosticCollection;
 	/** Structural SQL warnings from sqlglot (e.g. Aliases node type from a dangling identifier). */
 	private readonly _sqlglotCollection: vscode.DiagnosticCollection;
+	/** Warning shown on dbt_project.yml when SQLFluff is active alongside dbt Studio. */
+	private readonly _sqlfluffCollection: vscode.DiagnosticCollection;
+	/** Warning shown on dbt_project.yml when auto-save is enabled (triggers frequent dbt parse). */
+	private readonly _autoSaveCollection: vscode.DiagnosticCollection;
+	/** Visual-only dimming decoration applied from the syntax error token to end-of-file. */
+	private readonly _syntaxErrorDim: vscode.TextEditorDecorationType;
+	/** Tracks the dimmed range per document URI so it can be re-applied on tab switch. */
+	private readonly _syntaxErrorDimRanges = new Map<string, vscode.Range>();
 	private readonly _disposables: vscode.Disposable[] = [];
 	private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
 	// Per-document maps so one file's validation never cancels another file's timer/request.
@@ -47,6 +55,28 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		this._refCollection = vscode.languages.createDiagnosticCollection('dbt-studio-refs');
 		this._columnCollection = vscode.languages.createDiagnosticCollection('dbt-studio-columns');
 		this._sqlglotCollection = vscode.languages.createDiagnosticCollection('dbt-studio-sqlglot');
+		this._sqlfluffCollection = vscode.languages.createDiagnosticCollection('dbt-studio-sqlfluff');
+		this._autoSaveCollection = vscode.languages.createDiagnosticCollection('dbt-studio-autosave');
+		this._syntaxErrorDim = vscode.window.createTextEditorDecorationType({ opacity: '0.5' });
+		this._disposables.push(this._syntaxErrorDim);
+
+		// SQLFluff warning: shown on dbt_project.yml when SQLFluff extension is active.
+		// Cleared when the user sets dbt-studio.suppressSqlFluffWarning in settings.
+		this._updateSqlFluffDiagnostic();
+		// Auto-save warning: shown on dbt_project.yml when auto-save is enabled.
+		// Cleared when the user sets dbt-studio.suppressAutoSaveWarning in settings.
+		this._updateAutoSaveDiagnostic();
+		this._disposables.push(
+			vscode.workspace.onDidChangeConfiguration((e) => {
+				if (e.affectsConfiguration('dbt-studio.suppressSqlFluffWarning')) {
+					this._updateSqlFluffDiagnostic();
+				}
+				if (e.affectsConfiguration('dbt-studio.suppressAutoSaveWarning') || e.affectsConfiguration('files.autoSave')) {
+					this._updateAutoSaveDiagnostic();
+				}
+			}),
+			vscode.extensions.onDidChange(() => this._updateSqlFluffDiagnostic()),
+		);
 
 		// Parse-based diagnostics
 		this._disposables.push(
@@ -82,6 +112,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 				this._refCollection.delete(doc.uri);
 				this._columnCollection.delete(doc.uri);
 				this._sqlglotCollection.delete(doc.uri);
+				this._syntaxErrorDimRanges.delete(doc.uri.toString());
 			}),
 			vscode.workspace.onDidChangeConfiguration((e) => {
 				if (e.affectsConfiguration('dbt-studio.providers.sql.diagnostics')) {
@@ -135,29 +166,46 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 			);
 		}
 
-		// Surface sqlglot structural warnings (e.g. Aliases node type from a dangling
-		// identifier) as Warning diagnostics.  These fire on every parse — empty list
-		// clears stale diagnostics, non-empty list replaces them.
+		// Surface sqlglot warnings as diagnostics. These fire on every parse — empty
+		// list clears stale diagnostics, non-empty list replaces them.
+		// syntax_error → Error (red squiggle, precise token range)
+		// scope_warning → Warning (yellow squiggle, CTE line)
 		if (onSqlglotWarnings) {
 			this._disposables.push(
 				onSqlglotWarnings(({ uri, warnings }) => {
 					const diagnostics = warnings.map((w) => {
+						const isSyntaxError = w.type === 'syntax_error';
 						const line = w.line ?? 0;
 						const startCol = w.col ?? 0;
 						const endCol = w.endCol ?? Number.MAX_SAFE_INTEGER;
+						const severity = isSyntaxError
+							? vscode.DiagnosticSeverity.Error
+							: vscode.DiagnosticSeverity.Warning;
+						const prefix = isSyntaxError ? 'SQL syntax error' : 'SQL structure warning';
 						const diag = new vscode.Diagnostic(
 							new vscode.Range(line, startCol, line, endCol),
-							`SQL structure warning: ${w.message}`,
-							vscode.DiagnosticSeverity.Warning,
+							`${prefix}: ${w.message}`,
+							severity,
 						);
 						diag.source = 'dbt-studio (sqlglot)';
-						diag.code = 'sqlglot-scope-warning';
+						diag.code = isSyntaxError ? 'sqlglot-syntax-error' : 'sqlglot-scope-warning';
 						return diag;
 					});
 					this._sqlglotCollection.set(uri, diagnostics);
+					this._updateSyntaxErrorDim(uri, warnings);
 				}),
 			);
 		}
+
+		// Re-apply dim decoration when the user switches to a tab that already has a syntax error.
+		this._disposables.push(
+			vscode.window.onDidChangeVisibleTextEditors((editors) => {
+				for (const editor of editors) {
+					const range = this._syntaxErrorDimRanges.get(editor.document.uri.toString());
+					editor.setDecorations(this._syntaxErrorDim, range ? [range] : []);
+				}
+			}),
+		);
 
 		// Validate all currently open editors
 		for (const editor of vscode.window.visibleTextEditors) {
@@ -438,6 +486,12 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		this._refCollection.clear();
 		this._columnCollection.clear();
 		this._sqlglotCollection.clear();
+		this._sqlfluffCollection.clear();
+		this._autoSaveCollection.clear();
+		this._syntaxErrorDimRanges.clear();
+		for (const editor of vscode.window.visibleTextEditors) {
+			editor.setDecorations(this._syntaxErrorDim, []);
+		}
 		this.statusBar.setErrorCount(0);
 	}
 
@@ -450,6 +504,63 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		this._refCollection.dispose();
 		this._columnCollection.dispose();
 		this._sqlglotCollection.dispose();
+		this._sqlfluffCollection.dispose();
+		this._autoSaveCollection.dispose();
+	}
+
+	private _updateAutoSaveDiagnostic(): void {
+		const suppressed = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('suppressAutoSaveWarning');
+		const projectYml = vscode.Uri.file(`${this.projectDir}/dbt_project.yml`);
+		const autoSave = vscode.workspace.getConfiguration('files').get<string>('autoSave', 'off');
+		if (suppressed || autoSave === 'off') {
+			this._autoSaveCollection.delete(projectYml);
+			return;
+		}
+		const diag = new vscode.Diagnostic(
+			new vscode.Range(0, 0, 0, 0),
+			'Auto-save is enabled. dbt Studio triggers a dbt parse on every save of a SQL or YAML file — with auto-save on, this can run very frequently and slow things down on larger projects.',
+			vscode.DiagnosticSeverity.Warning,
+		);
+		diag.source = 'dbt-studio';
+		diag.code = 'autosave-active';
+		this._autoSaveCollection.set(projectYml, [diag]);
+	}
+
+	private _updateSqlFluffDiagnostic(): void {
+		const suppressed = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('suppressSqlFluffWarning');
+		const projectYml = vscode.Uri.file(`${this.projectDir}/dbt_project.yml`);
+		if (suppressed || !vscode.extensions.getExtension('dorzey.vscode-sqlfluff')) {
+			this._sqlfluffCollection.delete(projectYml);
+			return;
+		}
+		const diag = new vscode.Diagnostic(
+			new vscode.Range(0, 0, 0, 0),
+			'SQLFluff is active alongside dbt Studio. dbt Studio already provides SQL diagnostics for dbt models — SQLFluff may produce duplicate or conflicting warnings.',
+			vscode.DiagnosticSeverity.Warning,
+		);
+		diag.source = 'dbt-studio';
+		diag.code = 'sqlfluff-active';
+		this._sqlfluffCollection.set(projectYml, [diag]);
+	}
+
+	private _updateSyntaxErrorDim(uri: vscode.Uri, warnings: SqlglotWarning[]): void {
+		const syntaxErr = warnings.find(w => w.type === 'syntax_error');
+		if (syntaxErr) {
+			const doc = vscode.workspace.textDocuments.find(d => d.uri.toString() === uri.toString());
+			if (doc) {
+				const errorStart = new vscode.Position(syntaxErr.line ?? 0, syntaxErr.endCol ?? syntaxErr.col ?? 0);
+				const docEnd = doc.lineAt(doc.lineCount - 1).range.end;
+				this._syntaxErrorDimRanges.set(uri.toString(), new vscode.Range(errorStart, docEnd));
+			}
+		} else {
+			this._syntaxErrorDimRanges.delete(uri.toString());
+		}
+		for (const editor of vscode.window.visibleTextEditors) {
+			if (editor.document.uri.toString() === uri.toString()) {
+				const range = this._syntaxErrorDimRanges.get(uri.toString());
+				editor.setDecorations(this._syntaxErrorDim, range ? [range] : []);
+			}
+		}
 	}
 }
 
