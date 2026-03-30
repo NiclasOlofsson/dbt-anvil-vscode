@@ -61,17 +61,17 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		this._disposables.push(this._syntaxErrorDim);
 
 		// SQLFluff warning: shown on dbt_project.yml when SQLFluff extension is active.
-		// Cleared when the user sets dbt-studio.suppressSqlFluffWarning in settings.
+		// Cleared when the user sets dbt-studio.notifications.suppressSqlFluffWarning in settings.
 		this._updateSqlFluffDiagnostic();
 		// Auto-save warning: shown on dbt_project.yml when auto-save is enabled.
-		// Cleared when the user sets dbt-studio.suppressAutoSaveWarning in settings.
+		// Cleared when the user sets dbt-studio.notifications.suppressAutoSaveWarning in settings.
 		this._updateAutoSaveDiagnostic();
 		this._disposables.push(
 			vscode.workspace.onDidChangeConfiguration((e) => {
-				if (e.affectsConfiguration('dbt-studio.suppressSqlFluffWarning')) {
+				if (e.affectsConfiguration('dbt-studio.notifications.suppressSqlFluffWarning')) {
 					this._updateSqlFluffDiagnostic();
 				}
-				if (e.affectsConfiguration('dbt-studio.suppressAutoSaveWarning') || e.affectsConfiguration('files.autoSave')) {
+				if (e.affectsConfiguration('dbt-studio.notifications.suppressAutoSaveWarning') || e.affectsConfiguration('files.autoSave')) {
 					this._updateAutoSaveDiagnostic();
 				}
 			}),
@@ -509,7 +509,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 	}
 
 	private _updateAutoSaveDiagnostic(): void {
-		const suppressed = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('suppressAutoSaveWarning');
+		const suppressed = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('notifications.suppressAutoSaveWarning');
 		const projectYml = vscode.Uri.file(`${this.projectDir}/dbt_project.yml`);
 		const autoSave = vscode.workspace.getConfiguration('files').get<string>('autoSave', 'off');
 		if (suppressed || autoSave === 'off') {
@@ -527,7 +527,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 	}
 
 	private _updateSqlFluffDiagnostic(): void {
-		const suppressed = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('suppressSqlFluffWarning');
+		const suppressed = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('notifications.suppressSqlFluffWarning');
 		const projectYml = vscode.Uri.file(`${this.projectDir}/dbt_project.yml`);
 		if (suppressed || !vscode.extensions.getExtension('dorzey.vscode-sqlfluff')) {
 			this._sqlfluffCollection.delete(projectYml);

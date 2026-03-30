@@ -52,11 +52,11 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 		private readonly globalState: vscode.Memento,
 	) {
 		this._followActive = globalState.get<boolean>('dbt-studio.lineageFollowActive', true);
-		this._showTests = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('lineageShowTests', true);
+		this._showTests = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('lineage.showTests', true);
 		vscode.workspace.onDidChangeConfiguration(e => {
-			if (e.affectsConfiguration('dbt-studio.lineageShowTests')) {
-				this._showTests = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('lineageShowTests', true);
-				void vscode.commands.executeCommand('setContext', 'dbt-studio.lineageShowTests', this._showTests);
+			if (e.affectsConfiguration('dbt-studio.lineage.showTests')) {
+				this._showTests = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('lineage.showTests', true);
+				void vscode.commands.executeCommand('setContext', 'dbt-studio.lineage.showTests', this._showTests);
 				this._updateGraph();
 			}
 		});
@@ -89,7 +89,7 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 	}
 
 	setShowTests(value: boolean): void {
-		void vscode.workspace.getConfiguration('dbt-studio').update('lineageShowTests', value, vscode.ConfigurationTarget.Global);
+		void vscode.workspace.getConfiguration('dbt-studio').update('lineage.showTests', value, vscode.ConfigurationTarget.Global);
 		// Config change listener handles re-render and context key update
 	}
 
