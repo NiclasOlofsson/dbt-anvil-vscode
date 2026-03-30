@@ -209,6 +209,16 @@
 			{
 				"command": "dbt-studio.profiler.goToCte",
 				"title": "dbt Studio: Go to CTE Definition"
+			},
+			{
+				"command": "dbt-studio.profiler.showDecorations",
+				"title": "dbt Studio: Show Profile Decorations",
+				"icon": "$(eye)"
+			},
+			{
+				"command": "dbt-studio.profiler.hideDecorations",
+				"title": "dbt Studio: Hide Profile Decorations",
+				"icon": "$(eye-closed)"
 			}
 		],
 		"viewsContainers": {
@@ -340,6 +350,16 @@
 					"command": "dbt-studio.openSettings",
 					"when": "view == dbt-studio.modelExplorer",
 					"group": "navigation@100"
+				},
+				{
+					"command": "dbt-studio.profiler.showDecorations",
+					"when": "view == dbt-studio.profilerResults && !dbt-studio.profilerDecorationsVisible",
+					"group": "navigation"
+				},
+				{
+					"command": "dbt-studio.profiler.hideDecorations",
+					"when": "view == dbt-studio.profilerResults && dbt-studio.profilerDecorationsVisible",
+					"group": "navigation"
 				}
 			],
 			"view/item/context": [

@@ -185,6 +185,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	void vscode.commands.executeCommand('setContext', 'dbt-studio.lineageFollowActive', lineageGraphProvider.followActive);
 	void vscode.commands.executeCommand('setContext', 'dbt-studio.lineageShowTests', lineageGraphProvider.showTests);
 	void vscode.commands.executeCommand('setContext', 'dbt-studio.explorerFollowActive', modelExplorerProvider.followActive);
+	void vscode.commands.executeCommand('setContext', ProfilerDecorationProvider.contextKey, true);
 	const testExplorerProvider = new TestExplorerProvider(manifestIndexer, manifestLoader, logger);
 
 	const modelExplorerView = vscode.window.createTreeView('dbt-studio.modelExplorer', {
@@ -578,6 +579,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				selection: new vscode.Range(pos, pos),
 				preserveFocus: false,
 			});
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.profiler.showDecorations', () => {
+			if (!profilerDecorationProvider.visible) {
+				profilerDecorationProvider.toggle();
+			}
+			void vscode.commands.executeCommand('setContext', ProfilerDecorationProvider.contextKey, true);
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.profiler.hideDecorations', () => {
+			if (profilerDecorationProvider.visible) {
+				profilerDecorationProvider.toggle();
+			}
+			void vscode.commands.executeCommand('setContext', ProfilerDecorationProvider.contextKey, false);
 		}),
 	);
 
