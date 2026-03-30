@@ -202,7 +202,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	// -------- Profiler views --------
 	const profilerResultsProvider = new ProfilerResultsProvider(modelProfiler);
-	const profilerDecorationProvider = new ProfilerDecorationProvider(modelProfiler);
+	const profilerDecorationProvider = new ProfilerDecorationProvider(modelProfiler, parseService, manifestIndexer);
 	context.subscriptions.push(
 		profilerResultsProvider,
 		profilerDecorationProvider,
@@ -572,9 +572,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			}
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.profiler.goToCte', async (filePath: string, line: number) => {
+		vscode.commands.registerCommand('dbt-studio.profiler.goToCte', async (filePath: string, cteName: string) => {
 			const doc = await vscode.workspace.openTextDocument(filePath);
-			const pos = new vscode.Position(line, 0);
+			const adapterType = manifestIndexer.index?.adapterType ?? 'ansi';
+			const model = await parseService.getDocumentModel(doc, adapterType, { skipEnrichment: true });
+			const cte = model?.ctes.find(c => c.name === cteName);
+			const pos = new vscode.Position(cte?.line ?? 0, 0);
 			await vscode.window.showTextDocument(doc, {
 				selection: new vscode.Range(pos, pos),
 				preserveFocus: false,

@@ -440,11 +440,11 @@ describe('ModelProfiler — COUNT(*) result extraction', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Tests: definitionLine is propagated
+// Tests: CteProfile structure
 // ---------------------------------------------------------------------------
 
 describe('ModelProfiler — metadata propagation', () => {
-	it('propagates definitionLine from ParseService CteInfo', async () => {
+	it('CteProfile carries name and timing only — no line positions', async () => {
 		const dbProvider = makeDbProvider([5, 50]);
 		const profiler = new ModelProfiler(
 			makeParseService([{ name: 'alpha', line: 7 }]),
@@ -455,7 +455,9 @@ describe('ModelProfiler — metadata propagation', () => {
 		);
 
 		const result = await profiler.profileDocument(makeDocument('/model.sql'));
-		expect(result.cteProfiles[0].definitionLine).toBe(7);
+		expect(result.cteProfiles[0].name).toBe('alpha');
+		expect(result.cteProfiles[0]).not.toHaveProperty('definitionLine');
+		expect(result.cteProfiles[0]).not.toHaveProperty('endLine');
 	});
 
 	it('records modelName and sourceFilePath in the result', async () => {

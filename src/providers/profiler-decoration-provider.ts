@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import type { ModelProfiler } from '../dbt/model-profiler';
 import type { ProfileResult, CteProfile } from '../dbt/profiler-types';
+import type { ParseService } from '../services/parse-service';
+import type { ManifestIndexer } from '../indexing/manifest-indexer';
 
 /**
  * Renders inline timing annotations, gutter icons, and overview ruler colours
@@ -67,7 +69,11 @@ export class ProfilerDecorationProvider implements vscode.Disposable {
 
 	private readonly _disposables: vscode.Disposable[] = [];
 
-	constructor(private readonly _profiler: ModelProfiler) {
+	constructor(
+		private readonly _profiler: ModelProfiler,
+		private readonly _parseService: ParseService,
+		private readonly _indexer: ManifestIndexer,
+	) {
 		this._disposables.push(
 			vscode.window.onDidChangeActiveTextEditor(e => this._applyToEditor(e)),
 			_profiler.onProfileComplete(result => this._handleResult(result)),
@@ -98,10 +104,10 @@ export class ProfilerDecorationProvider implements vscode.Disposable {
 	private _handleResult(result: ProfileResult): void {
 		const editor = vscode.window.activeTextEditor;
 		if (!editor || editor.document.fileName !== result.sourceFilePath) return;
-		this._apply(editor, result);
+		void this._applyToEditor(editor);
 	}
 
-	private _applyToEditor(editor: vscode.TextEditor | undefined): void {
+	private async _applyToEditor(editor: vscode.TextEditor | undefined): Promise<void> {
 		if (!editor || editor.document.languageId !== 'jinja-sql') {
 			this._clearAll(editor);
 			return;
@@ -115,7 +121,10 @@ export class ProfilerDecorationProvider implements vscode.Disposable {
 			this._clearAll(editor);
 			return;
 		}
-		this._apply(editor, result);
+		const adapterType = this._indexer.index?.adapterType ?? 'ansi';
+		const model = await this._parseService.getDocumentModel(editor.document, adapterType, { skipEnrichment: true });
+		const cteByName = new Map((model?.ctes ?? []).map(c => [c.name, c]));
+		this._apply(editor, result, cteByName);
 	}
 
 	private _clearAll(editor: vscode.TextEditor | undefined): void {
@@ -129,7 +138,7 @@ export class ProfilerDecorationProvider implements vscode.Disposable {
 		editor.setDecorations(this._runningType, []);
 	}
 
-	private _apply(editor: vscode.TextEditor, result: ProfileResult): void {
+	private _apply(editor: vscode.TextEditor, result: ProfileResult, cteByName: Map<string, { line: number; endLine: number }>): void {
 		if (result.status === 'running' && result.cteProfiles.length === 0) {
 			// Nothing profiled yet — no decoration needed
 			this._clearAll(editor);
@@ -158,10 +167,12 @@ export class ProfilerDecorationProvider implements vscode.Disposable {
 		const hotRuler: vscode.DecorationOptions[] = [];
 
 		for (const cte of result.cteProfiles) {
-			const line = cte.definitionLine;
+			const pos = cteByName.get(cte.name);
+			if (!pos) continue;
+			const line = pos.line;
 			if (line < 0 || line >= editor.document.lineCount) continue;
 
-			const endLine = Math.min(cte.endLine, editor.document.lineCount - 1);
+			const endLine = Math.min(pos.endLine, editor.document.lineCount - 1);
 			const defLineLen = editor.document.lineAt(line).text.length;
 
 			// Inline text + gutter icon: range anchored to definition line only
