@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
-import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import type { ILogger } from '../types/logger';
-import { ParseService } from '../services/parse-service';
-import { isLinePositionInComment, computeCommentRanges, isOffsetInComment } from './comment-utils';
+import type { ManifestIndexer } from '../../indexing/manifest-indexer';
+import type { ILogger } from '../../types/logger';
+import { ParseService } from '../../services/parse-service';
+import { isLinePositionInComment, computeCommentRanges, isOffsetInComment } from '../common/comment-utils';
 import { SQL_KEYWORDS } from './sql-keywords';
 
 /**
@@ -142,7 +142,7 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 	/** Resolve a list of unique IDs to file paths via the models index. */
 	private _resolveFilePaths(
 		uniqueIds: string[],
-		index: import('../indexing/manifest-indexer').ManifestIndex,
+		index: import('../../indexing/manifest-indexer').ManifestIndex,
 	): string[] {
 		const paths: string[] = [];
 		const seen = new Set<string>();

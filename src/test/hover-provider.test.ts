@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as vscode from 'vscode';
-import { DbtHoverProvider } from '../providers/hover-provider';
+import { DbtHoverProvider } from '../providers/sql/hover-provider';
 import { ParseService } from '../services/parse-service';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { DocumentModel, TokenInfo } from '../services/parse-service';

@@ -1,16 +1,15 @@
 import * as vscode from 'vscode';
-import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import type { ParseService } from '../services/parse-service';
-import type { ILogger } from '../types/logger';
-import { SqlSymbolKind } from './common/icons';
+import type { ManifestIndexer } from '../../indexing/manifest-indexer';
+import type { ParseService } from '../../services/parse-service';
+import type { ILogger } from '../../types/logger';
+import { SqlSymbolKind } from '../common/icons';
 
 /**
- * Document symbols for the Outline panel.
- * SQL files: CTEs and final SELECT shown as named symbols with column children,
- *            backed by the bridge-parsed DocumentModel.
- * YAML files: model → columns → tests hierarchy.
+ * Document symbols for the Outline panel in SQL files.
+ * CTEs and final SELECT shown as named symbols with column children,
+ * backed by the bridge-parsed DocumentModel.
  */
-export class DbtDocumentSymbolProvider implements vscode.DocumentSymbolProvider {
+export class SqlDocumentSymbolProvider implements vscode.DocumentSymbolProvider {
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
@@ -22,15 +21,7 @@ export class DbtDocumentSymbolProvider implements vscode.DocumentSymbolProvider 
 		_token: vscode.CancellationToken,
 	): vscode.ProviderResult<vscode.DocumentSymbol[]> {
 		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.documentSymbols', true)) return [];
-		if (document.languageId === 'jinja-sql') {
-			return this._sqlSymbols(document);
-		}
-
-		if (document.languageId === 'yaml') {
-			return this._yamlSymbols(document);
-		}
-
-		return [];
+		return this._sqlSymbols(document);
 	}
 
 	private async _sqlSymbols(document: vscode.TextDocument): Promise<vscode.DocumentSymbol[]> {
@@ -42,7 +33,7 @@ export class DbtDocumentSymbolProvider implements vscode.DocumentSymbolProvider 
 
 	private _symbolsFromModel(
 		document: vscode.TextDocument,
-		model: import('../services/parse-service').DocumentModel,
+		model: import('../../services/parse-service').DocumentModel,
 	): vscode.DocumentSymbol[] {
 		if (model.ctes.length === 0 && model.finalColumns.length === 0) return [];
 
@@ -125,65 +116,6 @@ export class DbtDocumentSymbolProvider implements vscode.DocumentSymbolProvider 
 			'[parse-service] DocumentSymbol: '
 			+ symbols.length + ' symbols from DocumentModel in ' + document.fileName,
 		);
-		return symbols;
-	}
-
-	private _yamlSymbols(document: vscode.TextDocument): vscode.DocumentSymbol[] {
-		const text = document.getText();
-		const lines = text.split('\n');
-		const symbols: vscode.DocumentSymbol[] = [];
-
-		let currentModel: vscode.DocumentSymbol | undefined;
-		let inColumnsBlock = false;
-
-		for (let i = 0; i < lines.length; i++) {
-			const line = lines[i];
-
-			// Model: `  - name: model_name`
-			const modelMatch = /^(\s{2,4})-\s+name:\s+(\S+)/.exec(line);
-			if (modelMatch && !inColumnsBlock) {
-				const range = new vscode.Range(i, 0, i, line.length);
-				currentModel = new vscode.DocumentSymbol(
-					modelMatch[2],
-					'model',
-					vscode.SymbolKind.Class,
-					range,
-					range,
-				);
-				symbols.push(currentModel);
-				inColumnsBlock = false;
-				continue;
-			}
-
-			// columns: block
-			if (/^\s+columns:\s*$/.test(line)) {
-				inColumnsBlock = true;
-				continue;
-			}
-
-			// New block at same or lower indent — exit columns
-			if (inColumnsBlock && /^\s{2,4}\w/.test(line) && !/^\s+-/.test(line)) {
-				inColumnsBlock = false;
-			}
-
-			// Column: `      - name: column_name`
-			if (inColumnsBlock && currentModel) {
-				const colMatch = /^\s+-\s+name:\s+(\S+)/.exec(line);
-				if (colMatch) {
-					const range = new vscode.Range(i, 0, i, line.length);
-					const colSymbol = new vscode.DocumentSymbol(
-						colMatch[1],
-						'column',
-						vscode.SymbolKind.Field,
-						range,
-						range,
-					);
-					currentModel.children.push(colSymbol);
-				}
-			}
-		}
-
-		this.logger.debug(`DocumentSymbol: ${symbols.length} YAML symbols in ${document.fileName}`);
 		return symbols;
 	}
 

@@ -1,5 +1,5 @@
-import { ParseService } from '../services/parse-service';
-import type { DocumentModel, RefInfo, SourceInfo } from '../services/parse-service';
+import { ParseService } from '../../services/parse-service';
+import type { DocumentModel, RefInfo, SourceInfo } from '../../services/parse-service';
 
 export const JINJA_BUILTINS = new Set([
 	'ref', 'source', 'config', 'set', 'if', 'for', 'block', 'macro', 'call',

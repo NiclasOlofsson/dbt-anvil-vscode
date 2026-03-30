@@ -3,7 +3,7 @@ import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ParseService } from '../services/parse-service';
 import type { DocumentModel } from '../services/parse-service';
 
-import { DbtCompletionProvider } from '../providers/completion-provider';
+import { DbtCompletionProvider } from '../providers/sql/completion-provider';
 import { createMockLogger } from './helpers';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

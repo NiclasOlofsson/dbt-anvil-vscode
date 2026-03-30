@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
-import { DbtSymbolKind } from '../providers/icons';
+import { DbtSymbolKind } from './common/icons';
 
 /**
  * Workspace-wide symbol search (Ctrl+T / Cmd+T).

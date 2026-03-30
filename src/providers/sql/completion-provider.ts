@@ -1,9 +1,9 @@
 import * as vscode from 'vscode';
-import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import type { ILogger } from '../types/logger';
-import { ParseService } from '../services/parse-service';
-import { isLinePositionInComment } from './comment-utils';
-import { DbtCompletionKind } from './icons';
+import type { ManifestIndexer } from '../../indexing/manifest-indexer';
+import type { ILogger } from '../../types/logger';
+import { ParseService } from '../../services/parse-service';
+import { isLinePositionInComment } from '../common/comment-utils';
+import { DbtCompletionKind } from '../common/icons';
 
 /**
  * Completions for ref(), source(), macros, columns, and CTE/table names

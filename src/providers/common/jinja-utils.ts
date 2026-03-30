@@ -1,4 +1,4 @@
-import type { ManifestIndexer } from '../indexing/manifest-indexer';
+import type { ManifestIndexer } from '../../indexing/manifest-indexer';
 import { computeCommentRanges, isOffsetInComment } from './comment-utils';
 
 export interface StrippedSql {

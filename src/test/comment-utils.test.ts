@@ -3,7 +3,7 @@ import {
 	computeCommentRanges,
 	isOffsetInComment,
 	isLinePositionInComment,
-} from '../providers/comment-utils';
+} from '../providers/common/comment-utils';
 
 describe('computeCommentRanges', () => {
 	it('detects line comments (--)', () => {
