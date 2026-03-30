@@ -2,6 +2,8 @@ export interface CteProfile {
 	name: string;
 	/** 0-based line in the source SQL file where this CTE is defined */
 	definitionLine: number;
+	/** 0-based line of the closing paren of this CTE's body */
+	endLine: number;
 	/** Execution time (ms) of the profiling query for this CTE — each query includes all CTEs up to this one, so this naturally grows with each step */
 	queryTimeMs: number;
 	/** Wall-clock ms attributable to just this CTE (marginal cost) */

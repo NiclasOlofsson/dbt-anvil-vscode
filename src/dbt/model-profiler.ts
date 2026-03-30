@@ -252,6 +252,7 @@ export class ModelProfiler implements vscode.Disposable {
 			cteProfiles.push({
 				name: cte.name,
 				definitionLine: cte.line,
+				endLine: cte.endLine,
 				queryTimeMs,
 				marginalTimeMs: queryTimeMs - prevCumulativeMs,
 				rowCount,
