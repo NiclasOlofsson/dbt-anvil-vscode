@@ -318,14 +318,14 @@ describe('ParseService.traceCteLineage', () => {
 		expect(chain).toEqual(['raw_orders']);
 	});
 
-	it('returns [alias, ref(name)] for a direct ref() token with an alias', () => {
-		// FROM {{ ref('gold__address') }} wh — token: name='gold__address', alias='wh'
+	it('returns [ref(name)] for a direct ref() token with an alias', () => {
+		// FROM {{ ref('gold__address') }} wh — the alias is the qualifier, not a chain step
 		const directRef: import('../services/parse-service').TableRefToken = {
 			type: 'table_ref', name: 'gold__address', alias: 'wh', line: 1, col: 5, endCol: 18,
 		};
 		// model has refs: [{ model: 'gold__address', line: 1 }]
 		const chain = ParseService.traceCteLineage(directRef, model);
-		expect(chain).toEqual(['wh', "ref('gold__address')"]);
+		expect(chain).toEqual(["ref('gold__address')"]);
 	});
 
 	it('follows a two-hop chain: cte_b → cte_a → ref', () => {

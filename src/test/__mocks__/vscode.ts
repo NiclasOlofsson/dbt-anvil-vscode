@@ -156,6 +156,13 @@ export class ThemeColor {
 	constructor(public id: string) {}
 }
 
+export class RelativePattern {
+	constructor(
+		public readonly base: string,
+		public readonly pattern: string,
+	) {}
+}
+
 export class FileDecoration {
 	color?: ThemeColor;
 	constructor(init?: { color?: ThemeColor }) {

@@ -10,10 +10,17 @@ import { DbtCodeActionProvider } from '../providers/code-action-provider';
 import { createMockLogger } from './helpers';
 import type { ManifestIndexer, ManifestIndex, IndexedModel, IndexedSource, IndexedMacro } from '../indexing/manifest-indexer';
 import type { ManifestLoader } from '../dbt/manifest-loader';
+import type { DbtPathResolver, DbtFileCategory } from '../dbt/dbt-path-resolver';
 import type { ParseService } from '../services/parse-service';
 
 function createMockParseService(): ParseService {
 	return { getDocumentModel: vi.fn().mockResolvedValue(null) } as unknown as ParseService;
+}
+
+function createMockPathResolver(mapping: Record<string, DbtFileCategory> = {}): DbtPathResolver {
+	return {
+		classifyFile: (filePath: string) => mapping[filePath] ?? 'unknown',
+	} as unknown as DbtPathResolver;
 }
 
 // --------------- Helpers ---------------
@@ -262,6 +269,10 @@ describe('DbtCodeLensProvider', () => {
 		vi.clearAllMocks();
 		indexer = createMockIndexer();
 		provider = new DbtCodeLensProvider(indexer, createMockLogger());
+		provider.setPathResolver(createMockPathResolver({
+			'/project/models/customers.sql': 'model',
+			'/project/models/orders.sql': 'model',
+		}));
 	});
 
 	it('provides Run/Build/Test/Compile lenses for known SQL model', () => {
@@ -282,13 +293,26 @@ describe('DbtCodeLensProvider', () => {
 		expect(result[0].command?.command).toBe('dbt-studio.runModel');
 	});
 
-	it('returns empty for unknown model', () => {
-		const doc = createMockDocument('select 1', {
-			fileName: '/project/models/unknown_model.sql',
+	it('shows ad-hoc Run lenses for unknown model', () => {
+		const doc = createMockDocument('SELECT 1;\nSELECT 2', {
+			fileName: '/project/analyses/scratch.sql',
 		});
 
 		const result = provider.provideCodeLenses(doc, mockToken);
-		expect(result).toEqual([]);
+		const titles = result.map(l => l.command?.title);
+		expect(titles).toContain('$(run-all) Run All (2)');
+		expect(titles.filter(t => t === '$(play) Run')).toHaveLength(2);
+	});
+
+	it('shows single Run lens for unknown model with one statement', () => {
+		const doc = createMockDocument('SELECT 1', {
+			fileName: '/project/analyses/scratch.sql',
+		});
+
+		const result = provider.provideCodeLenses(doc, mockToken);
+		expect(result).toHaveLength(1);
+		expect(result[0].command?.title).toBe('$(play) Run');
+		expect(result[0].command?.command).toBe('dbt-studio.executeStatement');
 	});
 
 	it('returns empty for non-SQL/YAML documents', () => {

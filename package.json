@@ -219,6 +219,21 @@
 				"command": "dbt-studio.profiler.hideDecorations",
 				"title": "dbt Studio: Hide Profile Decorations",
 				"icon": "$(eye-closed)"
+			},
+			{
+				"command": "dbt-studio.executeQuery",
+				"title": "dbt Studio: Execute Query",
+				"icon": "$(play)"
+			},
+			{
+				"command": "dbt-studio.executeAll",
+				"title": "dbt Studio: Execute All Statements",
+				"icon": "$(run-all)"
+			},
+			{
+				"command": "dbt-studio.executeStatement",
+				"title": "dbt Studio: Execute Statement",
+				"icon": "$(play)"
 			}
 		],
 		"viewsContainers": {
@@ -510,6 +525,24 @@
 						"type": "boolean",
 						"default": true,
 						"markdownDescription": "**Enabled**: Use a native database adapter (e.g. Databricks REST API) for faster parallel queries when available. Disable to force all queries through `dbt show` instead — useful as a fallback if the native adapter has issues."
+					}
+				}
+			},
+			{
+				"id": "dbt-studio.queryEditor",
+				"title": "Query Editor",
+				"properties": {
+					"dbt-studio.queryEditor.defaultLimit": {
+						"type": "number",
+						"default": 500,
+						"minimum": 1,
+						"maximum": 100000,
+						"markdownDescription": "Default row limit for ad-hoc query execution. Override per-statement with an explicit `LIMIT` clause in SQL."
+					},
+					"dbt-studio.queryEditor.stopOnError": {
+						"type": "boolean",
+						"default": false,
+						"markdownDescription": "Stop executing remaining statements when one fails. When disabled, errors are shown per-statement and execution continues."
 					}
 				}
 			}
@@ -1045,6 +1078,19 @@
 			}
 		]
 	},
+	"keybindings": [
+		{
+			"command": "dbt-studio.executeQuery",
+			"key": "f5",
+			"when": "editorTextFocus && resourceLangId == jinja-sql"
+		},
+		{
+			"command": "dbt-studio.executeAll",
+			"key": "ctrl+shift+enter",
+			"mac": "cmd+shift+enter",
+			"when": "editorTextFocus && resourceLangId == jinja-sql"
+		}
+	],
 	"scripts": {
 		"clean": "rimraf dist out",
 		"build": "tsx .esbuild.ts",

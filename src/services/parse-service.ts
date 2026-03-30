@@ -430,9 +430,6 @@ export class ParseService {
 		if (chain.length === 0) {
 			const isRef = model.refs.some(r => r.model.toLowerCase() === ref.name.toLowerCase());
 			const refStr = isRef ? `ref('${ref.name}')` : ref.name;
-			if (ref.alias && ref.alias.toLowerCase() !== ref.name.toLowerCase()) {
-				return [ref.alias, refStr];
-			}
 			return [refStr];
 		}
 
@@ -444,67 +441,6 @@ export class ParseService {
 	 * Merges bridge-resolved upstream aliases (model.aliases) with CTE aliases
 	 * and any FROM/JOIN aliases that point to CTEs.
 	 */
-	/**
-	 * Resolve what a SQL alias refers to in a DocumentModel.
-	 *
-	 * When `atLine` is provided the lookup is scoped to the enclosing CTE body
-	 * first, so inner aliases shadow outer ones correctly.
-	 */
-	static resolveAlias(
-		model: DocumentModel,
-		alias: string,
-		atLine: number,
-	): { kind: 'cte'; cte: CteInfo } | { kind: 'ref'; ref: RefInfo } | { kind: 'source'; source: SourceInfo } | undefined {
-		const lc = alias.toLowerCase();
-
-		const enclosingCte = model.ctes.find(c => atLine > c.line && atLine <= c.endLine);
-		if (enclosingCte) {
-			const scopedRef = model.refs.find(
-				r => r.line >= enclosingCte.line && r.line <= enclosingCte.endLine
-					&& (r.alias ?? r.model).toLowerCase() === lc,
-			);
-			if (scopedRef) return { kind: 'ref', ref: scopedRef };
-
-			const scopedSrc = model.sources.find(
-				s => s.line >= enclosingCte.line && s.line <= enclosingCte.endLine
-					&& (s.alias ?? s.tableName).toLowerCase() === lc,
-			);
-			if (scopedSrc) return { kind: 'source', source: scopedSrc };
-
-			const scopedCteTok = model.tokens.find(
-				t => t.type === 'table_ref' && t.line >= enclosingCte.line && t.line <= enclosingCte.endLine
-					&& t.alias?.toLowerCase() === lc
-					&& model.ctes.some(c => c.name.toLowerCase() === t.name.toLowerCase()),
-			);
-			if (scopedCteTok) {
-				const cte = model.ctes.find(c => c.name.toLowerCase() === scopedCteTok.name.toLowerCase())!;
-				return { kind: 'cte', cte };
-			}
-		}
-
-		const directCte = model.ctes.find(c =>
-			c.name.toLowerCase() === lc || c.alias?.toLowerCase() === lc,
-		);
-		if (directCte) return { kind: 'cte', cte: directCte };
-
-		const cteTok = model.tokens.find(t =>
-			t.type === 'table_ref' && t.alias?.toLowerCase() === lc
-			&& model.ctes.some(c => c.name.toLowerCase() === t.name.toLowerCase()),
-		);
-		if (cteTok) {
-			const cte = model.ctes.find(c => c.name.toLowerCase() === cteTok.name.toLowerCase())!;
-			return { kind: 'cte', cte };
-		}
-
-		const ref = model.refs.find(r => (r.alias ?? r.model).toLowerCase() === lc);
-		if (ref) return { kind: 'ref', ref };
-
-		const src = model.sources.find(s => (s.alias ?? s.tableName).toLowerCase() === lc);
-		if (src) return { kind: 'source', source: src };
-
-		return undefined;
-	}
-
 	static resolveAliases(model: DocumentModel): Record<string, string[]> {
 		const cteAliases: Record<string, string[]> = {};
 		for (const cte of model.ctes) {

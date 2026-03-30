@@ -424,58 +424,6 @@ describe('definition-provider integration (real bridge)', () => {
 		});
 	});
 
-	// ---- resolveAlias: pure function, real DocumentModel, no VS Code ----
-	//
-	// resolveAlias is the lookup that maps an alias string (e.g. 'addr') to what it
-	// actually refers to: a CTE, a ref(), or a source(). It is used by both the
-	// definition provider (_jumpToColumn) and the hover provider.
-	//
-	// It has two modes:
-	//   - Scoped (atLine provided): prefers aliases defined in the enclosing CTE body,
-	//     so inner aliases shadow outer ones.
-	//   - Global (no atLine): falls back to the whole-document alias table.
-	//
-	// Coverage:
-	//   ✅ CTE alias scoped to enclosing CTE body (addr → address_with_country at line 15)
-	//   ✅ ref() alias scoped to enclosing CTE body (wh → gold__warehouse at line 15)
-	//   ✅ CTE resolved by its own name globally (address_with_country → CTE)
-	//   ✅ CTE alias resolved globally without atLine (addr → address_with_country)
-	//   ✅ unknown alias → undefined
-	//
-	// Not covered:
-	//   ❌ source() alias resolution (no source() calls in the SQL fixture)
-	//   ❌ alias that exists in outer scope but is shadowed by inner scope
-
-	describe('resolveAlias', () => {
-		it('resolves "addr" inside warehouses_enriched (line 15) → CTE address_with_country', () => {
-			const result = ParseService.resolveAlias(model, 'addr', 15);
-			expect(result?.kind).toBe('cte');
-			expect(result?.kind === 'cte' && result.cte.name).toBe('address_with_country');
-		});
-
-		it('resolves "wh" inside warehouses_enriched (line 15) → ref gold__warehouse', () => {
-			const result = ParseService.resolveAlias(model, 'wh', 15);
-			expect(result?.kind).toBe('ref');
-			expect(result?.kind === 'ref' && result.ref.model).toBe('gold__warehouse');
-		});
-
-		it('resolves "address_with_country" by name → CTE (line outside all CTEs)', () => {
-			const result = ParseService.resolveAlias(model, 'address_with_country', 0);
-			expect(result?.kind).toBe('cte');
-			expect(result?.kind === 'cte' && result.cte.name).toBe('address_with_country');
-		});
-
-		it('resolves "addr" alias → CTE via global cteTok (line outside all CTEs)', () => {
-			const result = ParseService.resolveAlias(model, 'addr', 0);
-			expect(result?.kind).toBe('cte');
-			expect(result?.kind === 'cte' && result.cte.name).toBe('address_with_country');
-		});
-
-		it('returns undefined for unknown alias', () => {
-			expect(ParseService.resolveAlias(model, 'nonexistent', 15)).toBeUndefined();
-		});
-	});
-
 	// ---- DbtDefinitionProvider.provideDefinition — end-to-end with real parsed model ----
 	//
 	// Full round-trip tests: cursor position → provider → vscode.Location (or undefined).

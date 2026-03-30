@@ -1,5 +1,5 @@
-a---
-name: fuck
+---
+name: fck
 description: When you want to tell the model to not use redirects
 ---
 
