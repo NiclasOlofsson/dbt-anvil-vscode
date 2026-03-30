@@ -16,8 +16,12 @@ export interface CteInfo {
 	name: string;
 	/** 0-based line of the CTE name token in the document */
 	line: number;
+	/** 0-based start column of the CTE name token (absent if position unavailable) */
+	col?: number;
 	/** 0-based line of the closing paren of the CTE body */
 	endLine: number;
+	/** 0-based exclusive end column of the closing paren (absent if paren not found) */
+	endCol?: number;
 	columns: ColumnInfo[];
 	/** SQL alias used in FROM/JOIN, e.g. `addr` in `FROM address_with_country addr` */
 	alias?: string;

@@ -340,6 +340,66 @@ select mkey, sourcename from warehouse`);
 	// per-column line numbers are in raw-SQL coordinates after the jinja2 fallback path.
 });
 
+describe('bridge parse_document – sqlglotWarnings', () => {
+	let bridge: BridgeRunner;
+
+	beforeAll(async () => {
+		const env = detectPythonEnvironment(JAFFLE_SHOP);
+		bridge = new BridgeRunner(BRIDGE_PY, JAFFLE_SHOP, env, createMockLogger());
+	}, 30_000);
+
+	afterAll(async () => {
+		await bridge.shutdown();
+	});
+
+	type Warning = { type: string; message: string; line?: number; col?: number; endCol?: number; cteName?: string };
+
+	function parseSql(sql: string) {
+		return bridge.invokeRaw({ parse_document: true, sql, dialect: 'ansi' });
+	}
+
+	it('reports a syntax_error with position for a typo in a keyword', async () => {
+		// 'FRON' is not a valid keyword — sqlglot interprets it as a column alias
+		// (SELECT order_id FRON), making 'orders' the unexpected token.
+		// col 26 is the 0-based start of 'orders'; endCol 32 is its exclusive end.
+		const result = await parseSql('select order_id FRON orders');
+		expect(result.success).toBe(true);
+		const data = result.data as Record<string, unknown>;
+		const warnings = data['sqlglotWarnings'] as Warning[];
+		const syntaxErr = warnings.find(w => w.type === 'syntax_error');
+		expect(syntaxErr).toBeDefined();
+		expect(syntaxErr!.line).toBe(0);
+		expect(syntaxErr!.col).toBe(26);
+		expect(syntaxErr!.endCol).toBe(32);
+	}, 30_000);
+
+	it('reports no warnings for valid SQL', async () => {
+		const result = await parseSql(`with orders as (
+    select order_id, amount from raw_orders
+)
+select order_id, amount from orders`);
+		expect(result.success).toBe(true);
+		const data = result.data as Record<string, unknown>;
+		const warnings = data['sqlglotWarnings'] as Warning[];
+		expect(warnings).toHaveLength(0);
+	}, 30_000);
+
+	it('syntax_error line and col are 0-based and match the bad token', async () => {
+		// The typo is on line 3 (0-based). Same 'FRON' pattern: sqlglot treats FRON
+		// as a column alias and flags 'orders' as unexpected.
+		// Within line 3 ('select order_id FRON orders'), 'orders' is at col 26.
+		const result = await parseSql('with orders as (\n    select order_id from raw_orders\n)\nselect order_id FRON orders');
+		expect(result.success).toBe(true);
+		const data = result.data as Record<string, unknown>;
+		const warnings = data['sqlglotWarnings'] as Warning[];
+		const syntaxErr = warnings.find(w => w.type === 'syntax_error');
+		expect(syntaxErr).toBeDefined();
+		expect(syntaxErr!.line).toBe(3);
+		expect(syntaxErr!.col).toBe(26);
+		expect(syntaxErr!.endCol).toBe(32);
+	}, 30_000);
+});
+
 describe('bridge parse_document – variant pipeline performance', () => {
 	let bridge: BridgeRunner;
 
@@ -358,7 +418,7 @@ describe('bridge parse_document – variant pipeline performance', () => {
 		await bridge.shutdown();
 	});
 
-	const BENCH_RUNS = 10;
+	const BENCH_RUNS = 50;
 
 	async function parseVariants(source: string): Promise<{ variantCount: number; runTotalsMs: number[]; perVariantMs: number[] }> {
 		const variants = generateVariants(source);
@@ -471,11 +531,52 @@ describe('bridge parse_document – variant pipeline performance', () => {
 		const medianSeq = result.runTotalsMs.slice().sort((a, b) => a - b)[Math.floor(result.runTotalsMs.length / 2)];
 		expect(medianSeq).toBeLessThan(270);
 	}, 120_000);
+
+	it('plain SQL with explicit schema (qualify path, 1 variant)', async () => {
+		const source = [
+			'with orders as (',
+			'  select * from raw_orders',
+			')',
+			'select customer_id, amount from orders',
+		].join('\n');
+
+		const schema = { raw_orders: { customer_id: 'INT', amount: 'NUMERIC', status: 'TEXT' } };
+		const variants = [{ sql: source }];
+		const runTotalsMs: number[] = [];
+		const perVariantMs: number[] = [];
+		for (let run = 0; run < BENCH_RUNS; run++) {
+			const t0 = performance.now();
+			for (const v of variants) {
+				const vt0 = performance.now();
+				await bridge.invokeRaw({ parse_document: true, sql: v.sql, dialect: 'ansi', schema });
+				perVariantMs.push(performance.now() - vt0);
+			}
+			runTotalsMs.push(performance.now() - t0);
+		}
+		const sortedTotals = runTotalsMs.slice().sort((a, b) => a - b);
+		const medianTotal = sortedTotals[Math.floor(sortedTotals.length / 2)];
+		const sortedPer = perVariantMs.slice().sort((a, b) => a - b);
+		console.log(
+			['  plain SQL + schema',
+				'variants=1',
+				'runs=' + BENCH_RUNS,
+				'median-total=' + medianTotal.toFixed(0) + 'ms',
+				'per-variant min/median/max=' + sortedPer[0].toFixed(1) + '/' + sortedPer[Math.floor(sortedPer.length / 2)].toFixed(1) + '/' + sortedPer[sortedPer.length - 1].toFixed(1) + 'ms',
+			].join('  '),
+		);
+		// Verify qualify path: parse succeeds and outer SELECT columns are resolved
+		const result = await bridge.invokeRaw({ parse_document: true, sql: source, dialect: 'ansi', schema });
+		expect(result.success).toBe(true);
+		const finalColumns = (result.data as Record<string, unknown>)['finalColumns'] as { name: string }[];
+		expect(finalColumns.map(c => c.name)).toContain('customer_id');
+		expect(finalColumns.map(c => c.name)).toContain('amount');
+		expect(medianTotal).toBeLessThan(50);
+	}, 120_000);
 });
 
 // ----- types mirroring parse-service DocumentModel for bridge response -----
 type ColInfo = { name: string; line: number };
-type CteEntry = { name: string; line: number; endLine: number; columns: ColInfo[] };
+type CteEntry = { name: string; line: number; col?: number; endLine: number; endCol?: number; columns: ColInfo[] };
 type RefEntry = { model: string; line: number; col: number };
 type TokenEntry = { type: string; name: string; line: number; col: number; endCol: number };
 type BridgeModel = {

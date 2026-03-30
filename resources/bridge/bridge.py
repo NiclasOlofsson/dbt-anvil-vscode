@@ -143,9 +143,6 @@ def _get_output_columns(
     except ImportError:
         return []
 
-    # TODO(refactor): parse_one + build_scope is called here, in _get_scope_columns,
-    # and again in handle_parse_document — the same SQL is parsed 3 times per request.
-    # Pass a shared AST instead to avoid the redundant work and triple warning logs.
     try:
         ast = parse_one(compiled_sql, dialect=dialect)
     except Exception:
@@ -1355,7 +1352,9 @@ def handle_parse_document(request: dict[str, Any]) -> None:
           {
             "name": str,
             "line": int,
+            "col": int,           # absent if name position unavailable
             "endLine": int,
+            "endCol": int,        # absent if closing paren not found; exclusive end col
             "columns": [{"name": str, "line": int}],
             "alias": str          # absent if no alias
           }
@@ -1425,12 +1424,18 @@ def handle_parse_document(request: dict[str, Any]) -> None:
         ],
         "aliases": {str: [str]},  # alias -> [column names] from schema-aware parse
         "sqlglotWarnings": [
+          # Two sources, distinguished by the 'type' field:
+          # "scope_warning" — SQL parsed OK but sqlglot can't analyse a CTE scope
+          #   (e.g. bare identifier where a subquery is expected).  cteName is set.
+          # "syntax_error"  — outright parse failure (typo, missing keyword, etc.).
+          #   cteName is absent; line/col/endCol point directly at the bad token.
           {
+            "type": "scope_warning" | "syntax_error",
             "message": str,
-            "cteName": str,       # absent if not CTE-scoped
+            "cteName": str,       # absent for syntax_error
             "line": int,          # absent if position unknown
-            "col": int,           # absent if position unknown
-            "endCol": int         # absent if position unknown
+            "col": int,           # absent for scope_warning without a position match
+            "endCol": int         # absent for scope_warning without a position match
           }
         ],
         "timing": {"parseMs": float, "totalMs": float}
@@ -1612,12 +1617,20 @@ def handle_parse_document(request: dict[str, Any]) -> None:
             if isinstance(_alias_id, exp.Identifier)
             else None
         )
+        _raw_col: int | None = (
+            _alias_id.meta.get("col")  # type: ignore[union-attr]
+            if isinstance(_alias_id, exp.Identifier)
+            else None
+        )
         # sqlglot line numbers are 1-based; convert to 0-based, then map to raw.
         start_line = to_raw_line(max(0, (_raw_line or 1) - 1))
+        # sqlglot col is 1-based exclusive end; convert to 0-based inclusive start.
+        start_col: int | None = (_raw_col - len(cte_name)) if _raw_col else None
 
         # Walk parse_sql from start of the CTE's line to find the opening '('
-        # then scan for its matching ')' to determine end_line.
+        # then scan for its matching ')' to determine end_line and end_col.
         end_line = start_line
+        end_col: int | None = None
         # Use parse_line_starts for the paren scan (parse_sql may differ from raw).
         ren_start_line = max(0, (_raw_line or 1) - 1)
         search_from = parse_line_starts[min(ren_start_line, len(parse_line_starts) - 1)]
@@ -1630,7 +1643,10 @@ def handle_parse_document(request: dict[str, Any]) -> None:
                 elif parse_sql[idx] == ")":
                     depth -= 1
                     if depth == 0:
-                        end_line = to_raw_line(parse_offset_to_line(idx))
+                        close_line_0 = parse_offset_to_line(idx)
+                        end_line = to_raw_line(close_line_0)
+                        # +1 so endCol is the exclusive end, consistent with all other tokens.
+                        end_col = idx - parse_line_starts[close_line_0] + 1
                         break
 
         columns: list[dict[str, Any]] = []
@@ -1642,24 +1658,47 @@ def handle_parse_document(request: dict[str, Any]) -> None:
                     col_line = to_raw_line(_projection_line(proj))
                     columns.append({"name": col, "line": col_line})
 
-        ctes.append(
-            {
-                "name": cte_name,
-                "line": start_line,
-                "endLine": end_line,
-                "columns": columns,
-            }
+        cte_entry: dict[str, Any] = {
+            "name": cte_name,
+            "line": start_line,
+            "endLine": end_line,
+            "columns": columns,
+        }
+        if start_col is not None:
+            cte_entry["col"] = start_col
+        if end_col is not None:
+            cte_entry["endCol"] = end_col
+        ctes.append(cte_entry)
+
+    # ------------------------------------------------------------------
+    # Qualify — resolve bare column references to their source table/alias.
+    # Run before build_scope so the scope tree is built on the prepared AST.
+    # ------------------------------------------------------------------
+    caller_schema: dict[str, Any] = request.get("schema", {})
+    try:
+        from sqlglot.optimizer.qualify import (  # type: ignore[import-not-found]
+            qualify,
         )
 
-    # Final output columns from the root SELECT (outside any CTE).
-    # Also capture any sqlglot warnings emitted during scope building (e.g.
-    # "Cannot traverse scope X with type Aliases") — these indicate structural
-    # SQL issues that dbt itself won't detect because it doesn't compile the SQL
-    # during `dbt parse`.  We return them so the extension can surface them as
-    # diagnostics in the Problems tab.
-    # NOTE: sqlglot uses Python's logging module (not warnings.warn), so we
-    # install a temporary logging.Handler on the 'sqlglot' logger to intercept
-    # the messages before they reach stderr.
+        ast = qualify(
+            ast,
+            schema=caller_schema,
+            infer_schema=True,
+            dialect=sqlglot_dialect,
+            quote_identifiers=False,
+            validate_qualify_columns=False,
+        )
+    except Exception:
+        pass  # best-effort — fall back to unqualified columns
+
+    # ------------------------------------------------------------------
+    # Build scope + capture warnings.
+    # sqlglot uses Python's logging module (not warnings.warn), so we install a
+    # temporary logging.Handler to intercept WARNING-level messages before they
+    # reach stderr.  These indicate structural SQL issues (e.g. "Cannot traverse
+    # scope X with type Aliases") that dbt won't catch at parse time; we surface
+    # them as diagnostics in the Problems tab.
+    # ------------------------------------------------------------------
     final_columns: list[dict[str, Any]] = []
     scope_aliases: dict[str, list[str]] = {}
     sqlglot_warnings: list[dict[str, Any]] = []
@@ -1673,7 +1712,6 @@ def handle_parse_document(request: dict[str, Any]) -> None:
                 if record.levelno == _logging_mod.WARNING:
                     _captured_log_messages.append(record.getMessage())
 
-        # TODO(refactor): this is parse #3 of 3 — see note in _get_output_columns_from_sql.
         _sqlglot_logger = _logging_mod.getLogger("sqlglot")
         _capture_handler = _LogCapture()
         _sqlglot_logger.addHandler(_capture_handler)
@@ -1703,7 +1741,7 @@ def handle_parse_document(request: dict[str, Any]) -> None:
                     if _cte["name"].lower() == _scope_name_lc:
                         _cte_line = _cte["line"]
                         break
-            entry: dict[str, Any] = {"message": msg}
+            entry: dict[str, Any] = {"type": "scope_warning", "message": msg}
             if _scope_name:
                 entry["cteName"] = _scope_name
             if _cte_line is not None:
@@ -1711,57 +1749,65 @@ def handle_parse_document(request: dict[str, Any]) -> None:
             sqlglot_warnings.append(entry)
 
         # Re-parse with ErrorLevel.RAISE to get structured error positions.
-        # The first parse used error_level=None which silently produces Aliases
-        # nodes instead of raising. Re-parsing with RAISE throws ParseError whose
-        # .errors list contains {line, col, highlight} for each bad token.
-        if sqlglot_warnings:
-            try:
-                from sqlglot.errors import (
-                    ErrorLevel as _EL,  # type: ignore[import-not-found]
-                )
+        # Always runs: enriches scope warnings with exact positions AND captures
+        # standalone syntax errors (e.g. a typo in a column name) that build_scope
+        # never sees because the first parse (ErrorLevel.IGNORE) swallowed them.
+        try:
+            from sqlglot.errors import (
+                ErrorLevel as _EL,  # type: ignore[import-not-found]
+            )
 
-                parse_one(parse_sql, dialect=sqlglot_dialect, error_level=_EL.RAISE)
-            except Exception as _rerr:
-                print(
-                    f"[bridge] re-parse errors: {getattr(_rerr, 'errors', None)}",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                if hasattr(_rerr, "errors"):
-                    # For each warning about a scope (e.g. "sales_orders_enriched"),
-                    # find the parse error whose highlight IS that scope name.
-                    # That error says "Expecting (" — meaning the token BEFORE it
-                    # is the actual stray bad token (e.g. "aadsf"), which is the
-                    # last word in the error's start_context.
-                    # Once we have the bad token text, search parse_sql for it (
-                    # bounded to before the error line) to get the exact position.
-                    for _warn in sqlglot_warnings:
-                        _cte_name = (_warn.get("cteName") or "").lower()
-                        for _ed in _rerr.errors:  # type: ignore[union-attr]
-                            if (_ed.get("highlight") or "").lower() != _cte_name:
-                                continue
-                            _sc = (_ed.get("start_context") or "").rstrip()
-                            _bad_match = re.search(r"\b(\w+)\s*$", _sc)
-                            if not _bad_match:
-                                break
-                            _bad_tok = _bad_match.group(1)
-                            _err_line_1b = _ed.get("line") or 1
-                            _search_end = parse_line_starts[
-                                min(_err_line_1b - 1, len(parse_line_starts) - 1)
-                            ]
-                            _bt_re = re.search(
-                                r"\b" + re.escape(_bad_tok) + r"\b",
-                                parse_sql[:_search_end],
-                                re.IGNORECASE,
-                            )
-                            if _bt_re:
-                                _ts = _bt_re.start()
-                                _tl = parse_offset_to_line(_ts)
-                                _tc = _ts - parse_line_starts[_tl]
-                                _warn["line"] = to_raw_line(_tl)
-                                _warn["col"] = _tc
-                                _warn["endCol"] = _tc + len(_bad_tok)
+            parse_one(parse_sql, dialect=sqlglot_dialect, error_level=_EL.RAISE)
+        except Exception as _rerr:
+            if hasattr(_rerr, "errors"):
+                _matched_idxs: set[int] = set()
+                # Pass 1: enrich existing scope warnings with exact token positions.
+                for _warn in sqlglot_warnings:
+                    _cte_name = (_warn.get("cteName") or "").lower()
+                    for _i, _ed in enumerate(_rerr.errors):  # type: ignore[union-attr]
+                        if (_ed.get("highlight") or "").lower() != _cte_name:
+                            continue
+                        _matched_idxs.add(_i)
+                        _sc = (_ed.get("start_context") or "").rstrip()
+                        _bad_match = re.search(r"\b(\w+)\s*$", _sc)
+                        if not _bad_match:
                             break
+                        _bad_tok = _bad_match.group(1)
+                        _err_line_1b = _ed.get("line") or 1
+                        _search_end = parse_line_starts[
+                            min(_err_line_1b - 1, len(parse_line_starts) - 1)
+                        ]
+                        _bt_re = re.search(
+                            r"\b" + re.escape(_bad_tok) + r"\b",
+                            parse_sql[:_search_end],
+                            re.IGNORECASE,
+                        )
+                        if _bt_re:
+                            _ts = _bt_re.start()
+                            _tl = parse_offset_to_line(_ts)
+                            _tc = _ts - parse_line_starts[_tl]
+                            _warn["line"] = to_raw_line(_tl)
+                            _warn["col"] = _tc
+                            _warn["endCol"] = _tc + len(_bad_tok)
+                        break
+                # Pass 2: add unmatched parse errors as standalone syntax errors.
+                for _i, _ed in enumerate(_rerr.errors):  # type: ignore[union-attr]
+                    if _i in _matched_idxs:
+                        continue
+                    _err_line_1b = _ed.get("line") or 1
+                    _err_col_1b = _ed.get("col") or 1
+                    _highlight = _ed.get("highlight") or ""
+                    _line_0 = to_raw_line(_err_line_1b - 1)
+                    _col_0 = _err_col_1b - 1
+                    sqlglot_warnings.append(
+                        {
+                            "type": "syntax_error",
+                            "message": _ed.get("description") or str(_rerr),
+                            "line": _line_0,
+                            "col": _col_0,
+                            "endCol": _col_0 + len(_highlight),
+                        }
+                    )
 
         if root_scope:
             sel = (
@@ -1785,59 +1831,12 @@ def handle_parse_document(request: dict[str, Any]) -> None:
     except Exception:
         pass
 
-    # Annotate refs/sources with table aliases from the sqlglot AST.
-    # _blank_jinja maps {{ ref('model') }} → the model name as an identifier,
-    # so sqlglot sees a real Table node with an optional alias (e.g. `orders o`).
-    # Build a table-name → alias map from every Table node in the AST and use
-    # it to populate the alias field on refs and sources.
-    table_alias_map: dict[str, str] = {}
-    for tbl in ast.find_all(exp.Table):
-        if tbl.alias:
-            table_alias_map[tbl.name.lower()] = tbl.alias
-    for cte in ctes:
-        ast_alias = table_alias_map.get(cte["name"].lower())
-        if ast_alias:
-            cte["alias"] = ast_alias
-    for ref in refs:
-        ast_alias = table_alias_map.get(ref["model"].lower())
-        if ast_alias:
-            ref["alias"] = ast_alias
-    for src in sources:
-        ast_alias = table_alias_map.get(src["tableName"].lower())
-        if ast_alias:
-            src["alias"] = ast_alias
-
     # ------------------------------------------------------------------
     # Token extraction — emit every Column and Table reference with
     # precise line/col positions so the extension can resolve cursor
     # positions directly from the AST without text pattern matching.
-    #
-    # sqlglot meta["line"] is 1-based; meta["col"] is the 1-based
-    # exclusive-end character offset.  We convert both to 0-based
-    # for the extension (line is start, col/endCol are char offsets).
-    #
-    # Run qualify_columns first so that bare columns (e.g. `name` in
-    # `SELECT name FROM base`) get their table qualifier resolved by
-    # sqlglot's scope analyser.  This is best-effort: if qualify fails
-    # (rare on malformed SQL) we proceed with the unqualified AST.
-    #
-    # Optional: caller may supply "schema" as {table: {col: type}} to
-    # let sqlglot resolve bare columns that span SELECT * sources.
     # ------------------------------------------------------------------
-    caller_schema: dict[str, Any] = request.get("schema", {})
-    try:
-        from sqlglot.optimizer.qualify import (  # type: ignore[import-not-found]
-            qualify,
-        )
-
-        ast = qualify(
-            ast, schema=caller_schema, infer_schema=True, dialect=sqlglot_dialect
-        )
-    except Exception:
-        pass  # best-effort — fall back to unqualified columns
-
     tokens: list[dict[str, Any]] = []
-
     for col_node in ast.find_all(exp.Column):
         col_id = col_node.this
         if not isinstance(col_id, exp.Identifier):
@@ -1865,9 +1864,8 @@ def handle_parse_document(request: dict[str, Any]) -> None:
             tbl_line_1 = tbl_id.meta.get("line")
             tbl_col_1 = tbl_id.meta.get("col")
             if tbl_line_1 and tbl_col_1:
-                tbl_name = tbl_id.this
-                tbl_end_0 = tbl_col_1  # 0-based exclusive end
-                tbl_start_0 = tbl_end_0 - len(tbl_name)
+                tbl_end_0 = tbl_col_1
+                tbl_start_0 = tbl_end_0 - len(tbl_id.this)
                 token_entry["tableLine"] = to_raw_line(tbl_line_1 - 1)
                 token_entry["tableCol"] = tbl_start_0
                 token_entry["tableEndCol"] = tbl_end_0
@@ -1894,20 +1892,20 @@ def handle_parse_document(request: dict[str, Any]) -> None:
             }
         )
 
+    table_alias_map: dict[str, str] = {}
     for tbl_node in ast.find_all(exp.Table):
         tbl_id = tbl_node.this
         if not isinstance(tbl_id, exp.Identifier):
             continue
+        tbl_name = tbl_id.this
         raw_line_1 = tbl_id.meta.get("line")
         raw_col_1 = tbl_id.meta.get("col")
         if not raw_line_1 or not raw_col_1:
             continue
-        tbl_name = tbl_id.this
         end_col_0 = raw_col_1  # 0-based exclusive end
         start_col_0 = end_col_0 - len(tbl_name)
         line_0 = to_raw_line(raw_line_1 - 1)
-        # If this table came from a jinja ref(), the sqlglot endCol only covers
-        # the bare identifier; extend it to the closing }} of the full tag.
+        # If this table came from a jinja ref(), extend endCol to cover the }} tag.
         jinja_end = _jinja_ref_end.get((line_0, start_col_0))
         token_entry = {
             "type": "table_ref",
@@ -1920,17 +1918,34 @@ def handle_parse_document(request: dict[str, Any]) -> None:
         if isinstance(alias_node, exp.TableAlias):
             alias_id = alias_node.this
             if isinstance(alias_id, exp.Identifier):
-                token_entry["alias"] = alias_id.this
                 a_line_1 = alias_id.meta.get("line")
                 a_col_1 = alias_id.meta.get("col")
+                # Only real (user-written) aliases have source position metadata.
+                # qualify() injects synthetic self-aliases with no position — skip.
                 if a_line_1 and a_col_1:
                     a_name = alias_id.this
-                    a_end_0 = a_col_1  # 0-based exclusive end
+                    a_end_0 = a_col_1
                     a_start_0 = a_end_0 - len(a_name)
+                    token_entry["alias"] = a_name
                     token_entry["aliasLine"] = to_raw_line(a_line_1 - 1)
                     token_entry["aliasCol"] = a_start_0
                     token_entry["aliasEndCol"] = a_end_0
+                    table_alias_map[tbl_name.lower()] = a_name
         tokens.append(token_entry)
+
+    # Annotate refs/sources/ctes with table aliases from the map built above.
+    for cte in ctes:
+        ast_alias = table_alias_map.get(cte["name"].lower())
+        if ast_alias:
+            cte["alias"] = ast_alias
+    for ref in refs:
+        ast_alias = table_alias_map.get(ref["model"].lower())
+        if ast_alias:
+            ref["alias"] = ast_alias
+    for src in sources:
+        ast_alias = table_alias_map.get(src["tableName"].lower())
+        if ast_alias:
+            src["alias"] = ast_alias
 
     # Post-processing: for each column_ref with a table qualifier, embed the
     # resolved table_ref object directly so providers never need to search.
