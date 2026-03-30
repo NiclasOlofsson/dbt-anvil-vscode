@@ -688,4 +688,20 @@ export class ParseService {
 	evict(uri: vscode.Uri): void {
 		this._cache.delete(uri.toString());
 	}
+
+	/**
+	 * Parse a raw SQL string (no Jinja) and return its CTEs.
+	 * Used by the profiler to extract CTE positions from compiled SQL.
+	 * No caching, no enrichment, no variant expansion — single bridge call.
+	 */
+	async parseSqlString(sql: string, dialect: string): Promise<CteInfo[]> {
+		const result = await this._bridge.invokeRaw({
+			parse_document: true,
+			sql,
+			dialect: dialect || 'ansi',
+		});
+		if (!result.success || !result.data) return [];
+		const d = result.data as { ctes?: CteInfo[] };
+		return d.ctes ?? [];
+	}
 }

@@ -1,7 +1,7 @@
 import type { ILogger } from '../../types/logger';
 import type { DbtExecutionService, DbtJobPriority } from '../../dbt/execution-service';
 import { Priority } from '../../dbt/execution-service';
-import type { CancelSignal, ColumnDefinition, DatabaseProvider, QueryResult } from './database-provider';
+import type { CancelSignal, ColumnDefinition, DatabaseProvider, QueryHints, QueryResult } from './database-provider';
 
 /**
  * Default DatabaseProvider implementation that routes all operations through
@@ -23,7 +23,7 @@ export class DbtDatabaseProvider implements DatabaseProvider {
 		this.adapterType = adapterType;
 	}
 
-	async query(sql: string, limit: number, _signal?: CancelSignal, priority: DbtJobPriority = Priority.Tool): Promise<QueryResult> {
+	async query(sql: string, limit: number, _signal?: CancelSignal, priority: DbtJobPriority = Priority.Tool, _hints?: QueryHints): Promise<QueryResult> {
 		const limitArg = limit < 0 ? '-1' : String(limit);
 		const args = ['--no-populate-cache', 'show', '--inline', sql, '--limit', limitArg, '--output', 'json'];
 		this.logger.debug(`DbtDatabaseProvider: query via dbt show (limit=${limitArg}, priority=${priority})`);
