@@ -27,7 +27,7 @@ import { BridgeRunner } from '../dbt/bridge-runner';
 import { detectPythonEnvironment } from '../dbt/env-detector';
 import { ParseService } from '../services/parse-service';
 import type { ColumnDefToken, ColumnRefToken, DocumentModel, TableRefToken } from '../services/parse-service';
-import { DbtDefinitionProvider, resolveAlias } from '../providers/definition-provider';
+import { DbtDefinitionProvider } from '../providers/definition-provider';
 import * as vscode from 'vscode';
 import { createMockLogger } from './helpers';
 
@@ -448,31 +448,31 @@ describe('definition-provider integration (real bridge)', () => {
 
 	describe('resolveAlias', () => {
 		it('resolves "addr" inside warehouses_enriched (line 15) → CTE address_with_country', () => {
-			const result = resolveAlias(model, 'addr', 15);
+			const result = ParseService.resolveAlias(model, 'addr', 15);
 			expect(result?.kind).toBe('cte');
 			expect(result?.kind === 'cte' && result.cte.name).toBe('address_with_country');
 		});
 
 		it('resolves "wh" inside warehouses_enriched (line 15) → ref gold__warehouse', () => {
-			const result = resolveAlias(model, 'wh', 15);
+			const result = ParseService.resolveAlias(model, 'wh', 15);
 			expect(result?.kind).toBe('ref');
 			expect(result?.kind === 'ref' && result.ref.model).toBe('gold__warehouse');
 		});
 
-		it('resolves "address_with_country" by name → CTE', () => {
-			const result = resolveAlias(model, 'address_with_country');
+		it('resolves "address_with_country" by name → CTE (line outside all CTEs)', () => {
+			const result = ParseService.resolveAlias(model, 'address_with_country', 0);
 			expect(result?.kind).toBe('cte');
 			expect(result?.kind === 'cte' && result.cte.name).toBe('address_with_country');
 		});
 
-		it('resolves "addr" without atLine → CTE (global cteTok fallback)', () => {
-			const result = resolveAlias(model, 'addr');
+		it('resolves "addr" alias → CTE via global cteTok (line outside all CTEs)', () => {
+			const result = ParseService.resolveAlias(model, 'addr', 0);
 			expect(result?.kind).toBe('cte');
 			expect(result?.kind === 'cte' && result.cte.name).toBe('address_with_country');
 		});
 
 		it('returns undefined for unknown alias', () => {
-			expect(resolveAlias(model, 'nonexistent', 15)).toBeUndefined();
+			expect(ParseService.resolveAlias(model, 'nonexistent', 15)).toBeUndefined();
 		});
 	});
 
@@ -771,12 +771,12 @@ describe('definition-provider integration (real bridge)', () => {
 		const SQL2 = [
 			'with cte_first as (',
 			'    select a.col_a',
-			"    from {{ ref('model_a') }} as addr",
+			'    from {{ ref(\'model_a\') }} as addr',
 			'    where addr.col_a = 1',
 			'),',
 			'cte_second as (',
 			'    select b.col_b',
-			"    from {{ ref('model_b') }} as addr",
+			'    from {{ ref(\'model_b\') }} as addr',
 			'    where addr.col_b = 2',
 			')',
 			'select * from cte_first join cte_second using (col_a)',
@@ -900,7 +900,7 @@ describe('definition-provider integration (real bridge)', () => {
 		const SQL3 = [
 			'with address_with_country as (',
 			'    select addr.*',
-			"    from {{ ref('gold__address') }} as addr",
+			'    from {{ ref(\'gold__address\') }} as addr',
 			'),',
 			'enriched as (',
 			'    select addr.street',
