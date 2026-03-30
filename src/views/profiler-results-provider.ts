@@ -22,7 +22,7 @@ class StepItem extends vscode.TreeItem {
 		ms: number,
 		rowCount: number,
 		maxStepMs: number,
-		navigateArgs?: [string, number],
+		navigateArgs?: [string, string],
 	) {
 		super(`${_formatMs(ms)} — ${name}`, vscode.TreeItemCollapsibleState.None);
 
@@ -101,15 +101,13 @@ export class ProfilerResultsProvider implements vscode.TreeDataProvider<TreeEntr
 
 		if (element instanceof ModelProfileItem) {
 			const { result } = element;
-			const lastCteMs = result.cteProfiles.length > 0
-				? result.cteProfiles[result.cteProfiles.length - 1].queryTimeMs
-				: 0;
+			const lastCteMs = result.cteProfiles.length > 0 ? result.cteProfiles[result.cteProfiles.length - 1].queryTimeMs : 0;
 			const fullModelMs = result.totalTimeMs > 0 ? result.totalTimeMs - lastCteMs : 0;
 			const maxStepMs = Math.max(...result.cteProfiles.map(c => c.queryTimeMs), fullModelMs, 1);
 
 			const completed = result.cteProfiles.map(cte => new StepItem(
 				cte.name, cte.queryTimeMs, cte.rowCount, maxStepMs,
-				[result.sourceFilePath, cte.definitionLine],
+				[result.sourceFilePath, cte.name],
 			));
 
 			const completedNames = new Set(result.cteProfiles.map(p => p.name));
@@ -117,7 +115,6 @@ export class ProfilerResultsProvider implements vscode.TreeDataProvider<TreeEntr
 				.filter(n => !completedNames.has(n))
 				.map(n => new PendingCteItem(n));
 
-			// Full-model step: spinning while running, timed when complete
 			const allCtesDone = pending.length === 0 && result.status !== 'error';
 			const fullModel: StepItem[] | PendingCteItem[] = allCtesDone
 				? [result.totalTimeMs > 0

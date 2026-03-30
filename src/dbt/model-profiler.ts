@@ -183,18 +183,12 @@ export class ModelProfiler implements vscode.Disposable {
 			throw new Error(`Profiler: could not compile '${rawNode.name}'`);
 		}
 
-		// 2. Parse CTE positions.
-		// From compiled SQL: endLine positions for slicing (clean SQL, reliable parse).
-		// From source document: definitionLine for source navigation.
-		const [compiledCtes, sourceCtes] = await Promise.all([
-			this._parseService.parseSqlString(compiledSql, adapterType),
-			this._parseService.getDocumentModel(document, adapterType, { skipEnrichment: true })
-				.then(m => m?.ctes ?? []),
-		]);
-
-		// Zip source line numbers onto compiled CTE entries (same order, same names).
-		const sourceLineByName = new Map(sourceCtes.map(c => [c.name, c.line]));
-		const ctes = compiledCtes.map(c => ({ ...c, line: sourceLineByName.get(c.name) ?? c.line }));
+		// 2. Parse CTE names + endLine positions from compiled SQL.
+		// Compiled SQL is clean (no Jinja), giving reliable line positions for query slicing.
+		// Source line positions for decorations/navigation are the parse service's concern.
+		const compiledCtes = await this._parseService.parseSqlString(compiledSql, adapterType);
+		const compiledEndLineByName = new Map(compiledCtes.map(c => [c.name, c.endLine]));
+		const ctes = compiledCtes;
 
 		this._logger.info(`Profiler: ${rawNode.name} has ${ctes.length} CTEs, starting queries`);
 
@@ -211,9 +205,9 @@ export class ModelProfiler implements vscode.Disposable {
 
 		// 3. Warmup: run the full model query once to prime the warehouse's IO cache
 		// (Delta Parquet files → SSD) so CTE timings reflect compute, not cold storage.
-		const lastCte = ctes[ctes.length - 1];
-		const fullQuery = lastCte
-			? _buildFullModelQuery(lines, lastCte.endLine, runTs)
+		const lastCompiledCte = compiledCtes[compiledCtes.length - 1];
+		const fullQuery = lastCompiledCte
+			? _buildFullModelQuery(lines, lastCompiledCte.endLine, runTs)
 			: _buildNoCteFullModelQuery(compiledSql, runTs);
 
 		this._logger.info('Profiler: running warmup query to prime Delta table cache...');
@@ -234,7 +228,9 @@ export class ModelProfiler implements vscode.Disposable {
 		for (const cte of ctes) {
 			if (token?.isCancellationRequested) break;
 
-			const profilingQuery = _buildCteQuery(lines, cte.endLine, cte.name, runTs);
+			const compiledEndLine = compiledEndLineByName.get(cte.name);
+			if (compiledEndLine === undefined) continue;
+			const profilingQuery = _buildCteQuery(lines, compiledEndLine, cte.name, runTs);
 
 			this._logger.debug(`Profiler: executing query for CTE '${cte.name}'`);
 			let rowCount = 0;
@@ -251,8 +247,6 @@ export class ModelProfiler implements vscode.Disposable {
 
 			cteProfiles.push({
 				name: cte.name,
-				definitionLine: cte.line,
-				endLine: cte.endLine,
 				queryTimeMs,
 				marginalTimeMs: queryTimeMs - prevCumulativeMs,
 				rowCount,
