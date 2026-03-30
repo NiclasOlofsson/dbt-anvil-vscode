@@ -296,19 +296,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			await vscode.window.showTextDocument(uri, { selection: new vscode.Range(pos, pos), preserveFocus: false });
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.refreshManifest', () => {
-			manifestLoader.invalidate();
-			parseService.invalidateEnrichment();
-			try {
-				manifestIndexer.build(true);
-				modelExplorerProvider.refresh();
-				testExplorerProvider.refresh();
-				void vscode.window.showInformationMessage('dbt Studio: Manifest refreshed.');
-			} catch (err) {
-				void vscode.window.showErrorMessage(`dbt Studio: Failed to refresh manifest — ${err}`);
-			}
-		}),
-
 		vscode.commands.registerCommand('dbt-studio.refreshExplorer', () => {
 			modelExplorerProvider.refresh();
 		}),

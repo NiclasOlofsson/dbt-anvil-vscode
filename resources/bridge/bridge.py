@@ -19,13 +19,13 @@ import json
 import os
 import re
 import sys
+from typing import Any
 
 # Prepend vendored dependencies (sqlglot) bundled with the extension.
 # This ensures bridge.py works regardless of what the user's project has installed.
 _VENDOR_DIR = os.path.join(os.path.dirname(__file__), "vendor")
 if os.path.isdir(_VENDOR_DIR) and _VENDOR_DIR not in sys.path:
     sys.path.insert(0, _VENDOR_DIR)
-from typing import Any
 
 
 def configure_stdio() -> None:
@@ -977,7 +977,6 @@ def _trace_column_lineage(
     wrapped_ast = _wrap_final_select(compiled_sql, column_name, dialect)
 
     result = None
-    last_error: BaseException | None = None
     for attempt in range(3):
         try:
             result = lineage(
@@ -987,8 +986,7 @@ def _trace_column_lineage(
                 dialect=dialect,
             )
             break
-        except (IndexError, SqlglotError) as exc:
-            last_error = exc
+        except (IndexError, SqlglotError):
             if attempt < 2:
                 wrapped_ast = _clean_static_union_branches(
                     wrapped_ast, column_name, dialect
@@ -1029,10 +1027,12 @@ def _trace_column_lineage(
             # not the SQL alias (e.g. "c" from "stg_customers AS c").
             actual_table = getattr(node.source, "name", table_or_cte) or table_or_cte
             dep: dict[str, Any] = {"column": col, "table": actual_table}
-            if hasattr(node.source, "db") and node.source.db:
-                dep["schema"] = str(node.source.db).strip('"')
-            if hasattr(node.source, "catalog") and node.source.catalog:
-                dep["database"] = str(node.source.catalog).strip('"')
+            _src_db = getattr(node.source, "db", None)
+            if _src_db:
+                dep["schema"] = str(_src_db).strip('"')
+            _src_catalog = getattr(node.source, "catalog", None)
+            if _src_catalog:
+                dep["database"] = str(_src_catalog).strip('"')
             dependencies.append(dep)
         elif table_or_cte and table_or_cte != "__lineage_final__":
             if table_or_cte not in via_ctes:
@@ -1351,10 +1351,88 @@ def handle_parse_document(request: dict[str, Any]) -> None:
     Response shape:
       {
         "success": true,
-        "ctes": [{"name": str, "line": int, "endLine": int, "columns": [{"name": str, "line": int}]}],
-        "refs": [{"model": str, "line": int}],
-        "sources": [{"sourceName": str, "tableName": str, "line": int}],
+        "ctes": [
+          {
+            "name": str,
+            "line": int,
+            "endLine": int,
+            "columns": [{"name": str, "line": int}],
+            "alias": str          # absent if no alias
+          }
+        ],
+        "refs": [
+          {
+            "model": str,
+            "line": int,
+            "col": int,
+            "modelCol": int,
+            "modelEndCol": int,
+            "jinjaCol": int,
+            "jinjaEndCol": int,
+            "alias": str          # absent if no alias
+          }
+        ],
+        "sources": [
+          {
+            "sourceName": str,
+            "tableName": str,
+            "line": int,
+            "col": int,
+            "sourceNameCol": int,
+            "sourceNameEndCol": int,
+            "tableNameCol": int,
+            "tableNameEndCol": int,
+            "jinjaCol": int,
+            "jinjaEndCol": int,
+            "alias": str          # absent if no alias
+          }
+        ],
         "finalColumns": [{"name": str, "line": int}],
+        "tokens": [
+          # column_ref — a column usage, e.g. `o.order_id` or bare `city`
+          {
+            "type": "column_ref",
+            "name": str,
+            "line": int,
+            "col": int,
+            "endCol": int,
+            "table": str,         # absent if no qualifier
+            "tableLine": int,     # absent if no qualifier
+            "tableCol": int,      # absent if no qualifier
+            "tableEndCol": int,   # absent if no qualifier
+            "resolvedTableRef":   # absent if qualifier could not be resolved
+          },
+          # table_ref — a FROM/JOIN target, e.g. `{{ ref('orders') }} as o`
+          {
+            "type": "table_ref",
+            "name": str,
+            "line": int,
+            "col": int,
+            "endCol": int,
+            "alias": str,         # absent if no alias
+            "aliasLine": int,     # absent if no alias
+            "aliasCol": int,      # absent if no alias
+            "aliasEndCol": int    # absent if no alias
+          },
+          # column_def — an output alias, e.g. `amt * 2 as total`
+          {
+            "type": "column_def",
+            "name": str,
+            "line": int,
+            "col": int,
+            "endCol": int
+          }
+        ],
+        "aliases": {str: [str]},  # alias -> [column names] from schema-aware parse
+        "sqlglotWarnings": [
+          {
+            "message": str,
+            "cteName": str,       # absent if not CTE-scoped
+            "line": int,          # absent if position unknown
+            "col": int,           # absent if position unknown
+            "endCol": int         # absent if position unknown
+          }
+        ],
         "timing": {"parseMs": float, "totalMs": float}
       }
     """
@@ -1616,12 +1694,13 @@ def handle_parse_document(request: dict[str, Any]) -> None:
             _scope_match = re.search(r'Cannot traverse scope "?([^"<>\s]+)"? AS', msg)
             if _scope_match:
                 _scope_name = _scope_match.group(1)
-                if _scope_name.lower() in _seen_scope_names:
+                _scope_name_lc = str(_scope_name).lower()
+                if _scope_name_lc in _seen_scope_names:
                     continue
-                _seen_scope_names.add(_scope_name.lower())
+                _seen_scope_names.add(_scope_name_lc)
                 # Look up the CTE line we already recorded
                 for _cte in ctes:
-                    if _cte["name"].lower() == _scope_name.lower():
+                    if _cte["name"].lower() == _scope_name_lc:
                         _cte_line = _cte["line"]
                         break
             entry: dict[str, Any] = {"message": msg}

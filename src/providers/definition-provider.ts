@@ -4,73 +4,9 @@ import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ManifestLoader } from '../dbt/manifest-loader';
 import type { ILogger } from '../types/logger';
 import { ParseService } from '../services/parse-service';
-import type { CteInfo, DocumentModel, RefInfo, SourceInfo, TableRefToken } from '../services/parse-service';
+import type { CteInfo, DocumentModel, SourceInfo } from '../services/parse-service';
 import { isLinePositionInComment } from './comment-utils';
 import { resolvePositionContext } from './position-context';
-
-/**
- * Resolve what a SQL alias refers to in a DocumentModel.
- * Pure function — no VS Code dependency — exported for testing.
- *
- * When `atLine` is provided the lookup is scoped to the enclosing CTE body
- * first, so inner aliases shadow outer ones correctly.
- */
-export function resolveAlias(
-	model: DocumentModel,
-	alias: string,
-	atLine?: number,
-): { kind: 'cte'; cte: CteInfo } | { kind: 'ref'; ref: RefInfo } | { kind: 'source'; source: SourceInfo } | undefined {
-	const lc = alias.toLowerCase();
-
-	if (atLine !== undefined) {
-		const enclosingCte = model.ctes.find(c => atLine > c.line && atLine <= c.endLine);
-		if (enclosingCte) {
-			const scopedRef = model.refs.find(
-				r => r.line >= enclosingCte.line && r.line <= enclosingCte.endLine
-					&& (r.alias ?? r.model).toLowerCase() === lc,
-			);
-			if (scopedRef) return { kind: 'ref', ref: scopedRef };
-
-			const scopedSrc = model.sources.find(
-				s => s.line >= enclosingCte.line && s.line <= enclosingCte.endLine
-					&& (s.alias ?? s.tableName).toLowerCase() === lc,
-			);
-			if (scopedSrc) return { kind: 'source', source: scopedSrc };
-
-			const scopedCteTok = model.tokens.find(
-				t => t.type === 'table_ref' && t.line >= enclosingCte.line && t.line <= enclosingCte.endLine
-					&& t.alias?.toLowerCase() === lc
-					&& model.ctes.some(c => c.name.toLowerCase() === t.name.toLowerCase()),
-			);
-			if (scopedCteTok) {
-				const cte = model.ctes.find(c => c.name.toLowerCase() === scopedCteTok.name.toLowerCase())!;
-				return { kind: 'cte', cte };
-			}
-		}
-	}
-
-	const directCte = model.ctes.find(c =>
-		c.name.toLowerCase() === lc || c.alias?.toLowerCase() === lc,
-	);
-	if (directCte) return { kind: 'cte', cte: directCte };
-
-	const cteTok = model.tokens.find(t =>
-		t.type === 'table_ref' && t.alias?.toLowerCase() === lc
-		&& model.ctes.some(c => c.name.toLowerCase() === t.name.toLowerCase()),
-	);
-	if (cteTok) {
-		const cte = model.ctes.find(c => c.name.toLowerCase() === cteTok.name.toLowerCase())!;
-		return { kind: 'cte', cte };
-	}
-
-	const ref = model.refs.find(r => (r.alias ?? r.model).toLowerCase() === lc);
-	if (ref) return { kind: 'ref', ref };
-
-	const src = model.sources.find(s => (s.alias ?? s.tableName).toLowerCase() === lc);
-	if (src) return { kind: 'source', source: src };
-
-	return undefined;
-}
 
 /**
  * Go-to-definition for ref('model_name'), source('source', 'table'),
@@ -209,33 +145,18 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 			}
 			case 'column': {
 				const colToken = resolved.token;
-				if (colToken.table) {
-					return this._jumpToColumn(document, model, colToken.table, colToken.name, colToken.line);
+				const refTok = colToken.resolvedTableRef;
+				if (refTok) {
+					const ref = model.refs.find(r => r.model.toLowerCase() === refTok.name.toLowerCase());
+					if (ref) return this._jumpToModelColumn(ref.model, colToken.name);
+					const src = model.sources.find(s => s.tableName.toLowerCase() === refTok.name.toLowerCase());
+					if (src) return this._jumpToSourceColumn(src, colToken.name);
+					const cte = model.ctes.find(c => c.name.toLowerCase() === refTok.name.toLowerCase());
+					if (cte) return this._jumpToCteColumn(document, model, cte, colToken.name);
 				}
-				this.logger.trace(`Definition: bare column '${colToken.name}' (no table qualifier) → undefined`);
+				this.logger.trace(`Definition: column '${resolved.token.name}' has no resolvedTableRef → undefined`);
 				return undefined;
 			}
-		}
-	}
-
-	// ---- Navigate to alias.column ----
-
-	private async _jumpToColumn(
-		document: vscode.TextDocument,
-		model: DocumentModel,
-		alias: string,
-		column: string,
-		atLine?: number,
-	): Promise<vscode.Definition | undefined> {
-		const target = resolveAlias(model, alias, atLine);
-		if (!target) {
-			this.logger.trace(`Definition: qualifier '${alias}' not found in CTEs, refs, or sources → undefined`);
-			return undefined;
-		}
-		switch (target.kind) {
-			case 'cte': return this._jumpToCteColumn(document, model, target.cte, column);
-			case 'ref': return this._jumpToModelColumn(target.ref.model, column);
-			case 'source': return this._jumpToSourceColumn(target.source, column);
 		}
 	}
 

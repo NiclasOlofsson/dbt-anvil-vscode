@@ -6,7 +6,6 @@ import type { ColumnRefToken, DocumentModel, TableRefToken } from '../services/p
 import { isLinePositionInComment } from './comment-utils';
 import { SQL_KEYWORDS } from './sql-keywords';
 import { resolvePositionContext } from './position-context';
-import { resolveAlias } from './definition-provider';
 import { DbtMaterializationIcons, SqlIcons } from './icons';
 
 /**
@@ -247,7 +246,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 			case 'table_qualifier': {
 				// Alias prefix of a column ref (e.g. the `o` in `o.order_id`)
 				const alias = resolved.token.table!;
-				const target = resolveAlias(model, alias, resolved.token.line);
+				const target = ParseService.resolveAlias(model, alias, resolved.token.line);
 				if (!target) return null;
 				switch (target.kind) {
 					case 'cte': {
