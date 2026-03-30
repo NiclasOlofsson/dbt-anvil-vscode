@@ -16,8 +16,6 @@ export class ProfilerDecorationProvider implements vscode.Disposable {
 	// Inline text + gutter icon + optional background + overview ruler — one type per tier
 	private readonly _coolType = vscode.window.createTextEditorDecorationType({
 		after: { margin: '0 0 0 2em' },
-		gutterIconPath: vscode.Uri.parse('data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="#73c991" stroke-width="1.5"/><path d="M5.5 8l2 2 3-3" stroke="#73c991" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>')),
-		gutterIconSize: 'contain',
 		overviewRulerColor: new vscode.ThemeColor('charts.green'),
 		overviewRulerLane: vscode.OverviewRulerLane.Right,
 		isWholeLine: false,
@@ -26,8 +24,6 @@ export class ProfilerDecorationProvider implements vscode.Disposable {
 
 	private readonly _warmType = vscode.window.createTextEditorDecorationType({
 		after: { margin: '0 0 0 2em' },
-		gutterIconPath: vscode.Uri.parse('data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M8 2l1.8 3.6L14 6.6l-3 2.9.7 4.1L8 11.5l-3.7 2.1.7-4.1-3-2.9 4.2-.6z" fill="none" stroke="#cca700" stroke-width="1.2"/></svg>')),
-		gutterIconSize: 'contain',
 		overviewRulerColor: new vscode.ThemeColor('charts.yellow'),
 		overviewRulerLane: vscode.OverviewRulerLane.Right,
 		isWholeLine: false,
@@ -36,12 +32,9 @@ export class ProfilerDecorationProvider implements vscode.Disposable {
 
 	private readonly _hotType = vscode.window.createTextEditorDecorationType({
 		after: { margin: '0 0 0 2em' },
-		gutterIconPath: vscode.Uri.parse('data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M9 1c0 3-2 4-2 6s1.5 3 3 3c-1 1-2.5 1.5-4 1-2-.7-3-2.5-3-4.5C3 4 6 2 9 1z" fill="#f14c4c"/><path d="M10 8c0 1.5-1 2.5-2 3 .5-1 .5-2-.5-3C8 9.5 7 10 6.5 11 6 9 7 7.5 8 6c0 1 .5 1.5 2 2z" fill="#e8a419"/></svg>')),
-		gutterIconSize: 'contain',
-		backgroundColor: new vscode.ThemeColor('diffEditor.insertedLineBackground'),
 		overviewRulerColor: new vscode.ThemeColor('charts.red'),
 		overviewRulerLane: vscode.OverviewRulerLane.Right,
-		isWholeLine: true,
+		isWholeLine: false,
 		rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
 	});
 
