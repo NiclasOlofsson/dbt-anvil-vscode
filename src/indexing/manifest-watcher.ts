@@ -26,6 +26,7 @@ export class ManifestWatcher {
 	private _parseService: ParseService | null = null;
 	private _compileCache: CompileCache | null = null;
 	private readonly _contentHashes = new Map<string, string>();
+	private readonly _nonWsHashes = new Map<string, string>();
 	private readonly _onIndexRebuild = new vscode.EventEmitter<ManifestIndexer>();
 
 	readonly onIndexRebuild = this._onIndexRebuild.event;
@@ -59,8 +60,10 @@ export class ManifestWatcher {
 			// Skip if content hasn't changed since last save
 			const prevHash = this._contentHashes.get(doc.fileName);
 			let currentHash: string;
+			let content: string;
 			try {
-				currentHash = this._simpleHash(fs.readFileSync(doc.fileName, 'utf8'));
+				content = fs.readFileSync(doc.fileName, 'utf8');
+				currentHash = this._simpleHash(content);
 			} catch {
 				return; // unreadable — let parse proceed
 			}
@@ -69,6 +72,15 @@ export class ManifestWatcher {
 				return;
 			}
 			this._contentHashes.set(doc.fileName, currentHash);
+
+			// Skip parse if only whitespace changed — dbt parse is expensive
+			const prevNonWsHash = this._nonWsHashes.get(doc.fileName);
+			const currentNonWsHash = this._simpleHash(content.replace(/\s+/g, ''));
+			this._nonWsHashes.set(doc.fileName, currentNonWsHash);
+			if (prevNonWsHash === currentNonWsHash) {
+				this.logger.trace(`Save with whitespace-only change, skipping parse: ${doc.fileName}`);
+				return;
+			}
 
 			const uniqueId = this.indexer.findModelByFilePath(doc.fileName);
 			if (uniqueId) {
@@ -180,7 +192,9 @@ export class ManifestWatcher {
 				const absPath = path.join(projectDir, node.original_file_path);
 				if (this._contentHashes.has(absPath)) continue;
 				try {
-					this._contentHashes.set(absPath, this._simpleHash(fs.readFileSync(absPath, 'utf8')));
+					const src = fs.readFileSync(absPath, 'utf8');
+					this._contentHashes.set(absPath, this._simpleHash(src));
+					this._nonWsHashes.set(absPath, this._simpleHash(src.replace(/\s+/g, '')));
 					added++;
 				} catch {
 					// file unreadable — skip
@@ -205,16 +219,19 @@ export class ManifestWatcher {
 	 * Seed content hashes from a previously persisted snapshot so that the
 	 * first save after a restart does not falsely trigger a dbt parse.
 	 */
-	restoreHashes(hashes: Record<string, string>): void {
-		for (const [fileName, hash] of Object.entries(hashes)) {
+	restoreHashes(persisted: { hashes: Record<string, string>; nonWsHashes: Record<string, string> }): void {
+		for (const [fileName, hash] of Object.entries(persisted.hashes)) {
 			this._contentHashes.set(fileName, hash);
 		}
-		this.logger.debug(`ManifestWatcher: restored ${Object.keys(hashes).length} content hashes`);
+		for (const [fileName, hash] of Object.entries(persisted.nonWsHashes)) {
+			this._nonWsHashes.set(fileName, hash);
+		}
+		this.logger.debug(`ManifestWatcher: restored ${Object.keys(persisted.hashes).length} content hashes`);
 	}
 
-	/** Returns the current content hash map for persistence. */
-	getHashes(): ReadonlyMap<string, string> {
-		return this._contentHashes;
+	/** Returns the current content hash maps for persistence. */
+	getHashes(): { hashes: ReadonlyMap<string, string>; nonWsHashes: ReadonlyMap<string, string> } {
+		return { hashes: this._contentHashes, nonWsHashes: this._nonWsHashes };
 	}
 
 	dispose(): void {

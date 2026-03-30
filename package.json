@@ -470,6 +470,16 @@
 						"type": "boolean",
 						"default": true,
 						"markdownDescription": "**Enabled**: Show dbt parse errors, unknown `ref()`/`source()` calls, and invalid column names in the Problems panel. Disabling this clears all dbt Studio diagnostics immediately."
+					},
+					"dbt-studio.suppressSqlFluffWarning": {
+						"type": "boolean",
+						"default": false,
+						"markdownDescription": "Suppress the one-time notice about SQLFluff being active alongside dbt Studio."
+					},
+					"dbt-studio.suppressAutoSaveWarning": {
+						"type": "boolean",
+						"default": false,
+						"markdownDescription": "Suppress the warning about auto-save triggering frequent dbt parse runs."
 					}
 				}
 			},
