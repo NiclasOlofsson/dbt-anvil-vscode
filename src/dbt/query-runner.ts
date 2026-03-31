@@ -22,10 +22,15 @@ export interface StatementResult {
  */
 export class QueryRunner {
 	private _abortController: AbortController | undefined;
+	private _runningUri: string | undefined;
+	private readonly _onRunningChange = new vscode.EventEmitter<string | undefined>();
+	readonly onRunningChange = this._onRunningChange.event;
+
+	get runningUri(): string | undefined { return this._runningUri; }
 
 	constructor(
 		private readonly _databaseProvider: DatabaseProvider,
-		private readonly _onResults: (results: StatementResult[]) => void,
+		private readonly _onResults: (results: StatementResult[], resultLocation?: string) => void,
 	) {}
 
 	/** Cancel any in-flight query execution. */
@@ -77,7 +82,33 @@ export class QueryRunner {
 		await this._executeStatements(sql, limit);
 	}
 
-	private async _executeStatements(sql: string, limit: number): Promise<void> {
+	/** Execute with explicit config (from debug adapter launch configuration). */
+	async executeWithConfig(editor: vscode.TextEditor, config: { limit: number; scope: 'cursor' | 'all'; resultLocation?: string }): Promise<void> {
+		if (config.scope === 'all') {
+			await this._executeStatements(editor.document.getText(), config.limit, config.resultLocation);
+			return;
+		}
+
+		const doc = editor.document;
+		const selection = editor.selection;
+		let sqlToExecute: string;
+
+		if (!selection.isEmpty) {
+			sqlToExecute = doc.getText(selection);
+		} else {
+			const fullText = doc.getText();
+			const offset = doc.offsetAt(selection.active);
+			const statements = splitStatements(fullText);
+			if (statements.length === 0) return;
+			const stmt = findStatementAtOffset(statements, offset);
+			if (!stmt) return;
+			sqlToExecute = stmt.sql;
+		}
+
+		await this._executeStatements(sqlToExecute, config.limit, config.resultLocation);
+	}
+
+	private async _executeStatements(sql: string, limit: number, resultLocation?: string): Promise<void> {
 		const statements = splitStatements(sql);
 		if (statements.length === 0) return;
 
@@ -113,6 +144,6 @@ export class QueryRunner {
 		);
 
 		this._abortController = undefined;
-		this._onResults(results);
+		this._onResults(results, resultLocation);
 	}
 }

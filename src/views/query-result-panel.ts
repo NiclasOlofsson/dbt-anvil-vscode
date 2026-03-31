@@ -2,43 +2,165 @@ import * as vscode from 'vscode';
 import type { StatementResult } from '../dbt/query-runner';
 
 /**
- * Singleton WebviewPanel that displays query results in a tabbed data grid.
+ * Manages query results display in either an editor-area WebviewPanel or a
+ * bottom-panel WebviewView. The user can toggle between the two locations.
  *
- * Lifecycle: created on first query execution, reused for subsequent queries.
- * The panel opens beside the active editor. Users can drag it to any position
- * and VS Code remembers the layout.
+ * - Editor mode (default): opens as a tab, split below the active editor.
+ * - Panel mode: lives in the dedicated "Query Results" panel tab alongside Terminal.
  */
-export class QueryResultPanel {
+export class QueryResultPanel implements vscode.WebviewViewProvider, vscode.WebviewPanelSerializer {
 	private static _instance: QueryResultPanel | undefined;
-	private _panel: vscode.WebviewPanel | undefined;
+
+	/** Editor-area tab (null when in panel mode or never shown). */
+	private _editorPanel: vscode.WebviewPanel | undefined;
+	/** Bottom-panel WebviewView (resolved lazily by VS Code). */
+	private _view: vscode.WebviewView | undefined;
+
 	private _results: StatementResult[] = [];
+	private _inPanel = false;
+	/** Prevents dispose side-effects when we programmatically dispose during a move. */
+	private _moving = false;
 
-	private constructor(private readonly _extensionUri: vscode.Uri) {}
+	/** viewType for WebviewPanel persistence (must match package.json serializer). */
+	static readonly viewType = 'dbtQueryResults';
+	/** viewId registered in package.json contributes.views. */
+	static readonly viewId = 'dbt-studio.queryResults';
 
-	static getInstance(extensionUri: vscode.Uri): QueryResultPanel {
+	private static readonly _ctxVisible = 'dbt-studio.queryResultVisible';
+	private static readonly _ctxInPanel = 'dbt-studio.queryResultInPanel';
+	private static readonly _stateKey = 'dbt-studio.queryResultInPanel';
+
+	private constructor(
+		private readonly _extensionUri: vscode.Uri,
+		private readonly _state: vscode.Memento,
+	) {
+		this._inPanel = this._state.get<boolean>(QueryResultPanel._stateKey, false);
+		if (this._inPanel) {
+			void vscode.commands.executeCommand('setContext', QueryResultPanel._ctxInPanel, true);
+		}
+	}
+
+	static getInstance(extensionUri: vscode.Uri, state: vscode.Memento): QueryResultPanel {
 		if (!QueryResultPanel._instance) {
-			QueryResultPanel._instance = new QueryResultPanel(extensionUri);
+			QueryResultPanel._instance = new QueryResultPanel(extensionUri, state);
 		}
 		return QueryResultPanel._instance;
 	}
 
-	/** Show results in the panel, creating it if needed. */
-	showResults(results: StatementResult[]): void {
+	// ---- WebviewViewProvider ------------------------------------------------
+
+	resolveWebviewView(
+		webviewView: vscode.WebviewView,
+		_context: vscode.WebviewViewResolveContext,
+		_token: vscode.CancellationToken,
+	): void {
+		this._view = webviewView;
+		webviewView.webview.options = { enableScripts: true };
+		webviewView.webview.onDidReceiveMessage((msg) => this._handleMessage(msg));
+		webviewView.onDidDispose(() => { this._view = undefined; });
+		webviewView.webview.html = (this._inPanel && this._results.length > 0)
+			? this._getHtml(this._results)
+			: this._emptyHtml();
+	}
+
+	// ---- WebviewPanelSerializer ---------------------------------------------
+
+	async deserializeWebviewPanel(panel: vscode.WebviewPanel, _state: unknown): Promise<void> {
+		this._adoptEditorPanel(panel);
+		panel.webview.html = this._results.length > 0
+			? this._getHtml(this._results)
+			: this._emptyHtml();
+	}
+
+	// ---- Public API ---------------------------------------------------------
+
+	showResults(results: StatementResult[], resultLocationOverride?: string): void {
 		this._results = results;
 
-		if (!this._panel) {
-			this._panel = vscode.window.createWebviewPanel(
-				'dbtQueryResults',
-				'Query Results',
-				{ viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
-				{ enableScripts: true, retainContextWhenHidden: true },
-			);
-			this._panel.onDidDispose(() => { this._panel = undefined; });
-			this._panel.webview.onDidReceiveMessage((msg) => this._handleMessage(msg));
-		}
+		const loc = resultLocationOverride
+			?? vscode.workspace.getConfiguration('dbt-studio').get<string>('queryEditor.resultLocation', 'preserve');
+		if (loc === 'panel' && !this._inPanel) this.moveToPanel();
+		else if (loc === 'editor' && this._inPanel) this.moveToEditor();
 
-		this._panel.webview.html = this._getHtml(results);
-		this._panel.reveal(undefined, true);
+		void vscode.commands.executeCommand('setContext', QueryResultPanel._ctxVisible, true);
+
+		if (this._inPanel) {
+			if (this._view) {
+				this._view.webview.html = this._getHtml(results);
+				this._view.show(true);
+			} else {
+				// View hasn't been resolved yet — focusing it triggers resolveWebviewView.
+				void vscode.commands.executeCommand(`${QueryResultPanel.viewId}.focus`);
+			}
+		} else {
+			if (!this._editorPanel) {
+				const panel = vscode.window.createWebviewPanel(
+					QueryResultPanel.viewType,
+					'Query Results',
+					vscode.ViewColumn.Active,
+					{ enableScripts: true, retainContextWhenHidden: true },
+				);
+				this._adoptEditorPanel(panel);
+				void vscode.commands.executeCommand('workbench.action.moveEditorToBelowGroup');
+			}
+			this._editorPanel!.webview.html = this._getHtml(results);
+			this._editorPanel!.reveal(undefined, true);
+		}
+	}
+
+	moveToPanel(): void {
+		if (this._inPanel) return;
+		this._inPanel = true;
+		void this._state.update(QueryResultPanel._stateKey, true);
+		this._moving = true;
+		this._editorPanel?.dispose();
+		this._moving = false;
+		void vscode.commands.executeCommand('setContext', QueryResultPanel._ctxInPanel, true);
+		// Reveal (triggers resolveWebviewView on first call).
+		void vscode.commands.executeCommand(`${QueryResultPanel.viewId}.focus`);
+		// If already resolved, push results in immediately.
+		if (this._view && this._results.length > 0) {
+			this._view.webview.html = this._getHtml(this._results);
+		}
+	}
+
+	moveToEditor(): void {
+		if (!this._inPanel) return;
+		this._inPanel = false;
+		void this._state.update(QueryResultPanel._stateKey, false);
+		void vscode.commands.executeCommand('setContext', QueryResultPanel._ctxInPanel, false);
+		if (this._view) {
+			this._view.webview.html = this._emptyHtml();
+		}
+		const panel = vscode.window.createWebviewPanel(
+			QueryResultPanel.viewType,
+			'Query Results',
+			vscode.ViewColumn.Active,
+			{ enableScripts: true, retainContextWhenHidden: true },
+		);
+		this._adoptEditorPanel(panel);
+		panel.webview.html = this._results.length > 0
+			? this._getHtml(this._results)
+			: this._emptyHtml();
+		void vscode.commands.executeCommand('workbench.action.moveEditorToBelowGroup');
+	}
+
+	// ---- Private helpers ----------------------------------------------------
+
+	private _adoptEditorPanel(panel: vscode.WebviewPanel): void {
+		if (this._editorPanel) {
+			this._moving = true;
+			this._editorPanel.dispose();
+			this._moving = false;
+		}
+		this._editorPanel = panel;
+		panel.webview.onDidReceiveMessage((msg) => this._handleMessage(msg));
+		panel.onDidDispose(() => {
+			this._editorPanel = undefined;
+			if (!this._moving && !this._inPanel) {
+				void vscode.commands.executeCommand('setContext', QueryResultPanel._ctxVisible, false);
+			}
+		});
 	}
 
 	private _handleMessage(msg: { type: string; value?: string; tabIndex?: number }): void {
@@ -66,6 +188,10 @@ export class QueryResultPanel {
 		const header = columns.map(escape).join(',');
 		const body = rows.map(row => columns.map(c => escape(row[c])).join(',')).join('\n');
 		return `${header}\n${body}`;
+	}
+
+	private _emptyHtml(): string {
+		return `<!DOCTYPE html><html><body style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:var(--vscode-font-family);color:var(--vscode-descriptionForeground)"><p>Run a query (F5) to see results.</p></body></html>`;
 	}
 
 	private _getHtml(results: StatementResult[]): string {

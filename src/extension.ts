@@ -47,6 +47,8 @@ import { ProfilerDecorationProvider } from './providers/profiler-decoration-prov
 import { ProfilerResultsProvider } from './views/profiler-results-provider';
 import { QueryRunner } from './dbt/query-runner';
 import { QueryResultPanel } from './views/query-result-panel';
+import { SqlDebugAdapter } from './dbt/debug-adapter';
+import { SqlDebugConfigProvider } from './dbt/debug-config-provider';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
 	// -------- Bootstrap logging & service container --------
@@ -258,6 +260,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// -------- Path resolver (file classification from dbt_project.yml) --------
 	const pathResolver = new DbtPathResolver(projectDir);
 	pathResolver.refresh(loadProjectConfig(projectDir));
+
+	// -------- File-category context key (drives menu visibility) --------
+	const updateFileCategory = (editor: vscode.TextEditor | undefined) => {
+		const category = editor?.document.languageId === 'jinja-sql'
+			? pathResolver.classifyFile(editor.document.fileName)
+			: undefined;
+		void vscode.commands.executeCommand('setContext', 'dbt-studio.fileCategory', category);
+	};
+	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(updateFileCategory));
+	updateFileCategory(vscode.window.activeTextEditor);
 
 	// -------- Register language providers (dynamic, re-registered on path changes) --------
 	const definitionProvider = new DbtDefinitionProvider(manifestIndexer, manifestLoader, logger, parseService);
@@ -631,9 +643,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	);
 
 	// -------- Query runner (ad-hoc SQL execution) --------
-	const queryResultPanel = QueryResultPanel.getInstance(context.extensionUri);
-	const queryRunner = new QueryRunner(databaseProvider, (results) => {
-		queryResultPanel.showResults(results);
+	const queryResultPanel = QueryResultPanel.getInstance(context.extensionUri, context.workspaceState);
+	context.subscriptions.push(
+		vscode.window.registerWebviewPanelSerializer(QueryResultPanel.viewType, queryResultPanel),
+		vscode.window.registerWebviewViewProvider(QueryResultPanel.viewId, queryResultPanel),
+	);
+	const queryRunner = new QueryRunner(databaseProvider, (results, resultLocation) => {
+		queryResultPanel.showResults(results, resultLocation);
 	});
 
 	context.subscriptions.push(
@@ -669,9 +685,53 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			if (!sql) return;
 			await queryRunner.executeSql(sql);
 		}),
+
+		vscode.commands.registerCommand('dbt-studio.queryResult.moveToPanel', () => {
+			queryResultPanel.moveToPanel();
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.queryResult.moveToEditor', () => {
+			queryResultPanel.moveToEditor();
+		}),
 	);
 
+	// -------- Debug adapter (F5 → run SQL) --------
+	context.subscriptions.push(
+		vscode.debug.registerDebugConfigurationProvider('dbt-sql', new SqlDebugConfigProvider()),
+		vscode.debug.registerDebugConfigurationProvider('dbt-sql', new SqlDebugConfigProvider(), vscode.DebugConfigurationProviderTriggerKind.Dynamic),
+		vscode.debug.registerDebugAdapterDescriptorFactory('dbt-sql', {
+			createDebugAdapterDescriptor() {
+				return new vscode.DebugAdapterInlineImplementation(
+					new SqlDebugAdapter(queryRunner, pathResolver, logger),
+				);
+			},
+		}),
+	);
+
+	// -------- Ensure .vscode/launch.json exists with SQL runner configs --------
+	void ensureLaunchConfig(vscode.workspace.workspaceFolders?.[0]);
+
 	logger.info(`dbt Studio v${version} activated.`);
+}
+
+async function ensureLaunchConfig(folder: vscode.WorkspaceFolder | undefined): Promise<void> {
+	if (!folder) return;
+	const launchUri = vscode.Uri.joinPath(folder.uri, '.vscode', 'launch.json');
+	try {
+		await vscode.workspace.fs.stat(launchUri);
+		// Already exists — leave it alone.
+	} catch {
+		// Create .vscode/ dir (may already exist) then write launch.json.
+		try { await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(folder.uri, '.vscode')); } catch { /* exists */ }
+		const config = {
+			version: '0.2.0',
+			configurations: [
+				{ name: 'Run SQL', type: 'dbt-sql', request: 'launch' },
+				{ name: 'Run All SQL', type: 'dbt-sql', request: 'launch', scope: 'all' },
+			],
+		};
+		await vscode.workspace.fs.writeFile(launchUri, Buffer.from(JSON.stringify(config, null, 4) + '\n', 'utf8'));
+	}
 }
 
 function getActiveModelName(): string | undefined {
