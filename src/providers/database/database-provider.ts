@@ -22,6 +22,8 @@ export interface CancelSignal {
 
 export interface QueryResult {
 	columns: string[];
+	/** Optional map of column name → database type string (e.g. "INT", "VARCHAR", "TIMESTAMP"). */
+	columnTypes?: Record<string, string>;
 	rows: Record<string, unknown>[];
 	rowCount: number;
 	/** Wall-clock milliseconds from sending the request to receiving the full response. */

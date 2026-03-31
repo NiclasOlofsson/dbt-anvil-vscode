@@ -58,6 +58,24 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 			return items;
 		}
 
+		// FQN completion: FROM/JOIN followed by dotted path with trailing dot
+		// e.g. "FROM catalog." or "FROM catalog.schema."
+		const fqnTrailingDot = /\b(?:from|join|into|update|table)\s+([\w.]+)\.\s*$/i.exec(linePrefix);
+		if (fqnTrailingDot) {
+			const items = this._completeFqnParts(fqnTrailingDot[1]);
+			this.logger.debug(`Completion: FQN after '${fqnTrailingDot[1]}.' → ${items.length} items`);
+			return items;
+		}
+
+		// FQN completion: FROM/JOIN followed by dotted path with partial last segment
+		// e.g. "FROM catalog.schema.partial" or "FROM catalog.partial"
+		const fqnPartial = /\b(?:from|join|into|update|table)\s+([\w.]+)\.\w+$/i.exec(linePrefix);
+		if (fqnPartial) {
+			const items = this._completeFqnParts(fqnPartial[1]);
+			this.logger.debug(`Completion: FQN partial under '${fqnPartial[1]}' → ${items.length} items`);
+			return items;
+		}
+
 		// alias. — column completions
 		const aliasMatch = /(\w+)\.\s*$/.exec(linePrefix);
 		if (aliasMatch) {
@@ -70,7 +88,7 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 		if (/(?:^|[\s,(])\w*$/.test(linePrefix)) {
 			// Skip if inside an unclosed Jinja expression
 			const insideJinja = /\{\{[^}]*$/.test(linePrefix) || /\{%[^%]*$/.test(linePrefix);
-			// After a table keyword — offer CTE names and model names
+			// After a table keyword — offer CTE names and model names (plain name or start of FQN)
 			const afterTableKeyword = /\b(?:from|join|into|update|table)\s+\w*$/i.test(linePrefix);
 			if (!insideJinja && afterTableKeyword) {
 				this.logger.debug('Completion: table/CTE after FROM/JOIN');
@@ -187,6 +205,80 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 		}
 
 		this.logger.debug(`Completion: ${items.length} tables/CTEs after FROM/JOIN`);
+		return items;
+	}
+
+	// -----------------------------------------------------------------------
+	// FQN (catalog.schema.table) completions
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Given a dotted prefix from a FROM/JOIN context (e.g. "catalog" or "catalog.schema"),
+	 * return the next segment candidates: schemas when prefix is a catalog, or table names
+	 * when prefix is "catalog.schema".
+	 */
+	private _completeFqnParts(prefix: string): vscode.CompletionItem[] {
+		const index = this.indexer.index;
+		if (!index) return [];
+
+		const parts = prefix.toLowerCase().split('.');
+		const items: vscode.CompletionItem[] = [];
+
+		if (parts.length === 1) {
+			const segment = parts[0];
+
+			// Offer schemas where this segment is the database (3-part FQN: catalog.schema.)
+			const schemas = new Set<string>();
+			for (const model of index.models.values()) {
+				if (model.database?.toLowerCase() === segment && model.schema) {
+					schemas.add(model.schema.toLowerCase());
+				}
+			}
+			for (const source of index.sources.values()) {
+				if (source.database?.toLowerCase() === segment && source.schema) {
+					schemas.add(source.schema.toLowerCase());
+				}
+			}
+			for (const schema of schemas) {
+				const item = new vscode.CompletionItem(schema, DbtCompletionKind.sourceName);
+				item.detail = `schema in ${segment}`;
+				items.push(item);
+			}
+
+			// Also offer table names where this segment is the schema (2-part FQN: schema.table)
+			for (const model of index.models.values()) {
+				if (model.schema?.toLowerCase() === segment) {
+					const item = new vscode.CompletionItem(model.name, DbtCompletionKind.modelRef);
+					item.detail = `${model.materialisation} — ${model.packageName}`;
+					items.push(item);
+				}
+			}
+			for (const source of index.sources.values()) {
+				if (source.schema?.toLowerCase() === segment) {
+					const item = new vscode.CompletionItem(source.name, DbtCompletionKind.sourceTable);
+					item.detail = source.sourceName;
+					items.push(item);
+				}
+			}
+		} else if (parts.length === 2) {
+			// Offer table names matching database+schema (3-part FQN: catalog.schema.table)
+			const [db, schema] = parts;
+			for (const model of index.models.values()) {
+				if (model.database?.toLowerCase() === db && model.schema?.toLowerCase() === schema) {
+					const item = new vscode.CompletionItem(model.name, DbtCompletionKind.modelRef);
+					item.detail = `${model.materialisation} — ${model.packageName}`;
+					items.push(item);
+				}
+			}
+			for (const source of index.sources.values()) {
+				if (source.database?.toLowerCase() === db && source.schema?.toLowerCase() === schema) {
+					const item = new vscode.CompletionItem(source.name, DbtCompletionKind.sourceTable);
+					item.detail = source.sourceName;
+					items.push(item);
+				}
+			}
+		}
+
 		return items;
 	}
 

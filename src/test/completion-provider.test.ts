@@ -247,3 +247,130 @@ describe('DbtCompletionProvider — FROM/JOIN with ParseService', () => {
 		expect(enrichedItem!.detail).toBe('CTE (1 columns)');
 	});
 });
+
+describe('DbtCompletionProvider — FQN completions', () => {
+	function makeIndexerWithFqnModels(): ManifestIndexer {
+		const models = new Map([
+			['model.pkg.gold__company', {
+				name: 'gold__company',
+				uniqueId: 'model.pkg.gold__company',
+				materialisation: 'table',
+				packageName: 'pkg',
+				path: 'models/gold__company.sql',
+				schema: 'niclas_olofsson_gold',
+				database: 'hive_metastore',
+				tags: [],
+				description: '',
+			}],
+			['model.pkg.mart_serving__chep', {
+				name: 'mart_serving__chep',
+				uniqueId: 'model.pkg.mart_serving__chep',
+				materialisation: 'view',
+				packageName: 'pkg',
+				path: 'models/mart_serving__chep.sql',
+				schema: 'niclas_olofsson_mart_serving',
+				database: 'hive_metastore',
+				tags: [],
+				description: '',
+			}],
+		]);
+		const sources = new Map([
+			['source.pkg.raw.orders', {
+				uniqueId: 'source.pkg.raw.orders',
+				name: 'orders',
+				sourceName: 'raw',
+				schema: 'niclas_olofsson_raw',
+				database: 'hive_metastore',
+				tags: [],
+				description: '',
+			}],
+		]);
+		return {
+			index: { adapterType: 'spark', models, sources },
+			findModelsByName: () => [],
+			getRawNode: () => null,
+			getColumns: () => null,
+			setColumns: vi.fn(),
+			buildSchemaMapping: () => ({}),
+		} as unknown as ManifestIndexer;
+	}
+
+	const emptyParseService = {
+		getDocumentModel: vi.fn().mockResolvedValue(null),
+		evict: vi.fn(),
+	} as unknown as ParseService;
+
+	it('returns schemas after catalog. (trailing dot)', async () => {
+		const provider = new DbtCompletionProvider(makeIndexerWithFqnModels(), createMockLogger(), emptyParseService);
+		const linePrefix = 'FROM hive_metastore.';
+		const doc = mockDocument([linePrefix]);
+		const pos = { line: 0, character: linePrefix.length };
+
+		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
+
+		expect(items).toBeDefined();
+		const labels = items!.map(i => i.label);
+		expect(labels).toContain('niclas_olofsson_gold');
+		expect(labels).toContain('niclas_olofsson_mart_serving');
+		expect(labels).toContain('niclas_olofsson_raw');
+	});
+
+	it('returns table names after catalog.schema. (trailing dot)', async () => {
+		const provider = new DbtCompletionProvider(makeIndexerWithFqnModels(), createMockLogger(), emptyParseService);
+		const linePrefix = 'FROM hive_metastore.niclas_olofsson_gold.';
+		const doc = mockDocument([linePrefix]);
+		const pos = { line: 0, character: linePrefix.length };
+
+		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
+
+		expect(items).toBeDefined();
+		const labels = items!.map(i => i.label);
+		expect(labels).toContain('gold__company');
+		expect(labels).not.toContain('mart_serving__chep');
+	});
+
+	it('returns table names after catalog.schema.partial (no dot)', async () => {
+		const provider = new DbtCompletionProvider(makeIndexerWithFqnModels(), createMockLogger(), emptyParseService);
+		const linePrefix = 'FROM hive_metastore.niclas_olofsson_gold.gold__';
+		const doc = mockDocument([linePrefix]);
+		const pos = { line: 0, character: linePrefix.length };
+
+		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
+
+		expect(items).toBeDefined();
+		const labels = items!.map(i => i.label);
+		expect(labels).toContain('gold__company');
+	});
+
+	it('works after JOIN keyword too', async () => {
+		const provider = new DbtCompletionProvider(makeIndexerWithFqnModels(), createMockLogger(), emptyParseService);
+		const linePrefix = 'JOIN hive_metastore.niclas_olofsson_mart_serving.';
+		const doc = mockDocument([linePrefix]);
+		const pos = { line: 0, character: linePrefix.length };
+
+		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
+
+		expect(items).toBeDefined();
+		const labels = items!.map(i => i.label);
+		expect(labels).toContain('mart_serving__chep');
+		expect(labels).not.toContain('gold__company');
+	});
+
+	it('does not pollute alias.column path for non-FROM context', async () => {
+		const aliases = { c: ['id', 'name'] };
+		const provider = new DbtCompletionProvider(makeIndexerWithFqnModels(), createMockLogger(), makeParseServiceWithAliases(aliases));
+		// "SELECT c." — should still give column completions, not FQN
+		const linePrefix = 'SELECT c.';
+		const doc = mockDocument([linePrefix]);
+		const pos = { line: 0, character: linePrefix.length };
+
+		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
+
+		expect(items).toBeDefined();
+		const labels = items!.map(i => i.label);
+		expect(labels).toContain('id');
+		expect(labels).toContain('name');
+		// No schema/table names should appear
+		expect(labels).not.toContain('niclas_olofsson_gold');
+	});
+});
