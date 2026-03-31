@@ -36,6 +36,7 @@ import { DbtWorkspaceSymbolProvider } from './providers/workspace-symbol-provide
 import { DbtSignatureHelpProvider } from './providers/sql/signature-help-provider';
 import { SqlCodeActionProvider } from './providers/sql/code-action-provider';
 import { ConfigCodeActionProvider } from './providers/common/config-code-action-provider';
+import { DbtCallHierarchyProvider } from './providers/sql/call-hierarchy-provider';
 import { ParseService } from './services/parse-service';
 import { StatusBarManager } from './views/status-bar';
 import { DbtDiagnosticsProvider } from './providers/diagnostics-provider';
@@ -291,6 +292,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const sqlCodeActionProvider = new SqlCodeActionProvider(manifestIndexer, logger);
 	sqlCodeActionProvider.setPathResolver(pathResolver);
 	const configCodeActionProvider = new ConfigCodeActionProvider();
+	const callHierarchyProvider = new DbtCallHierarchyProvider(manifestIndexer, logger, parseService);
 
 	let providerDisposables: vscode.Disposable[] = [];
 
@@ -321,6 +323,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			vscode.languages.registerCodeActionsProvider({ pattern: '**/dbt_project.yml' }, configCodeActionProvider, {
 				providedCodeActionKinds: ConfigCodeActionProvider.providedCodeActionKinds,
 			}),
+			vscode.languages.registerCallHierarchyProvider(sqlSelector, callHierarchyProvider),
 		];
 
 		logger.info(`Registered language providers with ${sqlSelector.length} SQL filters, ${yamlSelector.length} YAML filters`);
