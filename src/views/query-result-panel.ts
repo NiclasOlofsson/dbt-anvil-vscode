@@ -126,6 +126,11 @@ export class QueryResultPanel implements vscode.WebviewViewProvider, vscode.Webv
 		void webview?.postMessage({ type: 'toggleStats' });
 	}
 
+	requestExport(format: string, target: 'clipboard' | 'file' = 'clipboard'): void {
+		const webview = this._inPanel ? this._view?.webview : this._editorPanel?.webview;
+		void webview?.postMessage({ type: 'requestExport', format, target });
+	}
+
 	moveToEditor(): void {
 		if (!this._inPanel) return;
 		this._inPanel = false;
@@ -165,7 +170,7 @@ export class QueryResultPanel implements vscode.WebviewViewProvider, vscode.Webv
 		});
 	}
 
-	private _handleMessage(msg: { type: string; value?: string; tabIndex?: number; format?: string; selection?: { r1: number; r2: number; c1: number; c2: number } }): void {
+	private _handleMessage(msg: { type: string; value?: string; tabIndex?: number; format?: string; target?: string; selection?: { r1: number; r2: number; c1: number; c2: number } }): void {
 		if (msg.type === 'copyValue' && msg.value !== undefined) {
 			void vscode.env.clipboard.writeText(msg.value);
 		}
@@ -191,7 +196,17 @@ export class QueryResultPanel implements vscode.WebviewViewProvider, vscode.Webv
 					});
 				}
 				const text = this._formatExport(columns, rows, msg.format);
-				if (msg.format === 'editor') {
+				if (msg.target === 'file') {
+					const extMap: Record<string, string> = { csv: 'csv', tsv: 'tsv', json: 'json', markdown: 'md' };
+					const fileExt = extMap[msg.format] ?? 'txt';
+					void vscode.window.showSaveDialog({
+						defaultUri: vscode.Uri.file(`query-results.${fileExt}`),
+						filters: { [msg.format.toUpperCase()]: [fileExt] },
+					}).then(uri => {
+						if (!uri) return;
+						void vscode.workspace.fs.writeFile(uri, Buffer.from(text, 'utf8'));
+					});
+				} else if (msg.format === 'editor') {
 					void vscode.workspace.openTextDocument({ content: text, language: 'plaintext' })
 						.then(doc => vscode.window.showTextDocument(doc));
 				} else {
@@ -1266,6 +1281,11 @@ ${panelsHtml}
 			const panel = $('.panel.active');
 			if (panel) toggleStats(panel);
 		}
+		if (msg?.type === 'requestExport') {
+			const tabIdx = parseInt($('.panel.active')?.getAttribute('data-index') ?? '0');
+			const rect = msg.target === 'file' ? undefined : selRect();
+			vscode.postMessage({ type: 'export', tabIndex: tabIdx, format: msg.format, target: msg.target, ...(rect ? { selection: rect } : {}) });
+		}
 	});
 
 	// ── Context Menu ────────────────────────────────────────
@@ -1288,17 +1308,9 @@ ${panelsHtml}
 		if (selRect()) {
 			items.push({ label: 'Copy Selection (TSV)', action: copySelection });
 		}
-		items.push({ sep: true });
-		const tabIdx = parseInt($('.panel.active')?.getAttribute('data-index') ?? '0');
-		const rect = selRect();
-		const exportMsg = (format) => ({ type: 'export', tabIndex: tabIdx, format, ...(rect ? { selection: rect } : {}) });
-		items.push({ label: 'Export as CSV', action: () => vscode.postMessage(exportMsg('csv')) });
-		items.push({ label: 'Export as JSON', action: () => vscode.postMessage(exportMsg('json')) });
-		items.push({ label: 'Export as TSV', action: () => vscode.postMessage(exportMsg('tsv')) });
-		items.push({ label: 'Export as Markdown', action: () => vscode.postMessage(exportMsg('markdown')) });
-		items.push({ label: 'Open in Editor', action: () => vscode.postMessage(exportMsg('editor')) });
 
 		ctxMenu.innerHTML = '';
+		if (items.length === 0) return;
 		items.forEach(item => {
 			if (item.sep) {
 				const sep = document.createElement('div');

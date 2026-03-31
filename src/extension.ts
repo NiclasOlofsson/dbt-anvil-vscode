@@ -720,6 +720,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.commands.registerCommand('dbt-studio.queryResult.toggleStats', () => {
 			queryResultPanel.toggleStats();
 		}),
+
+		vscode.commands.registerCommand('dbt-studio.queryResult.exportMenu', async () => {
+			const items: vscode.QuickPickItem[] = [
+				{ label: '$(copy) Copy as CSV', detail: 'csv' },
+				{ label: '$(copy) Copy as TSV', detail: 'tsv' },
+				{ label: '$(copy) Copy as JSON', detail: 'json' },
+				{ label: '$(copy) Copy as Markdown', detail: 'markdown' },
+				{ label: '$(go-to-file) Open in Editor', detail: 'editor' },
+			];
+			const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Export query results' });
+			if (picked?.detail) {
+				queryResultPanel.requestExport(picked.detail);
+			}
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.queryResult.export.csv', () => {
+			queryResultPanel.requestExport('csv', 'file');
+		}),
+		vscode.commands.registerCommand('dbt-studio.queryResult.export.tsv', () => {
+			queryResultPanel.requestExport('tsv', 'file');
+		}),
+		vscode.commands.registerCommand('dbt-studio.queryResult.export.json', () => {
+			queryResultPanel.requestExport('json', 'file');
+		}),
+		vscode.commands.registerCommand('dbt-studio.queryResult.export.markdown', () => {
+			queryResultPanel.requestExport('markdown', 'file');
+		}),
 	);
 
 	// -------- Debug adapter (F5 → run SQL) --------

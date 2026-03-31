@@ -249,6 +249,22 @@
 				"command": "dbt-studio.queryResult.toggleStats",
 				"title": "Toggle Column Stats",
 				"icon": "$(graph)"
+			},
+			{
+				"command": "dbt-studio.queryResult.export.csv",
+				"title": "Export as CSV"
+			},
+			{
+				"command": "dbt-studio.queryResult.export.tsv",
+				"title": "Export as TSV"
+			},
+			{
+				"command": "dbt-studio.queryResult.export.json",
+				"title": "Export as JSON"
+			},
+			{
+				"command": "dbt-studio.queryResult.export.markdown",
+				"title": "Export as Markdown"
 			}
 		],
 		"viewsContainers": {
@@ -411,6 +427,26 @@
 					"group": "navigation@98"
 				},
 				{
+					"command": "dbt-studio.queryResult.export.csv",
+					"when": "dbt-studio.queryResultVisible",
+					"group": "1_export@1"
+				},
+				{
+					"command": "dbt-studio.queryResult.export.tsv",
+					"when": "dbt-studio.queryResultVisible",
+					"group": "1_export@2"
+				},
+				{
+					"command": "dbt-studio.queryResult.export.json",
+					"when": "dbt-studio.queryResultVisible",
+					"group": "1_export@3"
+				},
+				{
+					"command": "dbt-studio.queryResult.export.markdown",
+					"when": "dbt-studio.queryResultVisible",
+					"group": "1_export@4"
+				},
+				{
 					"command": "dbt-studio.showLineage",
 					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-studio.fileCategory =~ /model|seed|snapshot/",
 					"group": "navigation@1"
@@ -451,6 +487,26 @@
 					"command": "dbt-studio.queryResult.toggleStats",
 					"when": "view == dbt-studio.queryResults",
 					"group": "navigation"
+				},
+				{
+					"command": "dbt-studio.queryResult.export.csv",
+					"when": "view == dbt-studio.queryResults",
+					"group": "1_export@1"
+				},
+				{
+					"command": "dbt-studio.queryResult.export.tsv",
+					"when": "view == dbt-studio.queryResults",
+					"group": "1_export@2"
+				},
+				{
+					"command": "dbt-studio.queryResult.export.json",
+					"when": "view == dbt-studio.queryResults",
+					"group": "1_export@3"
+				},
+				{
+					"command": "dbt-studio.queryResult.export.markdown",
+					"when": "view == dbt-studio.queryResults",
+					"group": "1_export@4"
 				},
 				{
 					"command": "dbt-studio.refreshExplorer",
