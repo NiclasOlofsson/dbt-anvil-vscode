@@ -1,15 +1,11 @@
 # Features to add
 
-## Graph lineage, for aggregations
-
-(DONE)
+## ✅ Graph lineage, for aggregations
 
 Currently it can provide a trace through the model on a column level for "asdfsf" + "adsaf" columns. Looks fancy. Example fullname -> firstname, lastname.
 However,it can't visualize aggregations correctly, like count(orders). It should be able to at least visualize these aggregations somehow. Maybe a dotted line or something to the model where it is origin is (like orders for count(orders))
 
-## Process bridge improvment considerations
-
-(DONE)
+## ✅ Process bridge improvment considerations
 
 They're completely separable. The four sqlglot handlers (parse_document, get_column_lineage, get_scope_columns, get_columns) are:
 
@@ -36,9 +32,7 @@ C:\Development\dbt_oatanalytics\target\perf_info.json
 
 Have intersting information that we should look into.
 
-## Build profiler
-
-(DONE)
+## ✅ Build profiler
 
 Have something running in the background that can profile models in the database.
 
@@ -62,14 +56,14 @@ VS Code has a rich context menu of language features. We already cover most of t
 
 **Missing providers:**
 
-- **Call Hierarchy** (`CallHierarchyProvider`) — "Show Call Hierarchy" (Shift+Alt+H). Re-invent call stack but for dbt — lineage surfaced the way a coder would have it. Native tree panel with incoming callers (who refs this model) and outgoing calls (what this model refs). Keyboard-driven, not a graph.
-- **Document Highlights** (`DocumentHighlightProvider`) — powers "Change All Occurrences" (Ctrl+F2). Highlights same-symbol occurrences in the file. Without it, Ctrl+F2 falls back to dumb text matching.
-- **Type Definition** (`TypeDefinitionProvider`) — "Go to Type Definition". Cursor on a column → jump to its schema.yml definition. Or cursor on a `ref()` → jump to the YAML model entry instead of the .sql file.
-- **Refactor code actions** (`CodeActionKind.Refactor`) — "Refactor..." sub-menu. Extract selection into a new CTE, inline a CTE, extract model into a separate file.
+- [x] **Call Hierarchy** (`CallHierarchyProvider`) — "Show Call Hierarchy" (Shift+Alt+H). Re-invent call stack but for dbt — lineage surfaced the way a coder would have it. Native tree panel with incoming callers (who refs this model) and outgoing calls (what this model refs). Keyboard-driven, not a graph.
+- [ ] **Document Highlights** (`DocumentHighlightProvider`) — powers "Change All Occurrences" (Ctrl+F2). Highlights same-symbol occurrences in the file. Without it, Ctrl+F2 falls back to dumb text matching.
+- [ ] **Type Definition** (`TypeDefinitionProvider`) — "Go to Type Definition". Cursor on a column → jump to its schema.yml definition. Or cursor on a `ref()` → jump to the YAML model entry instead of the .sql file.
+- [ ] **Refactor code actions** (`CodeActionKind.Refactor`) — "Refactor..." sub-menu. Extract selection into a new CTE, inline a CTE, extract model into a separate file.
 
 **Incomplete providers:**
 
-- **Rename** — currently only renames `ref('model')` and the .sql file. Should also rename CTE names (with all in-file references), column aliases, source names, and macro names.
+- [x] **Rename** — currently only renames `ref('model')` and the .sql file. Should also rename CTE names (with all in-file references), column aliases, source names, and macro names.
 
 ## Structure-aware smart completion
 
@@ -84,4 +78,40 @@ Because we have a real SQL parser (sqlglot), completions can understand query st
 
 The code action (lightbulb) variant makes sense for *existing* SQL that already has the problem (e.g. "column in SELECT not in GROUP BY"). Smart completion handles the *as-you-type* case. Both are worth implementing — they cover different moments in the workflow.
 
+## Heat map
 
+Heat or flame maps .. for the model. It would be cool if the tree could visualize how many dependencies and dependents it has .. colorful in the model explorer perhaps. Something that could be toggled on/off perhaps. Also could imagine some sort of github green matrix view on some of, just have to come up with a cool usecase for it. Like, visualizing the entire model (all 2000 models and sources) etc .. in some sort of .. don't know visual that is sqarish .. need more thinking obviously :D
+
+## dbt profiles
+
+Support selection of different profiles from the project and user home. Different environments basically. Also with authentication support (when not using PAC). In addition to that, would imply that we can also implement deffer for dbt commands that can use it. And important aspect of when doing this is that we need to be able to classify different environments as dev, test, prod environments and similar. This ultimately opens up for monitoring of the environments, but that is very database dependent and there are probably better tools for that.
+
+## Yaml models and sources
+
+We have to make SQL and YAML play better togeter. For a model, they are one and the same and just two different views. Its almost like the code-behind views we had in visual studio back in the days (winforms). So navigation should be seamless .. it should offer
+
+## ✅ World-class query result view
+
+Rewrote the query result webview from scratch. Goal: best table view outside of Excel — sleek, minimal UI with contextual power features.
+
+**Data plumbing:**
+- `QueryResult` interface extended with optional `columnTypes: Record<string, string>`
+- Databricks provider extracts `type_name` from REST API manifest schema
+- Type inference from JSON values (number, boolean, date/datetime, string) as fallback
+
+**Features delivered:**
+
+| Feature | Details |
+|---|---|
+| **Column resize** | Drag handles on column headers; double-click to auto-fit |
+| **Type-aware formatting** | Right-aligned numbers (tabular-nums), centered booleans; resolves DB types + infers from values |
+| **Keyboard navigation** | Arrow keys, Tab/Shift+Tab, Enter/Space to copy, Ctrl+A select-all, Ctrl+C copy |
+| **Rectangular selection** | Click, Shift+click to extend, click+drag for range; column header click selects entire column |
+| **Floating toolbar** | Appears on multi-cell selection with Copy, CSV, JSON, TSV, Markdown, Open in Editor |
+| **Context menu** | Right-click for cell copy, selection copy, and all export formats |
+| **Footer selection stats** | Shows dimensions (3×5), cell count, Sum and Avg for numeric selections |
+| **Column stats bar** | Toggle via Σ button — shows min/max/mean for numbers, true% for booleans, distinct count for strings, date ranges |
+| **Smart filter** | Type to activate; DSL: `col: >100`, `col: contains text`, `col: != null`, or plain text search across all columns |
+| **Cell detail popup** | Hover popup showing full value, DB type badge, percentile for numbers, relative time for dates |
+| **Multi-format export** | CSV, TSV, JSON, Markdown, and "Open in Editor" — from toolbar, context menu, or footer |
+| **Sort improvements** | NULLs sort to bottom; re-indexes data after sort for correct selection behavior |

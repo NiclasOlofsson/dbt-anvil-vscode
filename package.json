@@ -244,6 +244,11 @@
 				"command": "dbt-studio.queryResult.moveToEditor",
 				"title": "Move Query Results to Editor",
 				"icon": "$(layout-panel-off)"
+			},
+			{
+				"command": "dbt-studio.queryResult.toggleStats",
+				"title": "Toggle Column Stats",
+				"icon": "$(graph)"
 			}
 		],
 		"viewsContainers": {
@@ -401,6 +406,11 @@
 					"group": "navigation@99"
 				},
 				{
+					"command": "dbt-studio.queryResult.toggleStats",
+					"when": "dbt-studio.queryResultVisible",
+					"group": "navigation@98"
+				},
+				{
 					"command": "dbt-studio.showLineage",
 					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-studio.fileCategory =~ /model|seed|snapshot/",
 					"group": "navigation@1"
@@ -434,6 +444,11 @@
 			"view/title": [
 				{
 					"command": "dbt-studio.queryResult.moveToEditor",
+					"when": "view == dbt-studio.queryResults",
+					"group": "navigation"
+				},
+				{
+					"command": "dbt-studio.queryResult.toggleStats",
 					"when": "view == dbt-studio.queryResults",
 					"group": "navigation"
 				},
@@ -1215,6 +1230,7 @@
 		}
 	],
 	"scripts": {
+		"generate-icon": "node scripts/generate-icon.mjs",
 		"clean": "rimraf dist out",
 		"build": "tsx .esbuild.ts",
 		"compile": "tsx .esbuild.ts --dev",

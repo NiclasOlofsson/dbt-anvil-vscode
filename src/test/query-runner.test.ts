@@ -5,6 +5,12 @@ import { QueryRunner, type StatementResult } from '../dbt/query-runner';
 
 // -------- vscode stub --------
 vi.mock('vscode', () => ({
+	EventEmitter: class {
+		event = (listener: (e: unknown) => void) => { this._listeners.push(listener); return () => {}; };
+		_listeners: Array<(e: unknown) => void> = [];
+		fire(data: unknown) { this._listeners.forEach(l => l(data)); }
+		dispose() { this._listeners = []; }
+	},
 	workspace: {
 		getConfiguration: () => ({
 			get: (key: string, defaultValue: unknown) => defaultValue,
@@ -86,6 +92,7 @@ function makeEditor(text: string, cursorOffset: number, selectionStart?: number,
 				return off + pos.character;
 			},
 			languageId: 'jinja-sql',
+			uri: { toString: () => 'file:///test.sql' },
 		},
 		selection: hasSelection
 			? {

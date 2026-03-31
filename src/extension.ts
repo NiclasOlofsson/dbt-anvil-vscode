@@ -716,6 +716,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.commands.registerCommand('dbt-studio.queryResult.moveToEditor', () => {
 			queryResultPanel.moveToEditor();
 		}),
+
+		vscode.commands.registerCommand('dbt-studio.queryResult.toggleStats', () => {
+			queryResultPanel.toggleStats();
+		}),
 	);
 
 	// -------- Debug adapter (F5 → run SQL) --------

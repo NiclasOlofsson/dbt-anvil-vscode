@@ -262,7 +262,12 @@ export class DatabricksProvider implements DatabaseProvider {
 	}
 
 	private _parseResult(response: StatementResult): QueryResult {
-		const columns = (response.manifest?.schema?.columns ?? []).map(c => c.name);
+		const schemaColumns = response.manifest?.schema?.columns ?? [];
+		const columns = schemaColumns.map(c => c.name);
+		const columnTypes: Record<string, string> = {};
+		for (const c of schemaColumns) {
+			if (c.type_name) columnTypes[c.name] = c.type_name;
+		}
 		const dataArray = response.result?.data_array ?? [];
 
 		const rows: Record<string, unknown>[] = dataArray.map(rowArr =>
@@ -271,6 +276,7 @@ export class DatabricksProvider implements DatabaseProvider {
 
 		return {
 			columns,
+			columnTypes: Object.keys(columnTypes).length > 0 ? columnTypes : undefined,
 			rows,
 			rowCount: response.manifest?.total_row_count ?? rows.length,
 			executionTimeMs: 0, // overwritten by query() after measuring round-trip
