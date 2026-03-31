@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../../indexing/manifest-indexer';
 import type { ModelProfiler } from '../../dbt/model-profiler';
 import type { DbtPathResolver } from '../../dbt/dbt-path-resolver';
+import type { QueryRunner } from '../../dbt/query-runner';
 import type { ILogger } from '../../types/logger';
 import { splitStatements } from '../../dbt/statement-splitter';
 
@@ -15,6 +16,7 @@ export class SqlCodeLensProvider implements vscode.CodeLensProvider {
 
 	private _profiler?: ModelProfiler;
 	private _pathResolver?: DbtPathResolver;
+	private _queryRunner?: QueryRunner;
 
 	constructor(
 		private readonly indexer: ManifestIndexer,
@@ -28,6 +30,11 @@ export class SqlCodeLensProvider implements vscode.CodeLensProvider {
 
 	setPathResolver(resolver: DbtPathResolver): void {
 		this._pathResolver = resolver;
+	}
+
+	setQueryRunner(runner: QueryRunner): void {
+		this._queryRunner = runner;
+		runner.onRunningChange(() => this.refresh());
 	}
 
 	refresh(): void {
@@ -121,24 +128,17 @@ export class SqlCodeLensProvider implements vscode.CodeLensProvider {
 
 		const lenses: vscode.CodeLens[] = [];
 
-		// "Run All" at top of file when there are multiple statements
-		if (statements.length > 1) {
-			lenses.push(new vscode.CodeLens(new vscode.Range(0, 0, 0, 0), {
-				title: `$(run-all) Run All (${statements.length})`,
-				command: 'dbt-studio.executeAll',
-				tooltip: `Execute all ${statements.length} statements`,
-			}));
-		}
+		const runningUri = this._queryRunner?.runningUri;
+		const runningLine = this._queryRunner?.runningLine;
+		const isRunningDoc = runningUri === document.uri.toString();
 
 		// Per-statement "Run" lens
 		for (const stmt of statements) {
 			const range = new vscode.Range(stmt.startLine, 0, stmt.startLine, 0);
-			lenses.push(new vscode.CodeLens(range, {
-				title: '$(play) Run',
-				command: 'dbt-studio.executeStatement',
-				arguments: [stmt.sql],
-				tooltip: stmt.sql.length > 80 ? stmt.sql.substring(0, 80) + '…' : stmt.sql,
-			}));
+			const isRunning = isRunningDoc && runningLine === stmt.startLine;
+			lenses.push(new vscode.CodeLens(range, isRunning
+				? { title: 'Running...', command: '' }
+				: { title: 'Press F5 to run', command: '' }));
 		}
 
 		return lenses;

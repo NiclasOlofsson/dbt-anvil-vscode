@@ -23,10 +23,12 @@ export interface StatementResult {
 export class QueryRunner {
 	private _abortController: AbortController | undefined;
 	private _runningUri: string | undefined;
-	private readonly _onRunningChange = new vscode.EventEmitter<string | undefined>();
+	private _runningLine: number | undefined;
+	private readonly _onRunningChange = new vscode.EventEmitter<{ uri: string; line: number } | undefined>();
 	readonly onRunningChange = this._onRunningChange.event;
 
 	get runningUri(): string | undefined { return this._runningUri; }
+	get runningLine(): number | undefined { return this._runningLine; }
 
 	constructor(
 		private readonly _databaseProvider: DatabaseProvider,
@@ -73,7 +75,7 @@ export class QueryRunner {
 	/** Execute all statements in the active editor. */
 	async executeAll(editor: vscode.TextEditor): Promise<void> {
 		const limit = vscode.workspace.getConfiguration('dbt-studio').get<number>('queryEditor.defaultLimit', 500);
-		await this._executeStatements(editor.document.getText(), limit);
+		await this._executeStatements(editor.document.getText(), limit, undefined, editor.document.uri.toString());
 	}
 
 	/** Execute a single SQL string (from CodeLens). */
@@ -85,7 +87,7 @@ export class QueryRunner {
 	/** Execute with explicit config (from debug adapter launch configuration). */
 	async executeWithConfig(editor: vscode.TextEditor, config: { limit: number; scope: 'cursor' | 'all'; resultLocation?: string }): Promise<void> {
 		if (config.scope === 'all') {
-			await this._executeStatements(editor.document.getText(), config.limit, config.resultLocation);
+			await this._executeStatements(editor.document.getText(), config.limit, config.resultLocation, editor.document.uri.toString());
 			return;
 		}
 
@@ -93,8 +95,10 @@ export class QueryRunner {
 		const selection = editor.selection;
 		let sqlToExecute: string;
 
+		let lineOffset = 0;
 		if (!selection.isEmpty) {
 			sqlToExecute = doc.getText(selection);
+			lineOffset = selection.start.line;
 		} else {
 			const fullText = doc.getText();
 			const offset = doc.offsetAt(selection.active);
@@ -103,16 +107,21 @@ export class QueryRunner {
 			const stmt = findStatementAtOffset(statements, offset);
 			if (!stmt) return;
 			sqlToExecute = stmt.sql;
+			lineOffset = stmt.startLine;
 		}
 
-		await this._executeStatements(sqlToExecute, config.limit, config.resultLocation);
+		await this._executeStatements(sqlToExecute, config.limit, config.resultLocation, editor.document.uri.toString(), lineOffset);
 	}
 
-	private async _executeStatements(sql: string, limit: number, resultLocation?: string): Promise<void> {
+	private async _executeStatements(sql: string, limit: number, resultLocation?: string, runningUri?: string, lineOffset = 0): Promise<void> {
 		const statements = splitStatements(sql);
 		if (statements.length === 0) return;
 
 		const stopOnError = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('queryEditor.stopOnError', false);
+
+		if (runningUri) {
+			this._runningUri = runningUri;
+		}
 
 		this.cancel();
 		this._abortController = new AbortController();
@@ -131,6 +140,11 @@ export class QueryRunner {
 					const stmt = statements[i];
 					progress.report({ message: `Statement ${i + 1}/${statements.length}`, increment: (100 / statements.length) });
 
+					if (runningUri) {
+						this._runningLine = lineOffset + stmt.startLine;
+						this._onRunningChange.fire({ uri: runningUri, line: lineOffset + stmt.startLine });
+					}
+
 					try {
 						const result = await this._databaseProvider.query(stmt.sql, limit, signal, Priority.User);
 						results.push({ sql: stmt.sql, index: i, result });
@@ -144,6 +158,9 @@ export class QueryRunner {
 		);
 
 		this._abortController = undefined;
+		this._runningUri = undefined;
+		this._runningLine = undefined;
+		this._onRunningChange.fire(undefined);
 		this._onResults(results, resultLocation);
 	}
 }

@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import type { QueryRunner } from './query-runner';
 import type { DbtPathResolver } from './dbt-path-resolver';
 import type { ILogger } from '../types/logger';
+import { splitStatements, findStatementAtOffset } from './statement-splitter';
 
 interface DapMessage {
 	seq: number;
@@ -19,6 +20,7 @@ interface DapMessage {
  */
 export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _seq = 1;
+	private _threadName = 'SQL';
 	private readonly _onDidSendMessage = new vscode.EventEmitter<vscode.DebugProtocolMessage>();
 	readonly onDidSendMessage = this._onDidSendMessage.event;
 
@@ -103,7 +105,22 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		const scope = args.scope === 'all' ? 'all' as const : 'cursor' as const;
 		const resultLocation = typeof args.resultLocation === 'string' ? args.resultLocation : undefined;
 
+		const fileName = editor.document.fileName.split(/[\\/]/).pop() ?? 'query';
+		if (scope === 'all') {
+			this._threadName = `${fileName} — all statements`;
+		} else {
+			const fullText = editor.document.getText();
+			const offset = editor.document.offsetAt(editor.selection.active);
+			const stmts = splitStatements(fullText);
+			const stmt = !editor.selection.isEmpty
+				? { sql: editor.document.getText(editor.selection) }
+				: findStatementAtOffset(stmts, offset);
+			const preview = stmt?.sql.replace(/\s+/g, ' ').trim().slice(0, 80) ?? fileName;
+			this._threadName = preview.length < (stmt?.sql.replace(/\s+/g, ' ').trim().length ?? 0) ? `${preview}…` : preview;
+		}
+
 		this._logger.info(`Debug adapter: launching (scope=${scope}, limit=${limit})`);
+		this._send({ type: 'event', event: 'thread', body: { threadId: 1, reason: 'started' } });
 
 		try {
 			await this._queryRunner.executeWithConfig(editor, { limit, scope, resultLocation });
