@@ -68,82 +68,82 @@
 		"commands": [
 			{
 				"command": "dbt-studio.runModel",
-				"title": "dbt Studio: Run Model",
+				"title": "Run Model",
 				"icon": "$(run)"
 			},
 			{
 				"command": "dbt-studio.testModel",
-				"title": "dbt Studio: Test Model",
+				"title": "Test Model",
 				"icon": "$(beaker)"
 			},
 			{
 				"command": "dbt-studio.buildModel",
-				"title": "dbt Studio: Build Model",
+				"title": "Build Model",
 				"icon": "$(package)"
 			},
 			{
 				"command": "dbt-studio.compileModel",
-				"title": "dbt Studio: Compile Model",
+				"title": "Compile Model",
 				"icon": "$(gear)"
 			},
 			{
 				"command": "dbt-studio.showLineage",
-				"title": "dbt Studio: Show Lineage Graph",
+				"title": "Show Lineage Graph",
 				"icon": "$(type-hierarchy)"
 			},
 			{
 				"command": "dbt-studio.runDeps",
-				"title": "dbt Studio: Install Dependencies (dbt deps)",
+				"title": "Install Dependencies (dbt deps)",
 				"icon": "$(cloud-download)"
 			},
 			{
 				"command": "dbt-studio.parseProject",
-				"title": "dbt Studio: Parse Project",
+				"title": "Parse Project",
 				"icon": "$(refresh)"
 			},
 			{
 				"command": "dbt-studio.refreshExplorer",
-				"title": "dbt Studio: Refresh Model Explorer",
+				"title": "Refresh Model Explorer",
 				"icon": "$(refresh)"
 			},
 			{
 				"command": "dbt-studio.toggleLineageFollow",
-				"title": "dbt Studio: Toggle Lineage Follow Active Editor",
+				"title": "Toggle Lineage Follow Active Editor",
 				"icon": "$(eye)"
 			},
 			{
 				"command": "dbt-studio.toggleLineageFollowOff",
-				"title": "dbt Studio: Toggle Lineage Follow Active Editor",
+				"title": "Toggle Lineage Follow Active Editor",
 				"icon": "$(eye-closed)"
 			},
 			{
 				"command": "dbt-studio.toggleExplorerFollow",
-				"title": "dbt Studio: Toggle Explorer Follow Active Editor",
+				"title": "Toggle Explorer Follow Active Editor",
 				"icon": "$(eye)"
 			},
 			{
 				"command": "dbt-studio.toggleExplorerFollowOff",
-				"title": "dbt Studio: Toggle Explorer Follow Active Editor",
+				"title": "Toggle Explorer Follow Active Editor",
 				"icon": "$(eye-closed)"
 			},
 			{
 				"command": "dbt-studio.showLineageTests",
-				"title": "dbt Studio: Show Tests in Lineage Graph",
+				"title": "Show Tests in Lineage Graph",
 				"icon": "$(beaker)"
 			},
 			{
 				"command": "dbt-studio.hideLineageTests",
-				"title": "dbt Studio: Hide Tests in Lineage Graph",
+				"title": "Hide Tests in Lineage Graph",
 				"icon": "$(beaker)"
 			},
 			{
 				"command": "dbt-studio.toggleLineageTests",
-				"title": "dbt Studio: Toggle Tests in Lineage Graph",
+				"title": "Toggle Tests in Lineage Graph",
 				"icon": "$(beaker)"
 			},
 			{
 				"command": "dbt-studio.refreshTestExplorer",
-				"title": "dbt Studio: Refresh Test Explorer",
+				"title": "Refresh Test Explorer",
 				"icon": "$(refresh)"
 			},
 			{
@@ -168,72 +168,82 @@
 			},
 			{
 				"command": "dbt-studio.runNamedModel",
-				"title": "dbt Studio: Run Named Model",
+				"title": "Run Named Model",
 				"icon": "$(run)"
 			},
 			{
 				"command": "dbt-studio.testNamedModel",
-				"title": "dbt Studio: Test Named Model",
+				"title": "Test Named Model",
 				"icon": "$(beaker)"
 			},
 			{
 				"command": "dbt-studio.runUnitTest",
-				"title": "dbt Studio: Run Unit Test",
+				"title": "Run Unit Test",
 				"icon": "$(beaker)"
 			},
 			{
 				"command": "dbt-studio.runCteTest",
-				"title": "dbt Studio: Run CTE Test",
+				"title": "Run CTE Test",
 				"icon": "$(combine)"
 			},
 			{
 				"command": "dbt-studio.openSettings",
-				"title": "dbt Studio: Open Settings",
+				"title": "Open Settings",
 				"icon": "$(gear)"
 			},
 			{
 				"command": "dbt-studio.profiler.profileModel",
-				"title": "dbt Studio: Profile Model",
+				"title": "Profile Model",
 				"icon": "$(clock)"
 			},
 			{
 				"command": "dbt-studio.profiler.clearResults",
-				"title": "dbt Studio: Clear Profile Results",
+				"title": "Clear Profile Results",
 				"icon": "$(clear-all)"
 			},
 			{
 				"command": "dbt-studio.profiler.cancelProfiling",
-				"title": "dbt Studio: Stop Profiling",
+				"title": "Stop Profiling",
 				"icon": "$(stop-circle)"
 			},
 			{
 				"command": "dbt-studio.profiler.goToCte",
-				"title": "dbt Studio: Go to CTE Definition"
+				"title": "Go to CTE Definition"
 			},
 			{
 				"command": "dbt-studio.profiler.showDecorations",
-				"title": "dbt Studio: Show Profile Decorations",
+				"title": "Show Profile Decorations",
 				"icon": "$(eye)"
 			},
 			{
 				"command": "dbt-studio.profiler.hideDecorations",
-				"title": "dbt Studio: Hide Profile Decorations",
+				"title": "Hide Profile Decorations",
 				"icon": "$(eye-closed)"
 			},
 			{
 				"command": "dbt-studio.executeQuery",
-				"title": "dbt Studio: Execute Query",
+				"title": "Execute Query",
 				"icon": "$(play)"
 			},
 			{
 				"command": "dbt-studio.executeAll",
-				"title": "dbt Studio: Execute All Statements",
+				"title": "Execute All Statements",
 				"icon": "$(run-all)"
 			},
 			{
 				"command": "dbt-studio.executeStatement",
-				"title": "dbt Studio: Execute Statement",
+				"title": "Execute Statement",
 				"icon": "$(play)"
+			},
+			{
+				"command": "dbt-studio.queryResult.moveToPanel",
+				"title": "Move Query Results to Panel",
+				"icon": "$(layout-panel)"
+			},
+			{
+				"command": "dbt-studio.queryResult.moveToEditor",
+				"title": "Move Query Results to Editor",
+				"icon": "$(layout-panel-off)"
 			}
 		],
 		"viewsContainers": {
@@ -249,6 +259,11 @@
 					"id": "dbt-studio-panel",
 					"title": "dbt Lineage",
 					"icon": "$(type-hierarchy)"
+				},
+				{
+					"id": "dbt-studio-results",
+					"title": "Query Results",
+					"icon": "$(table)"
 				}
 			]
 		},
@@ -284,33 +299,130 @@
 					"name": "Lineage",
 					"when": "workspaceHasDBT"
 				}
+			],
+			"dbt-studio-results": [
+				{
+					"type": "webview",
+					"id": "dbt-studio.queryResults",
+					"name": "Query Results",
+					"when": "dbt-studio.queryResultInPanel"
+				}
 			]
 		},
+		"debuggers": [
+			{
+				"type": "dbt-sql",
+				"label": "SQL",
+				"languages": ["jinja-sql"],
+				"configurationAttributes": {
+					"launch": {
+						"properties": {
+							"limit": {
+								"type": "number",
+								"description": "Row limit for query results. Use -1 for no limit.",
+								"default": 500
+							},
+							"scope": {
+								"type": "string",
+								"enum": ["cursor", "all"],
+								"description": "What to execute: 'cursor' runs the statement under the cursor or selection, 'all' runs all statements in the file.",
+								"default": "cursor"
+							},
+							"resultLocation": {
+								"type": "string",
+								"enum": ["preserve", "editor", "panel"],
+								"description": "Where to show results: 'preserve' keeps the current location, 'editor' forces an editor tab, 'panel' forces the bottom panel. Overrides the extension setting for this launch configuration."
+							}
+						}
+					}
+				},
+				"initialConfigurations": [
+					{
+						"name": "Run SQL",
+						"type": "dbt-sql",
+						"request": "launch"
+					}
+				],
+				"configurationSnippets": [
+					{
+						"label": "dbt SQL: Run (cursor)",
+						"description": "Run the SQL statement under the cursor",
+						"body": {
+							"name": "Run SQL",
+							"type": "dbt-sql",
+							"request": "launch",
+							"scope": "cursor"
+						}
+					},
+					{
+						"label": "dbt SQL: Run All",
+						"description": "Run all SQL statements in the file",
+						"body": {
+							"name": "Run All SQL",
+							"type": "dbt-sql",
+							"request": "launch",
+							"scope": "all"
+						}
+					},
+					{
+						"label": "dbt SQL: Run (no limit)",
+						"description": "Run SQL with no row limit",
+						"body": {
+							"name": "Run SQL (no limit)",
+							"type": "dbt-sql",
+							"request": "launch",
+							"limit": -1
+						}
+					}
+				]
+			}
+		],
 		"menus": {
+			"editor/title/run": [],
 			"editor/title": [
 				{
+					"command": "dbt-studio.executeQuery",
+					"when": "resourceLangId == jinja-sql && !(dbt-studio.fileCategory =~ /model|seed|snapshot/)",
+					"group": "navigation@1"
+				},
+				{
+					"command": "dbt-studio.executeAll",
+					"when": "resourceLangId == jinja-sql && !(dbt-studio.fileCategory =~ /model|seed|snapshot/)",
+					"group": "navigation@2"
+				},
+				{
+					"command": "dbt-studio.queryResult.moveToPanel",
+					"when": "dbt-studio.queryResultVisible && !dbt-studio.queryResultInPanel",
+					"group": "navigation@99"
+				},
+				{
+					"command": "dbt-studio.queryResult.moveToEditor",
+					"when": "dbt-studio.queryResultVisible && dbt-studio.queryResultInPanel",
+					"group": "navigation@99"
+				},
+				{
 					"command": "dbt-studio.showLineage",
-					"when": "resourceLangId == jinja-sql && workspaceHasDBT",
+					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-studio.fileCategory =~ /model|seed|snapshot/",
 					"group": "navigation@1"
 				},
 				{
 					"command": "dbt-studio.runModel",
-					"when": "resourceLangId == jinja-sql && workspaceHasDBT",
+					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-studio.fileCategory =~ /model|seed|snapshot/",
 					"group": "navigation@2"
 				},
 				{
 					"command": "dbt-studio.testModel",
-					"when": "resourceLangId == jinja-sql && workspaceHasDBT",
+					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-studio.fileCategory =~ /model|seed|snapshot/",
 					"group": "navigation@3"
 				},
 				{
 					"command": "dbt-studio.compileModel",
-					"when": "resourceLangId == jinja-sql && workspaceHasDBT",
+					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-studio.fileCategory =~ /model|seed|snapshot/",
 					"group": "navigation@4"
 				},
 				{
 					"command": "dbt-studio.profiler.profileModel",
-					"when": "resourceLangId == jinja-sql && workspaceHasDBT && !dbt-studio.profilingActive",
+					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-studio.fileCategory =~ /model|seed|snapshot/ && !dbt-studio.profilingActive",
 					"group": "navigation@5"
 				},
 				{
@@ -320,6 +432,11 @@
 				}
 			],
 			"view/title": [
+				{
+					"command": "dbt-studio.queryResult.moveToEditor",
+					"when": "view == dbt-studio.queryResults",
+					"group": "navigation"
+				},
 				{
 					"command": "dbt-studio.refreshExplorer",
 					"when": "view == dbt-studio.modelExplorer",
@@ -543,6 +660,17 @@
 						"type": "boolean",
 						"default": false,
 						"markdownDescription": "Stop executing remaining statements when one fails. When disabled, errors are shown per-statement and execution continues."
+					},
+					"dbt-studio.queryEditor.resultLocation": {
+						"type": "string",
+						"enum": ["preserve", "editor", "panel"],
+						"enumDescriptions": [
+							"Keep results wherever they already are (editor tab or panel).",
+							"Always show results in an editor tab, split below the active file.",
+							"Always show results in the bottom Query Results panel."
+						],
+						"default": "preserve",
+						"markdownDescription": "Where query results appear after each execution."
 					}
 				}
 			}
@@ -1079,11 +1207,6 @@
 		]
 	},
 	"keybindings": [
-		{
-			"command": "dbt-studio.executeQuery",
-			"key": "f5",
-			"when": "editorTextFocus && resourceLangId == jinja-sql"
-		},
 		{
 			"command": "dbt-studio.executeAll",
 			"key": "ctrl+shift+enter",
