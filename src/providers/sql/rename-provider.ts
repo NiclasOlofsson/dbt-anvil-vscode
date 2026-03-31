@@ -2,6 +2,8 @@ import * as vscode from 'vscode';
 import type { ManifestIndexer, ManifestIndex } from '../../indexing/manifest-indexer';
 import type { ManifestLoader } from '../../dbt/manifest-loader';
 import type { ILogger } from '../../types/logger';
+import { ParseService } from '../../services/parse-service';
+import type { PositionResolution } from '../../services/parse-service';
 
 /**
  * Rename ref('model') across the workspace using the manifest dependency graph.
@@ -13,13 +15,14 @@ export class DbtRenameProvider implements vscode.RenameProvider {
 		private readonly indexer: ManifestIndexer,
 		private readonly loader: ManifestLoader,
 		private readonly logger: ILogger,
+		private readonly parseService?: ParseService,
 	) {}
 
-	prepareRename(
+	async prepareRename(
 		document: vscode.TextDocument,
 		position: vscode.Position,
 		_token: vscode.CancellationToken,
-	): vscode.ProviderResult<vscode.Range | { range: vscode.Range; placeholder: string }> {
+	): Promise<vscode.Range | { range: vscode.Range; placeholder: string }> {
 		const line = document.lineAt(position.line).text;
 
 		const refRe = /ref\(\s*['"]([^'"]+)['"]\s*\)/g;
@@ -36,7 +39,19 @@ export class DbtRenameProvider implements vscode.RenameProvider {
 			}
 		}
 
-		throw new Error('Cannot rename this element — place cursor on a ref() model name.');
+		if (this.parseService) {
+			const dialect = this.indexer.index?.adapterType ?? 'ansi';
+			const model = await this.parseService.getDocumentModel(document, dialect);
+			if (model) {
+				const resolved = ParseService.resolveAtPosition(model, position.line, position.character);
+				if (resolved) {
+					const r = this._tokenRenameRange(resolved, model);
+					if (r) return r;
+				}
+			}
+		}
+
+		throw new Error('Cannot rename this element — place cursor on a renameable symbol.');
 	}
 
 	async provideRenameEdits(
@@ -61,48 +76,64 @@ export class DbtRenameProvider implements vscode.RenameProvider {
 			}
 		}
 
-		if (!oldName) return undefined;
+		if (oldName) {
+			const index = this.indexer.index;
+			if (!index) return undefined;
 
-		const index = this.indexer.index;
-		if (!index) return undefined;
+			this.logger.info(`RenameProvider: renaming '${oldName}' → '${newName}'`);
+			const edit = new vscode.WorkspaceEdit();
+			const models = this.indexer.findModelsByName(oldName);
 
-		this.logger.info(`RenameProvider: renaming '${oldName}' → '${newName}'`);
-		const edit = new vscode.WorkspaceEdit();
-		const models = this.indexer.findModelsByName(oldName);
+			const refPattern = new RegExp(`(ref\\(\\s*['"])${this._escapeRegex(oldName)}(['"]\\s*\\))`, 'g');
 
-		const refPattern = new RegExp(`(ref\\(\\s*['"])${this._escapeRegex(oldName)}(['"]\\s*\\))`, 'g');
+			for (const model of models) {
+				// 1. Replace ref('old') → ref('new') in downstream dependents only
+				const childIds = index.childMap.get(model.uniqueId) ?? [];
+				const filePaths = this._resolveFilePaths(childIds, index);
 
-		for (const model of models) {
-			// 1. Replace ref('old') → ref('new') in downstream dependents only
-			const childIds = index.childMap.get(model.uniqueId) ?? [];
-			const filePaths = this._resolveFilePaths(childIds, index);
+				// Also include the model's own file (it may self-reference or we want to be thorough)
+				if (model.path) {
+					filePaths.add(model.path);
+				}
 
-			// Also include the model's own file (it may self-reference or we want to be thorough)
-			if (model.path) {
-				filePaths.add(model.path);
+				for (const filePath of filePaths) {
+					if (token.isCancellationRequested) return undefined;
+					await this._replaceInFile(vscode.Uri.file(filePath), refPattern, oldName, newName, edit);
+				}
+
+				// 2. Update schema.yml entry for this model's own YAML definition
+				if (model.path) {
+					await this._updateYamlModelName(model.path, oldName, newName, edit, token);
+				}
+
+				// 3. Rename the .sql file itself
+				if (model.path) {
+					const oldUri = vscode.Uri.file(model.path);
+					const dir = model.path.replace(/[/\\][^/\\]+$/, '');
+					const newUri = vscode.Uri.file(`${dir}/${newName}.sql`);
+					edit.renameFile(oldUri, newUri);
+				}
 			}
 
-			for (const filePath of filePaths) {
-				if (token.isCancellationRequested) return undefined;
-				await this._replaceInFile(vscode.Uri.file(filePath), refPattern, oldName, newName, edit);
-			}
+			this.logger.info(`RenameProvider: created ${edit.entries().length} edit entries`);
+			return edit;
+		}
 
-			// 2. Update schema.yml entry for this model's own YAML definition
-			if (model.path) {
-				await this._updateYamlModelName(model.path, oldName, newName, edit, token);
-			}
-
-			// 3. Rename the .sql file itself
-			if (model.path) {
-				const oldUri = vscode.Uri.file(model.path);
-				const dir = model.path.replace(/[/\\][^/\\]+$/, '');
-				const newUri = vscode.Uri.file(`${dir}/${newName}.sql`);
-				edit.renameFile(oldUri, newUri);
+		// Token-based in-file rename (column, alias, CTE name)
+		if (this.parseService) {
+			const dialect = this.indexer.index?.adapterType ?? 'ansi';
+			const docModel = await this.parseService.getDocumentModel(document, dialect);
+			if (docModel) {
+				const resolved = ParseService.resolveAtPosition(docModel, position.line, position.character);
+				if (resolved) {
+					const edit = new vscode.WorkspaceEdit();
+					this._applyTokenRename(resolved, docModel, document.uri, newName, edit);
+					return edit;
+				}
 			}
 		}
 
-		this.logger.info(`RenameProvider: created ${edit.entries().length} edit entries`);
-		return edit;
+		return undefined;
 	}
 
 	/** Collect unique file paths from a list of node IDs. */
@@ -177,5 +208,108 @@ export class DbtRenameProvider implements vscode.RenameProvider {
 
 	private _escapeRegex(s: string): string {
 		return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	}
+
+	/**
+	 * Map a resolved cursor position to a rename range + placeholder.
+	 * Returns null for positions that are not renameable in-file (e.g. a
+	 * table_ref that isn't a CTE — those are cross-file ref() renames).
+	 */
+	private _tokenRenameRange(
+		resolved: PositionResolution,
+		model: import('../../services/parse-service').DocumentModel,
+	): { range: vscode.Range; placeholder: string } | null {
+		const { kind, token } = resolved;
+
+		if (kind === 'column' || kind === 'column_def') {
+			return {
+				range: new vscode.Range(token.line, token.col, token.line, token.endCol),
+				placeholder: token.name,
+			};
+		}
+
+		if (kind === 'table_alias') {
+			if (token.aliasLine === undefined || token.aliasCol === undefined || token.aliasEndCol === undefined || token.alias === undefined) return null;
+			return {
+				range: new vscode.Range(token.aliasLine, token.aliasCol, token.aliasLine, token.aliasEndCol),
+				placeholder: token.alias,
+			};
+		}
+
+		if (kind === 'table_qualifier') {
+			if (token.tableLine === undefined || token.tableCol === undefined || token.tableEndCol === undefined || token.table === undefined) return null;
+			return {
+				range: new vscode.Range(token.tableLine, token.tableCol, token.tableLine, token.tableEndCol),
+				placeholder: token.table,
+			};
+		}
+
+		if (kind === 'table_ref') {
+			// Only allow in-file rename for CTEs (not for ref() model names — those go through the manifest path)
+			const isCte = model.ctes.some(c => c.name === token.name);
+			if (!isCte) return null;
+			return {
+				range: new vscode.Range(token.line, token.col, token.line, token.endCol),
+				placeholder: token.name,
+			};
+		}
+
+		return null;
+	}
+
+	/** Apply in-file token-based rename edits to a WorkspaceEdit. */
+	private _applyTokenRename(
+		resolved: PositionResolution,
+		model: import('../../services/parse-service').DocumentModel,
+		uri: vscode.Uri,
+		newName: string,
+		edit: vscode.WorkspaceEdit,
+	): void {
+		const { kind, token } = resolved;
+
+		if (kind === 'column' || kind === 'column_def') {
+			const oldName = token.name;
+			for (const t of model.tokens) {
+				if ((t.type === 'column_ref' || t.type === 'column_def') && t.name === oldName) {
+					edit.replace(uri, new vscode.Range(t.line, t.col, t.line, t.endCol), newName);
+				}
+			}
+			return;
+		}
+
+		const alias = kind === 'table_alias'
+			? token.alias
+			: kind === 'table_qualifier'
+				? (token.resolvedTableRef?.alias ?? token.table)
+				: undefined;
+
+		if (alias !== undefined) {
+			// Update the alias definition site on the table_ref token
+			for (const t of model.tokens) {
+				if (t.type === 'table_ref' && t.alias === alias && t.aliasLine !== undefined && t.aliasCol !== undefined && t.aliasEndCol !== undefined) {
+					edit.replace(uri, new vscode.Range(t.aliasLine, t.aliasCol, t.aliasLine, t.aliasEndCol), newName);
+				}
+				// Update all qualifier spans on column_ref tokens
+				if (t.type === 'column_ref' && t.table === alias && t.tableLine !== undefined && t.tableCol !== undefined && t.tableEndCol !== undefined) {
+					edit.replace(uri, new vscode.Range(t.tableLine, t.tableCol, t.tableLine, t.tableEndCol), newName);
+				}
+			}
+			return;
+		}
+
+		if (kind === 'table_ref') {
+			const cteName = token.name;
+			// Update CTE definition keyword span (from ctes array)
+			const cteDef = model.ctes.find(c => c.name === cteName);
+			if (cteDef && cteDef.col !== undefined && cteDef.endCol !== undefined) {
+				edit.replace(uri, new vscode.Range(cteDef.line, cteDef.col, cteDef.line, cteDef.endCol), newName);
+			}
+			// Update all table_ref tokens with this name
+			for (const t of model.tokens) {
+				if (t.type === 'table_ref' && t.name === cteName) {
+					edit.replace(uri, new vscode.Range(t.line, t.col, t.line, t.endCol), newName);
+				}
+			}
+		}
 	}
 }

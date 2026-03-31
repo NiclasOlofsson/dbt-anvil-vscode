@@ -280,7 +280,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const yamlCompletionProvider = new YamlCompletionProvider(manifestIndexer, logger);
 	const yamlHoverProvider = new YamlHoverProvider(manifestIndexer, logger);
 	const referenceProvider = new DbtReferenceProvider(manifestIndexer, logger, parseService);
-	const renameProvider = new DbtRenameProvider(manifestIndexer, manifestLoader, logger);
+	const renameProvider = new DbtRenameProvider(manifestIndexer, manifestLoader, logger, parseService);
 	const sqlCodeLensProvider = new SqlCodeLensProvider(manifestIndexer, logger);
 	sqlCodeLensProvider.setProfiler(modelProfiler);
 	sqlCodeLensProvider.setPathResolver(pathResolver);

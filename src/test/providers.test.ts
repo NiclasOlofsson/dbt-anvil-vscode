@@ -330,20 +330,20 @@ describe('DbtRenameProvider', () => {
 		provider = new DbtRenameProvider(indexer, createMockLoader(), createMockLogger());
 	});
 
-	it('prepareRename returns range and placeholder for ref()', () => {
+	it('prepareRename returns range and placeholder for ref()', async () => {
 		const doc = createMockDocument('select * from {{ ref(\'customers\') }}');
 		const pos = new vscode.Position(0, 26); // cursor on 'customers'
 
-		const result = provider.prepareRename(doc, pos, mockToken);
+		const result = await provider.prepareRename(doc, pos, mockToken);
 		expect(result).toBeDefined();
 		expect((result as { placeholder: string }).placeholder).toBe('customers');
 	});
 
-	it('prepareRename throws for non-ref positions', () => {
+	it('prepareRename rejects for non-ref positions (no parseService)', async () => {
 		const doc = createMockDocument('select * from orders');
 		const pos = new vscode.Position(0, 5);
 
-		expect(() => provider.prepareRename(doc, pos, mockToken)).toThrow();
+		await expect(provider.prepareRename(doc, pos, mockToken)).rejects.toThrow();
 	});
 
 	it('provideRenameEdits creates workspace edit for ref rename', async () => {
@@ -358,12 +358,149 @@ describe('DbtRenameProvider', () => {
 		expect(result).toBeInstanceOf(vscode.WorkspaceEdit);
 	});
 
-	it('provideRenameEdits returns undefined when cursor not on ref', async () => {
+	it('provideRenameEdits returns undefined when cursor not on ref (no parseService)', async () => {
 		const doc = createMockDocument('select * from orders');
 		const pos = new vscode.Position(0, 5);
 
 		const result = await provider.provideRenameEdits(doc, pos, 'new_name', mockToken);
 		expect(result).toBeUndefined();
+	});
+
+	it('prepareRename returns column range for column_ref token', async () => {
+		const mockModel: Partial<DocumentModel> = {
+			tokens: [
+				{ type: 'column_ref', name: 'order_id', line: 0, col: 7, endCol: 15 },
+			],
+		};
+		const ps = createMockParseServiceWithModel(mockModel);
+		const localProvider = new DbtRenameProvider(indexer, createMockLoader(), createMockLogger(), ps);
+		const doc = createMockDocument('select order_id from orders');
+		const pos = new vscode.Position(0, 10); // inside 'order_id' [7,15)
+
+		const result = await localProvider.prepareRename(doc, pos, mockToken) as { range: vscode.Range; placeholder: string };
+		expect(result.placeholder).toBe('order_id');
+		expect(result.range.start.character).toBe(7);
+		expect(result.range.end.character).toBe(15);
+	});
+
+	it('prepareRename returns alias range for table_alias token', async () => {
+		const mockModel: Partial<DocumentModel> = {
+			tokens: [
+				{
+					type: 'table_ref', name: 'orders', line: 1, col: 5, endCol: 11,
+					alias: 'o', aliasLine: 1, aliasCol: 12, aliasEndCol: 13,
+				},
+			],
+		};
+		const ps = createMockParseServiceWithModel(mockModel);
+		const localProvider = new DbtRenameProvider(indexer, createMockLoader(), createMockLogger(), ps);
+		const doc = createMockDocument('select o.id\nfrom orders o');
+		const pos = new vscode.Position(1, 12); // cursor on alias 'o'
+
+		const result = await localProvider.prepareRename(doc, pos, mockToken) as { range: vscode.Range; placeholder: string };
+		expect(result.placeholder).toBe('o');
+		expect(result.range.start.character).toBe(12);
+	});
+
+	it('prepareRename returns alias range for table_qualifier token', async () => {
+		const tableRef = { type: 'table_ref' as const, name: 'orders', line: 1, col: 5, endCol: 11, alias: 'o', aliasLine: 1, aliasCol: 12, aliasEndCol: 13 };
+		const mockModel: Partial<DocumentModel> = {
+			tokens: [
+				tableRef,
+				{
+					type: 'column_ref', name: 'id', line: 0, col: 9, endCol: 11,
+					table: 'o', tableLine: 0, tableCol: 7, tableEndCol: 8,
+					resolvedTableRef: tableRef,
+				},
+			],
+		};
+		const ps = createMockParseServiceWithModel(mockModel);
+		const localProvider = new DbtRenameProvider(indexer, createMockLoader(), createMockLogger(), ps);
+		const doc = createMockDocument('select o.id\nfrom orders o');
+		const pos = new vscode.Position(0, 7); // cursor on qualifier 'o' in 'o.id'
+
+		const result = await localProvider.prepareRename(doc, pos, mockToken) as { range: vscode.Range; placeholder: string };
+		expect(result.placeholder).toBe('o');
+	});
+
+	it('prepareRename returns CTE name range for table_ref on CTE', async () => {
+		const mockModel: Partial<DocumentModel> = {
+			ctes: [{ name: 'base', line: 0, col: 5, endLine: 0, endCol: 9, columns: [] }],
+			tokens: [
+				{ type: 'table_ref', name: 'base', line: 1, col: 14, endCol: 18 },
+			],
+		};
+		const ps = createMockParseServiceWithModel(mockModel);
+		const localProvider = new DbtRenameProvider(indexer, createMockLoader(), createMockLogger(), ps);
+		const doc = createMockDocument('with base as (select 1),\nselect * from base');
+		const pos = new vscode.Position(1, 16); // cursor on 'base' table_ref
+
+		const result = await localProvider.prepareRename(doc, pos, mockToken) as { range: vscode.Range; placeholder: string };
+		expect(result.placeholder).toBe('base');
+	});
+
+	it('provideRenameEdits renames all column occurrences in-file', async () => {
+		const mockModel: Partial<DocumentModel> = {
+			tokens: [
+				{ type: 'column_def', name: 'order_id', line: 0, col: 7, endCol: 15 },
+				{ type: 'column_ref', name: 'order_id', line: 1, col: 4, endCol: 12 },
+				{ type: 'column_ref', name: 'order_id', line: 2, col: 0, endCol: 8 },
+				{ type: 'column_ref', name: 'amount',   line: 1, col: 14, endCol: 20 },
+			],
+		};
+		const ps = createMockParseServiceWithModel(mockModel);
+		const localProvider = new DbtRenameProvider(indexer, createMockLoader(), createMockLogger(), ps);
+		const doc = createMockDocument('select order_id,\n    order_id, amount\norder_id');
+		const pos = new vscode.Position(0, 10); // cursor on column_def
+
+		const result = await localProvider.provideRenameEdits(doc, pos, 'oid', mockToken);
+		expect(result).toBeInstanceOf(vscode.WorkspaceEdit);
+		// 3 replacements: column_def + 2 column_ref for 'order_id'
+		const entries = result!.entries();
+		const totalEdits = entries.reduce((s, [, edits]) => s + edits.length, 0);
+		expect(totalEdits).toBe(3);
+	});
+
+	it('provideRenameEdits renames alias definition and all qualifier spans', async () => {
+		const mockModel: Partial<DocumentModel> = {
+			tokens: [
+				{ type: 'table_ref', name: 'orders', line: 1, col: 5, endCol: 11, alias: 'o', aliasLine: 1, aliasCol: 12, aliasEndCol: 13 },
+				{ type: 'column_ref', name: 'id',     line: 0, col: 9,  endCol: 11, table: 'o', tableLine: 0, tableCol: 7, tableEndCol: 8 },
+				{ type: 'column_ref', name: 'amount', line: 0, col: 14, endCol: 20, table: 'o', tableLine: 0, tableCol: 12, tableEndCol: 13 },
+			],
+		};
+		const ps = createMockParseServiceWithModel(mockModel);
+		const localProvider = new DbtRenameProvider(indexer, createMockLoader(), createMockLogger(), ps);
+		const doc = createMockDocument('select o.id, o.amount\nfrom orders o');
+		const pos = new vscode.Position(1, 12); // cursor on alias 'o'
+
+		const result = await localProvider.provideRenameEdits(doc, pos, 'ord', mockToken);
+		expect(result).toBeInstanceOf(vscode.WorkspaceEdit);
+		const entries = result!.entries();
+		const totalEdits = entries.reduce((s, [, edits]) => s + edits.length, 0);
+		// alias site + 2 qualifier spans = 3
+		expect(totalEdits).toBe(3);
+	});
+
+	it('provideRenameEdits renames CTE name definition and all usages', async () => {
+		const mockModel: Partial<DocumentModel> = {
+			ctes: [{ name: 'base', line: 0, col: 5, endLine: 0, endCol: 9, columns: [] }],
+			tokens: [
+				{ type: 'table_ref', name: 'base', line: 0, col: 5, endCol: 9 },  // cte keyword site
+				{ type: 'table_ref', name: 'base', line: 1, col: 14, endCol: 18 }, // usage in FROM
+			],
+		};
+		const ps = createMockParseServiceWithModel(mockModel);
+		const localProvider = new DbtRenameProvider(indexer, createMockLoader(), createMockLogger(), ps);
+		const doc = createMockDocument('with base as (select 1),\nselect * from base');
+		const pos = new vscode.Position(1, 16); // cursor on usage 'base'
+
+		const result = await localProvider.provideRenameEdits(doc, pos, 'foundation', mockToken);
+		expect(result).toBeInstanceOf(vscode.WorkspaceEdit);
+		const entries = result!.entries();
+		const totalEdits = entries.reduce((s, [, edits]) => s + edits.length, 0);
+		// CTE def name + 2 table_ref tokens
+		expect(totalEdits).toBe(3);
 	});
 });
 
