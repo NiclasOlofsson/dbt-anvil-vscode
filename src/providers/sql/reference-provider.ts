@@ -49,10 +49,31 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 				);
 				if (src) return this._findSourceUsages(src.sourceName, src.tableName, token);
 
-				// Token-based: column references within this file
+				// Token-based dispatch using resolved position
 				const resolved = ParseService.resolveAtPosition(model, position.line, position.character);
+
 				if (resolved?.kind === 'column' || resolved?.kind === 'column_def') {
 					return this._findColumnReferences(document, resolved.token.name, token);
+				}
+
+				if (resolved?.kind === 'table_ref') {
+					// CTE name → in-file references
+					const cte = model.ctes.find(c => c.name === resolved.token.name);
+					if (cte) return this._findCteReferences(document, resolved.token.name, model, cte);
+
+					// table_ref that matches a ref() → cross-file references
+					const matchingRef = model.refs.find(r => r.model === resolved.token.name);
+					if (matchingRef) return this._findRefUsages(resolved.token.name, token);
+				}
+
+				if (resolved?.kind === 'table_alias') {
+					return this._findAliasReferences(document, resolved.token.alias!, model);
+				}
+
+				if (resolved?.kind === 'table_qualifier') {
+					// Qualifier `o` in `o.col` — find the alias it resolves to
+					const alias = resolved.token.resolvedTableRef?.alias ?? resolved.token.table;
+					if (alias) return this._findAliasReferences(document, alias, model);
 				}
 
 				return [];
@@ -179,6 +200,77 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 
 	private _escapeRegex(s: string): string {
 		return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	}
+
+	// ---- CTE name references within the current file ----
+
+	private _findCteReferences(
+		document: vscode.TextDocument,
+		cteName: string,
+		model: import('../../services/parse-service').DocumentModel,
+		cte: import('../../services/parse-service').CteInfo,
+	): vscode.Location[] {
+		const locations: vscode.Location[] = [];
+
+		// CTE definition site (the name token after WITH / comma)
+		const defCol = cte.col ?? 0;
+		locations.push(new vscode.Location(
+			document.uri,
+			new vscode.Range(cte.line, defCol, cte.line, defCol + cteName.length),
+		));
+
+		// All table_ref tokens in this file with the same name (FROM/JOIN uses)
+		for (const tok of model.tokens) {
+			if (tok.type !== 'table_ref') continue;
+			if (tok.name !== cteName) continue;
+			// Skip the definition line itself to avoid double-counting
+			if (tok.line === cte.line && tok.col === defCol) continue;
+			locations.push(new vscode.Location(
+				document.uri,
+				new vscode.Range(tok.line, tok.col, tok.line, tok.endCol),
+			));
+		}
+
+		this.logger.debug(`ReferenceProvider: found ${locations.length} references for CTE '${cteName}'`);
+		return locations;
+	}
+
+	// ---- Table alias references within the current file ----
+
+	private _findAliasReferences(
+		document: vscode.TextDocument,
+		alias: string,
+		model: import('../../services/parse-service').DocumentModel,
+	): vscode.Location[] {
+		const locations: vscode.Location[] = [];
+
+		// Find the table_ref token that declares this alias
+		for (const tok of model.tokens) {
+			if (tok.type !== 'table_ref' || tok.alias !== alias) continue;
+			if (tok.aliasLine === undefined || tok.aliasCol === undefined || tok.aliasEndCol === undefined) continue;
+
+			// Alias definition site
+			locations.push(new vscode.Location(
+				document.uri,
+				new vscode.Range(tok.aliasLine, tok.aliasCol, tok.aliasLine, tok.aliasEndCol),
+			));
+
+			// All column_ref tokens where the qualifier matches this alias
+			for (const colTok of model.tokens) {
+				if (colTok.type !== 'column_ref') continue;
+				if (colTok.table !== alias) continue;
+				if (colTok.tableCol === undefined || colTok.tableEndCol === undefined) continue;
+				locations.push(new vscode.Location(
+					document.uri,
+					new vscode.Range(colTok.tableLine ?? colTok.line, colTok.tableCol, colTok.tableLine ?? colTok.line, colTok.tableEndCol),
+				));
+			}
+
+			break; // alias names are unique within a query
+		}
+
+		this.logger.debug(`ReferenceProvider: found ${locations.length} references for alias '${alias}'`);
+		return locations;
 	}
 
 	// ---- Column references within the current file ----

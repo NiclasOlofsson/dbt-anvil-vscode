@@ -11,10 +11,23 @@ import { createMockLogger } from './helpers';
 import type { ManifestIndexer, ManifestIndex, IndexedModel, IndexedSource, IndexedMacro } from '../indexing/manifest-indexer';
 import type { ManifestLoader } from '../dbt/manifest-loader';
 import type { DbtPathResolver, DbtFileCategory } from '../dbt/dbt-path-resolver';
-import type { ParseService } from '../services/parse-service';
+import type { ParseService, DocumentModel } from '../services/parse-service';
 
 function createMockParseService(): ParseService {
 	return { getDocumentModel: vi.fn().mockResolvedValue(null) } as unknown as ParseService;
+}
+
+function createMockParseServiceWithModel(model: Partial<DocumentModel>): ParseService {
+	const full: DocumentModel = {
+		ctes: [],
+		refs: [],
+		sources: [],
+		finalColumns: [],
+		tokens: [],
+		timing: { parseMs: 0, totalMs: 0 },
+		...model,
+	};
+	return { getDocumentModel: vi.fn().mockResolvedValue(full) } as unknown as ParseService;
 }
 
 function createMockPathResolver(mapping: Record<string, DbtFileCategory> = {}): DbtPathResolver {
@@ -207,6 +220,101 @@ describe('DbtReferenceProvider', () => {
 		const result = await provider.provideReferences(doc, pos, { includeDeclaration: true }, mockToken);
 		expect(result.length).toBe(1);
 		expect(result[0].uri.fsPath).toContain('orders.sql');
+	});
+
+	it('finds CTE name references via token map', async () => {
+		// SQL: with base as (...), final as (select * from base) select * from final
+		// Tokens: table_ref 'base' at line 0 col 5 (CTE def), table_ref 'base' at line 1 col 26 (usage)
+		const mockModel: Partial<DocumentModel> = {
+			ctes: [
+				{ name: 'base', line: 0, col: 5, endLine: 0, endCol: 20, columns: [] },
+				{ name: 'final', line: 1, col: 5, endLine: 1, endCol: 50, columns: [] },
+			],
+			tokens: [
+				{ type: 'table_ref', name: 'base', line: 1, col: 26, endCol: 30 },
+				{ type: 'table_ref', name: 'final', line: 2, col: 14, endCol: 19 },
+			],
+			refs: [],
+		};
+		const ps = createMockParseServiceWithModel(mockModel);
+		const localProvider = new DbtReferenceProvider(indexer, createMockLogger(), ps);
+		const doc = createMockDocument(
+			'with base as (select 1 id),\n     final as (select * from base)\nselect * from final',
+		);
+		// Cursor on the 'base' table_ref token on line 1 col 28 (inside [26,30))
+		const pos = new vscode.Position(1, 28);
+		const result = await localProvider.provideReferences(doc, pos, { includeDeclaration: true }, mockToken);
+
+		// Definition at (line 0, col 5) + usage at (line 1, col 26)
+		expect(result).toHaveLength(2);
+		const lines = result.map(l => l.range.start.line);
+		expect(lines).toContain(0); // definition
+		expect(lines).toContain(1); // usage
+	});
+
+	it('finds table alias references and its column qualifiers', async () => {
+		// FROM orders o  →  o.id, o.amount
+		const mockModel: Partial<DocumentModel> = {
+			ctes: [],
+			refs: [],
+			tokens: [
+				{
+					type: 'table_ref',
+					name: 'orders',
+					line: 1, col: 5, endCol: 11,
+					alias: 'o',
+					aliasLine: 1, aliasCol: 12, aliasEndCol: 13,
+				},
+				{ type: 'column_ref', name: 'id',     line: 0, col: 7,  endCol: 9,  table: 'o', tableLine: 0, tableCol: 5, tableEndCol: 6 },
+				{ type: 'column_ref', name: 'amount', line: 0, col: 15, endCol: 21, table: 'o', tableLine: 0, tableCol: 13, tableEndCol: 14 },
+			],
+		};
+		const ps = createMockParseServiceWithModel(mockModel);
+		const localProvider = new DbtReferenceProvider(indexer, createMockLogger(), ps);
+		const doc = createMockDocument('select o.id, o.amount\nfrom orders o');
+		// Cursor on the alias definition 'o' at line 1 col 12
+		const pos = new vscode.Position(1, 12);
+		const result = await localProvider.provideReferences(doc, pos, { includeDeclaration: true }, mockToken);
+
+		// alias definition + 2 qualifier occurrences
+		expect(result).toHaveLength(3);
+		const [def, ...uses] = result;
+		expect(def.range.start.line).toBe(1);
+		expect(def.range.start.character).toBe(12);
+		expect(uses.every(u => u.range.start.line === 0)).toBe(true);
+	});
+
+	it('finds alias references when cursor is on a qualifier (o.col)', async () => {
+		const mockModel: Partial<DocumentModel> = {
+			ctes: [],
+			refs: [],
+			tokens: [
+				{
+					type: 'table_ref',
+					name: 'orders',
+					line: 1, col: 5, endCol: 11,
+					alias: 'o',
+					aliasLine: 1, aliasCol: 12, aliasEndCol: 13,
+				},
+				{
+					type: 'column_ref', name: 'id', line: 0, col: 7, endCol: 9,
+					table: 'o', tableLine: 0, tableCol: 5, tableEndCol: 6,
+					resolvedTableRef: {
+						type: 'table_ref', name: 'orders', line: 1, col: 5, endCol: 11,
+						alias: 'o', aliasLine: 1, aliasCol: 12, aliasEndCol: 13,
+					},
+				},
+			],
+		};
+		const ps = createMockParseServiceWithModel(mockModel);
+		const localProvider = new DbtReferenceProvider(indexer, createMockLogger(), ps);
+		const doc = createMockDocument('select o.id\nfrom orders o');
+		// Cursor on the qualifier 'o' in 'o.id' — tableCol=5, tableEndCol=6, so col 5
+		const pos = new vscode.Position(0, 5);
+		const result = await localProvider.provideReferences(doc, pos, { includeDeclaration: true }, mockToken);
+
+		// alias definition + 1 qualifier occurrence
+		expect(result).toHaveLength(2);
 	});
 });
 
