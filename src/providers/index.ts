@@ -11,5 +11,6 @@ export { SqlDocumentSymbolProvider } from './sql/document-symbol-provider';
 export { YamlDocumentSymbolProvider } from './yaml/document-symbol-provider';
 export { DbtWorkspaceSymbolProvider } from './workspace-symbol-provider';
 export { DbtSignatureHelpProvider } from './sql/signature-help-provider';
+export { DbtCallHierarchyProvider } from './sql/call-hierarchy-provider';
 export { SqlCodeActionProvider } from './sql/code-action-provider';
 export { ConfigCodeActionProvider } from './common/config-code-action-provider';

@@ -572,3 +572,37 @@ export class SignatureHelp {
 export class SnippetString {
 	constructor(public value: string) {}
 }
+
+export class CallHierarchyItem {
+	detail: string = '';
+	uri: Uri;
+	range: Range;
+	selectionRange: Range;
+	constructor(
+		public kind: SymbolKind,
+		public name: string,
+		detail: string,
+		uri: Uri,
+		range: Range,
+		selectionRange: Range,
+	) {
+		this.detail = detail;
+		this.uri = uri;
+		this.range = range;
+		this.selectionRange = selectionRange;
+	}
+}
+
+export class CallHierarchyIncomingCall {
+	constructor(
+		public from: CallHierarchyItem,
+		public fromRanges: Range[],
+	) {}
+}
+
+export class CallHierarchyOutgoingCall {
+	constructor(
+		public to: CallHierarchyItem,
+		public fromRanges: Range[],
+	) {}
+}
