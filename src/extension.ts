@@ -289,6 +289,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const workspaceSymbolProvider = new DbtWorkspaceSymbolProvider(manifestIndexer, logger);
 	const signatureHelpProvider = new DbtSignatureHelpProvider(manifestIndexer, logger);
 	const sqlCodeActionProvider = new SqlCodeActionProvider(manifestIndexer, logger);
+	sqlCodeActionProvider.setPathResolver(pathResolver);
 	const configCodeActionProvider = new ConfigCodeActionProvider();
 
 	let providerDisposables: vscode.Disposable[] = [];
@@ -522,6 +523,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			await vscode.workspace.fs.writeFile(fileUri, content);
 			const doc = await vscode.workspace.openTextDocument(fileUri);
 			await vscode.window.showTextDocument(doc);
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.inlineRefs', async (uri: vscode.Uri) => {
+			const doc = await vscode.workspace.openTextDocument(uri);
+			const inlined = sqlCodeActionProvider.inlineRefs(doc.getText());
+			const edit = new vscode.WorkspaceEdit();
+			edit.replace(uri, new vscode.Range(0, 0, doc.lineCount, 0), inlined);
+			await vscode.workspace.applyEdit(edit);
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.restoreRefs', async (uri: vscode.Uri) => {
+			const doc = await vscode.workspace.openTextDocument(uri);
+			const restored = sqlCodeActionProvider.restoreRefs(doc.getText());
+			const edit = new vscode.WorkspaceEdit();
+			edit.replace(uri, new vscode.Range(0, 0, doc.lineCount, 0), restored);
+			await vscode.workspace.applyEdit(edit);
 		}),
 
 		// ---- Test running commands (for explorer + CodeLens) ----
