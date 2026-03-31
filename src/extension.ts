@@ -44,6 +44,7 @@ import { CteTestRunner } from './dbt/cte-test-runner';
 import { ModelProfiler } from './dbt/model-profiler';
 import { ProfileResultPersistence } from './dbt/profile-result-persistence';
 import { ProfilerDecorationProvider } from './providers/profiler-decoration-provider';
+import { QueryDecorationProvider } from './providers/query-decoration-provider';
 import { ProfilerResultsProvider } from './views/profiler-results-provider';
 import { QueryRunner } from './dbt/query-runner';
 import { QueryResultPanel } from './views/query-result-panel';
@@ -651,6 +652,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const queryRunner = new QueryRunner(databaseProvider, (results, resultLocation) => {
 		queryResultPanel.showResults(results, resultLocation);
 	});
+	context.subscriptions.push(new QueryDecorationProvider(queryRunner));
+	sqlCodeLensProvider.setQueryRunner(queryRunner);
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand('dbt-studio.executeQuery', async () => {
@@ -664,7 +667,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				void vscode.window.showInformationMessage('Use the Run / Compile CodeLens to execute model files.');
 				return;
 			}
-			await queryRunner.executeFromEditor(editor);
+			await vscode.debug.startDebugging(undefined, { type: 'dbt-sql', request: 'launch', name: 'Run SQL', scope: 'cursor' });
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.executeAll', async () => {
@@ -678,7 +681,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				void vscode.window.showInformationMessage('Use the Run / Compile CodeLens to execute model files.');
 				return;
 			}
-			await queryRunner.executeAll(editor);
+			await vscode.debug.startDebugging(undefined, { type: 'dbt-sql', request: 'launch', name: 'Run All SQL', scope: 'all' });
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.executeStatement', async (sql: string) => {

@@ -86,16 +86,16 @@ export class ManifestWatcher {
 			}
 
 			const uniqueId = this.indexer.findModelByFilePath(doc.fileName);
-			if (uniqueId) {
-				const evicted = this.indexer.invalidateModel(uniqueId);
-				// Invalidate compile cache for the saved model
-				this._compileCache?.invalidate(uniqueId);
-				if (evicted.size > 0) {
-					this.logger.info(`Model saved: ${uniqueId} — evicted ${evicted.size} column store entries`);
-					// Surgical enrichment invalidation: only clear aliases for
-					// documents that reference evicted nodes, not all documents.
-					this._parseService?.invalidateEnrichmentFor(evicted);
-				}
+			if (!uniqueId) return; // not a project model — skip parse
+
+			const evicted = this.indexer.invalidateModel(uniqueId);
+			// Invalidate compile cache for the saved model
+			this._compileCache?.invalidate(uniqueId);
+			if (evicted.size > 0) {
+				this.logger.info(`Model saved: ${uniqueId} — evicted ${evicted.size} column store entries`);
+				// Surgical enrichment invalidation: only clear aliases for
+				// documents that reference evicted nodes, not all documents.
+				this._parseService?.invalidateEnrichmentFor(evicted);
 			}
 			this._debouncedParse();
 		});
