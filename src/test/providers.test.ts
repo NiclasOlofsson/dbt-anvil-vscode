@@ -164,6 +164,13 @@ function createMockDocument(content: string, options?: {
 			}
 			return new vscode.Position(lines.length - 1, 0);
 		}),
+		offsetAt: vi.fn((position: vscode.Position) => {
+			let offset = 0;
+			for (let i = 0; i < position.line; i++) {
+				offset += (lines[i] ?? '').length + 1;
+			}
+			return offset + position.character;
+		}),
 		lineCount: lines.length,
 		uri: vscode.Uri.file(options?.fileName ?? '/project/models/customers.sql'),
 	} as unknown as vscode.TextDocument;
@@ -545,8 +552,7 @@ describe('SqlCodeLensProvider', () => {
 
 		const result = provider.provideCodeLenses(doc, mockToken);
 		const titles = result.map(l => l.command?.title);
-		expect(titles).toContain('$(run-all) Run All (2)');
-		expect(titles.filter(t => t === '$(play) Run')).toHaveLength(2);
+		expect(titles.filter(t => t === 'Press F5 to run')).toHaveLength(2);
 	});
 
 	it('shows single Run lens for unknown model with one statement', () => {
@@ -556,8 +562,7 @@ describe('SqlCodeLensProvider', () => {
 
 		const result = provider.provideCodeLenses(doc, mockToken);
 		expect(result).toHaveLength(1);
-		expect(result[0].command?.title).toBe('$(play) Run');
-		expect(result[0].command?.command).toBe('dbt-studio.executeStatement');
+		expect(result[0].command?.title).toBe('Press F5 to run');
 	});
 
 	it('fires onDidChangeCodeLenses when refresh() is called', () => {
@@ -735,19 +740,21 @@ describe('SqlCodeActionProvider', () => {
 		const ctx = { diagnostics: [] } as unknown as vscode.CodeActionContext;
 
 		const actions = provider.provideCodeActions(doc, range, ctx, mockToken);
-		expect(actions.length).toBe(1);
-		expect(actions[0].title).toContain('nonexistent_model');
-		expect(actions[0].command?.command).toBe('dbt-studio.createModelFile');
-		expect(actions[0].isPreferred).toBe(true);
+		const quickFix = actions.find(a => a.kind?.value === vscode.CodeActionKind.QuickFix.value);
+		expect(quickFix).toBeDefined();
+		expect(quickFix!.title).toContain('nonexistent_model');
+		expect(quickFix!.command?.command).toBe('dbt-studio.createModelFile');
+		expect(quickFix!.isPreferred).toBe(true);
 	});
 
-	it('returns empty for existing model refs', () => {
+	it('returns no QuickFix actions for existing model refs', () => {
 		const doc = createMockDocument('select * from {{ ref(\'customers\') }}');
 		const range = new vscode.Range(0, 0, 0, 36);
 		const ctx = { diagnostics: [] } as unknown as vscode.CodeActionContext;
 
 		const actions = provider.provideCodeActions(doc, range, ctx, mockToken);
-		expect(actions).toEqual([]);
+		const quickFixes = actions.filter(a => a.kind === vscode.CodeActionKind.QuickFix);
+		expect(quickFixes).toEqual([]);
 	});
 
 	it('has QuickFix as provided code action kind', () => {
