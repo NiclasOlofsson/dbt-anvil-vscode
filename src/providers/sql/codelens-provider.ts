@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../../indexing/manifest-indexer';
-import type { ModelProfiler } from '../../dbt/model-profiler';
 import type { DbtPathResolver } from '../../dbt/dbt-path-resolver';
 import type { QueryRunner } from '../../dbt/query-runner';
 import type { ParseService } from '../../services/parse-service';
@@ -15,7 +14,6 @@ export class SqlCodeLensProvider implements vscode.CodeLensProvider {
 	private _onDidChangeCodeLenses = new vscode.EventEmitter<void>();
 	readonly onDidChangeCodeLenses = this._onDidChangeCodeLenses.event;
 
-	private _profiler?: ModelProfiler;
 	private _pathResolver?: DbtPathResolver;
 	private _queryRunner?: QueryRunner;
 
@@ -24,11 +22,6 @@ export class SqlCodeLensProvider implements vscode.CodeLensProvider {
 		private readonly logger: ILogger,
 		private readonly parseService: ParseService,
 	) {}
-
-	setProfiler(profiler: ModelProfiler): void {
-		this._profiler = profiler;
-		profiler.onProfileComplete(() => this.refresh());
-	}
 
 	setPathResolver(resolver: DbtPathResolver): void {
 		this._pathResolver = resolver;
@@ -60,7 +53,6 @@ export class SqlCodeLensProvider implements vscode.CodeLensProvider {
 		}
 
 		const modelName = this._getModelName(document);
-		const topRange = new vscode.Range(0, 0, 0, 0);
 		this.logger.debug(`CodeLens: adding lenses for model '${modelName}'`);
 
 		const modelId = this.indexer.findModelByFilePath(document.fileName);
@@ -69,7 +61,7 @@ export class SqlCodeLensProvider implements vscode.CodeLensProvider {
 			? await this.parseService.getDocumentModel(document, adapterType, { skipEnrichment: true })
 			: null;
 
-		const cteLenses = (model?.ctes ?? []).map(cte =>
+		return (model?.ctes ?? []).map(cte =>
 			new vscode.CodeLens(new vscode.Range(cte.line, 0, cte.line, 0), {
 				title: 'Query CTE...',
 				command: 'dbt-studio.queryCte',
@@ -77,66 +69,6 @@ export class SqlCodeLensProvider implements vscode.CodeLensProvider {
 				tooltip: `Query CTE: ${cte.name}`,
 			}),
 		);
-
-		return [
-			new vscode.CodeLens(topRange, {
-				title: '$(run) Run',
-				command: 'dbt-studio.runModel',
-				tooltip: `dbt run -s ${modelName}`,
-			}),
-			new vscode.CodeLens(topRange, {
-				title: '$(package) Build',
-				command: 'dbt-studio.buildModel',
-				tooltip: `dbt build -s ${modelName}`,
-			}),
-			new vscode.CodeLens(topRange, {
-				title: '$(beaker) Test',
-				command: 'dbt-studio.testModel',
-				tooltip: `dbt test -s ${modelName}`,
-			}),
-			new vscode.CodeLens(topRange, {
-				title: '$(gear) Compile',
-				command: 'dbt-studio.compileModel',
-				tooltip: `dbt compile -s ${modelName}`,
-			}),
-			...this._profileLens(document, modelName!, topRange),
-			...cteLenses,
-		];
-	}
-
-	private _profileLens(
-		document: vscode.TextDocument,
-		modelName: string,
-		range: vscode.Range,
-	): vscode.CodeLens[] {
-		const result = this._profiler?.getResultForFile(document.fileName);
-		if (result?.status === 'running') {
-			const n = result.cteProfiles.length;
-			const total = result.totalCtes ?? '?';
-			return [
-				new vscode.CodeLens(range, {
-					title: `$(loading~spin) Profiling (${n}/${total})`,
-					command: 'dbt-studio.profiler.profileModel',
-					tooltip: `Profiling ${modelName} — ${n} of ${total} CTEs done`,
-				}),
-				new vscode.CodeLens(range, {
-					title: '$(stop-circle) Stop',
-					command: 'dbt-studio.profiler.cancelProfiling',
-					tooltip: 'Cancel profiling',
-				}),
-			];
-		}
-		let title = '$(clock) Profile';
-		if (result?.status === 'complete') {
-			const ms = result.totalTimeMs;
-			const timeStr = ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms.toFixed(0)}ms`;
-			title = `$(clock) Profile (${timeStr})`;
-		}
-		return [new vscode.CodeLens(range, {
-			title,
-			command: 'dbt-studio.profiler.profileModel',
-			tooltip: `Profile all CTEs in ${modelName}`,
-		})];
 	}
 
 	private _adHocLenses(document: vscode.TextDocument): vscode.CodeLens[] {

@@ -310,12 +310,6 @@
 					"when": "workspaceHasDBT"
 				},
 				{
-					"id": "dbt-studio.testResults",
-					"name": "Test Results",
-					"when": "workspaceHasDBT",
-					"visibility": "collapsed"
-				},
-				{
 					"id": "dbt-studio.profilerResults",
 					"name": "Profile Results",
 					"when": "workspaceHasDBT",

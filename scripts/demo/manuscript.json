@@ -8,16 +8,14 @@
     {
       "id": "model-explorer",
       "frame": "model-explorer",
-      "caption": "Model Explorer — Models · Sources · By Tag",
+      "caption": "Model Explorer — your whole dbt project, right in the sidebar",
       "duration": {
         "from": {
-          "segment": "model-explorer",
-          "at": "start",
+          "event": "model-explorer.demo",
           "offsetMs": 0
         },
         "to": {
-          "segment": "model-explorer",
-          "at": "end",
+          "event": "model-explorer.post-demo",
           "offsetMs": 0
         }
       }
@@ -25,16 +23,14 @@
     {
       "id": "codelens",
       "frame": "codelens",
-      "caption": "CodeLens — Run · Build · Test · Compile · Profile",
+      "caption": "CodeLens — Run · Test · Build · Compile · Profile, without leaving the file",
       "duration": {
         "from": {
-          "segment": "codelens",
-          "at": "start",
+          "event": "codelens.demo",
           "offsetMs": 0
         },
         "to": {
-          "segment": "codelens",
-          "at": "end",
+          "event": "codelens.post-demo",
           "offsetMs": 0
         }
       }
@@ -43,15 +39,15 @@
       "id": "hover-ref",
       "frame": "hover-ref",
       "useVideo": true,
-      "caption": "Hover — model preview with columns & description",
+      "caption": "Hover a ref() — instant model preview, columns & docs. No tab switching.",
       "duration": {
         "from": {
           "event": "hover-ref.demo",
-          "offsetMs": -500
+          "offsetMs": 0
         },
         "to": {
           "event": "hover-ref.post-demo",
-          "offsetMs": 300
+          "offsetMs": 0
         }
       }
     },
@@ -59,15 +55,15 @@
       "id": "hover-column",
       "frame": "hover-column",
       "useVideo": true,
-      "caption": "Column Intelligence — type, origin CTE & lineage",
+      "caption": "Column Intelligence — know exactly where every column comes from",
       "duration": {
         "from": {
           "event": "hover-column.demo",
-          "offsetMs": -500
+          "offsetMs": 0
         },
         "to": {
           "event": "hover-column.post-demo",
-          "offsetMs": 300
+          "offsetMs": 0
         }
       }
     },
@@ -75,15 +71,15 @@
       "id": "completion",
       "frame": "completion",
       "useVideo": true,
-      "caption": "Completion — all models available inside ref()",
+      "caption": "Smart Completion — your entire model catalog, autocompleted inside ref()",
       "duration": {
         "from": {
           "event": "completion.demo",
-          "offsetMs": -500
+          "offsetMs": 0
         },
         "to": {
           "event": "completion.post-demo",
-          "offsetMs": 300
+          "offsetMs": 0
         }
       }
     },
@@ -91,15 +87,15 @@
       "id": "rename-symbol",
       "frame": "rename-symbol",
       "useVideo": true,
-      "caption": "Rename Symbol — renames CTE across all references",
+      "caption": "Rename Symbol — one rename, every reference updated. Instantly.",
       "duration": {
         "from": {
           "event": "rename-symbol.demo",
-          "offsetMs": -500
+          "offsetMs": 0
         },
         "to": {
           "event": "rename-symbol.post-demo",
-          "offsetMs": 300
+          "offsetMs": 0
         }
       }
     },
@@ -107,31 +103,29 @@
       "id": "diagnostics",
       "frame": "diagnostics",
       "useVideo": true,
-      "caption": "Diagnostics — unknown ref() flagged in real time",
+      "caption": "Live Diagnostics — broken ref() caught before you even hit save",
       "duration": {
         "from": {
           "event": "diagnostics.demo",
-          "offsetMs": -500
+          "offsetMs": 0
         },
         "to": {
           "event": "diagnostics.post-demo",
-          "offsetMs": 300
+          "offsetMs": 0
         }
       }
     },
     {
       "id": "document-symbols",
       "frame": "document-symbols",
-      "caption": "Outline — CTE tree with columns in every scope",
+      "caption": "Document Outline — every CTE and its columns, structured and navigable",
       "duration": {
         "from": {
-          "segment": "document-symbols",
-          "at": "start",
+          "event": "document-symbols.demo",
           "offsetMs": 0
         },
         "to": {
-          "segment": "document-symbols",
-          "at": "end",
+          "event": "document-symbols.post-demo",
           "offsetMs": 0
         }
       }
@@ -140,15 +134,15 @@
       "id": "go-to-definition",
       "frame": "go-to-definition",
       "useVideo": true,
-      "caption": "Go to Definition — Ctrl+Click to jump to source",
+      "caption": "Go to Definition — Ctrl+Click any ref() and follow the data",
       "duration": {
         "from": {
           "event": "go-to-definition.demo",
-          "offsetMs": -500
+          "offsetMs": 0
         },
         "to": {
           "event": "go-to-definition.post-demo",
-          "offsetMs": 300
+          "offsetMs": 0
         }
       }
     },
@@ -156,31 +150,29 @@
       "id": "find-all-references",
       "frame": "find-all-references",
       "useVideo": true,
-      "caption": "Find All References — all models using this source",
+      "caption": "Find All References — see every model downstream from this one",
       "duration": {
         "from": {
           "event": "find-all-references.demo",
-          "offsetMs": -500
+          "offsetMs": 0
         },
         "to": {
           "event": "find-all-references.post-demo",
-          "offsetMs": 300
+          "offsetMs": 0
         }
       }
     },
     {
       "id": "call-hierarchy",
       "frame": "call-hierarchy",
-      "caption": "Call Hierarchy — full upstream/downstream model tree",
+      "caption": "Call Hierarchy — full blast radius, upstream and downstream",
       "duration": {
         "from": {
-          "segment": "call-hierarchy",
-          "at": "start",
+          "event": "call-hierarchy.demo",
           "offsetMs": 0
         },
         "to": {
-          "segment": "call-hierarchy",
-          "at": "end",
+          "event": "call-hierarchy.post-demo",
           "offsetMs": 0
         }
       }
@@ -188,50 +180,31 @@
     {
       "id": "workspace-symbols",
       "frame": "workspace-symbols",
-      "caption": "Workspace Symbols (Ctrl+T) — search all models",
+      "caption": "Ctrl+T — fuzzy jump to any model in your project. No file browsing.",
       "duration": {
         "from": {
-          "segment": "workspace-symbols",
-          "at": "start",
+          "event": "workspace-symbols.demo",
           "offsetMs": 0
         },
         "to": {
-          "segment": "workspace-symbols",
-          "at": "end",
+          "event": "workspace-symbols.post-demo",
           "offsetMs": 0
         }
       }
     },
     {
-      "id": "lineage-graph",
-      "frame": "lineage-graph",
-      "caption": "Lineage Graph — interactive DAG",
-      "duration": {
-        "from": {
-          "segment": "lineage-graph",
-          "at": "start",
-          "offsetMs": 0
-        },
-        "to": {
-          "segment": "lineage-graph",
-          "at": "end",
-          "offsetMs": 0
-        }
-      }
-    },
-    {
-      "id": "lineage-column",
-      "frame": "lineage-column",
+      "id": "lineage",
+      "frame": "lineage",
       "useVideo": true,
-      "caption": "Column Lineage — trace column through upstream models",
+      "caption": "Lineage — interactive DAG, then drill into column-level traces",
       "duration": {
         "from": {
-          "event": "lineage-column.demo",
-          "offsetMs": -500
+          "event": "lineage.demo",
+          "offsetMs": 0
         },
         "to": {
-          "event": "lineage-column.post-demo",
-          "offsetMs": 300
+          "event": "lineage.post-demo",
+          "offsetMs": 0
         }
       }
     },
@@ -240,15 +213,15 @@
       "frame": "profiler",
       "useVideo": true,
       "playbackSpeed": 2.5,
-      "caption": "Profiler — per-CTE row counts & timing",
+      "caption": "Profiler — row counts & timing for every CTE. Find your bottleneck.",
       "duration": {
         "from": {
           "event": "profiler.demo",
-          "offsetMs": -500
+          "offsetMs": 0
         },
         "to": {
           "event": "profiler.post-demo",
-          "offsetMs": 300
+          "offsetMs": 0
         }
       }
     },
@@ -256,15 +229,47 @@
       "id": "query-results",
       "frame": "query-results",
       "useVideo": true,
-      "caption": "Query Results — run SQL and browse results inline",
+      "caption": "Query Results — run SQL, get results right here. Your editor is the query tool.",
       "duration": {
         "from": {
           "event": "query-results.demo",
-          "offsetMs": -500
+          "offsetMs": 0
         },
         "to": {
           "event": "query-results.post-demo",
-          "offsetMs": 300
+          "offsetMs": 0
+        }
+      }
+    },
+    {
+      "id": "query-model",
+      "frame": "query-model",
+      "useVideo": true,
+      "caption": "Query Model — one click compiles & runs the whole thing",
+      "duration": {
+        "from": {
+          "event": "query-model.demo",
+          "offsetMs": 0
+        },
+        "to": {
+          "event": "query-model.post-demo",
+          "offsetMs": 0
+        }
+      }
+    },
+    {
+      "id": "query-cte",
+      "frame": "query-cte",
+      "useVideo": true,
+      "caption": "Query CTE — run a single CTE in isolation. Debug like a pro.",
+      "duration": {
+        "from": {
+          "event": "query-cte.demo",
+          "offsetMs": 0
+        },
+        "to": {
+          "event": "query-cte.post-demo",
+          "offsetMs": 0
         }
       }
     }
