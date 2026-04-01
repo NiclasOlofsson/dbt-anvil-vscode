@@ -80,7 +80,24 @@ let sessionStartMs = Date.now();
  * viewer's eye is drawn to the right part of the screen in the screenshot.
  * Call removeHighlight(win) immediately after the screenshot.
  */
+async function injectHighlightStyle(win) {
+	await win.evaluate(() => {
+		if (document.getElementById('__demo-hl-style__')) return;
+		const style = document.createElement('style');
+		style.id = '__demo-hl-style__';
+		style.textContent = [
+			'@keyframes __demo-shimmer__ {',
+			'  0%   { background: rgba(50, 210, 120, 0.05); }',
+			'  50%  { background: rgba(50, 210, 120, 0.20); }',
+			'  100% { background: rgba(50, 210, 120, 0.05); }',
+			'}',
+		].join('\n');
+		document.head.appendChild(style);
+	});
+}
+
 async function flashHighlight(win, selector) {
+	await injectHighlightStyle(win);
 	await win.evaluate((sel) => {
 		const el = document.querySelector(sel);
 		if (!el) return;
@@ -99,6 +116,7 @@ async function flashHighlight(win, selector) {
 			pointerEvents: 'none',
 			zIndex: '99999',
 			boxSizing: 'border-box',
+			animation: '__demo-shimmer__ 1.2s ease-in-out infinite',
 		});
 		document.body.appendChild(ov);
 	}, selector);
@@ -109,6 +127,7 @@ async function flashHighlight(win, selector) {
  * Falls back to the provided container selector if the pane cannot be found.
  */
 async function flashPaneHighlight(win, titleText, containerSelector = '.part.sidebar') {
+	await injectHighlightStyle(win);
 	const highlighted = await win.evaluate(({ title, containerSel }) => {
 		const container = document.querySelector(containerSel);
 		if (!container) return false;
@@ -133,6 +152,7 @@ async function flashPaneHighlight(win, titleText, containerSelector = '.part.sid
 				pointerEvents: 'none',
 				zIndex: '99999',
 				boxSizing: 'border-box',
+				animation: '__demo-shimmer__ 1.2s ease-in-out infinite',
 			});
 			document.body.appendChild(ov);
 			return true;
@@ -207,7 +227,8 @@ function markSegmentEnd(segment) {
 
 async function runCommand(win, command) {
 	await win.keyboard.press('Control+Shift+P');
-	await win.waitForSelector('.quick-input-widget', { state: 'visible', timeout: 3000 });
+	const input = win.locator('.quick-input-widget input');
+	await input.waitFor({ state: 'visible', timeout: 3000 });
 	await win.keyboard.type(command, TYPE_DELAY);
 	await win.waitForSelector('.quick-input-list .monaco-list-row', { timeout: 3000 }).catch(() => { });
 	await win.keyboard.press('Enter');
@@ -217,8 +238,9 @@ async function runCommand(win, command) {
 
 async function openFile(win, filename) {
 	await win.keyboard.press('Control+P');
-	await win.waitForSelector('.quick-input-widget', { state: 'visible', timeout: 3000 });
-	await win.keyboard.press('Control+A'); // clear any leftover text from previous open
+	const input = win.locator('.quick-input-widget input');
+	await input.waitFor({ state: 'visible', timeout: 3000 });
+	await win.keyboard.press('Control+A'); // clear any leftover text
 	await win.keyboard.type(filename, TYPE_DELAY);
 	await win.waitForSelector('.quick-input-list .monaco-list-row', { timeout: 3000 }).catch(() => { });
 	await win.keyboard.press('Enter');
@@ -229,7 +251,8 @@ async function openFile(win, filename) {
 
 async function goToLine(win, line, col = 1) {
 	await win.keyboard.press('Control+G');
-	await win.waitForSelector('.quick-input-widget', { state: 'visible', timeout: 3000 });
+	const input = win.locator('.quick-input-widget input');
+	await input.waitFor({ state: 'visible', timeout: 3000 });
 	await win.keyboard.type(`${line}:${col}`, TYPE_DELAY);
 	await win.keyboard.press('Enter');
 	await win.waitForTimeout(400);
@@ -465,34 +488,32 @@ async function removeCursor(win) {
 
 /**
  * Reset VS Code to the base demo layout:
- *   - Primary sidebar = dbt Studio (always visible on the left)
+ *   - Primary sidebar = dbt Studio, only MODEL EXPLORER panel expanded
  *   - All editor tabs closed (middle column empty)
  *   - Bottom panel closed
  *   - Secondary sidebar (right column) closed
  *
- * Call this at the start of every segment's pre-demo setup phase.
- * All the runCommand / openFile / goToLine calls that follow are intentionally
- * BEFORE the `{id}.demo` event, so the command-palette UI is outside the
- * video clip window.
+ * This is the home state every segment starts from. Segments that need a
+ * different panel (e.g. PROFILE RESULTS) expand it in their own PRE-DEMO setup.
  */
 async function resetLayout(win) {
 	// Close every open editor tab
 	await runCommand(win, 'View: Close All Editors');
-	await win.waitForTimeout(200);
 	// Close the bottom panel if it is open
 	const panelOpen = await win.locator('.part.panel').isVisible({ timeout: 500 }).catch(() => false);
 	if (panelOpen) {
 		await win.keyboard.press('Control+J');
-		await win.waitForTimeout(200);
+		// Wait for the panel animation to finish — Ctrl+J is a raw keypress with no palette confirmation
+		await win.waitForSelector('.part.panel', { state: 'hidden', timeout: 2000 }).catch(() => { });
 	}
 	// Close the secondary sidebar (right column) if it is open
 	const auxOpen = await win.locator('.auxiliarybar, .part.auxiliarybar').isVisible({ timeout: 300 }).catch(() => false);
 	if (auxOpen) {
 		await runCommand(win, 'View: Close Secondary Side Bar');
-		await win.waitForTimeout(200);
 	}
-	// Make sure dbt Studio panes are visible in the primary sidebar
+	// Open dbt Studio sidebar then collapse everything except MODEL EXPLORER
 	await openDbtStudioSidebar(win);
+	await collapsePanelsExcept(win, 'MODEL EXPLORER');
 }
 
 /**
@@ -787,17 +808,19 @@ async function main() {
 		} // diagnostics check
 
 		// ── 01: Model Explorer ────────────────────────────────────────────────────
-		// waitForExtensionReady() already clicked the sidebar and waited for tree items,
-		// so just take the screenshot — sidebar is already open and populated.
 		console.log('[01] Model Explorer');
 		markSegmentStart('model-explorer');
 		if (shouldRun('model-explorer')) try {
-			await win.waitForTimeout(500);
+			// PRE-DEMO
+			await resetLayout(win);
 			// Expand top-level folders (Models, Sources) — single pass avoids over-expanding
 			await setAllTreeItemsExpanded(win, true, '.part.sidebar', 1);
-			await win.waitForTimeout(600);
+			// DEMO
+			logEvent('model-explorer.demo');
 			await flashPaneHighlight(win, 'MODEL EXPLORER');
 			await screenshot(win, 'model-explorer', 'Model Explorer — Models · Sources · By Tag', 3500);
+			logEvent('model-explorer.post-demo');
+			// POST-DEMO
 			await removeHighlight(win);
 		} catch (e) {
 			console.warn(`  ⚠ model-explorer: ${e.message}`);
@@ -808,15 +831,18 @@ async function main() {
 		console.log('[02] CodeLens');
 		markSegmentStart('codelens');
 		if (shouldRun('codelens')) try {
+			// PRE-DEMO
+			await resetLayout(win);
 			await openFile(win, 'reg_season_actuals_enriched.sql');
 			await goToLine(win, 1);
 			await waitForReady(win, 30000);
-			// Wait for CodeLens decorations above the first line
 			await win.waitForSelector('.codelens-decoration a', { timeout: 20000 });
-			await win.waitForTimeout(600);
-			// Highlight the editor title-bar action buttons (Run/Build/Compile/Profile icons)
+			// DEMO
+			logEvent('codelens.demo');
 			await flashHighlight(win, '.editor-actions');
 			await screenshot(win, 'codelens', 'CodeLens — Run · Build · Test · Compile · Profile', 3000);
+			logEvent('codelens.post-demo');
+			// POST-DEMO
 			await removeHighlight(win);
 		} catch (e) {
 			console.warn(`  ⚠ codelens: ${e.message}`);
@@ -837,9 +863,9 @@ async function main() {
 			const posHoverRef = await getTokenScreenPos(win, 6, 30);
 			if (!posHoverRef) throw new Error('getTokenScreenPos returned null for line 6 col 30');
 			console.log(`  hover-ref token pos: ${posHoverRef.x},${posHoverRef.y}`);
-			await moveMouse(win, posHoverRef.x, posHoverRef.y, 30);
-			// DEMO: real pointer lands — Monaco shows hover after ~300ms idle
+			// DEMO: cursor sweep is part of the demo
 			logEvent('hover-ref.demo');
+			await moveMouse(win, posHoverRef.x, posHoverRef.y, 30);
 			await win.mouse.move(posHoverRef.x, posHoverRef.y);
 			await win.waitForSelector('.monaco-hover', { state: 'visible', timeout: 15000 });
 			await win.waitForTimeout(1200);
@@ -866,9 +892,9 @@ async function main() {
 			const posHoverCol = await getTokenScreenPos(win, 77, 8);
 			if (!posHoverCol) throw new Error('getTokenScreenPos returned null for line 77 col 8');
 			console.log(`  hover-column token pos: ${posHoverCol.x},${posHoverCol.y}`);
-			await moveMouse(win, posHoverCol.x, posHoverCol.y, 30);
-			// DEMO
+			// DEMO: cursor sweep is part of the demo
 			logEvent('hover-column.demo');
+			await moveMouse(win, posHoverCol.x, posHoverCol.y, 30);
 			await win.mouse.move(posHoverCol.x, posHoverCol.y);
 			await win.waitForSelector('.monaco-hover', { state: 'visible', timeout: 15000 });
 			await win.waitForTimeout(1200);
@@ -927,9 +953,9 @@ async function main() {
 			await initCustomCursor(win);
 			// Animate cursor from centre to the CTE name token
 			const posRename = await getTokenScreenPos(win, 4, 5);
-			if (posRename) await moveMouse(win, posRename.x, posRename.y, 30);
-			// DEMO
+			// DEMO: cursor sweep is part of the demo
 			logEvent('rename-symbol.demo');
+			if (posRename) await moveMouse(win, posRename.x, posRename.y, 30);
 			await win.keyboard.press('F2');
 			const renameInput = win.locator('.rename-box input, .rename-box .rename-input').first();
 			await renameInput.waitFor({ state: 'attached', timeout: 8000 });
@@ -969,9 +995,9 @@ async function main() {
 			await goToLine(win, 20, 22);
 			await initCustomCursor(win);
 			const posDiag = await getTokenScreenPos(win, 20, 22);
-			if (posDiag) await moveMouse(win, posDiag.x, posDiag.y, 20);
-			// DEMO
+			// DEMO: cursor sweep is part of the demo
 			logEvent('diagnostics.demo');
+			if (posDiag) await moveMouse(win, posDiag.x, posDiag.y, 20);
 			if (posDiag) {
 				await win.waitForTimeout(200);
 				await win.mouse.dblclick(posDiag.x, posDiag.y);
@@ -996,16 +1022,19 @@ async function main() {
 		console.log('[08] Document Symbols');
 		markSegmentStart('document-symbols');
 		if (shouldRun('document-symbols')) try {
+			// PRE-DEMO
+			await resetLayout(win);
 			await openFile(win, 'reg_season_actuals_enriched.sql');
-			// Collapse other sidebar panes so OUTLINE fills more height
 			await collapsePanelsExcept(win, 'OUTLINE');
 			await runCommand(win, 'View: Focus Outline');
 			await win.waitForSelector('.outline-element', { timeout: 8000 });
-			// Expand all nodes so the full CTE tree with columns is visible
 			await setAllTreeItemsExpanded(win, true, '.part.sidebar', 4);
-			await win.waitForTimeout(800);
+			// DEMO
+			logEvent('document-symbols.demo');
 			await flashPaneHighlight(win, 'OUTLINE');
 			await screenshot(win, 'document-symbols', 'Outline — CTE tree with columns in every scope', 3000);
+			logEvent('document-symbols.post-demo');
+			// POST-DEMO
 			await removeHighlight(win);
 		} catch (e) {
 			console.warn(`  ⚠ document-symbols: ${e.message}`);
@@ -1022,9 +1051,9 @@ async function main() {
 			await goToLine(win, 92, 18);
 			await initCustomCursor(win);
 			const posGotoDef = await getTokenScreenPos(win, 92, 18);
-			if (posGotoDef) await moveMouse(win, posGotoDef.x, posGotoDef.y, 30);
-			// DEMO
+			// DEMO: cursor sweep is part of the demo
 			logEvent('go-to-definition.demo');
+			if (posGotoDef) await moveMouse(win, posGotoDef.x, posGotoDef.y, 30);
 			if (posGotoDef) {
 				await win.waitForTimeout(300);
 				// Hold Ctrl — VS Code shows clickable underline
@@ -1056,9 +1085,9 @@ async function main() {
 			await goToLine(win, 6, 30);
 			await initCustomCursor(win);
 			const posFar = await getTokenScreenPos(win, 6, 30);
-			if (posFar) await moveMouse(win, posFar.x, posFar.y, 25);
-			// DEMO
+			// DEMO: cursor sweep is part of the demo
 			logEvent('find-all-references.demo');
+			if (posFar) await moveMouse(win, posFar.x, posFar.y, 25);
 			await win.keyboard.press('Shift+F12');
 			await win.waitForTimeout(3000);
 			await screenshot(win, 'find-all-references', 'Find All References — all models using this source', 4000);
@@ -1075,21 +1104,22 @@ async function main() {
 		console.log('[11] Call Hierarchy');
 		markSegmentStart('call-hierarchy');
 		if (shouldRun('call-hierarchy')) try {
+			// PRE-DEMO
+			await resetLayout(win);
 			await openFile(win, 'season_summary.sql');
-			// Line 20: `from {{ ref("reg_season_summary") }} r`
-			// "reg_season_summary" starts at col 14, middle ~col 22
 			await win.click('.monaco-editor .view-lines');
 			await goToLine(win, 20, 22);
+			// DEMO
+			logEvent('call-hierarchy.demo');
 			await win.keyboard.press('Shift+Alt+H');
-			// Call hierarchy opens as a peek/panel — wait for idle then expand tree
-			await win.waitForTimeout(500);
 			await waitForReady(win, 15000).catch(() => { });
 			await win.waitForTimeout(2000);
-			// Expand both Callers (incoming) and Call Sites (outgoing) rows
 			await setAllTreeItemsExpanded(win, true, '.part.panel', 3);
 			await setAllTreeItemsExpanded(win, true, '.part.sidebar', 3);
 			await win.waitForTimeout(1000);
 			await screenshot(win, 'call-hierarchy', 'Call Hierarchy — upstream & downstream model tree', 4000);
+			logEvent('call-hierarchy.post-demo');
+			// POST-DEMO
 			await pressEscape(win);
 		} catch (e) {
 			console.warn(`  ⚠ call-hierarchy: ${e.message}`);
@@ -1100,77 +1130,44 @@ async function main() {
 		console.log('[12] Workspace Symbols');
 		markSegmentStart('workspace-symbols');
 		if (shouldRun('workspace-symbols')) try {
+			// PRE-DEMO
+			await resetLayout(win);
+			// DEMO
+			logEvent('workspace-symbols.demo');
 			await win.keyboard.press('Control+T');
-			await win.waitForTimeout(400);
+			await win.waitForSelector('.quick-input-widget input', { state: 'visible', timeout: 3000 });
 			await win.keyboard.type('nba_team', TYPE_DELAY);
-			await win.waitForTimeout(800);
 			await win.waitForSelector('.quick-input-list .monaco-list-row', { timeout: 6000 });
-			await win.waitForTimeout(500);
 			await screenshot(win, 'workspace-symbols', 'Workspace Symbols (Ctrl+T) — search all models', 3000);
+			logEvent('workspace-symbols.post-demo');
+			// POST-DEMO
 			await pressEscape(win);
 		} catch (e) {
 			console.warn(`  ⚠ workspace-symbols: ${e.message}`);
 		}
 		markSegmentEnd('workspace-symbols');
 
-		// ── 13: Lineage Graph ────────────────────────────────────────────────────
-		console.log('[13] Lineage Graph');
-		markSegmentStart('lineage-graph');
-		if (shouldRun('lineage-graph')) try {
+		// ── 13: Lineage Graph + Column Lineage (combined) ───────────────────────
+		console.log('[13] Lineage');
+		markSegmentStart('lineage');
+		if (shouldRun('lineage')) try {
+			// PRE-DEMO: open file, show lineage, maximize, fit, wait for enrichment
+			await resetLayout(win);
 			await openFile(win, 'season_summary.sql');
 			await runCommand(win, 'dbt Studio: Show Lineage');
 			await waitForReady(win, 30000).catch(() => { });
 			await win.waitForTimeout(5000);
-			// Maximize panel so the DAG fills the screen
 			const maximizeBtn = win.locator('.part.panel .codicon-panel-maximize').first();
 			if (await maximizeBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
 				await maximizeBtn.click();
 			} else {
 				await runCommand(win, 'View: Toggle Maximized Panel Size');
 			}
-			await win.waitForTimeout(500);
-			// Press Fit in the lineage webview
-			const lineageFrameForFit = await findWebviewFrame(win, '#canvas-wrap');
-			if (lineageFrameForFit) {
-				await lineageFrameForFit.evaluate(() => document.getElementById('fit-btn')?.click());
-				await win.waitForTimeout(1500);
-			}
-			await flashHighlight(win, '.part.panel');
-			await screenshot(win, 'lineage-graph', 'Lineage Graph — interactive DAG', 4500);
-			await removeHighlight(win);
-			// Stay maximized — lineage-column video uses this panel state
-		} catch (e) {
-			console.warn(`  ⚠ lineage-graph: ${e.message}`);
-		}
-		markSegmentEnd('lineage-graph');
-
-		// ── 14: Column Lineage ─────────────────────────────────────────────────
-		console.log('[14] Column Lineage');
-		markSegmentStart('lineage-column');
-		if (shouldRun('lineage-column')) try {
-			await initCustomCursor(win);
-			// Panel should still be maximized from lineage-graph segment.
-			// When running standalone (--step lineage-column), open lineage first.
-			if (stepFilter === 'lineage-column') {
-				await openFile(win, 'season_summary.sql');
-				await runCommand(win, 'dbt Studio: Show Lineage');
-				await waitForReady(win, 30000).catch(() => { });
-				await win.waitForTimeout(5000);
-				const maximizeBtnLC = win.locator('.part.panel .codicon-panel-maximize').first();
-				if (await maximizeBtnLC.isVisible({ timeout: 1000 }).catch(() => false)) {
-					await maximizeBtnLC.click();
-				} else {
-					await runCommand(win, 'View: Toggle Maximized Panel Size');
-				}
-				await win.waitForTimeout(500);
-			}
 			const lineageFrame = await findWebviewFrame(win, '#canvas-wrap');
 			if (!lineageFrame) throw new Error('Lineage webview frame not found');
-			// Ensure Fit is applied so the full graph is visible
 			await lineageFrame.evaluate(() => document.getElementById('fit-btn')?.click());
-			await win.waitForTimeout(1000);
-
-			// Wait for column enrichment
+			await win.waitForTimeout(1500);
+			// Wait for column enrichment (col-toggle buttons appear on cards)
 			let toggleVisible = false;
 			for (let i = 0; i < 20; i++) {
 				toggleVisible = await lineageFrame.evaluate(() => !!document.querySelector('.col-toggle'));
@@ -1178,45 +1175,38 @@ async function main() {
 				await win.waitForTimeout(1000);
 			}
 			if (!toggleVisible) throw new Error('No .col-toggle appeared');
-			logEvent('lineage-column.demo');
-
-			// Click the focus card's col-toggle to expand its column list
-			const clicked = await lineageFrame.evaluate(() => {
-				const toggle = document.querySelector('.card.focus .col-toggle');
-				if (!toggle) return false;
-				toggle.click();
-				return true;
-			});
-			if (!clicked) throw new Error('Focus card col-toggle not found');
-			await win.waitForTimeout(2000);
-
-			// Click the first column item to trigger column lineage trace
-			const colClicked = await lineageFrame.evaluate(() => {
-				const col = document.querySelector('.card.focus .col-item');
-				if (!col) return null;
-				col.click();
-				return col.dataset.col || '(unknown)';
-			});
-			if (!colClicked) throw new Error('Focus card .col-item not found');
-			console.log(`  → tracing column: ${colClicked}`);
-
+			// Get screen positions of col-toggle and first col-item on the focus card
+			const toggleBbox = await lineageFrame.locator('.card.focus .col-toggle').boundingBox();
+			if (!toggleBbox) throw new Error('Focus card col-toggle not found');
+			const togglePos = { x: toggleBbox.x + toggleBbox.width / 2, y: toggleBbox.y + toggleBbox.height / 2 };
+			// DEMO: cursor sweeps in, expands columns, then clicks a column
+			await initCustomCursor(win);
+			logEvent('lineage.demo');
+			await moveMouse(win, togglePos.x, togglePos.y, 30);
+			await win.mouse.click(togglePos.x, togglePos.y);
+			await win.waitForTimeout(1500);
+			// Get position of first column item after expansion
+			const colBbox = await lineageFrame.locator('.card.focus .col-item').first().boundingBox();
+			if (!colBbox) throw new Error('Focus card .col-item not found after expansion');
+			const colPos = { x: colBbox.x + colBbox.width / 2, y: colBbox.y + colBbox.height / 2 };
+			const colName = await lineageFrame.locator('.card.focus .col-item').first().getAttribute('data-col');
+			console.log(`  → tracing column: ${colName ?? '(unknown)'}`);
+			await moveMouse(win, colPos.x, colPos.y, 20);
+			await win.mouse.click(colPos.x, colPos.y);
 			await waitForReady(win, 30000).catch(() => { });
 			await win.waitForTimeout(2000);
-			await win.waitForTimeout(1000);
-
 			await flashHighlight(win, '.part.panel');
-			await screenshot(win, 'lineage-column', 'Column Lineage — trace column through upstream models', 5000);
-			logEvent('lineage-column.post-demo');
+			await screenshot(win, 'lineage', 'Lineage Graph & Column Lineage — interactive DAG', 5000);
+			logEvent('lineage.post-demo');
 			// POST-DEMO
 			await removeHighlight(win);
 			await removeCursor(win);
-			// Restore panel to normal size
 			await runCommand(win, 'View: Toggle Maximized Panel Size');
 			await win.waitForTimeout(400);
 		} catch (e) {
-			console.warn(`  ⚠ lineage-column: ${e.message}`);
+			console.warn(`  ⚠ lineage: ${e.message}`);
 		}
-		markSegmentEnd('lineage-column');
+		markSegmentEnd('lineage');
 
 		// Close the bottom panel — don't let it distract subsequent frames
 		await win.keyboard.press('Control+J');
@@ -1228,19 +1218,23 @@ async function main() {
 		console.log('[15] Profiler');
 		markSegmentStart('profiler');
 		if (shouldRun('profiler')) try {
-			// PRE-DEMO: reset layout (also opens dbt Studio sidebar), open file and collapse panels
+			// PRE-DEMO: reset layout, open file, collapse panels, wait for editor title button
 			await resetLayout(win);
 			await openFile(win, 'reg_season_actuals_enriched.sql');
 			await collapsePanelsExcept(win, 'PROFILE RESULTS');
 			await collapseAllTreeItems(win, '.part.sidebar');
-			await win.waitForTimeout(300);
 			await goToLine(win, 1);
 			await waitForReady(win, 30000);
-			await win.waitForSelector('.codelens-decoration a', { timeout: 20000 });
-			// DEMO: click Profile — the profiler run and results are the demo content
+			const profileBtn = win.locator('.editor-actions [aria-label="Profile Model"]');
+			await profileBtn.waitFor({ state: 'visible', timeout: 20000 });
+			const profileBbox = await profileBtn.boundingBox();
+			if (!profileBbox) throw new Error('Profile Model button not found');
+			const profilePos = { x: profileBbox.x + profileBbox.width / 2, y: profileBbox.y + profileBbox.height / 2 };
+			await initCustomCursor(win);
+			// DEMO: cursor sweeps to the Profile Model editor title button and clicks
 			logEvent('profiler.demo');
-			const profileLens = win.locator('.codelens-decoration a', { hasText: 'Profile' });
-			await profileLens.click();
+			await moveMouse(win, profilePos.x, profilePos.y, 30);
+			await win.mouse.click(profilePos.x, profilePos.y);
 
 			await flashPaneHighlight(win, 'PROFILE RESULTS');
 			await waitForDbQuery(win, 30000);
@@ -1265,6 +1259,7 @@ async function main() {
 			await screenshot(win, 'profiler', 'Profiler — per-CTE row counts & timing', 4000);
 			logEvent('profiler.post-demo');
 			await removeHighlight(win);
+			await removeCursor(win);
 		} catch (e) {
 			console.warn(`  ⚠ profiler: ${e.message}`);
 		}
@@ -1274,26 +1269,83 @@ async function main() {
 		console.log('[16] Query Results');
 		markSegmentStart('query-results');
 		if (shouldRun('query-results')) try {
-			// PRE-DEMO
+			// PRE-DEMO: open analysis query.sql, position on the query line
 			await resetLayout(win);
-			await openFile(win, 'reg_season_predictions.sql');
-			await goToLine(win, 1);
+			await openFile(win, 'query.sql');
+			await goToLine(win, 2, 1);
 			await initCustomCursor(win);
-			// DEMO: execute query and show results
+			// DEMO: F5 runs the statement at cursor
 			logEvent('query-results.demo');
-			await win.keyboard.press('Control+Shift+Enter');
-			await waitForReady(win, 60000).catch(() => { });
-			await win.waitForTimeout(2000);
-			const resultsFrame = await findWebviewFrame(win, '.result-grid, .tg, .grid-body, td');
+			await win.keyboard.press('F5');
+			// Wait for status bar to show "db query" (query started)
+			await waitForDbQuery(win, 15000);
+			// Wait for status bar to return to Ready (query finished)
+			await waitForReady(win, 60000);
+			await win.waitForTimeout(1000);
+			await win.waitForTimeout(1000);
+			// Find result cells and sweep cursor through a few with Shift-click
+			const resultsFrame = await findWebviewFrame(win, 'td[data-col]');
 			if (resultsFrame) {
-				const cells = await resultsFrame.locator('td, .grid-cell').elementHandles();
-				for (let i = 0; i < Math.min(3, cells.length); i++) {
-					await cells[i].click().catch(() => { });
-					await win.waitForTimeout(300);
+				const firstCell = resultsFrame.locator('td[data-col]').first();
+				await firstCell.waitFor({ state: 'visible', timeout: 8000 });
+				// Determine which row/col values are present, excluding gutter (row-num) cells
+				const rowValues = await resultsFrame.evaluate(() => {
+					const rows = new Set();
+					for (const td of document.querySelectorAll('td[data-row]:not(.row-num)')) {
+						rows.add(Number(td.getAttribute('data-row')));
+					}
+					return [...rows].sort((a, b) => a - b);
+				});
+				const colValues = await resultsFrame.evaluate(() => {
+					const cols = new Set();
+					for (const td of document.querySelectorAll('td[data-col]:not(.row-num)')) {
+						cols.add(Number(td.getAttribute('data-col')));
+					}
+					return [...cols].sort((a, b) => a - b);
+				});
+				const topLeftRow = rowValues[0];
+				const topLeftCol = colValues[0];
+				const bottomRightRow = rowValues[Math.min(2, rowValues.length - 1)];
+				const bottomRightCol = colValues[Math.min(3, colValues.length - 1)];
+				const topLeft = resultsFrame.locator(`td[data-row="${topLeftRow}"][data-col="${topLeftCol}"]:not(.row-num)`);
+				const bottomRight = resultsFrame.locator(`td[data-row="${bottomRightRow}"][data-col="${bottomRightCol}"]:not(.row-num)`);
+				const tlBbox = await topLeft.boundingBox();
+				const brBbox = await bottomRight.boundingBox();
+				if (tlBbox && brBbox) {
+					const p1 = { x: tlBbox.x + tlBbox.width / 2, y: tlBbox.y + tlBbox.height / 2 };
+					const p2 = { x: brBbox.x + brBbox.width / 2, y: brBbox.y + brBbox.height / 2 };
+					// Click-drag from top-left to bottom-right to select 4 cols × 3 rows
+					await moveMouse(win, p1.x, p1.y, 20);
+					await win.mouse.down();
+					await moveMouse(win, p2.x, p2.y, 30);
+					await win.mouse.up();
+					await win.waitForTimeout(400);
 				}
 			}
-			await win.waitForTimeout(600);
-			await screenshot(win, 'query-results', 'Query Results — run SQL and browse results inline', 4000);
+			await win.waitForTimeout(500);
+			// Click "Move Query Results to Panel"
+			const moveToPanelBtn = win.locator('[aria-label="Move Query Results to Panel"]');
+			if (await moveToPanelBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+				const moveBbox = await moveToPanelBtn.boundingBox();
+				if (moveBbox) {
+					const mp = { x: moveBbox.x + moveBbox.width / 2, y: moveBbox.y + moveBbox.height / 2 };
+					await moveMouse(win, mp.x, mp.y, 20);
+					await win.mouse.click(mp.x, mp.y);
+					await win.waitForTimeout(1000);
+				}
+			}
+			// Click "Toggle Column Stats"
+			const toggleStatsBtn = win.locator('[aria-label="Toggle Column Stats"]');
+			if (await toggleStatsBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+				const tsBbox = await toggleStatsBtn.boundingBox();
+				if (tsBbox) {
+					const tp = { x: tsBbox.x + tsBbox.width / 2, y: tsBbox.y + tsBbox.height / 2 };
+					await moveMouse(win, tp.x, tp.y, 20);
+					await win.mouse.click(tp.x, tp.y);
+					await win.waitForTimeout(1000);
+				}
+			}
+			await screenshot(win, 'query-results', 'Query Results — run SQL, get results right here. Your editor is the query tool.', 4000);
 			logEvent('query-results.post-demo');
 			// POST-DEMO
 			await removeCursor(win);
@@ -1302,6 +1354,68 @@ async function main() {
 		}
 		markSegmentEnd('query-results');
 
+		// ── 17: Query Model ───────────────────────────────────────────────────────
+		console.log('[17] Query Model');
+		markSegmentStart('query-model');
+		if (shouldRun('query-model')) try {
+			// PRE-DEMO: open file, wait for codelens to settle
+			await resetLayout(win);
+			await openFile(win, 'reg_season_actuals_enriched.sql');
+			await goToLine(win, 1);
+			await waitForReady(win, 30000);
+			await win.waitForSelector('.codelens-decoration a', { timeout: 20000 });
+			const queryModelBtn = win.locator('.editor-actions [aria-label="Query Model"]');
+			await queryModelBtn.waitFor({ state: 'visible', timeout: 10000 });
+			const queryModelBbox = await queryModelBtn.boundingBox();
+			if (!queryModelBbox) throw new Error('Query Model button not found');
+			const queryModelPos = { x: queryModelBbox.x + queryModelBbox.width / 2, y: queryModelBbox.y + queryModelBbox.height / 2 };
+			await initCustomCursor(win);
+			// DEMO: cursor sweeps to editor title button and clicks
+			logEvent('query-model.demo');
+			await moveMouse(win, queryModelPos.x, queryModelPos.y, 30);
+			await win.mouse.click(queryModelPos.x, queryModelPos.y);
+			await waitForDbQuery(win, 15000);
+			await waitForReady(win, 60000);
+			await win.waitForTimeout(1000);
+			await screenshot(win, 'query-model', 'Query Model — compile & run the full model', 4000);
+			logEvent('query-model.post-demo');
+			// POST-DEMO
+			await removeCursor(win);
+		} catch (e) {
+			console.warn(`  ⚠ query-model: ${e.message}`);
+		}
+		markSegmentEnd('query-model');
+
+		// ── 18: Query CTE ─────────────────────────────────────────────────────────
+		console.log('[18] Query CTE');
+		markSegmentStart('query-cte');
+		if (shouldRun('query-cte')) try {
+			// PRE-DEMO: open file, wait for Query CTE codelens to appear on CTE lines
+			await resetLayout(win);
+			await openFile(win, 'reg_season_actuals_enriched.sql');
+			await goToLine(win, 1);
+			await waitForReady(win, 30000);
+			const queryCteLens = win.locator('.codelens-decoration a', { hasText: 'Query CTE' }).first();
+			await queryCteLens.waitFor({ state: 'visible', timeout: 20000 });
+			const queryCteBbox = await queryCteLens.boundingBox();
+			if (!queryCteBbox) throw new Error('Query CTE codelens not found');
+			const queryCtePos = { x: queryCteBbox.x + queryCteBbox.width / 2, y: queryCteBbox.y + queryCteBbox.height / 2 };
+			await initCustomCursor(win);
+			// DEMO: cursor sweeps to the Query CTE codelens and clicks
+			logEvent('query-cte.demo');
+			await moveMouse(win, queryCtePos.x, queryCtePos.y, 30);
+			await win.mouse.click(queryCtePos.x, queryCtePos.y);
+			await waitForDbQuery(win, 15000);
+			await waitForReady(win, 60000);
+			await win.waitForTimeout(1000);
+			await screenshot(win, 'query-cte', 'Query CTE — run a single CTE in isolation', 4000);
+			logEvent('query-cte.post-demo');
+			// POST-DEMO
+			await removeCursor(win);
+		} catch (e) {
+			console.warn(`  ⚠ query-cte: ${e.message}`);
+		}
+		markSegmentEnd('query-cte');
 
 
 		// ── Done — write config and close ────────────────────────────────────────

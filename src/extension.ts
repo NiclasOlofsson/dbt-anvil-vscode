@@ -18,7 +18,6 @@ import { ContentHashPersistence } from './indexing/content-hash-persistence';
 import { registerLanguageModelTools } from './tools';
 import { GetColumnLineageTool } from './tools/get-column-lineage';
 import { ModelExplorerProvider } from './views/model-explorer-provider';
-import { TestResultsProvider } from './views/test-results-provider';
 import { LineageGraphProvider } from './views/lineage-graph-provider';
 import { TestExplorerProvider } from './views/test-explorer-provider';
 import { DbtDefinitionProvider } from './providers/sql/definition-provider';
@@ -188,7 +187,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	// -------- Register tree views --------
 	const modelExplorerProvider = new ModelExplorerProvider(manifestIndexer, logger, projectDir, context.globalState);
-	const testResultsProvider = new TestResultsProvider(logger);
 	const lineageGraphProvider = new LineageGraphProvider(manifestIndexer, logger, context.globalState);
 	const columnLineageTool = new GetColumnLineageTool(manifestIndexer, executionService, logger, compileCache, describeCache);
 	lineageGraphProvider.setColumnLineageTool(columnLineageTool);
@@ -207,7 +205,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	context.subscriptions.push(
 		modelExplorerView,
-		vscode.window.registerTreeDataProvider('dbt-studio.testResults', testResultsProvider),
 		vscode.window.registerWebviewViewProvider(LineageGraphProvider.viewId, lineageGraphProvider),
 		vscode.window.registerTreeDataProvider('dbt-studio.testExplorer', testExplorerProvider),
 	);
@@ -284,7 +281,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const referenceProvider = new DbtReferenceProvider(manifestIndexer, logger, parseService);
 	const renameProvider = new DbtRenameProvider(manifestIndexer, manifestLoader, logger, parseService);
 	const sqlCodeLensProvider = new SqlCodeLensProvider(manifestIndexer, logger, parseService);
-	sqlCodeLensProvider.setProfiler(modelProfiler);
 	sqlCodeLensProvider.setPathResolver(pathResolver);
 	const yamlCodeLensProvider = new YamlCodeLensProvider(manifestIndexer, logger);
 	const sqlDocumentSymbolProvider = new SqlDocumentSymbolProvider(manifestIndexer, logger, parseService);
