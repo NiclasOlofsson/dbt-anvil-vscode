@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.6
+
+This release is a significant step under the hood. The entire SQL analysis layer has been rewritten around sqlglot — no more regular expressions. Every hover, definition, diagnostic, and rename result comes from a proper parse tree, which means far fewer false positives and no more features silently falling back to guesswork. Jinja handling is also much improved, so mixed Jinja/SQL files are parsed more accurately. Caching has been overhauled too, so the extension stays fast even in large projects. On top of that, there's a genuinely useful new SQL editor for running ad-hoc queries and a round of editor experience improvements that make day-to-day work smoother.
+
+- **SQL editor for ad-hoc queries** — A dedicated SQL editor and result panel for running queries directly against your warehouse, without going through a dbt model. Open a scratch SQL file, run it with a single command, and results appear in the panel immediately. Per-row gutter numbers, a toggleable stats summary, and a cleaner toolbar make it easy to inspect what came back. Copy and export are selection-aware — only the selected rows are included. An export save-as dialog lets you choose the output path. A new entry in the Run and Debug picker provides quick access, and the `resultLocation` launch config option lets you route results to a custom destination.
+- **CTE Profiler overhaul** — The profiler tree view is completely rebuilt. Gutter icons and the overview ruler now mark hot and warm CTEs directly in the editor so you can see the cost distribution without leaving the file. Decorations can be toggled on and off. On Databricks the profiler issues a `REFRESH TABLE` hint before each run so results reflect actual execution time, not cached reads.
+- **SQL syntax diagnostics** — SQL syntax errors are flagged inline as you type, powered by sqlglot. Whitespace-only changes skip re-validation.
+- **Rename symbol (F2)** — Rename any CTE, column alias, or inline alias across the entire file with F2. Every reference updates in one step, the same as renaming a variable in any other language.
+- **Find all references (Shift+F12)** — The References panel now lists every use of a CTE name or column alias in the current file.
+- **Call hierarchy** — Peek at which dbt models reference yours, and which models yours references, directly from the editor's Go menu.
+- **Inline / restore ref** — A lightbulb quick-fix lets you inline a `ref()` call to its raw compiled SQL, or restore it back. Useful for debugging what a ref resolves to without leaving the editor.
+- **Rich hover cards** — Hover tooltips show icons, clickable source links, and a distinct badge for CTEs. Column and model info is much easier to read at a glance.
+
+
 ## 0.1.5
 
 - **Databricks native queries** — If you're on Databricks, the extension now talks directly to the SQL Statement API instead of going through `dbt show`. Queries run faster and don't require a dbt invocation for every describe or inline execution.

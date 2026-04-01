@@ -1,0 +1,21 @@
+{
+  "format": "webp",
+  "outputFile": "images/demo.webp",
+  "manuscriptFile": "scripts/demo/manuscript.json",
+  "outputWidth": 1920,
+  "captionHeightPx": 48,
+  "splash": {
+    "logoPath": "resources/icons/dbt-studio-512.png",
+    "backgroundColor": "#000000"
+  },
+  "watermark": {
+    "logoPath": "resources/icons/dbt-studio-128.png",
+    "sizePx": 32,
+    "position": "bottom-right",
+    "opacity": 0.6
+  },
+  "encoder": {
+    "fps": 12,
+    "quality": 80
+  }
+}

@@ -1,0 +1,13 @@
+[project]
+name = "nba-monte-carlo"
+version = "1.0.0"
+description = "NBA/NFL Monte Carlo simulation dbt project (DuckDB)"
+requires-python = ">=3.9"
+dependencies = [
+    "dbt-core>=1.9.0",
+    "dbt-duckdb>=1.9.0",
+    "numpy>=2.0.2",
+    "pandas>=2.3.3",
+    "polars>=1.36.1",
+    "pyarrow>=21.0.0",
+]

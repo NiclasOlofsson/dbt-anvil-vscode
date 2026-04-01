@@ -1,0 +1,272 @@
+{
+  "recordingFile": "temp_auto/demo-recording.json",
+  "splash": {
+    "enabled": true,
+    "durationMs": 2000
+  },
+  "clips": [
+    {
+      "id": "model-explorer",
+      "frame": "model-explorer",
+      "caption": "Model Explorer — Models · Sources · By Tag",
+      "duration": {
+        "from": {
+          "segment": "model-explorer",
+          "at": "start",
+          "offsetMs": 0
+        },
+        "to": {
+          "segment": "model-explorer",
+          "at": "end",
+          "offsetMs": 0
+        }
+      }
+    },
+    {
+      "id": "codelens",
+      "frame": "codelens",
+      "caption": "CodeLens — Run · Build · Test · Compile · Profile",
+      "duration": {
+        "from": {
+          "segment": "codelens",
+          "at": "start",
+          "offsetMs": 0
+        },
+        "to": {
+          "segment": "codelens",
+          "at": "end",
+          "offsetMs": 0
+        }
+      }
+    },
+    {
+      "id": "hover-ref",
+      "frame": "hover-ref",
+      "useVideo": true,
+      "caption": "Hover — model preview with columns & description",
+      "duration": {
+        "from": {
+          "event": "hover-ref.demo",
+          "offsetMs": -500
+        },
+        "to": {
+          "event": "hover-ref.post-demo",
+          "offsetMs": 300
+        }
+      }
+    },
+    {
+      "id": "hover-column",
+      "frame": "hover-column",
+      "useVideo": true,
+      "caption": "Column Intelligence — type, origin CTE & lineage",
+      "duration": {
+        "from": {
+          "event": "hover-column.demo",
+          "offsetMs": -500
+        },
+        "to": {
+          "event": "hover-column.post-demo",
+          "offsetMs": 300
+        }
+      }
+    },
+    {
+      "id": "completion",
+      "frame": "completion",
+      "useVideo": true,
+      "caption": "Completion — all models available inside ref()",
+      "duration": {
+        "from": {
+          "event": "completion.demo",
+          "offsetMs": -500
+        },
+        "to": {
+          "event": "completion.post-demo",
+          "offsetMs": 300
+        }
+      }
+    },
+    {
+      "id": "rename-symbol",
+      "frame": "rename-symbol",
+      "useVideo": true,
+      "caption": "Rename Symbol — renames CTE across all references",
+      "duration": {
+        "from": {
+          "event": "rename-symbol.demo",
+          "offsetMs": -500
+        },
+        "to": {
+          "event": "rename-symbol.post-demo",
+          "offsetMs": 300
+        }
+      }
+    },
+    {
+      "id": "diagnostics",
+      "frame": "diagnostics",
+      "useVideo": true,
+      "caption": "Diagnostics — unknown ref() flagged in real time",
+      "duration": {
+        "from": {
+          "event": "diagnostics.demo",
+          "offsetMs": -500
+        },
+        "to": {
+          "event": "diagnostics.post-demo",
+          "offsetMs": 300
+        }
+      }
+    },
+    {
+      "id": "document-symbols",
+      "frame": "document-symbols",
+      "caption": "Outline — CTE tree with columns in every scope",
+      "duration": {
+        "from": {
+          "segment": "document-symbols",
+          "at": "start",
+          "offsetMs": 0
+        },
+        "to": {
+          "segment": "document-symbols",
+          "at": "end",
+          "offsetMs": 0
+        }
+      }
+    },
+    {
+      "id": "go-to-definition",
+      "frame": "go-to-definition",
+      "useVideo": true,
+      "caption": "Go to Definition — Ctrl+Click to jump to source",
+      "duration": {
+        "from": {
+          "event": "go-to-definition.demo",
+          "offsetMs": -500
+        },
+        "to": {
+          "event": "go-to-definition.post-demo",
+          "offsetMs": 300
+        }
+      }
+    },
+    {
+      "id": "find-all-references",
+      "frame": "find-all-references",
+      "useVideo": true,
+      "caption": "Find All References — all models using this source",
+      "duration": {
+        "from": {
+          "event": "find-all-references.demo",
+          "offsetMs": -500
+        },
+        "to": {
+          "event": "find-all-references.post-demo",
+          "offsetMs": 300
+        }
+      }
+    },
+    {
+      "id": "call-hierarchy",
+      "frame": "call-hierarchy",
+      "caption": "Call Hierarchy — full upstream/downstream model tree",
+      "duration": {
+        "from": {
+          "segment": "call-hierarchy",
+          "at": "start",
+          "offsetMs": 0
+        },
+        "to": {
+          "segment": "call-hierarchy",
+          "at": "end",
+          "offsetMs": 0
+        }
+      }
+    },
+    {
+      "id": "workspace-symbols",
+      "frame": "workspace-symbols",
+      "caption": "Workspace Symbols (Ctrl+T) — search all models",
+      "duration": {
+        "from": {
+          "segment": "workspace-symbols",
+          "at": "start",
+          "offsetMs": 0
+        },
+        "to": {
+          "segment": "workspace-symbols",
+          "at": "end",
+          "offsetMs": 0
+        }
+      }
+    },
+    {
+      "id": "lineage-graph",
+      "frame": "lineage-graph",
+      "caption": "Lineage Graph — interactive DAG",
+      "duration": {
+        "from": {
+          "segment": "lineage-graph",
+          "at": "start",
+          "offsetMs": 0
+        },
+        "to": {
+          "segment": "lineage-graph",
+          "at": "end",
+          "offsetMs": 0
+        }
+      }
+    },
+    {
+      "id": "lineage-column",
+      "frame": "lineage-column",
+      "useVideo": true,
+      "caption": "Column Lineage — trace column through upstream models",
+      "duration": {
+        "from": {
+          "event": "lineage-column.demo",
+          "offsetMs": -500
+        },
+        "to": {
+          "event": "lineage-column.post-demo",
+          "offsetMs": 300
+        }
+      }
+    },
+    {
+      "id": "profiler",
+      "frame": "profiler",
+      "useVideo": true,
+      "playbackSpeed": 2.5,
+      "caption": "Profiler — per-CTE row counts & timing",
+      "duration": {
+        "from": {
+          "event": "profiler.demo",
+          "offsetMs": -500
+        },
+        "to": {
+          "event": "profiler.post-demo",
+          "offsetMs": 300
+        }
+      }
+    },
+    {
+      "id": "query-results",
+      "frame": "query-results",
+      "useVideo": true,
+      "caption": "Query Results — run SQL and browse results inline",
+      "duration": {
+        "from": {
+          "event": "query-results.demo",
+          "offsetMs": -500
+        },
+        "to": {
+          "event": "query-results.post-demo",
+          "offsetMs": 300
+        }
+      }
+    }
+  ]
+}

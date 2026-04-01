@@ -104,6 +104,23 @@ describe('blankJinja', () => {
 		expect(blankJinja(tag)).toBe(' '.repeat(tag.length));
 	});
 
+	it('blanks var() to _ placeholder (VAR is a SQL reserved word)', () => {
+		// {{ var("latest_ratings") }} must NOT produce `var ...` — VAR is an aggregate
+		// function in DuckDB and causes sqlglot parse errors in SELECT position.
+		const tag = '{{ var("latest_ratings") }}';
+		const result = blankJinja(tag);
+		expect(result.length).toBe(tag.length);
+		expect(result[0]).toBe('_');
+		expect(result.slice(1)).toBe(' '.repeat(tag.length - 1));
+	});
+
+	it('blanks env_var() to _ placeholder', () => {
+		const tag = '{{ env_var("MY_VAR") }}';
+		const result = blankJinja(tag);
+		expect(result.length).toBe(tag.length);
+		expect(result[0]).toBe('_');
+	});
+
 	it('blanks exceptions() to spaces', () => {
 		const tag = '{{ exceptions.raise_compiler_error("msg") }}';
 		// MACRO_TAG_RE captures the last name component after '.', which is 'raise_compiler_error'
@@ -269,5 +286,112 @@ describe('blankJinja', () => {
 
 	it('returns an empty string unchanged', () => {
 		expect(blankJinja('')).toBe('');
+	});
+
+	// ── Nested {{ }} tags ─────────────────────────────────────────────────
+	// In dbt, {{ config(post_hook="COPY {{ this }} TO '...'") }} is valid:
+	// the inner {{ this }} is a literal string inside the outer tag's argument,
+	// not a separate Jinja expression.  The blanker must treat the outer tag as
+	// one unit and blank it entirely to spaces (config is a STATEMENT_MACRO).
+
+	it('blanks config tag that contains {{ this }} in post_hook string', () => {
+		const sql = '{{ config(post_hook="COPY {{ this }} TO \'output.parquet\'") }}';
+		const result = blankJinja(sql);
+		expect(result.length).toBe(sql.length);
+		// Entire outer tag (including inner {{ this }}) must become spaces.
+		expect(result.trim()).toBe('');
+		expect(result.includes('{{')).toBe(false);
+	});
+
+	it('blanks multiline config with nested {{ }} in post_hook — real season_summary pattern', () => {
+		const sql = [
+			'{{',
+			'    config(',
+			'        materialized="table",',
+			'        post_hook="COPY {{ this }} TO \'../data/output.parquet\'",',
+			'    )',
+			'}}',
+		].join('\n');
+		const result = blankJinja(sql);
+		expect(result.length).toBe(sql.length);
+		// Newlines preserved; all other chars spaces.
+		for (let i = 0; i < result.length; i++) {
+			if (sql[i] === '\n') {
+				expect(result[i]).toBe('\n');
+			} else {
+				expect(result[i]).toBe(' ');
+			}
+		}
+	});
+
+	it('correctly blanks adjacent tags when nested {{ }} appears in the first', () => {
+		const prefix = '{{ config(post_hook="{{ this }}") }}';
+		const suffix = ' {{ ref(\'orders\') }}';
+		const sql = prefix + suffix;
+		const result = blankJinja(sql);
+		expect(result.length).toBe(sql.length);
+		// config tag → all spaces
+		expect(result.slice(0, prefix.length).trim()).toBe('');
+		// ref tag → 'orders' padded
+		expect(result.slice(prefix.length + 1)).toBe(padTo('orders', suffix.length - 1));
+	});
+
+	it('handles multiple levels of {{ }} nesting', () => {
+		const sql = '{{ outer(inner="{{ a() }} text {{ b() }}") }}';
+		const result = blankJinja(sql);
+		expect(result.length).toBe(sql.length);
+		// outer is not a STATEMENT_MACRO — treated as identifier 'outer'
+		expect(result.startsWith('outer')).toBe(true);
+		expect(result.includes('{{')).toBe(false);
+	});
+
+	// ── SQL characters that look like Jinja delimiters ────────────────────
+
+	it('ignores single { and } characters in plain SQL', () => {
+		// DuckDB struct literal — single braces, not Jinja
+		const sql = "select {'key': 1} as s, {{ ref('orders') }} as o";
+		const result = blankJinja(sql);
+		expect(result.length).toBe(sql.length);
+		// The struct literal is untouched — only the {{ ref(...) }} is blanked
+		expect(result.includes("{'key': 1}")).toBe(true);
+		expect(result.includes('orders')).toBe(true);
+	});
+
+	it('ignores { } in SQL outside any Jinja tag', () => {
+		const sql = 'select {col: val} from {{ ref(\'t\') }}';
+		const result = blankJinja(sql);
+		expect(result.length).toBe(sql.length);
+		expect(result.startsWith('select {col: val} from ')).toBe(true);
+	});
+
+	it('handles {{ }} inside a Jinja tag string arg alongside outer SQL braces', () => {
+		const sql = "{{ config(post_hook=\"{{ this }}\") }} select {x: 1}";
+		const result = blankJinja(sql);
+		expect(result.length).toBe(sql.length);
+		// config tag (including nested {{ this }}) → all spaces
+		const configEnd = "{{ config(post_hook=\"{{ this }}\") }}".length;
+		expect(result.slice(0, configEnd).trim()).toBe('');
+		// SQL after the tag is untouched
+		expect(result.slice(configEnd)).toBe(' select {x: 1}');
+	});
+
+	// ── Known limitation: literal }} inside a string arg ─────────────────
+	// The depth counter cannot distinguish a literal `}}` inside a string
+	// from a real Jinja closing `}}`.  This documents the current behaviour
+	// rather than asserting it works perfectly — the pattern is extremely
+	// rare in practice and would also confuse Jinja's own template engine.
+
+	it('documents: literal }} inside a string arg inside a tag stops early (known limitation)', () => {
+		// {{ config(x="has }} in string") }}
+		// depth counter hits the inner }} first → stops there
+		const sql = '{{ config(x="has }} in string") }}';
+		const result = blankJinja(sql);
+		// The scan stops at the inner }}, so the rest is left as raw text.
+		// We assert length is preserved (the partial tag was still blanked).
+		expect(result.length).toBe(sql.length);
+		// The part after the premature close is NOT blanked — document this.
+		expect(result.slice('{{ config(x="has '.length + 2)).not.toBe(
+			' '.repeat(sql.length - '{{ config(x="has '.length - 2),
+		);
 	});
 });

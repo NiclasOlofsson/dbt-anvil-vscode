@@ -1,9 +1,8 @@
 import * as vscode from 'vscode';
-import type { ParseService } from '../services/parse-service';
 import type { DatabaseProvider, CancelSignal, QueryHints } from '../providers/database/database-provider';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
-import type { CompileCache } from './compile-cache';
+import type { DbtQueryService } from '../services/dbt-query-service';
 import { Priority } from './execution-service';
 import type { CteProfile, ProfileResult } from './profiler-types';
 import type { ProfileResultPersistence } from './profile-result-persistence';
@@ -41,10 +40,9 @@ export class ModelProfiler implements vscode.Disposable {
 	private _persistence?: ProfileResultPersistence;
 
 	constructor(
-		private readonly _parseService: ParseService,
+		private readonly _dbtQueryService: DbtQueryService,
 		private readonly _dbProvider: DatabaseProvider,
 		private readonly _indexer: ManifestIndexer,
-		private readonly _compileCache: CompileCache,
 		private readonly _logger: ILogger,
 	) {}
 
@@ -170,25 +168,19 @@ export class ModelProfiler implements vscode.Disposable {
 		onProgress: (partial: ProfileResult) => void,
 		token?: vscode.CancellationToken,
 	): Promise<ProfileResult> {
-		const adapterType = this._indexer.index?.adapterType ?? 'ansi';
-
 		// 1. Compile the model once — reuses CompileCache if already compiled.
 		// This gives us clean SQL with all Jinja expanded, which we parse and slice
 		// instead of sending raw Jinja per-query. Eliminates N compile_inline calls.
 		this._logger.info(`Profiler: compiling ${rawNode.name}...`);
-		const compiledSql = await this._compileCache.ensureCompiled(
-			uniqueId, rawNode.name, this._indexer.projectDir, rawNode.original_file_path,
-		);
-		if (!compiledSql) {
+		const compiled = await this._dbtQueryService.getCompiledCtes(uniqueId);
+		if (!compiled) {
 			throw new Error(`Profiler: could not compile '${rawNode.name}'`);
 		}
+		const { compiledSql, ctes } = compiled;
 
-		// 2. Parse CTE names + endLine positions from compiled SQL.
+		// 2. CTE names + endLine positions come from the sqlglot parse in getCompiledCtes.
 		// Compiled SQL is clean (no Jinja), giving reliable line positions for query slicing.
-		// Source line positions for decorations/navigation are the parse service's concern.
-		const compiledCtes = await this._parseService.parseSqlString(compiledSql, adapterType);
-		const compiledEndLineByName = new Map(compiledCtes.map(c => [c.name, c.endLine]));
-		const ctes = compiledCtes;
+		const compiledEndLineByName = new Map(ctes.map(c => [c.name, c.endLine]));
 
 		this._logger.info(`Profiler: ${rawNode.name} has ${ctes.length} CTEs, starting queries`);
 
@@ -205,7 +197,7 @@ export class ModelProfiler implements vscode.Disposable {
 
 		// 3. Warmup: run the full model query once to prime the warehouse's IO cache
 		// (Delta Parquet files → SSD) so CTE timings reflect compute, not cold storage.
-		const lastCompiledCte = compiledCtes[compiledCtes.length - 1];
+		const lastCompiledCte = ctes[ctes.length - 1];
 		const fullQuery = lastCompiledCte
 			? _buildFullModelQuery(lines, lastCompiledCte.endLine, runTs)
 			: _buildNoCteFullModelQuery(compiledSql, runTs);

@@ -3,6 +3,7 @@ import type { ManifestIndexer } from '../../indexing/manifest-indexer';
 import type { ModelProfiler } from '../../dbt/model-profiler';
 import type { DbtPathResolver } from '../../dbt/dbt-path-resolver';
 import type { QueryRunner } from '../../dbt/query-runner';
+import type { ParseService } from '../../services/parse-service';
 import type { ILogger } from '../../types/logger';
 import { splitStatements } from '../../dbt/statement-splitter';
 
@@ -21,6 +22,7 @@ export class SqlCodeLensProvider implements vscode.CodeLensProvider {
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
+		private readonly parseService: ParseService,
 	) {}
 
 	setProfiler(profiler: ModelProfiler): void {
@@ -44,12 +46,12 @@ export class SqlCodeLensProvider implements vscode.CodeLensProvider {
 	provideCodeLenses(
 		document: vscode.TextDocument,
 		_token: vscode.CancellationToken,
-	): vscode.CodeLens[] {
+	): vscode.CodeLens[] | Thenable<vscode.CodeLens[]> {
 		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.codeLens', true)) return [];
 		return this._sqlCodeLenses(document);
 	}
 
-	private _sqlCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {
+	private async _sqlCodeLenses(document: vscode.TextDocument): Promise<vscode.CodeLens[]> {
 		const category = this._pathResolver?.classifyFile(document.fileName);
 		const isManifestModel = category === 'model' || category === 'seed' || category === 'snapshot';
 
@@ -60,6 +62,21 @@ export class SqlCodeLensProvider implements vscode.CodeLensProvider {
 		const modelName = this._getModelName(document);
 		const topRange = new vscode.Range(0, 0, 0, 0);
 		this.logger.debug(`CodeLens: adding lenses for model '${modelName}'`);
+
+		const modelId = this.indexer.findModelByFilePath(document.fileName);
+		const adapterType = this.indexer.index?.adapterType ?? 'ansi';
+		const model = modelId
+			? await this.parseService.getDocumentModel(document, adapterType, { skipEnrichment: true })
+			: null;
+
+		const cteLenses = (model?.ctes ?? []).map(cte =>
+			new vscode.CodeLens(new vscode.Range(cte.line, 0, cte.line, 0), {
+				title: 'Query CTE...',
+				command: 'dbt-studio.queryCte',
+				arguments: [modelId, cte.name],
+				tooltip: `Query CTE: ${cte.name}`,
+			}),
+		);
 
 		return [
 			new vscode.CodeLens(topRange, {
@@ -83,6 +100,7 @@ export class SqlCodeLensProvider implements vscode.CodeLensProvider {
 				tooltip: `dbt compile -s ${modelName}`,
 			}),
 			...this._profileLens(document, modelName!, topRange),
+			...cteLenses,
 		];
 	}
 

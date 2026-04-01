@@ -79,7 +79,7 @@ export class DescribeCache {
 		qualifiedName?: string,
 	): Promise<string[] | undefined> {
 		const cached = this.indexer.getColumns(uniqueId);
-		if (cached) {
+		if (cached && !this.indexer.isManifestOnly(uniqueId)) {
 			this.logger.trace(`DescribeCache: hit for ${uniqueId}`);
 			return cached;
 		}

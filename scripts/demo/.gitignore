@@ -1,0 +1,8 @@
+# Outputs — ignored from git
+../../temp_auto/demo-frames/
+../../temp_auto/demo-video/
+../../temp_auto/demo-userdata/
+../../temp_auto/demo-recording.json
+../../temp_auto/demo-render-temp.gif
+../../images/demo.gif
+../../images/demo.webp

@@ -113,6 +113,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 				this._columnCollection.delete(doc.uri);
 				this._sqlglotCollection.delete(doc.uri);
 				this._syntaxErrorDimRanges.delete(doc.uri.toString());
+				this._updateStatusBar();
 			}),
 			vscode.workspace.onDidChangeConfiguration((e) => {
 				if (e.affectsConfiguration('dbt-studio.providers.sql.diagnostics')) {

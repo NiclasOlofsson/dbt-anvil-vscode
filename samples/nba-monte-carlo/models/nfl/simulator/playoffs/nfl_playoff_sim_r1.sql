@@ -1,0 +1,49 @@
+-- model name: nfl_playoff_sim_r1
+with
+    cte_seed as (
+        select * from {{ ref('nfl_initialize_seeding') }}
+    ),
+    cte_step_1 as (
+        select
+            r.scenario_id,
+            s.game_id,
+            s.week_number as series_id,
+            s.visiting_team as visitor_key,
+            s.home_team as home_key,
+            ev.winning_team as visiting_team,
+            ev.elo_rating as visiting_team_elo_rating,
+            eh.winning_team as home_team,
+            eh.elo_rating as home_team_elo_rating,
+            {{ elo_calc('EH.elo_rating', 'EV.elo_rating', 's.game_site_adjustment') }} as home_team_win_probability,
+            r.rand_result,
+            lr.winning_team as actual_winner,
+            lr.include_actuals,
+            case
+                when lr.include_actuals = 'true' then lr.winning_team
+                when {{ elo_calc('EH.elo_rating', 'EV.elo_rating', 's.game_site_adjustment') }} >= r.rand_result then eh.winning_team
+                else ev.winning_team
+            end as winning_team
+        from {{ ref('nfl_schedules') }} s
+        left join {{ ref('nfl_random_num_gen') }} r on r.game_id = s.game_id
+        left join cte_seed eh on s.home_team = eh.seed and r.scenario_id = eh.scenario_id
+        left join cte_seed ev on s.visiting_team = ev.seed and r.scenario_id = ev.scenario_id
+        left join {{ ref('nfl_latest_playoff_results') }} lr
+            on lr.week_number = s.week_number
+            and ((lr.winning_team = eh.winning_team and lr.losing_team = ev.winning_team)
+                or (lr.winning_team = ev.winning_team and lr.losing_team = eh.winning_team))
+        where s.type = 'playoffs_r1'
+    )
+
+select
+    e.scenario_id,
+    e.series_id,
+    e.game_id,
+    e.winning_team,
+    case when e.winning_team = e.home_team then e.home_team_elo_rating else e.visiting_team_elo_rating end as elo_rating,
+    case when e.winning_team = e.home_team then e.home_key else e.visitor_key end as seed,
+    coalesce(e.include_actuals, false) as include_actuals,
+    {{ var('sim_start_game_id') }} as sim_start_game_id
+from cte_step_1 e
+-- single-elimination; no series crosswalk needed
+
+

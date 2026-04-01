@@ -20,6 +20,7 @@ function createMockIndexer(storedColumns?: string[]): ManifestIndexer {
 	return {
 		getColumns: vi.fn((uid: string) => store.get(uid) ?? undefined),
 		setColumns: vi.fn((uid: string, cols: string[]) => { store.set(uid, cols); }),
+		isManifestOnly: vi.fn(() => false),
 	} as unknown as ManifestIndexer;
 }
 

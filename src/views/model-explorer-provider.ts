@@ -70,7 +70,7 @@ export class ModelExplorerProvider implements vscode.TreeDataProvider<ExplorerIt
 		private readonly projectDir: string,
 		private readonly globalState: vscode.Memento,
 	) {
-		this._followActive = globalState.get<boolean>('dbt-studio.explorerFollowActive', true);
+		this._followActive = globalState.get<boolean>('dbt-studio.explorerFollowActive', false);
 	}
 
 	get followActive(): boolean {
@@ -132,7 +132,7 @@ export class ModelExplorerProvider implements vscode.TreeDataProvider<ExplorerIt
 	private _registerParents(parent: ExplorerItem | undefined, children: ExplorerItem[]): void {
 		for (const child of children) {
 			this._parentMap.set(child, parent);
-			if (child instanceof ModelItem) {
+			if (child instanceof ModelItem && !this._modelItemMap.has(child.model.uniqueId)) {
 				this._modelItemMap.set(child.model.uniqueId, child);
 			}
 			if (child instanceof GroupItem) {

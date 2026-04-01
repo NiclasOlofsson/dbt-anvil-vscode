@@ -38,6 +38,7 @@ import { SqlCodeActionProvider } from './providers/sql/code-action-provider';
 import { ConfigCodeActionProvider } from './providers/common/config-code-action-provider';
 import { DbtCallHierarchyProvider } from './providers/sql/call-hierarchy-provider';
 import { ParseService } from './services/parse-service';
+import { DbtQueryService } from './services/dbt-query-service';
 import { StatusBarManager } from './views/status-bar';
 import { DbtDiagnosticsProvider } from './providers/diagnostics-provider';
 import { VsTestController } from './views/vs-test-controller';
@@ -168,7 +169,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	manifestWatcher.setCompileCache(compileCache);
 
 	// -------- Model profiler --------
-	const modelProfiler = new ModelProfiler(parseService, databaseProvider, manifestIndexer, compileCache, logger);
+	const dbtQueryService = new DbtQueryService(compileCache, parseService, manifestIndexer);
+	const modelProfiler = new ModelProfiler(dbtQueryService, databaseProvider, manifestIndexer, logger);
 	const profileResultPersistence = new ProfileResultPersistence(context, logger);
 	modelProfiler.initPersistence(profileResultPersistence);
 	container.setModelProfiler(modelProfiler);
@@ -182,7 +184,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	void vscode.commands.executeCommand('setContext', 'workspaceHasDBT', manifestLoader.manifestExists());
 
 	// -------- Register Copilot language model tools --------
-	registerLanguageModelTools(context, manifestIndexer, executionService, manifestLoader, logger, compileCache, databaseProvider, describeCache);
+	registerLanguageModelTools(context, manifestIndexer, executionService, manifestLoader, logger, compileCache, databaseProvider, describeCache, dbtQueryService);
 
 	// -------- Register tree views --------
 	const modelExplorerProvider = new ModelExplorerProvider(manifestIndexer, logger, projectDir, context.globalState);
@@ -281,7 +283,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const yamlHoverProvider = new YamlHoverProvider(manifestIndexer, logger);
 	const referenceProvider = new DbtReferenceProvider(manifestIndexer, logger, parseService);
 	const renameProvider = new DbtRenameProvider(manifestIndexer, manifestLoader, logger, parseService);
-	const sqlCodeLensProvider = new SqlCodeLensProvider(manifestIndexer, logger);
+	const sqlCodeLensProvider = new SqlCodeLensProvider(manifestIndexer, logger, parseService);
 	sqlCodeLensProvider.setProfiler(modelProfiler);
 	sqlCodeLensProvider.setPathResolver(pathResolver);
 	const yamlCodeLensProvider = new YamlCodeLensProvider(manifestIndexer, logger);
@@ -707,6 +709,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.commands.registerCommand('dbt-studio.executeStatement', async (sql: string) => {
 			if (!sql) return;
 			await queryRunner.executeSql(sql);
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.queryCte', async (modelId: string, cteName: string) => {
+			if (!modelId || !cteName) return;
+			const rawNode = manifestIndexer.getRawNode(modelId);
+			if (!rawNode || rawNode.resource_type !== 'model') return;
+			const cteSql = await dbtQueryService.buildCteSql(modelId, cteName);
+			if (!cteSql) {
+				void vscode.window.showErrorMessage(`CTE '${cteName}' not found in compiled model '${rawNode.name}'`);
+				return;
+			}
+			await queryRunner.executeSql(cteSql);
+		}),
+
+		vscode.commands.registerCommand('dbt-studio.queryModel', async () => {
+			const editor = vscode.window.activeTextEditor;
+			if (!editor) return;
+			const modelId = manifestIndexer.findModelByFilePath(editor.document.fileName);
+			if (!modelId) return;
+			const rawNode = manifestIndexer.getRawNode(modelId);
+			if (!rawNode || rawNode.resource_type !== 'model') return;
+			const compiledSql = await compileCache.ensureCompiled(
+				rawNode.unique_id, rawNode.name, manifestIndexer.projectDir, rawNode.original_file_path,
+			);
+			if (!compiledSql) {
+				void vscode.window.showErrorMessage(`Could not compile model '${rawNode.name}'`);
+				return;
+			}
+			await queryRunner.executeSql(compiledSql);
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.queryResult.moveToPanel', () => {

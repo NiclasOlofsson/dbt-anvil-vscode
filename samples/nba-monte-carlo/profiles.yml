@@ -1,0 +1,11 @@
+# DuckDB config reference:
+config:
+  send_anonymous_usage_stats: False
+  use_colors: True
+default:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      threads: 1
+      path: nba-monte-carlo.duckdb

@@ -28,6 +28,19 @@
 			]
 		},
 		{
+			"name": "Run Extension (nba-monte-carlo)",
+			"type": "extensionHost",
+			"request": "launch",
+			"internalConsoleOptions": "neverOpen",
+			"args": [
+				"--extensionDevelopmentPath=${workspaceFolder}",
+				"--folder-uri=${workspaceFolder}/samples/nba-monte-carlo"
+			],
+			"outFiles": [
+				"${workspaceFolder}/dist/**/*.js"
+			]
+		},
+		{
 			"name": "Run Extension (Watch)",
 			"type": "extensionHost",
 			"request": "launch",

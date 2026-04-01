@@ -2,7 +2,7 @@
 	"name": "dbt-studio-vscode",
 	"displayName": "dbt Studio",
 	"description": "A full-featured development environment and an AI-powered assistant — the best of both worlds for analytics engineering",
-	"version": "0.1.5",
+	"version": "0.1.6",
 	"publisher": "nickeolofsson",
 	"license": "MIT",
 	"icon": "resources/icons/dbt-studio-128.png",
@@ -85,6 +85,15 @@
 				"command": "dbt-studio.compileModel",
 				"title": "Compile Model",
 				"icon": "$(gear)"
+			},
+			{
+				"command": "dbt-studio.queryModel",
+				"title": "Query Model",
+				"icon": "$(zap)"
+			},
+			{
+				"command": "dbt-studio.queryCte",
+				"title": "Query CTE"
 			},
 			{
 				"command": "dbt-studio.showLineage",
@@ -334,7 +343,9 @@
 			{
 				"type": "dbt-sql",
 				"label": "SQL",
-				"languages": ["jinja-sql"],
+				"languages": [
+					"jinja-sql"
+				],
 				"configurationAttributes": {
 					"launch": {
 						"properties": {
@@ -345,13 +356,20 @@
 							},
 							"scope": {
 								"type": "string",
-								"enum": ["cursor", "all"],
+								"enum": [
+									"cursor",
+									"all"
+								],
 								"description": "What to execute: 'cursor' runs the statement under the cursor or selection, 'all' runs all statements in the file.",
 								"default": "cursor"
 							},
 							"resultLocation": {
 								"type": "string",
-								"enum": ["preserve", "editor", "panel"],
+								"enum": [
+									"preserve",
+									"editor",
+									"panel"
+								],
 								"description": "Where to show results: 'preserve' keeps the current location, 'editor' forces an editor tab, 'panel' forces the bottom panel. Overrides the extension setting for this launch configuration."
 							}
 						}
@@ -403,27 +421,27 @@
 			"editor/title": [
 				{
 					"command": "dbt-studio.executeQuery",
-					"when": "resourceLangId == jinja-sql && !(dbt-studio.fileCategory =~ /model|seed|snapshot/)",
+					"when": "resourceLangId == jinja-sql && dbt-studio.fileCategory && !(dbt-studio.fileCategory =~ /model|seed|snapshot/)",
 					"group": "navigation@1"
 				},
 				{
 					"command": "dbt-studio.executeAll",
-					"when": "resourceLangId == jinja-sql && !(dbt-studio.fileCategory =~ /model|seed|snapshot/)",
+					"when": "resourceLangId == jinja-sql && dbt-studio.fileCategory && !(dbt-studio.fileCategory =~ /model|seed|snapshot/)",
 					"group": "navigation@2"
 				},
 				{
 					"command": "dbt-studio.queryResult.moveToPanel",
-					"when": "dbt-studio.queryResultVisible && !dbt-studio.queryResultInPanel",
+					"when": "dbt-studio.queryResultVisible && !dbt-studio.queryResultInPanel && resourceLangId != jinja-sql",
 					"group": "navigation@99"
 				},
 				{
 					"command": "dbt-studio.queryResult.moveToEditor",
-					"when": "dbt-studio.queryResultVisible && dbt-studio.queryResultInPanel",
+					"when": "dbt-studio.queryResultVisible && dbt-studio.queryResultInPanel && resourceLangId != jinja-sql",
 					"group": "navigation@99"
 				},
 				{
 					"command": "dbt-studio.queryResult.toggleStats",
-					"when": "dbt-studio.queryResultVisible",
+					"when": "dbt-studio.queryResultVisible && resourceLangId != jinja-sql",
 					"group": "navigation@98"
 				},
 				{
@@ -467,13 +485,18 @@
 					"group": "navigation@4"
 				},
 				{
+					"command": "dbt-studio.queryModel",
+					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-studio.fileCategory =~ /model|seed|snapshot/",
+					"group": "navigation@5"
+				},
+				{
 					"command": "dbt-studio.profiler.profileModel",
 					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-studio.fileCategory =~ /model|seed|snapshot/ && !dbt-studio.profilingActive",
 					"group": "navigation@5"
 				},
 				{
 					"command": "dbt-studio.profiler.cancelProfiling",
-					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-studio.profilingActive",
+					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-studio.fileCategory =~ /model|seed|snapshot/ && dbt-studio.profilingActive",
 					"group": "navigation@5"
 				}
 			],
@@ -734,7 +757,11 @@
 					},
 					"dbt-studio.queryEditor.resultLocation": {
 						"type": "string",
-						"enum": ["preserve", "editor", "panel"],
+						"enum": [
+							"preserve",
+							"editor",
+							"panel"
+						],
 						"enumDescriptions": [
 							"Keep results wherever they already are (editor tab or panel).",
 							"Always show results in an editor tab, split below the active file.",
@@ -1302,7 +1329,12 @@
 		"typecheck": "tsc --noEmit",
 		"vscode:prepublish": "tsx .esbuild.ts",
 		"package:marketplace": "npm version patch && vsce package --allow-proposed-apis contribLanguageModelToolSets",
-		"publish:marketplace": "npm version patch && vsce publish --allow-proposed-apis contribLanguageModelToolSets"
+		"publish:marketplace": "npm version patch && vsce publish --allow-proposed-apis contribLanguageModelToolSets",
+		"demo:capture": "node scripts/demo/capture-demo.mjs",
+		"demo:generate": "node scripts/demo/generate-demo.mjs",
+		"demo:render:gif": "node scripts/demo/generate-demo.mjs --config scripts/demo/rendering-config-gif.json",
+		"demo:render:mp4": "node scripts/demo/generate-demo.mjs --config scripts/demo/rendering-config-mp4.json",
+		"demo:render:webp": "node scripts/demo/generate-demo.mjs --config scripts/demo/rendering-config-webp.json && npm run demo:render:mp4"
 	},
 	"devDependencies": {
 		"@resvg/resvg-js": "^2.6.2",
@@ -1318,10 +1350,13 @@
 		"eslint-import-resolver-typescript": "^4.4.4",
 		"eslint-plugin-import": "^2.32.0",
 		"eslint-plugin-jsdoc": "^62.8.1",
+		"gif-encoder-2": "^1.0.5",
 		"husky": "^9.1.7",
+		"jimp": "^1.6.0",
 		"lint-staged": "^16.4.0",
 		"nodemon": "^3.1.10",
 		"npm-run-all": "^4.1.5",
+		"playwright": "^1.58.2",
 		"rimraf": "^6.0.1",
 		"tsx": "^4.20.3",
 		"typescript": "^6.0.2",

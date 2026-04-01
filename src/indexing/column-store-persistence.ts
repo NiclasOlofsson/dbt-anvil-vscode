@@ -5,7 +5,7 @@ import type { ManifestIndexer } from './manifest-indexer';
 import type { ILogger } from '../types/logger';
 
 interface PersistedColumnStore {
-	version: 1;
+	version: 2;
 	columns: Record<string, string[]>;
 	checksums: Record<string, string>;
 }
@@ -41,7 +41,7 @@ export class ColumnStorePersistence {
 			if (!fs.existsSync(this._filePath)) return;
 			const raw = fs.readFileSync(this._filePath, 'utf8');
 			const data = JSON.parse(raw) as PersistedColumnStore;
-			if (data.version !== 1) return;
+			if (data.version !== 2) return;
 			indexer.seedFromCache({ columns: data.columns, checksums: data.checksums });
 			this.logger.info(`ColumnStore: restored ${Object.keys(data.columns).length} entries from disk`);
 		} catch (err) {
@@ -58,7 +58,7 @@ export class ColumnStorePersistence {
 			const data = indexer.exportForCache();
 			if (Object.keys(data.columns).length === 0) return;
 			fs.mkdirSync(path.dirname(this._filePath), { recursive: true });
-			const payload: PersistedColumnStore = { version: 1, ...data };
+			const payload: PersistedColumnStore = { version: 2, ...data };
 			fs.writeFileSync(this._filePath, JSON.stringify(payload), 'utf8');
 			this.logger.debug(`ColumnStore: saved ${Object.keys(data.columns).length} entries to disk`);
 		} catch (err) {

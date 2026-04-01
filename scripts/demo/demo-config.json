@@ -1,0 +1,92 @@
+{
+  "outputWidth": 1920,
+  "captionHeightPx": 48,
+  "splash": {
+    "logoPath": "resources/icons/dbt-studio-512.png",
+    "durationMs": 2000,
+    "backgroundColor": "#000000"
+  },
+  "watermark": {
+    "logoPath": "resources/icons/dbt-studio-128.png",
+    "sizePx": 32,
+    "position": "bottom-right",
+    "opacity": 0.6
+  },
+  "frames": [
+    {
+      "file": "temp_auto/demo-frames/01-model-explorer.png",
+      "caption": "Model Explorer — full project DAG",
+      "durationMs": 3500
+    },
+    {
+      "file": "temp_auto/demo-frames/02-codelens.png",
+      "caption": "CodeLens — Run · Build · Test · Compile · Profile",
+      "durationMs": 3000
+    },
+    {
+      "file": "temp_auto/demo-frames/03-hover-ref.png",
+      "caption": "Hover — model preview with columns & description",
+      "durationMs": 3500
+    },
+    {
+      "file": "temp_auto/demo-frames/04-hover-column.png",
+      "caption": "Column Intelligence — type, origin CTE & lineage",
+      "durationMs": 3500
+    },
+    {
+      "file": "temp_auto/demo-frames/05-completion.png",
+      "caption": "Completion — all models available inside ref()",
+      "durationMs": 3500
+    },
+    {
+      "file": "temp_auto/demo-frames/06-diagnostics.png",
+      "caption": "Diagnostics — unknown ref() flagged in real time",
+      "durationMs": 3500
+    },
+    {
+      "file": "temp_auto/demo-frames/07-document-symbols.png",
+      "caption": "Outline — CTE tree with columns in every scope",
+      "durationMs": 3000
+    },
+    {
+      "file": "temp_auto/demo-frames/08-go-to-definition.png",
+      "caption": "Go to Definition — jump to model source file",
+      "durationMs": 3000
+    },
+    {
+      "file": "temp_auto/demo-frames/09-call-hierarchy.png",
+      "caption": "Call Hierarchy — full upstream/downstream model tree",
+      "durationMs": 4000
+    },
+    {
+      "file": "temp_auto/demo-frames/10-workspace-symbols.png",
+      "caption": "Workspace Symbols (Ctrl+T) — search all models",
+      "durationMs": 3000
+    },
+    {
+      "file": "temp_auto/demo-frames/11-lineage-graph.png",
+      "caption": "Lineage Graph — interactive DAG",
+      "durationMs": 4500
+    },
+    {
+      "file": "temp_auto/demo-frames/12-lineage-column.png",
+      "caption": "Column Lineage — trace column through upstream models",
+      "durationMs": 5000
+    },
+    {
+      "file": "temp_auto/demo-frames/13-profiler.png",
+      "caption": "Profiler — per-CTE row counts & timing",
+      "durationMs": 4000
+    },
+    {
+      "file": "temp_auto/demo-frames/14-query-results.png",
+      "caption": "Query Results — run SQL and browse results inline",
+      "durationMs": 4000
+    },
+    {
+      "file": "temp_auto/demo-frames/15-rename-symbol.png",
+      "caption": "Rename Symbol — renames CTE across all references",
+      "durationMs": 3000
+    }
+  ]
+}

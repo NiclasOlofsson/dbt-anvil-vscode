@@ -1,0 +1,16 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run SQL",
+            "type": "dbt-sql",
+            "request": "launch"
+        },
+        {
+            "name": "Run All SQL",
+            "type": "dbt-sql",
+            "request": "launch",
+            "scope": "all"
+        }
+    ]
+}

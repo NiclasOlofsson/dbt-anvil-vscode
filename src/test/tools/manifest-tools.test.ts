@@ -330,6 +330,7 @@ describe('GetColumnLineageTool', () => {
 
 describe('QueryDatabaseTool', () => {
 	const token = { isCancellationRequested: false, onCancellationRequested: vi.fn() };
+	const stubDbtQueryService = {} as import('../../services/dbt-query-service').DbtQueryService;
 
 	it('returns rows from provider.query()', async () => {
 		const index = createTestIndex();
@@ -340,7 +341,7 @@ describe('QueryDatabaseTool', () => {
 			query: vi.fn().mockResolvedValue({ columns: ['id', 'name'], rows, rowCount: 2 }),
 		} as unknown as import('../../providers/database/database-provider').DatabaseProvider;
 
-		const tool = new QueryDatabaseTool(mockProvider, indexer, mockLogger);
+		const tool = new QueryDatabaseTool(mockProvider, indexer, mockLogger, stubDbtQueryService);
 		const result = await tool.invoke(
 			{ input: { sql: 'SELECT 1' }, toolInvocationToken: undefined } as never,
 			token as never,
@@ -361,7 +362,7 @@ describe('QueryDatabaseTool', () => {
 			query: querySpy,
 		} as unknown as import('../../providers/database/database-provider').DatabaseProvider;
 
-		const tool = new QueryDatabaseTool(mockProvider, indexer, mockLogger);
+		const tool = new QueryDatabaseTool(mockProvider, indexer, mockLogger, stubDbtQueryService);
 		await tool.invoke(
 			{ input: { sql: 'SELECT 42 AS n' }, toolInvocationToken: undefined } as never,
 			token as never,
@@ -378,7 +379,7 @@ describe('QueryDatabaseTool', () => {
 			query: vi.fn().mockResolvedValue({ columns: [], rows: [], rowCount: 0 }),
 		} as unknown as import('../../providers/database/database-provider').DatabaseProvider;
 
-		const tool = new QueryDatabaseTool(mockProvider, indexer, mockLogger);
+		const tool = new QueryDatabaseTool(mockProvider, indexer, mockLogger, stubDbtQueryService);
 		const result = await tool.invoke(
 			{ input: { sql: 'SELECT 1' }, toolInvocationToken: undefined } as never,
 			token as never,
@@ -398,7 +399,7 @@ describe('QueryDatabaseTool', () => {
 			query: vi.fn().mockRejectedValue(new Error('Compilation error')),
 		} as unknown as import('../../providers/database/database-provider').DatabaseProvider;
 
-		const tool = new QueryDatabaseTool(mockProvider, indexer, mockLogger);
+		const tool = new QueryDatabaseTool(mockProvider, indexer, mockLogger, stubDbtQueryService);
 		const result = await tool.invoke(
 			{ input: { sql: 'SELECT bad_column FROM missing_table' }, toolInvocationToken: undefined } as never,
 			token as never,
