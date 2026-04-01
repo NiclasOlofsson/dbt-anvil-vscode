@@ -42,18 +42,28 @@ export class DbtDatabaseProvider implements DatabaseProvider {
 			throw new Error(result.stderr || result.stdout || 'dbt show failed');
 		}
 
-		// dbt show --output json emits one JSON line: {"show": [...rows...]}
-		const showLine = result.stdout.split('\n').find(l => l.trimStart().startsWith('{"show"'));
-		if (showLine) {
-			try {
-				const data = JSON.parse(showLine.trim()) as Record<string, unknown>;
-				const rows = data['show'];
-				if (Array.isArray(rows)) {
-					const columns = rows.length > 0 ? Object.keys(rows[0] as Record<string, unknown>) : [];
-					return { columns, rows: rows as Record<string, unknown>[], rowCount: rows.length, executionTimeMs };
+		// dbt show --output json emits {"show": [...rows...]} either compact or pretty-printed.
+		// Find the first { and extract the brace-balanced JSON block.
+		const stdout = result.stdout;
+		const firstBrace = stdout.indexOf('{');
+		if (firstBrace !== -1) {
+			let depth = 0;
+			let end = -1;
+			for (let i = firstBrace; i < stdout.length; i++) {
+				if (stdout[i] === '{') depth++;
+				else if (stdout[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+			}
+			if (end !== -1) {
+				try {
+					const data = JSON.parse(stdout.slice(firstBrace, end + 1)) as Record<string, unknown>;
+					const rows = data['show'];
+					if (Array.isArray(rows)) {
+						const columns = rows.length > 0 ? Object.keys(rows[0] as Record<string, unknown>) : [];
+						return { columns, rows: rows as Record<string, unknown>[], rowCount: rows.length, executionTimeMs };
+					}
+				} catch (err) {
+					this.logger.warn(`DbtDatabaseProvider: failed to parse dbt show output: ${err}`);
 				}
-			} catch (err) {
-				this.logger.warn(`DbtDatabaseProvider: failed to parse dbt show output: ${err}`);
 			}
 		}
 

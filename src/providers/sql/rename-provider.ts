@@ -299,12 +299,8 @@ export class DbtRenameProvider implements vscode.RenameProvider {
 
 		if (kind === 'table_ref') {
 			const cteName = token.name;
-			// Update CTE definition keyword span (from ctes array)
-			const cteDef = model.ctes.find(c => c.name === cteName);
-			if (cteDef && cteDef.col !== undefined && cteDef.endCol !== undefined) {
-				edit.replace(uri, new vscode.Range(cteDef.line, cteDef.col, cteDef.line, cteDef.endCol), newName);
-			}
-			// Update all table_ref tokens with this name
+			// Update all table_ref tokens with this name — includes the definition
+			// site token emitted by the bridge, so no separate cteDef edit needed.
 			for (const t of model.tokens) {
 				if (t.type === 'table_ref' && t.name === cteName) {
 					edit.replace(uri, new vscode.Range(t.line, t.col, t.line, t.endCol), newName);

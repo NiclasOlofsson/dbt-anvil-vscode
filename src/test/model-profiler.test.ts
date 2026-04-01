@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { ParseService, DocumentModel, CteInfo } from '../services/parse-service';
+import type { CteInfo } from '../services/parse-service';
 import type { DatabaseProvider, QueryResult } from '../providers/database/database-provider';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import type { CompileCache } from '../dbt/compile-cache';
+import type { DbtQueryService } from '../services/dbt-query-service';
 import { ModelProfiler } from '../dbt/model-profiler';
 import { createMockLogger } from './helpers';
 
@@ -10,25 +10,17 @@ import { createMockLogger } from './helpers';
 // Stub factories
 // ---------------------------------------------------------------------------
 
-function makeParseService(ctes: Partial<CteInfo>[] = []): ParseService {
-	const model: Partial<DocumentModel> = {
-		ctes: ctes.map((c, i) => ({
-			name: c.name ?? `cte_${i}`,
-			line: c.line ?? i,
-			endLine: c.endLine ?? i,
-			columns: c.columns ?? [],
-		})),
-	};
+function makeDbtQueryService(ctes: Partial<CteInfo>[] = [], compiledSql = SIMPLE_SQL): DbtQueryService {
+	const cteList = ctes.map((c, i) => ({
+		name: c.name ?? `cte_${i}`,
+		line: c.line ?? i,
+		endLine: c.endLine ?? i,
+		columns: c.columns ?? [],
+	}));
 	return {
-		getDocumentModel: vi.fn().mockResolvedValue(model),
-		parseSqlString: vi.fn().mockResolvedValue(model.ctes ?? []),
-	} as unknown as ParseService;
-}
-
-function makeCompileCache(compiledSql: string = SIMPLE_SQL): CompileCache {
-	return {
-		ensureCompiled: vi.fn().mockResolvedValue(compiledSql),
-	} as unknown as CompileCache;
+		getCompiledCtes: vi.fn().mockResolvedValue({ compiledSql, ctes: cteList }),
+		buildCteSql: vi.fn(),
+	} as unknown as DbtQueryService;
 }
 
 function makeQueryResult(count: number): QueryResult {
@@ -95,10 +87,9 @@ describe('ModelProfiler — initial state', () => {
 
 	beforeEach(() => {
 		profiler = new ModelProfiler(
-			makeParseService(),
+			makeDbtQueryService(),
 			makeDbProvider([]),
 			makeIndexer('/model.sql', 'model.orders', 'orders'),
-			makeCompileCache(),
 			createMockLogger(),
 		);
 	});
@@ -115,10 +106,9 @@ describe('ModelProfiler — initial state', () => {
 		const indexer = makeIndexer('/model.sql', 'model.orders', 'orders');
 		(indexer.findModelByFilePath as ReturnType<typeof vi.fn>).mockReturnValue(undefined);
 		const p = new ModelProfiler(
-			makeParseService(),
+			makeDbtQueryService(),
 			makeDbProvider([]),
 			indexer,
-			makeCompileCache(),
 			createMockLogger(),
 		);
 		expect(p.getResultForFile('/other.sql')).toBeUndefined();
@@ -128,10 +118,9 @@ describe('ModelProfiler — initial state', () => {
 		// Quick profile to populate results
 		const dbProvider = makeDbProvider([10, 20, 30]);
 		const p = new ModelProfiler(
-			makeParseService([{ name: 'alpha', line: 0 }, { name: 'beta', line: 1 }]),
+			makeDbtQueryService([{ name: 'alpha', line: 0 }, { name: 'beta', line: 1 }]),
 			dbProvider,
 			makeIndexer('/model.sql', 'model.orders', 'orders'),
-			makeCompileCache(),
 			createMockLogger(),
 		);
 		await p.profileDocument(makeDocument('/model.sql'));
@@ -143,10 +132,9 @@ describe('ModelProfiler — initial state', () => {
 	it('clearResult removes a specific model', async () => {
 		const dbProvider = makeDbProvider([5, 10, 50]);
 		const p = new ModelProfiler(
-			makeParseService([{ name: 'alpha', line: 0 }, { name: 'beta', line: 1 }]),
+			makeDbtQueryService([{ name: 'alpha', line: 0 }, { name: 'beta', line: 1 }]),
 			dbProvider,
 			makeIndexer('/model.sql', 'model.orders', 'orders'),
-			makeCompileCache(),
 			createMockLogger(),
 		);
 		await p.profileDocument(makeDocument('/model.sql'));
@@ -168,10 +156,9 @@ describe('ModelProfiler — profileDocument success', () => {
 			100, // full model row count
 		]);
 		const profiler = new ModelProfiler(
-			makeParseService([{ name: 'alpha', line: 0 }, { name: 'beta', line: 1 }]),
+			makeDbtQueryService([{ name: 'alpha', line: 0 }, { name: 'beta', line: 1 }]),
 			dbProvider,
 			makeIndexer('/model.sql', 'model.orders', 'orders'),
-			makeCompileCache(),
 			createMockLogger(),
 		);
 
@@ -186,10 +173,9 @@ describe('ModelProfiler — profileDocument success', () => {
 	it('rowCount on each CTE comes from COUNT(*) query', async () => {
 		const dbProvider = makeDbProvider([0, 42, 7, 999]); // 0 = warmup
 		const profiler = new ModelProfiler(
-			makeParseService([{ name: 'alpha', line: 0 }, { name: 'beta', line: 1 }]),
+			makeDbtQueryService([{ name: 'alpha', line: 0 }, { name: 'beta', line: 1 }]),
 			dbProvider,
 			makeIndexer('/model.sql', 'model.orders', 'orders'),
-			makeCompileCache(),
 			createMockLogger(),
 		);
 
@@ -202,10 +188,9 @@ describe('ModelProfiler — profileDocument success', () => {
 	it('fractionOfTotal is a finite number for each CTE', async () => {
 		const dbProvider = makeDbProvider([5, 10, 100]);
 		const profiler = new ModelProfiler(
-			makeParseService([{ name: 'alpha', line: 0 }, { name: 'beta', line: 1 }]),
+			makeDbtQueryService([{ name: 'alpha', line: 0 }, { name: 'beta', line: 1 }]),
 			dbProvider,
 			makeIndexer('/model.sql', 'model.orders', 'orders'),
-			makeCompileCache(),
 			createMockLogger(),
 		);
 
@@ -218,10 +203,9 @@ describe('ModelProfiler — profileDocument success', () => {
 	it('marginalTimeMs[i] is a finite number for all CTEs', async () => {
 		const dbProvider = makeDbProvider([1, 2, 10]);
 		const profiler = new ModelProfiler(
-			makeParseService([{ name: 'alpha', line: 0 }, { name: 'beta', line: 1 }]),
+			makeDbtQueryService([{ name: 'alpha', line: 0 }, { name: 'beta', line: 1 }]),
 			dbProvider,
 			makeIndexer('/model.sql', 'model.orders', 'orders'),
-			makeCompileCache(),
 			createMockLogger(),
 		);
 
@@ -235,10 +219,9 @@ describe('ModelProfiler — profileDocument success', () => {
 		const started: string[] = [];
 		const dbProvider = makeDbProvider([1, 2, 10]);
 		const profiler = new ModelProfiler(
-			makeParseService([{ name: 'alpha', line: 0 }]),
+			makeDbtQueryService([{ name: 'alpha', line: 0 }]),
 			dbProvider,
 			makeIndexer('/model.sql', 'model.orders', 'orders'),
-			makeCompileCache(),
 			createMockLogger(),
 		);
 		profiler.onProfileStarted(uid => started.push(uid));
@@ -250,10 +233,9 @@ describe('ModelProfiler — profileDocument success', () => {
 		const statuses: string[] = [];
 		const dbProvider = makeDbProvider([1, 2, 10]);
 		const profiler = new ModelProfiler(
-			makeParseService([{ name: 'alpha', line: 0 }]),
+			makeDbtQueryService([{ name: 'alpha', line: 0 }]),
 			dbProvider,
 			makeIndexer('/model.sql', 'model.orders', 'orders'),
-			makeCompileCache(),
 			createMockLogger(),
 		);
 		profiler.onProfileComplete(r => statuses.push(r.status));
@@ -265,10 +247,9 @@ describe('ModelProfiler — profileDocument success', () => {
 	it('stores the result so getResult() returns it after profiling', async () => {
 		const dbProvider = makeDbProvider([1, 2, 10]);
 		const profiler = new ModelProfiler(
-			makeParseService([{ name: 'alpha', line: 0 }]),
+			makeDbtQueryService([{ name: 'alpha', line: 0 }]),
 			dbProvider,
 			makeIndexer('/model.sql', 'model.orders', 'orders'),
-			makeCompileCache(),
 			createMockLogger(),
 		);
 		await profiler.profileDocument(makeDocument('/model.sql'));
@@ -279,10 +260,9 @@ describe('ModelProfiler — profileDocument success', () => {
 	it('getResultForFile resolves via indexer', async () => {
 		const dbProvider = makeDbProvider([1, 2, 10]);
 		const profiler = new ModelProfiler(
-			makeParseService([{ name: 'alpha', line: 0 }]),
+			makeDbtQueryService([{ name: 'alpha', line: 0 }]),
 			dbProvider,
 			makeIndexer('/model.sql', 'model.orders', 'orders'),
-			makeCompileCache(),
 			createMockLogger(),
 		);
 		await profiler.profileDocument(makeDocument('/model.sql'));
@@ -298,10 +278,9 @@ describe('ModelProfiler — profileDocument success', () => {
 			10,                             // full model
 		]);
 		const profiler = new ModelProfiler(
-			makeParseService([{ name: 'alpha', line: 0 }, { name: 'ghost', line: 1 }]),
+			makeDbtQueryService([{ name: 'alpha', line: 0 }, { name: 'ghost', line: 1 }]),
 			dbProvider,
 			makeIndexer('/model.sql', 'model.orders', 'orders'),
-			makeCompileCache(),
 			createMockLogger(),
 		);
 
@@ -321,10 +300,9 @@ describe('ModelProfiler — error handling', () => {
 		const indexer = makeIndexer('/model.sql', 'model.orders', 'orders');
 		(indexer.findModelByFilePath as ReturnType<typeof vi.fn>).mockReturnValue(undefined);
 		const profiler = new ModelProfiler(
-			makeParseService(),
+			makeDbtQueryService(),
 			makeDbProvider([]),
 			indexer,
-			makeCompileCache(),
 			createMockLogger(),
 		);
 
@@ -340,10 +318,9 @@ describe('ModelProfiler — error handling', () => {
 			unique_id: 'source.orders',
 		});
 		const profiler = new ModelProfiler(
-			makeParseService(),
+			makeDbtQueryService(),
 			makeDbProvider([]),
 			indexer,
-			makeCompileCache(),
 			createMockLogger(),
 		);
 
@@ -357,10 +334,9 @@ describe('ModelProfiler — error handling', () => {
 			5,                             // full model still succeeds
 		]);
 		const profiler = new ModelProfiler(
-			makeParseService([{ name: 'alpha', line: 0 }]),
+			makeDbtQueryService([{ name: 'alpha', line: 0 }]),
 			dbProvider,
 			makeIndexer('/model.sql', 'model.orders', 'orders'),
-			makeCompileCache(),
 			createMockLogger(),
 		);
 
@@ -386,10 +362,9 @@ describe('ModelProfiler — COUNT(*) result extraction', () => {
 		} as unknown as DatabaseProvider;
 
 		const profiler = new ModelProfiler(
-			makeParseService([{ name: 'alpha', line: 0 }]),
+			makeDbtQueryService([{ name: 'alpha', line: 0 }]),
 			dbProvider,
 			makeIndexer('/model.sql', 'model.orders', 'orders'),
-			makeCompileCache(),
 			createMockLogger(),
 		);
 
@@ -407,10 +382,9 @@ describe('ModelProfiler — COUNT(*) result extraction', () => {
 		} as unknown as DatabaseProvider;
 
 		const profiler = new ModelProfiler(
-			makeParseService([{ name: 'alpha', line: 0 }]),
+			makeDbtQueryService([{ name: 'alpha', line: 0 }]),
 			dbProvider,
 			makeIndexer('/model.sql', 'model.orders', 'orders'),
-			makeCompileCache(),
 			createMockLogger(),
 		);
 
@@ -427,10 +401,9 @@ describe('ModelProfiler — COUNT(*) result extraction', () => {
 		} as unknown as DatabaseProvider;
 
 		const profiler = new ModelProfiler(
-			makeParseService([{ name: 'alpha', line: 0 }]),
+			makeDbtQueryService([{ name: 'alpha', line: 0 }]),
 			dbProvider,
 			makeIndexer('/model.sql', 'model.orders', 'orders'),
-			makeCompileCache(),
 			createMockLogger(),
 		);
 
@@ -447,10 +420,9 @@ describe('ModelProfiler — metadata propagation', () => {
 	it('CteProfile carries name and timing only — no line positions', async () => {
 		const dbProvider = makeDbProvider([5, 50]);
 		const profiler = new ModelProfiler(
-			makeParseService([{ name: 'alpha', line: 7 }]),
+			makeDbtQueryService([{ name: 'alpha', line: 7 }]),
 			dbProvider,
 			makeIndexer('/model.sql', 'model.orders', 'orders'),
-			makeCompileCache(),
 			createMockLogger(),
 		);
 
@@ -463,10 +435,9 @@ describe('ModelProfiler — metadata propagation', () => {
 	it('records modelName and sourceFilePath in the result', async () => {
 		const dbProvider = makeDbProvider([1, 5]);
 		const profiler = new ModelProfiler(
-			makeParseService([{ name: 'alpha', line: 0 }]),
+			makeDbtQueryService([{ name: 'alpha', line: 0 }]),
 			dbProvider,
 			makeIndexer('/path/to/orders.sql', 'model.orders', 'orders'),
-			makeCompileCache(),
 			createMockLogger(),
 		);
 
@@ -479,10 +450,9 @@ describe('ModelProfiler — metadata propagation', () => {
 		const before = Date.now();
 		const dbProvider = makeDbProvider([1, 5]);
 		const profiler = new ModelProfiler(
-			makeParseService([{ name: 'alpha', line: 0 }]),
+			makeDbtQueryService([{ name: 'alpha', line: 0 }]),
 			dbProvider,
 			makeIndexer('/model.sql', 'model.orders', 'orders'),
-			makeCompileCache(),
 			createMockLogger(),
 		);
 
@@ -503,10 +473,9 @@ describe('ModelProfiler — no CTEs', () => {
 	it('returns complete status with empty cteProfiles and the full model timing', async () => {
 		const dbProvider = makeDbProvider([0, 99]); // 0 = warmup
 		const profiler = new ModelProfiler(
-			makeParseService([]), // no CTEs
+			makeDbtQueryService([]), // no CTEs
 			dbProvider,
 			makeIndexer('/model.sql', 'model.dim_date', 'dim_date'),
-			makeCompileCache(),
 			createMockLogger(),
 		);
 

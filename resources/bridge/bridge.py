@@ -97,9 +97,23 @@ def run_command(dbt, args: list, project_dir: str, profiles_dir: str) -> bool:
 
 
 def _find_table_columns(schema_mapping: dict[str, Any], table_name: str) -> list[str]:
-    """Walk {db: {schema: {table: {col: type}}}} and return column names for table_name."""
+    """Walk {db: {schema: {table: {col: type}}}} and return column names for table_name.
+
+    Prefers the ``__described__`` namespace (authoritative live-describe results
+    populated by DescribeCache) over manifest YAML columns which may be partial
+    documentation.  Manifest YAML typically documents only a subset of columns
+    for testing purposes, so it must not win against a full live describe.
+    """
     table_lower = table_name.lower()
-    for db_mapping in schema_mapping.values():
+    # Check __described__ first (live describe results take priority)
+    described_db = schema_mapping.get("__described__", {})
+    for schema_dict in described_db.values():
+        if table_lower in schema_dict:
+            return list(schema_dict[table_lower].keys())
+    # Fall back to manifest YAML or other database/schema mappings
+    for db_name, db_mapping in schema_mapping.items():
+        if db_name == "__described__":
+            continue
         for schema_dict in db_mapping.values():
             if table_lower in schema_dict:
                 return list(schema_dict[table_lower].keys())
@@ -1044,6 +1058,76 @@ def _trace_column_lineage(
     }
 
 
+# ---------------------------------------------------------------------------
+# Jinja tag scanner — replaces _JINJA_TAG_RE non-greedy regex with a
+# depth-counting scanner so nested {{ }} inside string arguments is handled.
+#
+# Example: {{ config(post_hook="COPY {{ this }} TO '...'") }}
+# The non-greedy regex stopped at the inner }}, leaving ") }}" as raw SQL.
+# Depth-counting increments on {{ and decrements on }}, yielding the whole
+# outer tag as one unit.
+#
+# For {% %} and {# #} tags there is no nesting — their terminators (%} / #})
+# are unambiguous, so a simple str.find() scan is used.
+# ---------------------------------------------------------------------------
+def _iter_jinja_tags(sql: str):
+    """Yield (start, end, tag_text) for every Jinja tag in *sql*.
+
+    Uses brace-counting for {{ }} tags so that nested {{ }} inside string
+    arguments (e.g. ``post_hook="COPY {{ this }} TO '...'"``) is consumed as
+    part of the outer enclosing tag rather than stopping at the first }}.
+    """
+    i = 0
+    n = len(sql)
+    while i < n:
+        if sql[i] != "{" or i + 1 >= n:
+            i += 1
+            continue
+        nxt = sql[i + 1]
+
+        if nxt == "{":
+            # Depth-count {{ / }} pairs to find the matching close.
+            start = i
+            depth = 0
+            j = i
+            while j < n:
+                if sql[j] == "{" and j + 1 < n and sql[j + 1] == "{":
+                    depth += 1
+                    j += 2
+                elif sql[j] == "}" and j + 1 < n and sql[j + 1] == "}":
+                    depth -= 1
+                    j += 2
+                    if depth == 0:
+                        break
+                else:
+                    j += 1
+            if depth == 0:
+                yield start, j, sql[start:j]
+            i = j
+
+        elif nxt == "%":
+            start = i
+            end = sql.find("%}", i + 2)
+            if end == -1:
+                break
+            j = end + 2
+            yield start, j, sql[start:j]
+            i = j
+
+        elif nxt == "#":
+            start = i
+            end = sql.find("#}", i + 2)
+            if end == -1:
+                break
+            j = end + 2
+            yield start, j, sql[start:j]
+            i = j
+
+        else:
+            i += 1
+
+
+# Keep for callers that use it directly (e.g. ref/source extraction).
 _JINJA_TAG_RE = re.compile(r"\{%-?[\s\S]*?-?%\}|\{\{[\s\S]*?\}\}|\{#-?[\s\S]*?-?#\}")
 # Matches {{ ref('model') }} and {{ ref("model") }}
 _REF_TAG_RE = re.compile(r"\{\{[^}]*ref\(\s*['\"]([^'\"]+)['\"]\s*\)[^}]*\}\}")
@@ -1058,6 +1142,11 @@ _MACRO_TAG_RE = re.compile(r"\{\{\s*(?:[a-zA-Z_]\w*\.)*([a-zA-Z_]\w*)\s*\(")
 _STATEMENT_MACROS = frozenset(
     {"config", "docs", "print", "log", "return", "exceptions"}
 )
+# dbt built-in value functions whose names clash with SQL reserved words/aggregates.
+# VAR(x) is a statistical aggregate in DuckDB — using the macro name as the
+# replacement identifier causes sqlglot parse errors in SELECT position.
+# Blank these to ``_`` (the safe fallback) instead of their name.
+_VALUE_MACROS = frozenset({"var", "env_var"})
 
 
 def _blank_jinja(sql: str, macro_mode: str = "identifier") -> str:
@@ -1093,13 +1182,13 @@ def _blank_jinja(sql: str, macro_mode: str = "identifier") -> str:
     """
     buf = list(sql)
 
-    for m in _JINJA_TAG_RE.finditer(sql):
-        tag = m.group(0)
-        start, end = m.start(), m.end()
+    for m in _iter_jinja_tags(sql):
+        start, end, tag = m
 
         # Determine replacement: an identifier string, or blank_to_spaces=True,
         # or use_comment=True (comment mode for statement-level macros).
         identifier: str | None = None
+        identifier_nl_offset = 0  # non-NL chars to skip before writing identifier
         blank_to_spaces = not tag.startswith("{{")  # {# #} and {% %} always spaces
         use_comment = False
 
@@ -1120,10 +1209,23 @@ def _blank_jinja(sql: str, macro_mode: str = "identifier") -> str:
                             # Do NOT fall through to the ``_`` fallback — a bare
                             # ``_`` before e.g. ``WITH`` causes a parse error.
                             blank_to_spaces = True
+                        elif name in _VALUE_MACROS:
+                            # Known value-returning macros whose names clash with
+                            # SQL reserved words (e.g. VAR is a DuckDB aggregate).
+                            # Leave identifier=None so the ``_`` fallback fires.
+                            pass
                         elif macro_mode == "comment":
                             use_comment = True
                         else:
                             identifier = name
+                            # Only offset the identifier when there are newlines
+                            # before the name in the tag.  Single-line tags keep
+                            # the old left-aligned behaviour (offset = 0).
+                            name_slice = tag[: macro_m.start(1)]
+                            if "\n" in name_slice:
+                                identifier_nl_offset = sum(
+                                    1 for ch in name_slice if ch != "\n"
+                                )
 
         # Blank the tag character-by-character, skipping newlines.
         non_nl_positions = [i for i in range(start, end) if sql[i] != "\n"]
@@ -1142,9 +1244,12 @@ def _blank_jinja(sql: str, macro_mode: str = "identifier") -> str:
                 for pos in non_nl_positions:
                     buf[pos] = " "
         elif identifier and non_nl_positions:
-            # Write identifier chars into the first N positions, spaces for the rest.
+            # Write identifier chars starting at identifier_nl_offset so that
+            # multi-line tags (e.g. `{{\n    elo_calc(...)}}`) place the name on
+            # the line where the name actually appears, not on the `{{` line.
             for j, pos in enumerate(non_nl_positions):
-                buf[pos] = identifier[j] if j < len(identifier) else " "
+                idx = j - identifier_nl_offset
+                buf[pos] = identifier[idx] if 0 <= idx < len(identifier) else " "
         elif blank_to_spaces:
             # Comment/block tags, statement macros → all spaces.
             for i in range(start, end):
@@ -1507,13 +1612,27 @@ def handle_parse_document(request: dict[str, Any]) -> None:
     source_re = re.compile(
         r"source\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"]([^'\"]+)['\"]\s*\)"
     )
-    for jinja_m in _JINJA_TAG_RE.finditer(raw_sql):
-        if ref_re.search(jinja_m.group(0)) or source_re.search(jinja_m.group(0)):
-            line_0 = offset_to_line(jinja_m.start())
-            col_0 = offset_to_col(jinja_m.start())
-            # All chars in a ref/source tag are on one line, so end col = start col + tag length.
-            end_col_0 = col_0 + (jinja_m.end() - jinja_m.start())
+    # All Jinja tag byte ranges in raw_sql — used to suppress false-positive
+    # syntax_error diagnostics whose position falls inside a Jinja tag.  A
+    # macro like ``{{ playoff_sim(...) }}`` used as a CTE body blanks to a bare
+    # identifier which sqlglot rejects, but the error is not a real SQL bug.
+    _jinja_tag_ranges: list[tuple[int, int]] = []
+
+    for jinja_m in _iter_jinja_tags(raw_sql):
+        _jinja_start, _jinja_end, _jinja_tag = jinja_m
+        _jinja_tag_ranges.append((_jinja_start, _jinja_end))
+        if ref_re.search(_jinja_tag) or source_re.search(_jinja_tag):
+            line_0 = offset_to_line(_jinja_start)
+            col_0 = offset_to_col(_jinja_start)
+            end_col_0 = col_0 + (_jinja_end - _jinja_start)
             _jinja_ref_end[(line_0, col_0)] = end_col_0
+
+    def _in_jinja_tag(raw_line_0: int, col_0: int) -> bool:
+        """Return True if (raw_line_0, col_0) falls inside any raw Jinja tag."""
+        if raw_line_0 < len(line_starts):
+            offset = line_starts[raw_line_0] + col_0
+            return any(s <= offset < e for s, e in _jinja_tag_ranges)
+        return False
 
     refs: list[dict[str, Any]] = []
     for m in ref_re.finditer(raw_sql):
@@ -1858,6 +1977,29 @@ def handle_parse_document(request: dict[str, Any]) -> None:
                     # 0-based start column.
                     _col_end_0 = _err_col_1b  # 0-based exclusive end
                     _col_0 = max(0, _col_end_0 - len(_highlight))
+                    # Downgrade errors where the reported position falls inside a
+                    # Jinja tag in the raw SQL to a scope_warning (yellow squiggle).
+                    # This is a safety net for the rare case where pass 1 blanking
+                    # produces a partial AST and the RAISE re-parse then reports an
+                    # error at a Jinja-tag position.  Typical examples (bare macro
+                    # identifier in CTE body) cause pass 1 to raise entirely, which
+                    # short-circuits to pass 2 stub rendering — so this branch fires
+                    # only for edge cases where error_level=None returns a partial AST.
+                    if _in_jinja_tag(_line_0, _col_0):
+                        sqlglot_warnings.append(
+                            {
+                                "type": "scope_warning",
+                                "message": (
+                                    "Jinja macro in statement position — "
+                                    "cannot parse statically: "
+                                    + (_ed.get("description") or str(_rerr))
+                                ),
+                                "line": _line_0,
+                                "col": _col_0,
+                                "endCol": _col_end_0,
+                            }
+                        )
+                        continue
                     sqlglot_warnings.append(
                         {
                             "type": "syntax_error",
@@ -1896,6 +2038,20 @@ def handle_parse_document(request: dict[str, Any]) -> None:
     # positions directly from the AST without text pattern matching.
     # ------------------------------------------------------------------
     tokens: list[dict[str, Any]] = []
+    # Emit a table_ref token at each CTE definition site so providers
+    # (rename, hover, etc.) can resolve the cursor there without any
+    # special-case fallback — the definition is just another table_ref.
+    for _cte in ctes:
+        if _cte.get("col") is not None:
+            tokens.append(
+                {
+                    "type": "table_ref",
+                    "name": _cte["name"],
+                    "line": _cte["line"],
+                    "col": _cte["col"],
+                    "endCol": _cte["col"] + len(_cte["name"]),
+                }
+            )
     for col_node in ast.find_all(exp.Column):
         col_id = col_node.this
         if not isinstance(col_id, exp.Identifier):

@@ -1,8 +1,8 @@
 /**
- * CTE extractor — TypeScript port of Python cte_generator.extract_cte_sql().
+ * CTE extractor utilities used by cte-test-generator.ts.
  *
- * Given a model's raw SQL and a CTE name, extracts all SQL from the beginning
- * through the target CTE's closing paren, then appends `SELECT * FROM <cte_name>`.
+ * isPositionInComment, findCteDef, and findMatchingParen are used to locate
+ * CTE boundaries in raw SQL for test generation purposes.
  */
 
 function escapeRegExp(s: string): string {
@@ -116,21 +116,4 @@ export function findMatchingParen(sql: string, openPos: number): number {
 	}
 
 	return depth === 0 ? i : -1;
-}
-
-/**
- * Extract the SQL from the start of a model through a named CTE,
- * appending `SELECT * FROM <cte_name>`.
- *
- * Returns null if the CTE cannot be found.
- */
-export function extractCteSql(sql: string, cteName: string): string | null {
-	const def = findCteDef(sql, cteName);
-	if (!def) return null;
-
-	const closingPos = findMatchingParen(sql, def.parenPos);
-	if (closingPos < 0) return null;
-
-	const upstreamSql = sql.slice(0, closingPos).trimEnd();
-	return `${upstreamSql}\nSELECT * FROM ${cteName}`;
 }

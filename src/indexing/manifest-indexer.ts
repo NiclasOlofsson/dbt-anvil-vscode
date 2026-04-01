@@ -76,6 +76,13 @@ export class ManifestIndexer {
 	 */
 	private _columnStore = new Map<string, string[]>();
 
+	/**
+	 * Tracks column store entries that were pre-populated from manifest YAML only
+	 * (partial documentation, not from a live describe). DescribeCache bypasses
+	 * these entries to trigger a live describe, ensuring validations use real data.
+	 */
+	private _manifestOnlyIds = new Set<string>();
+
 	/** Checksums from the previous manifest build, used to diff on rebuild. */
 	private _nodeChecksums = new Map<string, string>();
 
@@ -434,8 +441,14 @@ export class ManifestIndexer {
 		return this._columnStore.get(uniqueId);
 	}
 
+	/** Returns true if the stored column list came from manifest YAML only (not a live describe). */
+	isManifestOnly(uniqueId: string): boolean {
+		return this._manifestOnlyIds.has(uniqueId);
+	}
+
 	setColumns(uniqueId: string, columns: string[]): void {
 		this._columnStore.set(uniqueId, columns);
+		this._manifestOnlyIds.delete(uniqueId);
 	}
 
 	/**
@@ -458,8 +471,14 @@ export class ManifestIndexer {
 	 * Export the current column store and node checksums for persistence.
 	 */
 	exportForCache(): { columns: Record<string, string[]>; checksums: Record<string, string> } {
+		// Exclude manifest-only entries — they contain partial YAML-documented columns,
+		// not authoritative live-describe results. Persisting them would cause stale
+		// partial column lists to survive restarts and block the live describe.
+		const columns = Object.fromEntries(
+			[...this._columnStore].filter(([uid]) => !this._manifestOnlyIds.has(uid)),
+		);
 		return {
-			columns: Object.fromEntries(this._columnStore),
+			columns,
 			checksums: Object.fromEntries(this._nodeChecksums),
 		};
 	}
@@ -533,6 +552,7 @@ export class ManifestIndexer {
 	clearColumnStore(manifest?: DbtManifest): void {
 		const size = this._columnStore.size;
 		this._columnStore.clear();
+		this._manifestOnlyIds.clear();
 		if (size > 0) {
 			this.logger.debug(`Column store: cleared all ${size} entries`);
 		}
@@ -572,6 +592,7 @@ export class ManifestIndexer {
 			const colNames = Object.keys(node.columns);
 			if (colNames.length > 0) {
 				this._columnStore.set(uid, colNames);
+				this._manifestOnlyIds.add(uid);
 				count++;
 			}
 		}
@@ -581,6 +602,7 @@ export class ManifestIndexer {
 			const colNames = Object.keys(source.columns);
 			if (colNames.length > 0) {
 				this._columnStore.set(uid, colNames);
+				this._manifestOnlyIds.add(uid);
 				count++;
 			}
 		}
@@ -593,6 +615,7 @@ export class ManifestIndexer {
 		if (visited.has(uniqueId)) return;
 		visited.add(uniqueId);
 		const hadColumns = this._columnStore.delete(uniqueId);
+		this._manifestOnlyIds.delete(uniqueId);
 		if (hadColumns) {
 			evicted.add(uniqueId);
 		}

@@ -7,9 +7,69 @@
 // the downstream sqlglot parse maps directly back to the original source.
 // --------------------------------------------------------------------------
 
-// Matches all Jinja tag types: block {% %}, expression {{ }}, comment {# #}
-// Using the 'g' flag so the regex works with matchAll.
-const JINJA_TAG_RE = /\{%-?[\s\S]*?-?%\}|\{\{[\s\S]*?\}\}|\{#-?[\s\S]*?-?#\}/g;
+// ---------------------------------------------------------------------------
+// Jinja tag scanner — replaces the old non-greedy regex with a depth-counting
+// scanner so that nested {{ }} inside string arguments is handled correctly.
+//
+// Example: {{ config(post_hook="COPY {{ this }} TO '...'"}) }}
+// The non-greedy regex stopped at the inner }}, leaving `) }}` as raw SQL.
+// The depth-counter increments on {{ and decrements on }}, yielding the full
+// outer tag as one unit.
+//
+// For {% %} and {# #} tags there is no nesting concern — their respective
+// terminators (%} / #}) are unambiguous, so a simple indexOf scan suffices.
+// ---------------------------------------------------------------------------
+interface JinjaTagMatch {
+	index: number;
+	0: string; // full tag text — keeps the same shape as a RegExpMatchArray
+}
+
+function* iterJinjaTags(sql: string): Generator<JinjaTagMatch> {
+	const n = sql.length;
+	let i = 0;
+	while (i < n) {
+		if (sql[i] !== '{' || i + 1 >= n) { i++; continue; }
+		const next = sql[i + 1];
+
+		if (next === '{') {
+			// Depth-count {{ / }} pairs to find the matching close.
+			const start = i;
+			let depth = 0;
+			let j = i;
+			while (j < n) {
+				if (sql[j] === '{' && j + 1 < n && sql[j + 1] === '{') {
+					depth++; j += 2;
+				} else if (sql[j] === '}' && j + 1 < n && sql[j + 1] === '}') {
+					depth--; j += 2;
+					if (depth === 0) break;
+				} else {
+					j++;
+				}
+			}
+			if (depth === 0) yield { index: start, 0: sql.slice(start, j) };
+			i = j;
+
+		} else if (next === '%') {
+			const start = i;
+			const end = sql.indexOf('%}', i + 2);
+			if (end === -1) break;
+			const j = end + 2;
+			yield { index: start, 0: sql.slice(start, j) };
+			i = j;
+
+		} else if (next === '#') {
+			const start = i;
+			const end = sql.indexOf('#}', i + 2);
+			if (end === -1) break;
+			const j = end + 2;
+			yield { index: start, 0: sql.slice(start, j) };
+			i = j;
+
+		} else {
+			i++;
+		}
+	}
+}
 
 // Matches a {{ ref('model') }} or {{ ref("model") }} tag (entire tag, anchored).
 // Equivalent to Python: _REF_TAG_RE.fullmatch(tag)
@@ -28,6 +88,11 @@ const MACRO_TAG_RE = /^\{\{\s*(?:[a-zA-Z_]\w*\.)*([a-zA-Z_]\w*)\s*\(/;
 // A bare identifier replacement (e.g. `_`) before `with` causes parse errors.
 const STATEMENT_MACROS = new Set(['config', 'docs', 'print', 'log', 'return', 'exceptions']);
 
+// dbt built-in value functions whose names clash with SQL reserved words/aggregates.
+// Using their name as identifier causes sqlglot parse errors (e.g. `var` = VAR aggregate
+// in DuckDB). Blank these to `_` instead so they parse as a generic SQL identifier.
+const VALUE_MACROS = new Set(['var', 'env_var']);
+
 /**
  * Replace Jinja tags with space-padded SQL-safe placeholders.
  *
@@ -38,6 +103,7 @@ const STATEMENT_MACROS = new Set(['config', 'docs', 'print', 'log', 'return', 'e
  * - `{{ ref('model') }}`        → model name, space-padded to tag length
  * - `{{ source('ns', 'tbl') }}` → table name (2nd arg), space-padded
  * - `{{ config(...) }}` etc.    → all spaces (known no-SQL-output macros)
+ * - `{{ var(...) }}` etc.       → `_` placeholder (name is a SQL reserved word)
  * - `{{ my_macro(...) }}`       → macro name, space-padded
  * - `{{ ns.macro(...) }}`       → last name component, space-padded
  * - `{{ arbitrary_expr }}`      → `_` followed by spaces
@@ -48,12 +114,13 @@ const STATEMENT_MACROS = new Set(['config', 'docs', 'print', 'log', 'return', 'e
 export function blankJinja(sql: string): string {
 	const buf = sql.split('');
 
-	for (const match of sql.matchAll(JINJA_TAG_RE)) {
+	for (const match of iterJinjaTags(sql)) {
 		const tag = match[0];
-		const start = match.index!;
+		const start = match.index;
 		const end = start + tag.length;
 
 		let identifier: string | undefined;
+		let identifierNlOffset = 0; // non-NL chars to skip before writing identifier
 		// Block tags {% %} and comment tags {# #} always become spaces.
 		let blankToSpaces = !tag.startsWith('{{');
 
@@ -74,8 +141,20 @@ export function blankJinja(sql: string): string {
 							// Do NOT fall through to the `_` fallback — a bare `_`
 							// before e.g. `with` causes a sqlglot parse error.
 							blankToSpaces = true;
+						} else if (VALUE_MACROS.has(name)) {
+							// Known value-returning macros whose names clash with SQL reserved
+							// words — use `_` so they parse as a generic SQL identifier.
+							// identifier stays undefined, falls through to the `_` branch below.
 						} else {
 							identifier = name;
+							// Only offset the identifier when there are newlines before
+							// the name in the tag. Single-line tags keep the old
+							// left-aligned behaviour (identifierNlOffset stays 0).
+							const nameStartInTag = macroMatch[0].length - name.length - 1; // -1 for '('
+							const sliceBeforeName = tag.slice(0, nameStartInTag);
+							if (sliceBeforeName.includes('\n')) {
+								identifierNlOffset = [...sliceBeforeName].filter(c => c !== '\n').length;
+							}
 						}
 					}
 				}
@@ -92,9 +171,12 @@ export function blankJinja(sql: string): string {
 		}
 
 		if (identifier !== undefined) {
-			// Write identifier chars left-aligned, space-pad the remainder.
+			// Write identifier chars starting at identifierNlOffset so that
+			// multi-line tags (e.g. `{{\n    elo_calc(...) }}`) place the name
+			// on the line where it actually appears, not on the `{{` line.
 			for (let j = 0; j < nonNlPositions.length; j++) {
-				buf[nonNlPositions[j]] = j < identifier.length ? identifier[j] : ' ';
+				const idx = j - identifierNlOffset;
+				buf[nonNlPositions[j]] = idx >= 0 && idx < identifier.length ? identifier[idx] : ' ';
 			}
 		} else if (blankToSpaces) {
 			for (const pos of nonNlPositions) {

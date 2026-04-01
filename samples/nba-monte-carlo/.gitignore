@@ -1,0 +1,8 @@
+*.duckdb
+target/
+logs/
+dbt_packages/
+dbt_modules/
+data/nba_dlt/
+
+logs/

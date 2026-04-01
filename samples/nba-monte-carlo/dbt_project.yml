@@ -1,0 +1,57 @@
+name: sports_sims
+version: '1.0'
+profile: default
+config-version: 2
+require-dbt-version: [">=1.0.0", "<2.0.0"]
+model-paths:
+- models
+analysis-paths:
+- analysis
+test-paths:
+- tests
+seed-paths:
+- data
+macro-paths:
+- macros
+snapshot-paths:
+- snapshots
+target-path: target
+log-path: logs
+packages-install-path: dbt_packages
+clean-targets:
+- target
+- dbt_packages
+- logs
+models:
+  sports_sims:
+    nba:
+      +tags: nba
+      raw:
+        +materialized: table
+      prep:
+        +materialized: table
+      simulator:
+        +materialized: table
+      analysis:
+        +materialized: view
+    nfl:
+      +tags: nfl
+      raw:
+        +materialized: table
+      prep:
+        +materialized: view
+      simulator:
+        +materialized: table
+      analysis:
+        +materialized: view
+
+vars:
+  scenarios: 10000            # set number of scenarios. 100k is safe on 8GB of RAM
+  include_actuals: true       # set to true to use actual game results, otherwise sim entire season
+  latest_ratings: true        # set to true to use latest ELO ratings, otherwise use start of season ratings
+  sim_start_game_id: 0        # placeholder one multi-container is in place
+  nba_elo_offset: 100          # nba offset to ELO to get to ~12% home advantage
+  nfl_elo_offset: 52          # nfl offset to ELO to get to 7.5% home advantage
+  ncaaf_elo_offset: 52        # ncaaf offset to ELO to get to 7.5% home advantage
+  nba_start_date: '2026-04-12'    # set as of date for start of season
+

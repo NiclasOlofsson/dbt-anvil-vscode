@@ -490,24 +490,48 @@ describe('DbtRenameProvider', () => {
 	});
 
 	it('provideRenameEdits renames CTE name definition and all usages', async () => {
+		// endLine/endCol represent the closing paren of the CTE body — on a
+		// different line from the name. The rename must NOT use endCol as the name
+		// end (Bug #2 regression guard).
 		const mockModel: Partial<DocumentModel> = {
-			ctes: [{ name: 'base', line: 0, col: 5, endLine: 0, endCol: 9, columns: [] }],
+			ctes: [{ name: 'base', line: 0, col: 5, endLine: 2, endCol: 1, columns: [] }],
 			tokens: [
-				{ type: 'table_ref', name: 'base', line: 0, col: 5, endCol: 9 },  // cte keyword site
-				{ type: 'table_ref', name: 'base', line: 1, col: 14, endCol: 18 }, // usage in FROM
+				{ type: 'table_ref', name: 'base', line: 0, col: 5, endCol: 9 },  // cte def site (emitted by bridge)
+				{ type: 'table_ref', name: 'base', line: 3, col: 14, endCol: 18 }, // usage in FROM
 			],
 		};
 		const ps = createMockParseServiceWithModel(mockModel);
 		const localProvider = new DbtRenameProvider(indexer, createMockLoader(), createMockLogger(), ps);
-		const doc = createMockDocument('with base as (select 1),\nselect * from base');
-		const pos = new vscode.Position(1, 16); // cursor on usage 'base'
+		const doc = createMockDocument('with base as (\n  select 1\n),\nselect * from base');
+		const pos = new vscode.Position(3, 16); // cursor on usage 'base'
 
 		const result = await localProvider.provideRenameEdits(doc, pos, 'foundation', mockToken);
 		expect(result).toBeInstanceOf(vscode.WorkspaceEdit);
 		const entries = result!.entries();
 		const totalEdits = entries.reduce((s, [, edits]) => s + edits.length, 0);
-		// CTE def name + 2 table_ref tokens
-		expect(totalEdits).toBe(3);
+		// def-site token + usage token — no separate cteDef edit
+		expect(totalEdits).toBe(2);
+	});
+
+	it('provideRenameEdits renames CTE from the definition site', async () => {
+		const mockModel: Partial<DocumentModel> = {
+			ctes: [{ name: 'base', line: 0, col: 5, endLine: 2, endCol: 1, columns: [] }],
+			tokens: [
+				{ type: 'table_ref', name: 'base', line: 0, col: 5, endCol: 9 },  // cte def site
+				{ type: 'table_ref', name: 'base', line: 3, col: 14, endCol: 18 }, // usage in FROM
+			],
+		};
+		const ps = createMockParseServiceWithModel(mockModel);
+		const localProvider = new DbtRenameProvider(indexer, createMockLoader(), createMockLogger(), ps);
+		const doc = createMockDocument('with base as (\n  select 1\n),\nselect * from base');
+		const pos = new vscode.Position(0, 6); // cursor on 'base' in the definition line
+
+		const result = await localProvider.provideRenameEdits(doc, pos, 'foundation', mockToken);
+		expect(result).toBeInstanceOf(vscode.WorkspaceEdit);
+		const entries = result!.entries();
+		const totalEdits = entries.reduce((s, [, edits]) => s + edits.length, 0);
+		// def-site token + usage token
+		expect(totalEdits).toBe(2);
 	});
 });
 
@@ -520,19 +544,19 @@ describe('SqlCodeLensProvider', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		indexer = createMockIndexer();
-		provider = new SqlCodeLensProvider(indexer, createMockLogger());
+		provider = new SqlCodeLensProvider(indexer, createMockLogger(), createMockParseService());
 		provider.setPathResolver(createMockPathResolver({
 			'/project/models/customers.sql': 'model',
 			'/project/models/orders.sql': 'model',
 		}));
 	});
 
-	it('provides Run/Build/Test/Compile lenses for known SQL model', () => {
+	it('provides Run/Build/Test/Compile lenses for known SQL model', async () => {
 		const doc = createMockDocument('{{ config(materialized=\'table\') }}\nselect 1', {
 			fileName: '/project/models/customers.sql',
 		});
 
-		const result = provider.provideCodeLenses(doc, mockToken);
+		const result = await provider.provideCodeLenses(doc, mockToken);
 		expect(result.length).toBe(5);
 
 		const titles = result.map(l => l.command?.title);
@@ -545,22 +569,46 @@ describe('SqlCodeLensProvider', () => {
 		expect(result[0].command?.command).toBe('dbt-studio.runModel');
 	});
 
-	it('shows ad-hoc Run lenses for unknown model', () => {
+	it('adds CTE query lenses when parse service returns CTEs', async () => {
+		const parseService = createMockParseServiceWithModel({
+			ctes: [
+				{ name: 'base', line: 2, endLine: 5, columns: [] },
+				{ name: 'final', line: 7, endLine: 10, columns: [] },
+			],
+		});
+		provider = new SqlCodeLensProvider(indexer, createMockLogger(), parseService);
+		provider.setPathResolver(createMockPathResolver({ '/project/models/customers.sql': 'model' }));
+		vi.mocked(indexer.findModelByFilePath).mockReturnValue('model.project.customers');
+
+		const doc = createMockDocument('WITH base AS (\n  SELECT 1\n)\nSELECT * FROM base', {
+			fileName: '/project/models/customers.sql',
+		});
+
+		const result = await provider.provideCodeLenses(doc, mockToken);
+		const cteLenses = result.filter(l => l.command?.command === 'dbt-studio.queryCte');
+		expect(cteLenses).toHaveLength(2);
+		expect(cteLenses[0].command?.arguments).toEqual(['model.project.customers', 'base']);
+		expect(cteLenses[1].command?.arguments).toEqual(['model.project.customers', 'final']);
+		expect(cteLenses[0].range.start.line).toBe(2);
+		expect(cteLenses[1].range.start.line).toBe(7);
+	});
+
+	it('shows ad-hoc Run lenses for unknown model', async () => {
 		const doc = createMockDocument('SELECT 1;\nSELECT 2', {
 			fileName: '/project/analyses/scratch.sql',
 		});
 
-		const result = provider.provideCodeLenses(doc, mockToken);
+		const result = await provider.provideCodeLenses(doc, mockToken);
 		const titles = result.map(l => l.command?.title);
 		expect(titles.filter(t => t === 'Press F5 to run')).toHaveLength(2);
 	});
 
-	it('shows single Run lens for unknown model with one statement', () => {
+	it('shows single Run lens for unknown model with one statement', async () => {
 		const doc = createMockDocument('SELECT 1', {
 			fileName: '/project/analyses/scratch.sql',
 		});
 
-		const result = provider.provideCodeLenses(doc, mockToken);
+		const result = await provider.provideCodeLenses(doc, mockToken);
 		expect(result).toHaveLength(1);
 		expect(result[0].command?.title).toBe('Press F5 to run');
 	});

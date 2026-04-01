@@ -2,8 +2,8 @@ import * as vscode from 'vscode';
 import type { ILogger } from '../types/logger';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { DatabaseProvider } from '../providers/database/database-provider';
+import type { DbtQueryService } from '../services/dbt-query-service';
 import { toolResult } from './tool-helpers';
-import { extractCteSql } from './cte-extractor';
 
 interface QueryDatabaseInput {
 	sql: string;
@@ -16,6 +16,7 @@ export class QueryDatabaseTool implements vscode.LanguageModelTool<QueryDatabase
 		private readonly provider: DatabaseProvider,
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
+		private readonly dbtQueryService: DbtQueryService,
 	) {}
 
 	async invoke(
@@ -26,22 +27,17 @@ export class QueryDatabaseTool implements vscode.LanguageModelTool<QueryDatabase
 		const { cte_name, model_name } = options.input;
 		this.logger.info('LM Tool: queryDatabase');
 
-		// CTE extraction: extract SQL for a specific CTE from a model
+		// CTE extraction: compile the model and use sqlglot to find the CTE boundary
 		if (cte_name && model_name) {
 			const resources = this.indexer.findResource(model_name, 'model');
 			if (resources.length === 0) {
 				return toolResult({ error: `Model "${model_name}" not found in manifest` });
 			}
-			const rawNode = this.indexer.getRawNode(resources[0].uniqueId);
-			const rawSql = rawNode && 'raw_code' in rawNode ? rawNode.raw_code : undefined;
-			if (!rawSql) {
-				return toolResult({ error: `No SQL found for model "${model_name}"` });
-			}
-			const extracted = extractCteSql(rawSql, cte_name);
-			if (!extracted) {
+			const cteSql = await this.dbtQueryService.buildCteSql(resources[0].uniqueId, cte_name);
+			if (!cteSql) {
 				return toolResult({ error: `CTE "${cte_name}" not found in model "${model_name}"` });
 			}
-			sql = extracted;
+			sql = cteSql;
 		}
 
 		try {
