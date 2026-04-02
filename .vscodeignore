@@ -6,6 +6,7 @@ scripts/
 temp_auto/
 samples/
 node_modules/
+images/demo.gif
 .esbuild.ts
 tsconfig.json
 vitest.config.ts
