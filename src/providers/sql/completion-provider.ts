@@ -124,7 +124,7 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 
 			this.logger.debug(`Completion: ${cols.length} columns for '${alias}': [${cols.slice(0, 5).join(', ')}${cols.length > 5 ? ', ...' : ''}]`);
 			return cols.map((col, i) => {
-			const item = new vscode.CompletionItem(col, DbtCompletionKind.column);
+				const item = new vscode.CompletionItem(col, DbtCompletionKind.column);
 				item.detail = `column of ${alias}`;
 				item.sortText = String(i).padStart(4, '0');
 				return item;

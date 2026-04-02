@@ -125,3 +125,9 @@ Also no "icons" in the Code lense. Use Text and ... to signify that it's a comma
 I don't like how the checkmark is shown. We can use a small green circle instead.
 We should add the full model node at the end, directly when we first open the tree and start running. it's uggly when it's added in the end.
 On the containing treenode (root) we don't have to show any status at all, just the model name.
+
+## Debug
+
+Seipel suggested I'd implement breakpoints. Not sure how I would do it, but since we have the debugger interface implemented, we could just as well use it. Can do it on a CTE level, as well as line level. Up to us how we do it, and what we make out of it. But it's a cool idea that I haven't seen elsewhere. Also with cache, this can be really rewarding and we can do stuff stepping back, that many can't do .. which is cool.
+
+For debugging, dynamic breaks .. i could imagine pausing on events we emit, like before parse, after parse, etc. Like we create our own stuff for that.

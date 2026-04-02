@@ -10,7 +10,16 @@ import { DbtExecutionService, Priority } from './dbt/execution-service';
 import { CompileCache } from './dbt/compile-cache';
 import { CompileCachePersistence } from './dbt/compile-cache-persistence';
 import { DescribeCache } from './dbt/describe-cache';
-import { loadProjectConfig } from './dbt/project-config';
+import {
+	loadProjectConfig,
+	resolveAnalysisPaths,
+	resolveMacroPaths,
+	resolveModelPaths,
+	resolveSeedPaths,
+	resolveSnapshotPaths,
+	resolveTargetPath,
+	resolveTestPaths,
+} from './dbt/project-config';
 import { DbtPathResolver } from './dbt/dbt-path-resolver';
 import { createDatabaseProvider } from './providers/database/database-provider-factory';
 import { ColumnStorePersistence } from './indexing/column-store-persistence';
@@ -39,6 +48,7 @@ import { DbtCallHierarchyProvider } from './providers/sql/call-hierarchy-provide
 import { ParseService } from './services/parse-service';
 import { DbtQueryService } from './services/dbt-query-service';
 import { StatusBarManager } from './views/status-bar';
+import { ExternalDbtMonitor } from './dbt/external-dbt-monitor';
 import { DbtDiagnosticsProvider } from './providers/diagnostics-provider';
 import { VsTestController } from './views/vs-test-controller';
 import { CteTestRunner } from './dbt/cte-test-runner';
@@ -51,6 +61,7 @@ import { QueryRunner } from './dbt/query-runner';
 import { QueryResultPanel } from './views/query-result-panel';
 import { SqlDebugAdapter } from './dbt/debug-adapter';
 import { SqlDebugConfigProvider } from './dbt/debug-config-provider';
+import * as path from 'node:path';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
 	// -------- Bootstrap logging & service container --------
@@ -76,13 +87,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	}
 
 	const projectDir = workspaceFolders[0].uri.fsPath;
+	const storageDir = context.storageUri?.fsPath ?? context.globalStorageUri.fsPath;
+	const extensionTargetDir = path.join(storageDir, 'target');
+	const hasDbtProject = !!loadProjectConfig(projectDir);
 
 	// -------- Detect Python environment --------
 	const pythonEnv = detectPythonEnvironment(projectDir);
 	logger.info(`Python environment: ${pythonEnv.description} (${pythonEnv.command.join(' ')})`);
 
 	// -------- Set up manifest loading and indexing --------
-	const manifestLoader = new ManifestLoader(projectDir);
+	const manifestLoader = new ManifestLoader(projectDir, extensionTargetDir);
 	const manifestIndexer = new ManifestIndexer(manifestLoader, logger);
 
 	const container = ServiceContainer.getInstance();
@@ -122,8 +136,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// one for fast sqlglot operations (parse_document, describe_table).
 	// This lets hover/completion run in parallel with a dbt parse on save.
 	const bridgePyPath = vscode.Uri.joinPath(context.extensionUri, 'resources', 'bridge', 'bridge.py').fsPath;
-	const dbtBridgeRunner = new BridgeRunner(bridgePyPath, projectDir, pythonEnv, logger);
-	const sqlglotBridgeRunner = new BridgeRunner(bridgePyPath, projectDir, pythonEnv, logger);
+	const stateDir = storageDir;
+	const dbtBridgeRunner = new BridgeRunner(bridgePyPath, projectDir, pythonEnv, logger, stateDir, extensionTargetDir);
+	const sqlglotBridgeRunner = new BridgeRunner(bridgePyPath, projectDir, pythonEnv, logger, stateDir, extensionTargetDir);
 	container.setBridgeRunner(dbtBridgeRunner);
 	context.subscriptions.push({ dispose: () => void dbtBridgeRunner.shutdown() });
 	context.subscriptions.push({ dispose: () => void sqlglotBridgeRunner.shutdown() });
@@ -149,6 +164,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const projectConfig = loadProjectConfig(projectDir);
 	const profileName = projectConfig?.profile ?? 'default';
 	const profilesDir = detectProfilesDir(projectDir);
+	const projectTargetDir = resolveTargetPath(projectConfig, projectDir);
+	logger.info('Resolved dbt/extension paths:');
+	logger.info(`  projectDir: ${projectDir}`);
+	logger.info(`  storageDir: ${storageDir}`);
+	logger.info(`  extensionTargetDir: ${extensionTargetDir}`);
+	logger.info(`  extensionManifestPath: ${manifestLoader.manifestPath}`);
+	logger.info(`  stateDir: ${stateDir}`);
+	logger.info(`  projectTargetDir (dbt_project.yml): ${projectTargetDir}`);
+	logger.info(`  profilesDir: ${profilesDir}`);
+	logger.info(`  modelPaths: ${resolveModelPaths(projectConfig, projectDir).join(', ')}`);
+	logger.info(`  seedPaths: ${resolveSeedPaths(projectConfig, projectDir).join(', ')}`);
+	logger.info(`  macroPaths: ${resolveMacroPaths(projectConfig, projectDir).join(', ')}`);
+	logger.info(`  analysisPaths: ${resolveAnalysisPaths(projectConfig, projectDir).join(', ')}`);
+	logger.info(`  snapshotPaths: ${resolveSnapshotPaths(projectConfig, projectDir).join(', ')}`);
+	logger.info(`  testPaths: ${resolveTestPaths(projectConfig, projectDir).join(', ')}`);
 	const adapterType = manifestIndexer.index?.adapterType ?? 'ansi';
 	const databaseProvider = await createDatabaseProvider(adapterType, profileName, profilesDir, executionService, logger);
 	container.setDatabaseProvider(databaseProvider);
@@ -157,6 +187,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// -------- Status bar --------
 	const statusBar = new StatusBarManager(executionService, logger);
 	context.subscriptions.push(statusBar);
+
+	// -------- External dbt monitor (detect conflicting terminal dbt commands) --------
+	if (vscode.workspace.getConfiguration('dbt-studio').get<boolean>('terminal.externalCommandMonitor.enabled', true)) {
+		const externalDbtMonitor = new ExternalDbtMonitor(projectDir, executionService, manifestWatcher, logger, context);
+		externalDbtMonitor.start();
+		context.subscriptions.push(externalDbtMonitor);
+	} else {
+		logger.warn('ExternalDbtMonitor is disabled via dbt-studio.terminal.externalCommandMonitor.enabled — concurrent terminal dbt commands may corrupt the manifest.');
+	}
 
 	// Kick off a full compile to warm the cache. Skipped if enough valid entries
 	// were restored from disk (mtime validation happens on first access per entry).
@@ -180,7 +219,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	context.subscriptions.push(diagnosticsProvider);
 
 	// -------- Set workspaceHasDBT context --------
-	void vscode.commands.executeCommand('setContext', 'workspaceHasDBT', manifestLoader.manifestExists());
+	// This context means "dbt project is present", not "manifest already exists".
+	// Cold start must still show the extension UI/actions before the first parse/compile
+	// creates the manifest in the extension target folder.
+	void vscode.commands.executeCommand('setContext', 'workspaceHasDBT', hasDbtProject);
 
 	// -------- Register Copilot language model tools --------
 	registerLanguageModelTools(context, manifestIndexer, executionService, manifestLoader, logger, compileCache, databaseProvider, describeCache, dbtQueryService);
@@ -231,6 +273,37 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			columnStorePersistence.save(manifestIndexer);
 		}),
 	);
+
+	if (!manifestLoader.manifestExists()) {
+		void (async () => {
+			logger.info('No manifest in extension target on startup — triggering background dbt parse');
+			try {
+				const result = await executionService.submit({
+					type: 'parse',
+					args: ['parse'],
+					priority: Priority.Background,
+					origin: 'background',
+					label: 'parse (startup bootstrap)',
+				});
+				if (!result.success) {
+					logger.warn(`Startup parse failed: ${result.stderr}`);
+					return;
+				}
+				try {
+					manifestIndexer.build(true);
+					testExplorerProvider.refresh();
+					modelExplorerProvider.refresh();
+					lineageGraphProvider.refreshGraph();
+					columnStorePersistence.save(manifestIndexer);
+					logger.info('Startup parse completed and manifest index rebuilt');
+				} catch (err) {
+					logger.warn(`Startup parse succeeded but manifest rebuild failed: ${err}`);
+				}
+			} catch (err) {
+				logger.warn(`Startup parse error: ${err}`);
+			}
+		})();
+	}
 
 	// -------- Editor follow (sync explorer + lineage) --------
 	const revealModelForEditor = (editor: vscode.TextEditor | undefined) => {
@@ -441,15 +514,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.showLineage', () => {
-			const model = getActiveModelName();
-			if (!model) return;
-			const models = manifestIndexer.findModelsByName(model);
-			if (models.length === 0) {
-				void vscode.window.showWarningMessage(`Model "${model}" not found in manifest.`);
-				return;
-			}
-			lineageGraphProvider.setFocusModel(models[0].uniqueId);
-			void vscode.commands.executeCommand('dbt-studio.lineageGraph.focus');
+			void (async () => {
+				const model = getActiveModelName();
+				if (!model) return;
+				const models = manifestIndexer.findModelsByName(model);
+				if (models.length === 0) {
+					void vscode.window.showWarningMessage(`Model "${model}" not found in manifest yet. The startup parse may still be running.`);
+					return;
+				}
+				lineageGraphProvider.setFocusModel(models[0].uniqueId);
+				void vscode.commands.executeCommand('dbt-studio.lineageGraph.focus');
+			})();
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.toggleLineageFollow', () => {
@@ -723,7 +798,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			const editor = vscode.window.activeTextEditor;
 			if (!editor) return;
 			const modelId = manifestIndexer.findModelByFilePath(editor.document.fileName);
-			if (!modelId) return;
+			if (!modelId) {
+				void vscode.window.showWarningMessage('Model is not indexed yet. The startup parse may still be running.');
+				return;
+			}
 			const rawNode = manifestIndexer.getRawNode(modelId);
 			if (!rawNode || rawNode.resource_type !== 'model') return;
 			const compiledSql = await compileCache.ensureCompiled(

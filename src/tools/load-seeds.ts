@@ -16,6 +16,7 @@ export class LoadSeedsTool implements vscode.LanguageModelTool<LoadSeedsInput> {
 	constructor(
 		private readonly service: DbtExecutionService,
 		private readonly logger: ILogger,
+		private readonly stateDir: string,
 	) {}
 
 	async invoke(
@@ -28,7 +29,7 @@ export class LoadSeedsTool implements vscode.LanguageModelTool<LoadSeedsInput> {
 		} = options.input;
 
 		const { selector, stateArgs } = buildStateSelector(
-			select_state_modified, select_state_modified_plus_downstream, select,
+			select_state_modified, select_state_modified_plus_downstream, this.stateDir, select,
 		);
 		this.logger.info(`LM Tool: loadSeeds select="${selector ?? 'all'}"`);
 

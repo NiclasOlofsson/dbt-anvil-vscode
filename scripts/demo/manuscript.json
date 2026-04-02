@@ -8,7 +8,7 @@
     {
       "id": "model-explorer",
       "frame": "model-explorer",
-      "caption": "Model Explorer — your whole dbt project, right in the sidebar",
+      "caption": "Model Explorer — models, sources, tags. Your whole project, right there.",
       "duration": {
         "from": {
           "event": "model-explorer.demo",
@@ -23,7 +23,7 @@
     {
       "id": "codelens",
       "frame": "codelens",
-      "caption": "CodeLens — Run · Test · Build · Compile · Profile, without leaving the file",
+      "caption": "Editor buttons — Lineage · Run · Test · Compile · Query · Profile. No terminal needed.",
       "duration": {
         "from": {
           "event": "codelens.demo",
@@ -39,7 +39,7 @@
       "id": "hover-ref",
       "frame": "hover-ref",
       "useVideo": true,
-      "caption": "Hover a ref() — instant model preview, columns & docs. No tab switching.",
+      "caption": "Hover a ref() — model preview, columns, docs. Without opening a single file.",
       "duration": {
         "from": {
           "event": "hover-ref.demo",
@@ -55,7 +55,7 @@
       "id": "hover-column",
       "frame": "hover-column",
       "useVideo": true,
-      "caption": "Column Intelligence — know exactly where every column comes from",
+      "caption": "Hover a column — see exactly where it comes from, through refs and CTEs.",
       "duration": {
         "from": {
           "event": "hover-column.demo",
@@ -71,7 +71,7 @@
       "id": "completion",
       "frame": "completion",
       "useVideo": true,
-      "caption": "Smart Completion — your entire model catalog, autocompleted inside ref()",
+      "caption": "Completions — your whole model catalog, autocompleted inside ref().",
       "duration": {
         "from": {
           "event": "completion.demo",
@@ -87,7 +87,7 @@
       "id": "rename-symbol",
       "frame": "rename-symbol",
       "useVideo": true,
-      "caption": "Rename Symbol — one rename, every reference updated. Instantly.",
+      "caption": "Rename — press F2, every reference updates. Models, CTEs, columns, aliases.",
       "duration": {
         "from": {
           "event": "rename-symbol.demo",
@@ -103,7 +103,7 @@
       "id": "diagnostics",
       "frame": "diagnostics",
       "useVideo": true,
-      "caption": "Live Diagnostics — broken ref() caught before you even hit save",
+      "caption": "Diagnostics — broken ref() caught before you hit save. No surprises in CI.",
       "duration": {
         "from": {
           "event": "diagnostics.demo",
@@ -118,7 +118,7 @@
     {
       "id": "document-symbols",
       "frame": "document-symbols",
-      "caption": "Document Outline — every CTE and its columns, structured and navigable",
+      "caption": "Document Outline — every CTE and its columns. Navigate without scrolling.",
       "duration": {
         "from": {
           "event": "document-symbols.demo",
@@ -134,7 +134,7 @@
       "id": "go-to-definition",
       "frame": "go-to-definition",
       "useVideo": true,
-      "caption": "Go to Definition — Ctrl+Click any ref() and follow the data",
+      "caption": "Go to Definition — Ctrl+Click any ref() and land in that model. Instantly.",
       "duration": {
         "from": {
           "event": "go-to-definition.demo",
@@ -150,7 +150,7 @@
       "id": "find-all-references",
       "frame": "find-all-references",
       "useVideo": true,
-      "caption": "Find All References — see every model downstream from this one",
+      "caption": "Find All References — see everywhere this model is used across the project.",
       "duration": {
         "from": {
           "event": "find-all-references.demo",
@@ -165,7 +165,7 @@
     {
       "id": "call-hierarchy",
       "frame": "call-hierarchy",
-      "caption": "Call Hierarchy — full blast radius, upstream and downstream",
+      "caption": "Call Hierarchy — full blast radius. Everything upstream and downstream at once.",
       "duration": {
         "from": {
           "event": "call-hierarchy.demo",
@@ -180,7 +180,7 @@
     {
       "id": "workspace-symbols",
       "frame": "workspace-symbols",
-      "caption": "Ctrl+T — fuzzy jump to any model in your project. No file browsing.",
+      "caption": "Ctrl+T — fuzzy jump to any model or source in the project. No file browsing.",
       "duration": {
         "from": {
           "event": "workspace-symbols.demo",
@@ -196,7 +196,7 @@
       "id": "lineage",
       "frame": "lineage",
       "useVideo": true,
-      "caption": "Lineage — interactive DAG, then drill into column-level traces",
+      "caption": "Lineage — interactive DAG that follows your editor. Drill into column-level traces.",
       "duration": {
         "from": {
           "event": "lineage.demo",
@@ -213,7 +213,7 @@
       "frame": "profiler",
       "useVideo": true,
       "playbackSpeed": 2.5,
-      "caption": "Profiler — row counts & timing for every CTE. Find your bottleneck.",
+      "caption": "Profiler — row counts and timing per CTE. Find which one is scanning 40M rows.",
       "duration": {
         "from": {
           "event": "profiler.demo",
@@ -229,7 +229,7 @@
       "id": "query-results",
       "frame": "query-results",
       "useVideo": true,
-      "caption": "Query Results — run SQL, get results right here. Your editor is the query tool.",
+      "caption": "Query Results — F5 to run, results appear inline. Jinja compiles first. Just works.",
       "duration": {
         "from": {
           "event": "query-results.demo",
@@ -245,7 +245,7 @@
       "id": "query-model",
       "frame": "query-model",
       "useVideo": true,
-      "caption": "Query Model — one click compiles & runs the whole thing",
+      "caption": "Query Model — one click. Compiles the Jinja, runs it, results right there.",
       "duration": {
         "from": {
           "event": "query-model.demo",
@@ -261,7 +261,7 @@
       "id": "query-cte",
       "frame": "query-cte",
       "useVideo": true,
-      "caption": "Query CTE — run a single CTE in isolation. Debug like a pro.",
+      "caption": "Query CTE — run one CTE in isolation. Find out what it actually returns.",
       "duration": {
         "from": {
           "event": "query-cte.demo",

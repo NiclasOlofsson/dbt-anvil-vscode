@@ -349,11 +349,11 @@ describe('blankJinja', () => {
 
 	it('ignores single { and } characters in plain SQL', () => {
 		// DuckDB struct literal — single braces, not Jinja
-		const sql = "select {'key': 1} as s, {{ ref('orders') }} as o";
+		const sql = 'select {\'key\': 1} as s, {{ ref(\'orders\') }} as o';
 		const result = blankJinja(sql);
 		expect(result.length).toBe(sql.length);
 		// The struct literal is untouched — only the {{ ref(...) }} is blanked
-		expect(result.includes("{'key': 1}")).toBe(true);
+		expect(result.includes('{\'key\': 1}')).toBe(true);
 		expect(result.includes('orders')).toBe(true);
 	});
 
@@ -365,11 +365,11 @@ describe('blankJinja', () => {
 	});
 
 	it('handles {{ }} inside a Jinja tag string arg alongside outer SQL braces', () => {
-		const sql = "{{ config(post_hook=\"{{ this }}\") }} select {x: 1}";
+		const sql = '{{ config(post_hook="{{ this }}") }} select {x: 1}';
 		const result = blankJinja(sql);
 		expect(result.length).toBe(sql.length);
 		// config tag (including nested {{ this }}) → all spaces
-		const configEnd = "{{ config(post_hook=\"{{ this }}\") }}".length;
+		const configEnd = '{{ config(post_hook="{{ this }}") }}'.length;
 		expect(result.slice(0, configEnd).trim()).toBe('');
 		// SQL after the tag is untouched
 		expect(result.slice(configEnd)).toBe(' select {x: 1}');

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.7
+
+- **Terminal dbt command detection** — dbt Studio now monitors your integrated terminal for `dbt run`, `build`, `seed`, `snapshot`, `clone`, and `run-operation` commands. When one is detected, background operations are automatically suspended so they don't race against the terminal process and corrupt the manifest. Once the command finishes, the extension resumes and immediately re-indexes the manifest to pick up any changes. Can be disabled via `dbt-studio.terminal.externalCommandMonitor.enabled` if VS Code shell integration causes unrelated problems in your environment.
+
 ## 0.1.6
 
 This release is a significant step under the hood. The entire SQL analysis layer has been rewritten around sqlglot — no more regular expressions. Every hover, definition, diagnostic, and rename result comes from a proper parse tree, which means far fewer false positives and no more features silently falling back to guesswork. Jinja handling is also much improved, so mixed Jinja/SQL files are parsed more accurately. Caching has been overhauled too, so the extension stays fast even in large projects. On top of that, there's a genuinely useful new SQL editor for running ad-hoc queries and a round of editor experience improvements that make day-to-day work smoother.

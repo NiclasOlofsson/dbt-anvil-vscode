@@ -46,10 +46,15 @@ const MODEL = {
 	preds: path.join(sampleProject, 'models', 'nba', 'analysis', 'reg_season_predictions.sql'),
 };
 
-// Ensure output directories exist — wipe frames dir first so stale files don't accumulate
-// Only wipe stale frames on a full run; preserve them when testing a single step
-if (!stepFilter && fs.existsSync(framesDir)) {
-	for (const f of fs.readdirSync(framesDir)) fs.unlinkSync(path.join(framesDir, f));
+// Ensure output directories exist — wipe frames and video dirs first so stale files don't accumulate
+// Only wipe on a full run; preserve them when testing a single step
+if (!stepFilter) {
+	if (fs.existsSync(framesDir)) {
+		for (const f of fs.readdirSync(framesDir)) fs.unlinkSync(path.join(framesDir, f));
+	}
+	if (fs.existsSync(videoDir)) {
+		for (const f of fs.readdirSync(videoDir)) fs.unlinkSync(path.join(videoDir, f));
+	}
 }
 fs.mkdirSync(framesDir, { recursive: true });
 fs.mkdirSync(videoDir, { recursive: true });
@@ -72,6 +77,7 @@ const frames = [];
 const events = [];
 const segmentStarts = new Map();
 let sessionStartMs = Date.now();
+let videoStartOffsetMs = 0;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -214,6 +220,27 @@ function logEvent(name, data = {}) {
 	});
 }
 
+/**
+ * Inject a 2-frame white flash (80ms), log 'X.sync' at injection time, then
+ * log 'X.demo' after the flash clears. The generator uses 'X.sync' to find
+ * the exact PTS of this segment in the video, giving per-segment drift
+ * calibration that handles accumulated WebM timestamp drift.
+ */
+async function syncAndLogDemo(win, eventName) {
+	const syncName = eventName.replace(/\.demo$/, '.sync');
+	await win.evaluate(() => {
+		const d = document.createElement('div');
+		d.id = '__seg-sync__';
+		d.style.cssText = 'position:fixed;inset:0;background:#fff;z-index:2147483647;pointer-events:none;';
+		document.body.appendChild(d);
+	});
+	logEvent(syncName);
+	await win.waitForTimeout(80);
+	await win.evaluate(() => document.getElementById('__seg-sync__')?.remove());
+	await win.waitForTimeout(400);
+	logEvent(eventName);
+}
+
 function markSegmentStart(segment) {
 	segmentStarts.set(segment, Date.now() - sessionStartMs);
 	logEvent('segment.start', { segment });
@@ -246,7 +273,14 @@ async function openFile(win, filename) {
 	await win.keyboard.press('Enter');
 	// Wait for editor to be visible and stabilise
 	await win.waitForSelector('.monaco-editor .view-lines', { timeout: 10000 });
-	await win.waitForTimeout(300);
+	// Wait for the quick-input to fully dismiss before continuing
+	await win.waitForSelector('.quick-input-widget', { state: 'hidden', timeout: 2000 }).catch(() => { });
+	await win.waitForTimeout(2000);
+	// Reset to line 1 col 1 so horizontal scroll starts at the leftmost position.
+	// VS Code remembers cursor/scroll per file; Ctrl+Home guarantees col 0 is visible
+	// before any subsequent goToLine call positions the cursor.
+	await win.keyboard.press('Control+Home');
+	await win.waitForTimeout(4000);
 }
 
 async function goToLine(win, line, col = 1) {
@@ -255,7 +289,9 @@ async function goToLine(win, line, col = 1) {
 	await input.waitFor({ state: 'visible', timeout: 3000 });
 	await win.keyboard.type(`${line}:${col}`, TYPE_DELAY);
 	await win.keyboard.press('Enter');
-	await win.waitForTimeout(400);
+	// Wait for the quick-input to fully dismiss before continuing
+	await win.waitForSelector('.quick-input-widget', { state: 'hidden', timeout: 2000 }).catch(() => { });
+	await win.waitForTimeout(200);
 }
 
 async function closeEditor(win) {
@@ -683,6 +719,10 @@ async function main() {
 
 		// Get the main workbench window
 		const win = await app.firstWindow({ timeout: 45000 });
+		// Record how many ms elapsed before the first window appeared — the Playwright
+		// video recording starts approximately here, so all seek times must be offset
+		// by this amount to align event timestamps with the video file's timeline.
+		videoStartOffsetMs = Date.now() - sessionStartMs;
 		const recordedVideo = win.video();
 
 		// Wait for workbench chrome to appear
@@ -692,6 +732,27 @@ async function main() {
 		const browserWindow = await app.browserWindow(win);
 		await browserWindow.evaluate(bw => bw.maximize());
 		await win.waitForTimeout(500);
+
+		// Sync flash: inject a full-white overlay for exactly 2 frames (80ms at 25fps).
+		// The renderer scans the seekable MP4 for the first bright frame and uses its
+		// exact PTS to compute a frame-accurate time offset. Shorter = more precise:
+		// 2 frames gives a ±1-frame (~40ms) sync window while still reliably registering
+		// in the compressed video. 1 frame risks being missed due to paint latency.
+		await win.evaluate(() => {
+			const el = document.createElement('div');
+			el.id = '__demo-sync-flash__';
+			Object.assign(el.style, {
+				position: 'fixed', inset: '0',
+				background: 'white',
+				zIndex: '999999999',
+				pointerEvents: 'none',
+			});
+			document.body.appendChild(el);
+		});
+		logEvent('sync.flash');
+		await win.waitForTimeout(80);
+		await win.evaluate(() => document.getElementById('__demo-sync-flash__')?.remove());
+		await win.waitForTimeout(100);
 		const windowSize = await win.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
 		console.log(`VS Code loaded. Window: ${windowSize.width}×${windowSize.height}`);
 
@@ -816,7 +877,7 @@ async function main() {
 			// Expand top-level folders (Models, Sources) — single pass avoids over-expanding
 			await setAllTreeItemsExpanded(win, true, '.part.sidebar', 1);
 			// DEMO
-			logEvent('model-explorer.demo');
+			await syncAndLogDemo(win, 'model-explorer.demo');
 			await flashPaneHighlight(win, 'MODEL EXPLORER');
 			await screenshot(win, 'model-explorer', 'Model Explorer — Models · Sources · By Tag', 3500);
 			logEvent('model-explorer.post-demo');
@@ -838,7 +899,7 @@ async function main() {
 			await waitForReady(win, 30000);
 			await win.waitForSelector('.codelens-decoration a', { timeout: 20000 });
 			// DEMO
-			logEvent('codelens.demo');
+			await syncAndLogDemo(win, 'codelens.demo');
 			await flashHighlight(win, '.editor-actions');
 			await screenshot(win, 'codelens', 'CodeLens — Run · Build · Test · Compile · Profile', 3000);
 			logEvent('codelens.post-demo');
@@ -864,7 +925,7 @@ async function main() {
 			if (!posHoverRef) throw new Error('getTokenScreenPos returned null for line 6 col 30');
 			console.log(`  hover-ref token pos: ${posHoverRef.x},${posHoverRef.y}`);
 			// DEMO: cursor sweep is part of the demo
-			logEvent('hover-ref.demo');
+			await syncAndLogDemo(win, 'hover-ref.demo');
 			await moveMouse(win, posHoverRef.x, posHoverRef.y, 30);
 			await win.mouse.move(posHoverRef.x, posHoverRef.y);
 			await win.waitForSelector('.monaco-hover', { state: 'visible', timeout: 15000 });
@@ -893,7 +954,7 @@ async function main() {
 			if (!posHoverCol) throw new Error('getTokenScreenPos returned null for line 77 col 8');
 			console.log(`  hover-column token pos: ${posHoverCol.x},${posHoverCol.y}`);
 			// DEMO: cursor sweep is part of the demo
-			logEvent('hover-column.demo');
+			await syncAndLogDemo(win, 'hover-column.demo');
 			await moveMouse(win, posHoverCol.x, posHoverCol.y, 30);
 			await win.mouse.move(posHoverCol.x, posHoverCol.y);
 			await win.waitForSelector('.monaco-hover', { state: 'visible', timeout: 15000 });
@@ -919,7 +980,7 @@ async function main() {
 			await win.waitForTimeout(400);
 			await initCustomCursor(win);
 			// DEMO — cursor starts at screen centre, typing will happen at end of file
-			logEvent('completion.demo');
+			await syncAndLogDemo(win, 'completion.demo');
 			await win.keyboard.press('Enter');
 			await win.keyboard.type("{{ ref('", TYPE_DELAY);
 			await win.waitForTimeout(600);
@@ -954,7 +1015,7 @@ async function main() {
 			// Animate cursor from centre to the CTE name token
 			const posRename = await getTokenScreenPos(win, 4, 5);
 			// DEMO: cursor sweep is part of the demo
-			logEvent('rename-symbol.demo');
+			await syncAndLogDemo(win, 'rename-symbol.demo');
 			if (posRename) await moveMouse(win, posRename.x, posRename.y, 30);
 			await win.keyboard.press('F2');
 			const renameInput = win.locator('.rename-box input, .rename-box .rename-input').first();
@@ -985,18 +1046,17 @@ async function main() {
 		console.log('[07] Diagnostics');
 		markSegmentStart('diagnostics');
 		if (shouldRun('diagnostics')) try {
-			// PRE-DEMO: reset, open file, open Problems panel, position cursor at the token
+			// PRE-DEMO: reset, open Problems panel first, then open file
 			await resetLayout(win);
-			await openFile(win, 'season_summary.sql');
 			// Ctrl+Shift+M is a direct key (no command palette) — safe in pre-demo
 			await win.keyboard.press('Control+Shift+M');
 			await win.waitForSelector('.part.panel', { state: 'visible', timeout: 3000 }).catch(() => { });
-			await win.click('.monaco-editor .view-lines');
+			await openFile(win, 'season_summary.sql');
 			await goToLine(win, 20, 22);
 			await initCustomCursor(win);
 			const posDiag = await getTokenScreenPos(win, 20, 22);
 			// DEMO: cursor sweep is part of the demo
-			logEvent('diagnostics.demo');
+			await syncAndLogDemo(win, 'diagnostics.demo');
 			if (posDiag) await moveMouse(win, posDiag.x, posDiag.y, 20);
 			if (posDiag) {
 				await win.waitForTimeout(200);
@@ -1030,7 +1090,7 @@ async function main() {
 			await win.waitForSelector('.outline-element', { timeout: 8000 });
 			await setAllTreeItemsExpanded(win, true, '.part.sidebar', 4);
 			// DEMO
-			logEvent('document-symbols.demo');
+			await syncAndLogDemo(win, 'document-symbols.demo');
 			await flashPaneHighlight(win, 'OUTLINE');
 			await screenshot(win, 'document-symbols', 'Outline — CTE tree with columns in every scope', 3000);
 			logEvent('document-symbols.post-demo');
@@ -1052,7 +1112,7 @@ async function main() {
 			await initCustomCursor(win);
 			const posGotoDef = await getTokenScreenPos(win, 92, 18);
 			// DEMO: cursor sweep is part of the demo
-			logEvent('go-to-definition.demo');
+			await syncAndLogDemo(win, 'go-to-definition.demo');
 			if (posGotoDef) await moveMouse(win, posGotoDef.x, posGotoDef.y, 30);
 			if (posGotoDef) {
 				await win.waitForTimeout(300);
@@ -1086,7 +1146,7 @@ async function main() {
 			await initCustomCursor(win);
 			const posFar = await getTokenScreenPos(win, 6, 30);
 			// DEMO: cursor sweep is part of the demo
-			logEvent('find-all-references.demo');
+			await syncAndLogDemo(win, 'find-all-references.demo');
 			if (posFar) await moveMouse(win, posFar.x, posFar.y, 25);
 			await win.keyboard.press('Shift+F12');
 			await win.waitForTimeout(3000);
@@ -1110,7 +1170,7 @@ async function main() {
 			await win.click('.monaco-editor .view-lines');
 			await goToLine(win, 20, 22);
 			// DEMO
-			logEvent('call-hierarchy.demo');
+			await syncAndLogDemo(win, 'call-hierarchy.demo');
 			await win.keyboard.press('Shift+Alt+H');
 			await waitForReady(win, 15000).catch(() => { });
 			await win.waitForTimeout(2000);
@@ -1133,7 +1193,7 @@ async function main() {
 			// PRE-DEMO
 			await resetLayout(win);
 			// DEMO
-			logEvent('workspace-symbols.demo');
+			await syncAndLogDemo(win, 'workspace-symbols.demo');
 			await win.keyboard.press('Control+T');
 			await win.waitForSelector('.quick-input-widget input', { state: 'visible', timeout: 3000 });
 			await win.keyboard.type('nba_team', TYPE_DELAY);
@@ -1181,7 +1241,7 @@ async function main() {
 			const togglePos = { x: toggleBbox.x + toggleBbox.width / 2, y: toggleBbox.y + toggleBbox.height / 2 };
 			// DEMO: cursor sweeps in, expands columns, then clicks a column
 			await initCustomCursor(win);
-			logEvent('lineage.demo');
+			await syncAndLogDemo(win, 'lineage.demo');
 			await moveMouse(win, togglePos.x, togglePos.y, 30);
 			await win.mouse.click(togglePos.x, togglePos.y);
 			await win.waitForTimeout(1500);
@@ -1232,7 +1292,7 @@ async function main() {
 			const profilePos = { x: profileBbox.x + profileBbox.width / 2, y: profileBbox.y + profileBbox.height / 2 };
 			await initCustomCursor(win);
 			// DEMO: cursor sweeps to the Profile Model editor title button and clicks
-			logEvent('profiler.demo');
+			await syncAndLogDemo(win, 'profiler.demo');
 			await moveMouse(win, profilePos.x, profilePos.y, 30);
 			await win.mouse.click(profilePos.x, profilePos.y);
 
@@ -1247,7 +1307,7 @@ async function main() {
 			await win.waitForTimeout(500);
 			await removeHighlight(win);
 
-			await waitForReady(win, 90000);
+			await waitForReady(win, 180000);
 			logEvent('profiler.ready');
 			await win.waitForTimeout(800);
 
@@ -1275,7 +1335,7 @@ async function main() {
 			await goToLine(win, 2, 1);
 			await initCustomCursor(win);
 			// DEMO: F5 runs the statement at cursor
-			logEvent('query-results.demo');
+			await syncAndLogDemo(win, 'query-results.demo');
 			await win.keyboard.press('F5');
 			// Wait for status bar to show "db query" (query started)
 			await waitForDbQuery(win, 15000);
@@ -1371,7 +1431,7 @@ async function main() {
 			const queryModelPos = { x: queryModelBbox.x + queryModelBbox.width / 2, y: queryModelBbox.y + queryModelBbox.height / 2 };
 			await initCustomCursor(win);
 			// DEMO: cursor sweeps to editor title button and clicks
-			logEvent('query-model.demo');
+			await syncAndLogDemo(win, 'query-model.demo');
 			await moveMouse(win, queryModelPos.x, queryModelPos.y, 30);
 			await win.mouse.click(queryModelPos.x, queryModelPos.y);
 			await waitForDbQuery(win, 15000);
@@ -1402,7 +1462,7 @@ async function main() {
 			const queryCtePos = { x: queryCteBbox.x + queryCteBbox.width / 2, y: queryCteBbox.y + queryCteBbox.height / 2 };
 			await initCustomCursor(win);
 			// DEMO: cursor sweeps to the Query CTE codelens and clicks
-			logEvent('query-cte.demo');
+			await syncAndLogDemo(win, 'query-cte.demo');
 			await moveMouse(win, queryCtePos.x, queryCtePos.y, 30);
 			await win.mouse.click(queryCtePos.x, queryCtePos.y);
 			await waitForDbQuery(win, 15000);
@@ -1449,6 +1509,7 @@ async function main() {
 	const recording = {
 		capturedAt: new Date().toISOString(),
 		videoFile,
+		videoStartOffsetMs,
 		windowSize,
 		events,
 		frames,

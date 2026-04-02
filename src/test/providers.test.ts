@@ -551,22 +551,13 @@ describe('SqlCodeLensProvider', () => {
 		}));
 	});
 
-	it('provides Run/Build/Test/Compile lenses for known SQL model', async () => {
+	it('does not add model action lenses for known SQL model', async () => {
 		const doc = createMockDocument('{{ config(materialized=\'table\') }}\nselect 1', {
 			fileName: '/project/models/customers.sql',
 		});
 
 		const result = await provider.provideCodeLenses(doc, mockToken);
-		expect(result.length).toBe(5);
-
-		const titles = result.map(l => l.command?.title);
-		expect(titles).toContain('$(run) Run');
-		expect(titles).toContain('$(package) Build');
-		expect(titles).toContain('$(beaker) Test');
-		expect(titles).toContain('$(gear) Compile');
-		expect(titles).toContain('$(clock) Profile');
-
-		expect(result[0].command?.command).toBe('dbt-studio.runModel');
+		expect(result.length).toBe(0);
 	});
 
 	it('adds CTE query lenses when parse service returns CTEs', async () => {

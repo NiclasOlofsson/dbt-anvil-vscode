@@ -57,6 +57,8 @@ export class BridgeRunner {
 		private readonly projectDir: string,
 		private readonly env: PythonEnvironment,
 		private readonly logger: ILogger,
+		private readonly stateDir: string = projectDir,
+		private readonly extensionTargetDir: string = path.join(projectDir, 'target'),
 	) {}
 
 	/**
@@ -82,6 +84,7 @@ export class BridgeRunner {
 			...process.env,
 			PYTHONIOENCODING: 'utf-8',
 			DBT_PROJECT_DIR: this.projectDir,
+			DBT_EXTENSION_TARGET_PATH: this.extensionTargetDir,
 			DBT_USE_COLORS: '0',
 			DBT_LOG_LEVEL_FILE: 'none',
 			...buildDbtLogDir(this.projectDir),
@@ -284,16 +287,16 @@ export class BridgeRunner {
 
 	/**
 	 * Save current manifest as run state for state-based selection.
-	 * Copies target/manifest.json → target/state_last_run/manifest.json.
+	 * Copies <extension target>/manifest.json → <storageUri>/state_last_run/manifest.json.
 	 */
 	async saveRunState(): Promise<void> {
-		const src = path.join(this.projectDir, 'target', 'manifest.json');
-		const destDir = path.join(this.projectDir, 'target', 'state_last_run');
+		const src = path.join(this.extensionTargetDir, 'manifest.json');
+		const destDir = path.join(this.stateDir, 'state_last_run');
 		const dest = path.join(destDir, 'manifest.json');
 		try {
 			await fs.mkdir(destDir, { recursive: true });
 			await fs.copyFile(src, dest);
-			this.logger.info('Saved run state to target/state_last_run/manifest.json');
+			this.logger.info(`Saved run state to ${dest}`);
 		} catch (err) {
 			this.logger.warn(`Failed to save run state: ${err instanceof Error ? err.message : String(err)}`);
 		}

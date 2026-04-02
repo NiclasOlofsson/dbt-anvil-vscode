@@ -77,6 +77,7 @@ export class DbtExecutionService implements vscode.Disposable {
 	private _activeJob: DbtJob | null = null;
 	private _nextJobId = 1;
 	private _disposed = false;
+	private _suspended = false;
 
 	private readonly _onJobStarted = new vscode.EventEmitter<DbtJobInfo>();
 	private readonly _onJobCompleted = new vscode.EventEmitter<{ job: DbtJobInfo; result: DbtCommandResult }>();
@@ -166,6 +167,42 @@ export class DbtExecutionService implements vscode.Disposable {
 		return false;
 	}
 
+	get activeJobPriority(): DbtJobPriority | null {
+		return this._activeJob?.priority ?? null;
+	}
+
+	/**
+	 * Suspend the execution service while an external dbt command is running in a terminal.
+	 * Cancels all queued cancellable jobs (background ops) so they don't pile up.
+	 * Non-cancellable (user-initiated) jobs remain queued and run after resume().
+	 */
+	suspend(): void {
+		this._suspended = true;
+		const keepJobs: DbtJob[] = [];
+		for (const job of this._queue) {
+			if (job.cancellable) {
+				job.reject(new Error('Job cancelled: external dbt command running in terminal'));
+			} else {
+				keepJobs.push(job);
+			}
+		}
+		if (keepJobs.length !== this._queue.length) {
+			this._queue = keepJobs;
+			this._onQueueChanged.fire(this._queue.length);
+		}
+		this.logger.info('DbtExecutionService: suspended (external dbt command running)');
+	}
+
+	/**
+	 * Resume the execution service after the external dbt command has finished.
+	 */
+	resume(): void {
+		if (!this._suspended) return;
+		this._suspended = false;
+		this.logger.info('DbtExecutionService: resumed');
+		this._processNext();
+	}
+
 	getActiveJob(): DbtJobInfo | null {
 		return this._activeJob ? this._toJobInfo(this._activeJob) : null;
 	}
@@ -186,7 +223,7 @@ export class DbtExecutionService implements vscode.Disposable {
 	}
 
 	private _processNext(): void {
-		if (this._activeJob || this._queue.length === 0) return;
+		if (this._activeJob || this._queue.length === 0 || this._suspended) return;
 
 		const job = this._queue.shift()!;
 		this._activeJob = job;

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { DatabaseProvider, CancelSignal, QueryHints } from '../providers/database/database-provider';
+import type { DatabaseProvider, CancelSignal } from '../providers/database/database-provider';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
 import type { DbtQueryService } from '../services/dbt-query-service';

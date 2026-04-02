@@ -2,7 +2,7 @@
   "format": "gif",
   "outputFile": "images/demo.gif",
   "manuscriptFile": "scripts/demo/manuscript.json",
-  "outputWidth": 1920,
+  "outputWidth": 800,
   "captionHeightPx": 48,
   "splash": {
     "logoPath": "resources/icons/dbt-studio-512.png",

@@ -35,10 +35,12 @@ export function registerLanguageModelTools(
 ): void {
 	logger.info('Registering language model tools for Copilot Agent Mode');
 
+	const stateDir = context.storageUri?.fsPath ?? context.globalStorageUri.fsPath;
+
 	const tools: Array<[string, vscode.LanguageModelTool<never>]> = [
-		['run_models', new RunModelsTool(service, logger)],
-		['test_models', new TestModelsTool(service, logger)],
-		['build_models', new BuildModelsTool(service, logger)],
+		['run_models', new RunModelsTool(service, logger, stateDir)],
+		['test_models', new TestModelsTool(service, logger, stateDir)],
+		['build_models', new BuildModelsTool(service, logger, stateDir)],
 		['compile_model', new CompileModelTool(service, loader, logger, indexer, compileCache)],
 		['get_lineage', new GetLineageTool(indexer, logger)],
 		['get_column_lineage', new GetColumnLineageTool(indexer, service, logger, compileCache, describeCache)],
@@ -48,7 +50,7 @@ export function registerLanguageModelTools(
 		['query_database', new QueryDatabaseTool(databaseProvider, indexer, logger, dbtQueryService)],
 		['install_deps', new InstallDepsTool(service, logger)],
 		['analyze_impact', new AnalyzeImpactTool(indexer, logger)],
-		['load_seeds', new LoadSeedsTool(service, logger)],
+		['load_seeds', new LoadSeedsTool(service, logger, stateDir)],
 		['snapshot_models', new SnapshotModelsTool(service, logger)],
 	];
 

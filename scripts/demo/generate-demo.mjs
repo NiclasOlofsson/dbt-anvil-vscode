@@ -96,7 +96,11 @@ function buildResolvedClips(manuscript, recording) {
 
 		const startMs = resolveTimestamp(clip.duration.from, recording);
 		const endMs = resolveTimestamp(clip.duration.to, recording);
-		const durationMs = Math.max(clip.durationMs ?? recordedFrame.durationMs ?? 0, endMs - startMs);
+		// For video clips, the event markers define the exact window — don't extend
+		// past endMs using frame.durationMs (which is a static screenshot hold time).
+		const durationMs = clip.useVideo === true
+			? (endMs - startMs)
+			: Math.max(clip.durationMs ?? recordedFrame.durationMs ?? 0, endMs - startMs);
 		if (durationMs <= 0) {
 			fail(`Clip '${clip.id}' resolved to non-positive duration (${durationMs}ms)`);
 		}
@@ -139,7 +143,7 @@ function writeCaptionPng(text, width, height, outPath) {
 /** Run ffmpeg synchronously; terminates the process on failure. */
 function ffRun(args, label) {
 	if (!ffmpegPath) fail('ffmpeg-static path is unavailable');
-	const result = spawnSync(ffmpegPath, ['-y', ...args], { encoding: 'utf8' });
+	const result = spawnSync(ffmpegPath, ['-y', '-loglevel', 'error', ...args], { encoding: 'utf8' });
 	if (result.status !== 0) {
 		fail(`ffmpeg failed (${label}):\n${result.stderr || result.stdout}`);
 	}
@@ -148,9 +152,39 @@ function ffRun(args, label) {
 /** Probe width×height of a video file by parsing ffmpeg stderr. */
 function probeVideoDimensions(videoPath) {
 	const result = spawnSync(ffmpegPath, ['-i', videoPath], { encoding: 'utf8' });
-	const m = result.stderr.match(/Video:.*? (\d+)x(\d+)/);
+	// Match resolution like "1920x1080" — require 3-4 digit numbers to avoid
+	// matching FourCC hex codes like "avc1 / 0x31637661" in H.264 MP4 streams.
+	const m = result.stderr.match(/\b(\d{3,4})x(\d{3,4})\b/);
 	if (!m) return null;
 	return { width: parseInt(m[1], 10), height: parseInt(m[2], 10) };
+}
+
+/**
+ * Scan the video around expectedFlashPts (±scanRadius/2 seconds) for a full-white
+ * frame (mean luma > 200). Returns the absolute PTS of the flash closest to
+ * expectedFlashPts, or null if none found.
+ * pts_time from ffmpeg showinfo is relative to -ss, so we add scanStartSec back.
+ */
+function detectFlashPtsSec(videoFile, expectedFlashPts, cropFilter = '', scanRadiusSec = 3) {
+	const scanStartSec = Math.max(0, expectedFlashPts - scanRadiusSec / 2).toFixed(3);
+	const probe = spawnSync(ffmpegPath, [
+		'-ss', scanStartSec, '-t', String(scanRadiusSec),
+		'-i', videoFile,
+		'-vf', `${cropFilter}showinfo`,
+		'-f', 'null', '-',
+	], { encoding: 'utf8' });
+	// Collect all bright frames, return the one closest to expectedFlashPts
+	const candidates = [];
+	for (const line of probe.stderr.split('\n')) {
+		if (!line.includes('showinfo')) continue;
+		const meanM = line.match(/mean:\[(\d+)/);
+		if (meanM && parseInt(meanM[1]) > 200) {
+			const ptMatch = line.match(/pts_time:([\d.]+)/);
+			if (ptMatch) candidates.push(parseFloat(scanStartSec) + parseFloat(ptMatch[1]));
+		}
+	}
+	if (candidates.length === 0) return null;
+	return candidates.reduce((a, b) => Math.abs(a - expectedFlashPts) <= Math.abs(b - expectedFlashPts) ? a : b);
 }
 
 /**
@@ -200,8 +234,23 @@ function renderSplashMp4(profile, splashDurationMs, sizing, outputPath) {
 	if (profile.splash?.logoPath) {
 		const logoPath = path.resolve(repoRoot, profile.splash.logoPath);
 		const logoW = Math.floor(outputWidth * 0.12);
+		const logoH = logoW; // source is 512×512 (square)
+		const logoLeft = Math.floor((outputWidth - logoW) / 2);
+		const logoTop = Math.floor((outputHeight - logoH) / 2);
+		// Glint: small white sparkle on the dot of the "i" in "studio"
+		// Position calibrated against resources/icons/dbt-studio-512.png
+		const glintX = logoLeft + Math.round((358 / 512) * logoW);
+		const glintY = logoTop + Math.round((236 / 512) * logoH);
+		const glintR2 = Math.pow(Math.max(1, Math.round(logoW * 9 / 153)), 2);
+		const glintPeak = 1.0;
+		const glintSigma2 = Math.pow(0.35 / 2.35, 2);
+		const geq = (ch) => `ifnot(lte(0+${ch}(X,Y),0),clip(${ch}(X,Y)`
+			+ `+255*exp(-((X-${glintX})^2+(Y-${glintY})^2)/${glintR2})`
+			+ `*exp(-((T-${glintPeak})^2)/${glintSigma2}),0,255),0)`;
+		const glintFilter = `geq=r='${geq('r')}':g='${geq('g')}':b='${geq('b')}'`;
 		const fc = `[1:v]scale=${logoW}:-2:force_original_aspect_ratio=decrease[logo];`
-			+ `[0:v][logo]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2[out]`;
+			+ `[0:v][logo]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2[composited];`
+			+ `[composited]${glintFilter}[out]`;
 		ffRun([
 			'-f', 'lavfi', '-i', colorSrc,
 			'-loop', '1', '-i', logoPath,
@@ -342,7 +391,7 @@ async function main() {
 	const { width: srcW, height: srcH } = readPngDimensions(resolvedClips[0].filePath);
 	const outputWidth = profile.outputWidth ?? 1280;
 	const captionHeight = profile.captionHeightPx ?? 40;
-	const contentHeight = Math.round((srcH / srcW) * outputWidth);
+	const contentHeight = Math.round((srcH / srcW) * outputWidth / 2) * 2;
 	const outputHeight = contentHeight + captionHeight;
 	const fps = profile.encoder?.fps ?? 10;
 	const sizing = { outputWidth, contentHeight, outputHeight, captionHeight, fps };
@@ -356,9 +405,34 @@ async function main() {
 	const hasWatermark = !!(watermarkPath && fs.existsSync(watermarkPath));
 
 	// Session video file for useVideo clips
-	const videoFile = recording.videoFile
+	const rawVideoFile = recording.videoFile
 		? path.resolve(repoRoot, recording.videoFile.replaceAll('\\', '/'))
 		: null;
+
+	// Playwright records WebM (VP8) which has sparse keyframes — input-side -ss snaps
+	// to the nearest keyframe and seeking into a long recording is inaccurate or hangs.
+	// Transcode to a keyframe-dense MP4 (every frame is a keyframe with -g 1) once,
+	// cache it alongside the WebM (invalidated by mtime), then seek into that.
+	let videoFile = rawVideoFile;
+	if (rawVideoFile && fs.existsSync(rawVideoFile)) {
+		const seekablePath = rawVideoFile.replace(/\.webm$/i, '.seekable.mp4');
+		const webmMtime = fs.statSync(rawVideoFile).mtimeMs;
+		const cacheMtime = fs.existsSync(seekablePath) ? fs.statSync(seekablePath).mtimeMs : 0;
+		if (cacheMtime < webmMtime) {
+			console.log('  Transcoding WebM to seekable MP4 (one-time, cached)…');
+			ffRun([
+				'-i', rawVideoFile,
+				'-g', '1',
+				'-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+				'-an',
+				seekablePath,
+			], 'transcode-seekable');
+			console.log('  Transcode complete.');
+		} else {
+			console.log('  Using cached seekable MP4.');
+		}
+		videoFile = seekablePath;
+	}
 
 	// If the recorded video is taller than the screenshots (e.g. Playwright records at
 	// 1920×1080 but the maximized VS Code window is only 1920×1020 due to the taskbar),
@@ -369,6 +443,26 @@ async function main() {
 		if (vDims && vDims.height > srcH) {
 			videoCropToHeight = srcH;
 			console.log(`  Note: video is ${vDims.width}×${vDims.height}, screenshots are ${srcW}×${srcH} — cropping video to ${srcH}px height`);
+		}
+	}
+
+	// Compute frame-accurate video offset using the global sync flash frame.
+	// During capture a full-white overlay was shown for 80ms and its wall-clock time
+	// logged as 'sync.flash'. We scan the seekable MP4 near videoStartOffsetMs to find
+	// the bright frame and get its exact PTS. Individual segments may also carry per-
+	// segment 'X.sync' events (see syncAndLogDemo in capture-demo.mjs) which override
+	// this global offset to eliminate per-segment WebM PTS drift.
+	let videoStartOffsetMs = recording.videoStartOffsetMs ?? 0;
+	const syncEvent = recording.events?.find(e => e.name === 'sync.flash');
+	if (videoFile && fs.existsSync(videoFile) && syncEvent) {
+		const expectedFlashPts = (syncEvent.tMs - videoStartOffsetMs) / 1000;
+		const cropFilter = videoCropToHeight ? `crop=iw:${videoCropToHeight}:0:0,` : '';
+		const flashPtsSec = detectFlashPtsSec(videoFile, expectedFlashPts, cropFilter, 3);
+		if (flashPtsSec !== null) {
+			videoStartOffsetMs = syncEvent.tMs - Math.round(flashPtsSec * 1000);
+			console.log(`  Global sync flash at pts=${flashPtsSec.toFixed(3)}s → videoStartOffsetMs=${videoStartOffsetMs}ms`);
+		} else {
+			console.warn('  ⚠ Global sync flash not detected — falling back to videoStartOffsetMs from recording');
 		}
 	}
 
@@ -392,6 +486,7 @@ async function main() {
 	}
 
 	// Clips
+	const cropFilter = videoCropToHeight ? `crop=iw:${videoCropToHeight}:0:0,` : '';
 	for (const clip of resolvedClips) {
 		const captionPng = path.join(workDir, `${clip.id}-caption.png`);
 		writeCaptionPng(clip.caption, outputWidth, captionHeight, captionPng);
@@ -401,8 +496,28 @@ async function main() {
 		if (clip.useVideo) {
 			if (!videoFile) fail(`Clip '${clip.id}' is marked useVideo but recording has no videoFile`);
 			if (!fs.existsSync(videoFile)) fail(`Video file not found: ${rel(videoFile)}`);
-			console.log(`  Rendering video clip '${clip.id}' (${(clip.durationMs / 1000).toFixed(1)}s from ${(clip.window.startMs / 1000).toFixed(1)}s)…`);
-			renderVideoClipMp4(clip, videoFile, captionPng, hasWatermark ? watermarkPath : null, videoFilter, sizing, mp4Path);
+
+			// Use per-segment sync event if present (eliminates WebM PTS drift accumulation).
+			// capture-demo.mjs injects a white flash just before each .demo event and logs
+			// it as 'X.sync'. We scan for that flash to get an exact per-segment PTS, giving
+			// drift-corrected video offsets for each clip independently.
+			const segSyncName = `${clip.id}.sync`;
+			const segSyncEvent = recording.events?.find(e => e.name === segSyncName);
+			let effectiveOffsetMs = videoStartOffsetMs;
+			if (segSyncEvent && videoFile) {
+				const approxPts = (segSyncEvent.tMs - videoStartOffsetMs) / 1000;
+				const segFlashPts = detectFlashPtsSec(videoFile, approxPts, cropFilter, 15);
+				if (segFlashPts !== null) {
+					effectiveOffsetMs = segSyncEvent.tMs - Math.round(segFlashPts * 1000);
+					console.log(`  [${clip.id}] Per-segment sync at pts=${segFlashPts.toFixed(3)}s → effectiveOffset=${effectiveOffsetMs}ms`);
+				} else {
+					console.warn(`  [${clip.id}] ⚠ Per-segment sync flash not detected — using global offset`);
+				}
+			}
+
+			const seekMs = Math.max(0, clip.window.startMs - effectiveOffsetMs);
+			console.log(`  Rendering video clip '${clip.id}' (${(clip.durationMs / 1000).toFixed(1)}s from ${(seekMs / 1000).toFixed(1)}s)…`);
+			renderVideoClipMp4({ ...clip, window: { ...clip.window, startMs: seekMs } }, videoFile, captionPng, hasWatermark ? watermarkPath : null, videoFilter, sizing, mp4Path);
 		} else {
 			console.log(`  Rendering static clip '${clip.id}' (${(clip.durationMs / 1000).toFixed(1)}s)…`);
 			renderStaticClipMp4(clip, captionPng, hasWatermark ? watermarkPath : null, staticFilter, sizing, mp4Path);

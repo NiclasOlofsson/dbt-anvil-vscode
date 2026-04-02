@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'node:path';
 import type { DbtCommandResult } from '../dbt/bridge-runner';
 
 export interface StateSelectionResult {
@@ -9,6 +10,7 @@ export interface StateSelectionResult {
 export function buildStateSelector(
 	selectStateModified: boolean | undefined,
 	selectStateModifiedPlusDownstream: boolean | undefined,
+	stateDir: string,
 	select?: string,
 ): StateSelectionResult {
 	if (!selectStateModified) {
@@ -19,7 +21,7 @@ export function buildStateSelector(
 		: 'state:modified';
 	return {
 		selector: stateSelector,
-		stateArgs: ['--state', 'target/state_last_run'],
+		stateArgs: ['--state', path.join(stateDir, 'state_last_run')],
 	};
 }
 
