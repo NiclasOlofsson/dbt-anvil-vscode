@@ -1,6 +1,7 @@
 .vscode
 .github
 nul
+images/
 src/
 scripts/
 temp_auto/
