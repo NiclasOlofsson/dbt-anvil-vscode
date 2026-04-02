@@ -1,6 +1,6 @@
 {
   "format": "webp",
-  "outputFile": "images/demo.webp",
+  "outputFile": "../dbt-studio-assets/demo.webp",
   "manuscriptFile": "scripts/demo/manuscript.json",
   "outputWidth": 1280,
   "captionHeightPx": 48,

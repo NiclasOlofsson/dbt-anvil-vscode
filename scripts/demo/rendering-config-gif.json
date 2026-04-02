@@ -1,6 +1,6 @@
 {
   "format": "gif",
-  "outputFile": "images/demo.gif",
+  "outputFile": "../dbt-studio-assets/demo.gif",
   "manuscriptFile": "scripts/demo/manuscript.json",
   "outputWidth": 800,
   "captionHeightPx": 48,
