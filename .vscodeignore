@@ -8,6 +8,7 @@ temp_auto/
 samples/
 node_modules/
 .esbuild.ts
+.eslintcache
 tsconfig.json
 vitest.config.ts
 eslint.config.mjs
