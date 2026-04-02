@@ -2,7 +2,7 @@
 	"name": "dbt-studio-vscode",
 	"displayName": "dbt Studio",
 	"description": "A full-featured development environment and an AI-powered assistant — the best of both worlds for analytics engineering",
-	"version": "0.1.6",
+	"version": "0.1.7",
 	"publisher": "nickeolofsson",
 	"license": "MIT",
 	"icon": "resources/icons/dbt-studio-128.png",
@@ -719,6 +719,17 @@
 						"type": "boolean",
 						"default": false,
 						"markdownDescription": "Suppress the warning about auto-save triggering frequent dbt parse runs."
+					}
+				}
+			},
+			{
+				"id": "dbt-studio.terminal",
+				"title": "Terminal",
+				"properties": {
+					"dbt-studio.terminal.externalCommandMonitor.enabled": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "**⚠️ Disabling this is strongly discouraged.** dbt Studio monitors terminal shell executions and automatically suspends its own background operations when you run `dbt run`, `build`, `seed`, `snapshot`, `clone`, or `run-operation` directly in a terminal. Without this, concurrent dbt writes can corrupt the manifest and produce stale intellisense, phantom errors, and incorrect lineage. Only disable if VS Code shell integration is causing unrelated problems in your environment."
 					}
 				}
 			},

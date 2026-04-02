@@ -14,11 +14,13 @@ export class ManifestLoader {
 	private _manifestPath: string;
 	private _projectConfig: DbtProjectConfig | undefined;
 	private _lastMtimeMs: number | null = null;
+	private readonly _extensionTargetDir: string | undefined;
 
-	constructor(private readonly _projectDir: string) {
+	constructor(private readonly _projectDir: string, extensionTargetDir?: string) {
+		this._extensionTargetDir = extensionTargetDir;
 		this._projectConfig = loadProjectConfig(_projectDir);
 		this._manifestPath = path.join(
-			resolveTargetPath(this._projectConfig, _projectDir),
+			this._extensionTargetDir ?? resolveTargetPath(this._projectConfig, _projectDir),
 			'manifest.json',
 		);
 	}
@@ -36,10 +38,12 @@ export class ManifestLoader {
 	 */
 	reloadProjectConfig(): void {
 		this._projectConfig = loadProjectConfig(this._projectDir);
-		this._manifestPath = path.join(
-			resolveTargetPath(this._projectConfig, this._projectDir),
-			'manifest.json',
-		);
+		if (!this._extensionTargetDir) {
+			this._manifestPath = path.join(
+				resolveTargetPath(this._projectConfig, this._projectDir),
+				'manifest.json',
+			);
+		}
 	}
 
 	get projectConfig(): DbtProjectConfig | undefined {

@@ -73,7 +73,9 @@ def resolve_profiles_dir(project_dir: str) -> str:
     return os.path.expanduser("~/.dbt")
 
 
-def run_command(dbt, args: list, project_dir: str, profiles_dir: str) -> bool:
+def run_command(
+    dbt, args: list, project_dir: str, profiles_dir: str, extension_target_path: str
+) -> bool:
     """
     Invoke a dbt command. dbt output goes directly to stdout (print statements).
     Returns True if successful, False otherwise.
@@ -81,6 +83,8 @@ def run_command(dbt, args: list, project_dir: str, profiles_dir: str) -> bool:
     # Always inject --profiles-dir and --log-format unless caller provided them
     if "--profiles-dir" not in args:
         args = [*args, "--profiles-dir", profiles_dir]
+    if "--target-path" not in args:
+        args = [*args, "--target-path", extension_target_path]
     if "--log-format" not in args and len(args) > 0 and args[0] not in ("deps",):
         args = [*args, "--log-format", "text"]
 
@@ -304,7 +308,11 @@ def _aliases_from_scope(
 
 
 def handle_compile_inline(
-    request: dict[str, Any], dbt: Any, project_dir: str, profiles_dir: str
+    request: dict[str, Any],
+    dbt: Any,
+    project_dir: str,
+    profiles_dir: str,
+    extension_target_path: str,
 ) -> None:
     """Compile a Jinja SQL string without executing it.
 
@@ -331,6 +339,8 @@ def handle_compile_inline(
         project_dir,
         "--profiles-dir",
         profiles_dir,
+        "--target-path",
+        extension_target_path,
         "--log-format",
         "json",
     ]
@@ -370,7 +380,11 @@ def handle_compile_inline(
 
 
 def handle_describe_table(
-    request: dict[str, Any], dbt: Any, project_dir: str, profiles_dir: str
+    request: dict[str, Any],
+    dbt: Any,
+    project_dir: str,
+    profiles_dir: str,
+    extension_target_path: str,
 ) -> None:
     """Handle a describe_table request using dbt show to query the actual database.
 
@@ -403,6 +417,8 @@ def handle_describe_table(
         project_dir,
         "--profiles-dir",
         profiles_dir,
+        "--target-path",
+        extension_target_path,
         "--log-format",
         "json",
     ]
@@ -2307,6 +2323,10 @@ def main() -> None:
     # Determine project directory (passed via env var set by the extension)
     project_dir = os.environ.get("DBT_PROJECT_DIR", os.getcwd())
     profiles_dir = resolve_profiles_dir(project_dir)
+    extension_target_path = os.environ.get(
+        "DBT_EXTENSION_TARGET_PATH",
+        os.environ.get("DBT_TARGET_PATH", os.path.join(project_dir, "target")),
+    )
 
     # dbt is lazy-loaded — only imported/instantiated when a request that
     # actually needs it arrives (command, describe_table).
@@ -2370,7 +2390,9 @@ def main() -> None:
                     flush=True,
                 )
                 continue
-            handle_describe_table(request, d, project_dir, profiles_dir)
+            handle_describe_table(
+                request, d, project_dir, profiles_dir, extension_target_path
+            )
         elif "compile_inline" in request:
             d = get_dbt()
             if d is None:
@@ -2379,7 +2401,9 @@ def main() -> None:
                     flush=True,
                 )
                 continue
-            handle_compile_inline(request, d, project_dir, profiles_dir)
+            handle_compile_inline(
+                request, d, project_dir, profiles_dir, extension_target_path
+            )
         elif "get_columns" in request:
             handle_get_columns(request)
         elif "command" in request:
@@ -2396,7 +2420,13 @@ def main() -> None:
                     flush=True,
                 )
                 continue
-            success = run_command(d, list(command_args), project_dir, profiles_dir)
+            success = run_command(
+                d,
+                list(command_args),
+                project_dir,
+                profiles_dir,
+                extension_target_path,
+            )
             print(json.dumps({"success": success}), flush=True)
         else:
             print(

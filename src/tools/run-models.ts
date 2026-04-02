@@ -17,6 +17,7 @@ export class RunModelsTool implements vscode.LanguageModelTool<RunModelsInput> {
 	constructor(
 		private readonly service: DbtExecutionService,
 		private readonly logger: ILogger,
+		private readonly stateDir: string,
 	) {}
 
 	async invoke(
@@ -30,7 +31,7 @@ export class RunModelsTool implements vscode.LanguageModelTool<RunModelsInput> {
 		} = options.input;
 
 		const { selector, stateArgs } = buildStateSelector(
-			select_state_modified, select_state_modified_plus_downstream, select,
+			select_state_modified, select_state_modified_plus_downstream, this.stateDir, select,
 		);
 		this.logger.info(`LM Tool: runModels select="${selector ?? 'all'}"`);
 

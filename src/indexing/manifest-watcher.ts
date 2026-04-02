@@ -10,7 +10,7 @@ import type { ParseService } from '../services/parse-service';
 import type { CompileCache } from '../dbt/compile-cache';
 
 /**
- * Watches dbt target/manifest.json for changes and rebuilds the index.
+ * Watches the manifest.json path configured by ManifestLoader and rebuilds the index.
  * Also watches dbt_project.yml for project-level changes.
  * Watches SQL model files and invalidates column store entries on save.
  */
@@ -41,17 +41,15 @@ export class ManifestWatcher {
 
 	start(projectDir: string): void {
 		this._projectDir = projectDir;
-		const manifestPattern = new vscode.RelativePattern(projectDir, '**/target/manifest.json');
-		this._manifestWatcher = vscode.workspace.createFileSystemWatcher(manifestPattern);
-
-		this._manifestWatcher.onDidChange(() => this._debouncedRebuild('manifest changed'));
-		this._manifestWatcher.onDidCreate(() => this._debouncedRebuild('manifest created'));
+		this._startManifestWatcher();
 
 		const projectPattern = new vscode.RelativePattern(projectDir, 'dbt_project.yml');
 		this._projectWatcher = vscode.workspace.createFileSystemWatcher(projectPattern);
 		this._projectWatcher.onDidChange(() => {
 			this.loader.reloadProjectConfig();
 			this._onProjectConfigChanged.fire();
+			// Target path may have changed — restart the manifest watcher on the new path
+			this._startManifestWatcher();
 			this._rebuild('dbt_project.yml changed');
 		});
 
@@ -149,6 +147,15 @@ export class ManifestWatcher {
 		this._suppressed = false;
 	}
 
+	/**
+	 * Force an immediate manifest index rebuild, bypassing debounce and suppression.
+	 * Call this after an external dbt command (run/build/seed etc.) completes in a terminal
+	 * so the extension picks up any manifest changes it wrote.
+	 */
+	triggerRebuild(): void {
+		this._rebuild('external dbt command completed');
+	}
+
 	setExecutionService(service: DbtExecutionService): void {
 		this._executionService = service;
 	}
@@ -235,6 +242,14 @@ export class ManifestWatcher {
 	/** Returns the current content hash maps for persistence. */
 	getHashes(): { hashes: ReadonlyMap<string, string>; nonWsHashes: ReadonlyMap<string, string> } {
 		return { hashes: this._contentHashes, nonWsHashes: this._nonWsHashes };
+	}
+
+	private _startManifestWatcher(): void {
+		this._manifestWatcher?.dispose();
+		const manifestUri = vscode.Uri.file(this.loader.manifestPath);
+		this._manifestWatcher = vscode.workspace.createFileSystemWatcher(manifestUri.fsPath);
+		this._manifestWatcher.onDidChange(() => this._debouncedRebuild('manifest changed'));
+		this._manifestWatcher.onDidCreate(() => this._debouncedRebuild('manifest created'));
 	}
 
 	dispose(): void {

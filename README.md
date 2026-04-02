@@ -6,6 +6,8 @@ If you work with TypeScript or Python in VS Code, you take column completions, g
 
 No configuration. Open a dbt project and everything works.
 
+![dbt Studio demo](images/demo.webp)
+
 ## Column Intelligence
 
 dbt Studio parses your models and knows their columns. Type in a SELECT and you get completions from the actual columns defined upstream. Hover over a column name to see where it comes from. Rename it and every reference updates.
@@ -18,19 +20,41 @@ Most SQL tooling treats Jinja as noise and breaks the moment it hits a `{% if %}
 
 Macro calls get signature help as you type. Both Jinja-SQL and Jinja-in-YAML have dedicated grammars, so highlighting is accurate in model files and schema definitions alike.
 
+dbt Studio is, quietly, a Jinja ninja.
+
 ## Lineage
 
 An interactive graph that follows your editor. Open a model and see its upstream and downstream dependencies in a side panel. Click into column-level lineage to trace individual columns through the DAG.
 
-Depth controls let you expand or collapse the view. The graph updates as you navigate between files.
+Column lineage is parsed — not pattern-matched. No regular expressions trying to guess what your SQL means. For a developer who's spent time debugging why a regex-based lineage tool got confused by a subquery, this is roughly what oat milk is to someone who's lactose intolerant: it just works, nobody gets a stomachache, and you stop thinking about it.
+
+Also fast. Noticeably fast.
+
+## SQL Editor
+
+dbt Studio includes a SQL editor for running ad-hoc queries directly against your warehouse. Open any `.sql` file outside your models folder, write a query, and press F5. Results appear in a panel immediately — with row numbers, a stats summary, and selection-aware copy and export.
+
+Vanilla SQL or Jinja macros — it doesn't matter. dbt Studio compiles Jinja before sending the query, so you can write `{{ ref('orders') }}` or `{{ my_macro() }}` in a scratch file and it just works.
+
+Useful for exploration, debugging, and verifying what a compiled query actually returns before you build it into a model.
+
+## Profiler
+
+Not a real profiler. A real profiler instruments query plans, tracks memory allocation, and produces flame graphs. This is not that.
+
+What it _is_: a tool that runs each CTE in your model separately and tells you how many rows it produced and how long it took. That's often enough to find the CTE that's scanning 40 million rows when it should be scanning 40. Results appear in a sidebar tree, and gutter icons mark the hot and warm CTEs directly in the editor so you can spot the expensive ones without leaving the file.
+
+Think of it as a map drawn on a napkin — not GPS, but it'll get you to the right neighbourhood.
 
 ## Testing
 
-Run dbt tests from the editor. Results show up in a sidebar — pass, fail, warn — with the real error output.
+Let's be honest — most dbt tests are data quality checks. `not_null`. `unique`. The occasional `accepted_values`. Useful, sure, but not exactly what a developer means when they say "I want to test my logic."
 
-dbt Studio can also test individual CTEs inside a model in isolation, using the `model::cte_name` convention. Useful when a model has complex intermediate steps you want to verify on their own.
+dbt does have unit tests now, and they are what developers actually want. Someone has to write them though, and that someone is you. dbt Studio at least makes running them less painful: results show up in a sidebar with pass, fail, and warn grouped by status, and the real error output is right there without digging through terminal logs.
 
-Tests integrate with VS Code's native Test Controller, so the Testing panel works too.
+You can also test individual CTEs in isolation using the `model::cte_name` convention — useful when a model has complex intermediate steps and you want to verify one of them without running the whole thing.
+
+Tests integrate with VS Code's native Test Controller, so the Testing panel works too. No excuses left, really.
 
 ## Copilot Tools
 
@@ -55,20 +79,28 @@ Copilot uses the tools to actually query your project and run commands — these
 
 ## Full Feature List
 
-- Syntax highlighting for Jinja SQL and Jinja in YAML
-- Go to definition for models, sources, and macros
+You've read the prose. You skipped to here anyway. Fine.
+
+- Column completions — `ref()`, `source()`, Jinja blocks, column names, YAML schema
 - Hover info — model details, column metadata, source descriptions
-- Completions — `ref()`, `source()`, Jinja blocks, column names, YAML schema
-- Find all references for models and sources
-- Rename models (including the file) and columns across the project
-- CodeLens — run/test/compile actions inline above models
-- Diagnostics — parse errors, unresolved refs, column mismatches
+- Go to definition for models, sources, and macros
+- Find all references for models, sources, CTEs, and column aliases
+- Rename with F2 — models (including the file), CTEs, column aliases, and inline aliases
+- Call hierarchy — see which models reference yours, and which models yours references
+- Diagnostics — parse errors, unresolved refs, column mismatches, SQL syntax errors
+- Inline / restore ref — quick-fix to expand a `ref()` to its compiled SQL or restore it
+- Quick Fix — create missing model files from unresolved refs
+- CodeLens — per-CTE query actions inline above each CTE definition
 - Document symbols — navigate CTEs and model structure via the outline
 - Workspace symbols — find any model or source by name (Ctrl+T)
 - Signature help for Jinja macros
-- Quick Fix — create missing model files from unresolved refs
+- Syntax highlighting for Jinja SQL and Jinja in YAML
+- Interactive lineage graph — model-level and column-level, follows your active editor
+- SQL editor — run ad-hoc queries with F5, results panel with stats, copy, and export
+- CTE Profiler — per-CTE row counts and timing, gutter icons, sidebar summary
 - Model Explorer — browse the project tree with materialisation icons
-- Test Explorer with status tracking
+- Test Explorer — pass/fail/warn by status, integrates with VS Code Testing panel
+- Copilot tools — 14 tools for project info, lineage, queries, and dbt execution
 
 ## Under the Hood
 

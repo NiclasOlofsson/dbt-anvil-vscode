@@ -248,7 +248,7 @@ export class QueryResultPanel implements vscode.WebviewViewProvider, vscode.Webv
 				'| ' + columns.map(c => {
 					const v = row[c];
 					return (v === null || v === undefined) ? '' : String(v).replace(/\|/g, '\\|');
-				}).join(' | ') + ' |'
+				}).join(' | ') + ' |',
 			).join('\n');
 			return `${header}\n${sep}\n${body}`;
 		}
@@ -256,7 +256,7 @@ export class QueryResultPanel implements vscode.WebviewViewProvider, vscode.Webv
 	}
 
 	private _emptyHtml(): string {
-		return `<!DOCTYPE html><html><body style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:var(--vscode-font-family);color:var(--vscode-descriptionForeground)"><p>Run a query (F5) to see results.</p></body></html>`;
+		return '<!DOCTYPE html><html><body style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:var(--vscode-font-family);color:var(--vscode-descriptionForeground)"><p>Run a query (F5) to see results.</p></body></html>';
 	}
 
 	private _getHtml(results: StatementResult[]): string {

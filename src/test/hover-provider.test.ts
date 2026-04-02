@@ -295,7 +295,7 @@ describe('ParseService.traceCteLineage', () => {
 	it('returns single-hop chain when CTE wraps a ref', () => {
 		// addr → address_with_country (CTE) → ref('gold__address')
 		const chain = ParseService.traceCteLineage(addrCteRef, model);
-		expect(chain).toEqual(['address_with_country', "ref('gold__address')"]);
+		expect(chain).toEqual(['address_with_country', 'ref(\'gold__address\')']);
 	});
 
 	it('returns just the CTE name when it has no upstream table_ref in its body', () => {
@@ -325,7 +325,7 @@ describe('ParseService.traceCteLineage', () => {
 		};
 		// model has refs: [{ model: 'gold__address', line: 1 }]
 		const chain = ParseService.traceCteLineage(directRef, model);
-		expect(chain).toEqual(["ref('gold__address')"]);
+		expect(chain).toEqual(['ref(\'gold__address\')']);
 	});
 
 	it('follows a two-hop chain: cte_b → cte_a → ref', () => {

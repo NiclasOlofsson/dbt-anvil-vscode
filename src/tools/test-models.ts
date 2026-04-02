@@ -16,6 +16,7 @@ export class TestModelsTool implements vscode.LanguageModelTool<TestModelsInput>
 	constructor(
 		private readonly service: DbtExecutionService,
 		private readonly logger: ILogger,
+		private readonly stateDir: string,
 	) {}
 
 	async invoke(
@@ -47,7 +48,7 @@ export class TestModelsTool implements vscode.LanguageModelTool<TestModelsInput>
 		}
 
 		const { selector, stateArgs } = buildStateSelector(
-			select_state_modified, select_state_modified_plus_downstream, select,
+			select_state_modified, select_state_modified_plus_downstream, this.stateDir, select,
 		);
 		this.logger.info(`LM Tool: testModels select="${selector ?? 'all'}"`);
 
