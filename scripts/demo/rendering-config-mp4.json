@@ -1,6 +1,6 @@
 {
   "format": "mp4",
-  "outputFile": "temp_auto/demo.mp4",
+  "outputFile": "../dbt-studio-assets/demo.mp4",
   "manuscriptFile": "scripts/demo/manuscript.json",
   "outputWidth": 1920,
   "captionHeightPx": 48,
