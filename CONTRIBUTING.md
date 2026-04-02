@@ -99,13 +99,13 @@ This bumps the patch version and publishes directly to the VS Code Marketplace. 
 
 > **Note:** Both commands pass `--allow-proposed-apis contribLanguageModelToolSets` because the toolset feature is still a proposed VS Code API. This means the toolset grouping only works in VS Code Insiders; core features (syntax highlighting, model explorer, individual tools) work in stable VS Code.
 
-After publishing, commit the version bump and changelog:
+`npm run publish:marketplace` runs `npm version patch` internally, which automatically creates a git commit and tag for the version bump. After publishing, push the commit and tag:
 
 ```bash
-git add package.json package-lock.json CHANGELOG.md
-git commit -m "chore: bump version to x.x.x"
-git push
+git push && git push --tags
 ```
+
+Do **not** manually commit `package.json` or `package-lock.json` after publishing — `npm version patch` already did that.
 
 ## Quick Reference
 
