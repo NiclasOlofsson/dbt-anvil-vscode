@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.8
+
+- **Fix Marketplace README image** — Demo image was not rendering on the VS Code Marketplace due to the repository being private. Images are now hosted publicly and load correctly on the extension page.
+
 ## 0.1.7
 
 - **Terminal dbt command detection** — dbt Studio now monitors your integrated terminal for `dbt run`, `build`, `seed`, `snapshot`, `clone`, and `run-operation` commands. When one is detected, background operations are automatically suspended so they don't race against the terminal process and corrupt the manifest. Once the command finishes, the extension resumes and immediately re-indexes the manifest to pick up any changes. Can be disabled via `dbt-studio.terminal.externalCommandMonitor.enabled` if VS Code shell integration causes unrelated problems in your environment.
