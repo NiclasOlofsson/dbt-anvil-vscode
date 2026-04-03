@@ -44,18 +44,26 @@ export class SqlDebugConfigProvider implements vscode.DebugConfigurationProvider
 				name: 'Run SQL',
 				type: DEBUG_TYPE,
 				request: 'launch',
+				noDebug: true,
+			},
+			{
+				name: 'Debug SQL',
+				type: DEBUG_TYPE,
+				request: 'launch',
 			},
 			{
 				name: 'Run All SQL',
 				type: DEBUG_TYPE,
 				request: 'launch',
 				scope: 'all',
+				noDebug: true,
 			},
 			{
 				name: 'Run SQL (no limit)',
 				type: DEBUG_TYPE,
 				request: 'launch',
 				limit: -1,
+				noDebug: true,
 			},
 		];
 	}

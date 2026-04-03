@@ -78,10 +78,10 @@ export class QueryRunner {
 		await this._executeStatements(editor.document.getText(), limit, undefined, editor.document.uri.toString());
 	}
 
-	/** Execute a single SQL string (from CodeLens). */
-	async executeSql(sql: string): Promise<void> {
-		const limit = vscode.workspace.getConfiguration('dbt-studio').get<number>('queryEditor.defaultLimit', 500);
-		await this._executeStatements(sql, limit);
+	/** Execute a single SQL string (from CodeLens or debug adapter). */
+	async executeSql(sql: string, limit?: number): Promise<void> {
+		const effectiveLimit = limit ?? vscode.workspace.getConfiguration('dbt-studio').get<number>('queryEditor.defaultLimit', 500);
+		await this._executeStatements(sql, effectiveLimit);
 	}
 
 	/** Execute with explicit config (from debug adapter launch configuration). */
