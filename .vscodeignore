@@ -7,6 +7,7 @@ scripts/
 temp_auto/
 samples/
 node_modules/
+!node_modules/@duckdb/**
 .esbuild.ts
 .eslintcache
 tsconfig.json

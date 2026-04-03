@@ -4,7 +4,8 @@ import type { DbtExecutionService } from '../../dbt/execution-service';
 import type { DatabaseProvider } from './database-provider';
 import { DatabricksProvider } from './databricks-provider';
 import { DbtDatabaseProvider } from './dbt-database-provider';
-import { ProfilesReader, type DatabricksConnection } from './profiles-reader';
+import { DuckdbProvider } from './duckdb-provider';
+import { ProfilesReader, type DatabricksConnection, type DuckdbConnection } from './profiles-reader';
 
 /**
  * Create the appropriate DatabaseProvider for the given dbt adapter type.
@@ -22,6 +23,7 @@ export async function createDatabaseProvider(
 	adapterType: string,
 	profileName: string,
 	profilesDir: string,
+	projectDir: string,
 	executionService: DbtExecutionService,
 	logger: ILogger,
 ): Promise<DatabaseProvider> {
@@ -41,6 +43,26 @@ export async function createDatabaseProvider(
 
 		logger.warn(
 			'DatabaseProviderFactory: adapter is databricks but could not read connection from ' +
+			`profiles.yml at "${profilesDir}" — falling back to DbtDatabaseProvider`,
+		);
+	}
+
+	if (preferNative && adapterType === 'duckdb' && process.platform === 'win32') {
+		const reader = new ProfilesReader(profileName, profilesDir);
+		const connection = await reader.readConnection();
+
+		if (connection && connection.type === 'duckdb') {
+			logger.info('DatabaseProviderFactory: using DuckdbProvider');
+			return new DuckdbProvider(
+				connection as DuckdbConnection,
+				projectDir,
+				executionService,
+				logger,
+			);
+		}
+
+		logger.warn(
+			'DatabaseProviderFactory: adapter is duckdb but could not read connection from ' +
 			`profiles.yml at "${profilesDir}" — falling back to DbtDatabaseProvider`,
 		);
 	}
