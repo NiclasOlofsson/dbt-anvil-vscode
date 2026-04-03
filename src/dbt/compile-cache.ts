@@ -209,6 +209,14 @@ export class CompileCache {
 	}
 
 	/**
+	 * Return the cached compiled SQL for a uniqueId without triggering a compile.
+	 * Returns undefined if the model has not been compiled yet in this session.
+	 */
+	getCachedSql(uniqueId: string): string | undefined {
+		return this._cache.get(uniqueId)?.compiledCode;
+	}
+
+	/**
 	 * Export all current cache entries for persistence.
 	 */
 	exportForPersistence(): Record<string, { compiledCode: string; sourceMtimeMs: number; sourceContentHash: string; originalFilePath: string }> {

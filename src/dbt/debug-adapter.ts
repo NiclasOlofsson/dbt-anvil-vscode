@@ -2,6 +2,11 @@ import * as vscode from 'vscode';
 import type { QueryRunner } from './query-runner';
 import type { DbtPathResolver } from './dbt-path-resolver';
 import type { ILogger } from '../types/logger';
+import type { DatabaseProvider, QueryResult } from '../providers/database/database-provider';
+import type { BridgeRunner } from './bridge-runner';
+import type { CompileCache } from './compile-cache';
+import type { ManifestIndexer } from '../indexing/manifest-indexer';
+import { Priority } from './execution-service';
 import { splitStatements, findStatementAtOffset } from './statement-splitter';
 
 interface DapMessage {
@@ -12,80 +17,192 @@ interface DapMessage {
 	request_seq?: number;
 }
 
+// ── Bridge response types ──
+
+interface DecomposeFrame {
+	name: string;
+	type: 'cte' | 'select' | 'subquery';
+	line: number;
+	endLine: number;
+}
+
+interface DecomposeClause {
+	stage: string;
+	sql: string;
+	line: number;
+}
+
+interface DecomposeResult {
+	success: boolean;
+	error?: string;
+	frames: DecomposeFrame[];
+	clauses: Record<string, DecomposeClause[]>;
+	refs: Record<string, string[]>;
+}
+
+// ── Cached step result ──
+
+interface StepResult {
+	rows: Record<string, unknown>[];
+	columns: string[];
+	columnTypes?: Record<string, string>;
+	totalCount: number;
+	executionTimeMs: number;
+}
+
+// ── Scope/variable reference encoding ──
+// We pack frameIndex + scopeKind into a single variablesReference integer.
+const SCOPE_RESULT = 1;
+const SCOPE_IMPACT = 2;
+const SCOPE_QUERY = 3;
+
+function encodeRef(frameIndex: number, scope: number, _extra = 0): number {
+	return ((frameIndex & 0xFFFF) << 16) | ((scope & 0xFF) << 8) | (_extra & 0xFF);
+}
+function decodeRef(ref: number): { frameIndex: number; scope: number; extra: number } {
+	return {
+		frameIndex: (ref >> 16) & 0xFFFF,
+		scope: (ref >> 8) & 0xFF,
+		extra: ref & 0xFF,
+	};
+}
+
 /**
- * Minimal inline DAP adapter that runs ad-hoc SQL queries via QueryRunner.
+ * Full DAP adapter for SQL CTE debugging.
  *
- * No breakpoints, no stepping — just launch → execute → terminate.
- * Wired into VS Code via DebugAdapterInlineImplementation so F5 runs SQL.
+ * - `noDebug: true` (Ctrl+F5) → fire-and-forget execution (legacy behaviour)
+ * - `noDebug: false` (F5) → stepping debugger with CTE/clause frames
  */
 export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _seq = 1;
-	private _threadName = 'SQL';
 	private readonly _onDidSendMessage = new vscode.EventEmitter<vscode.DebugProtocolMessage>();
 	readonly onDidSendMessage = this._onDidSendMessage.event;
+
+	// ── Debug state ──
+	private _frames: DecomposeFrame[] = [];
+	private _clauses: Record<string, DecomposeClause[]> = {};
+	private _refs: Record<string, string[]> = {};
+	private _currentFrameIndex = 0;
+	private _granularity: 'statement' | 'line' = 'statement';
+	private _currentClauseIndex = 0;
+	private _resultCache = new Map<string, StepResult>();
+	private _breakpoints: Array<{ line: number; id: number; frameName?: string; clauseIndex?: number }> = [];
+	private _nextBpId = 1;
+	private _compiledSql = '';
+	private _sourceUri = '';
+	private _limit = 50;
+	private _scope: 'cursor' | 'all' = 'cursor';
+	private _resultLocation: string | undefined;
+	private _lineOffset = 0;
+	private _noDebug = false;
+	private _setupPromise: Promise<void> | undefined;
+	private _abortController: AbortController | undefined;
 
 	constructor(
 		private readonly _queryRunner: QueryRunner,
 		private readonly _pathResolver: DbtPathResolver,
 		private readonly _logger: ILogger,
+		private readonly _databaseProvider: DatabaseProvider,
+		private readonly _bridgeRunner: BridgeRunner,
+		private readonly _compileCache: CompileCache,
+		private readonly _manifestIndexer: ManifestIndexer,
 	) {}
 
 	handleMessage(message: vscode.DebugProtocolMessage): void {
 		const msg = message as unknown as DapMessage;
+		this._logger.debug(`DAP ← ${msg.command ?? msg.type} seq=${msg.seq}`);
+		this._logger.trace(`DAP ← payload: ${JSON.stringify(msg.arguments ?? '')}`);
 		switch (msg.command) {
-			case 'initialize':
-				this._send({
-					type: 'response',
-					command: 'initialize',
-					request_seq: msg.seq,
-					success: true,
-					body: {
-						supportsConfigurationDoneRequest: true,
-						supportsCancelRequest: false,
-						supportsTerminateRequest: true,
-						supportsBreakpointLocationsRequest: false,
-					},
-				});
-				this._send({ type: 'event', event: 'initialized' });
-				break;
-
-			case 'configurationDone':
-				this._send({ type: 'response', command: 'configurationDone', request_seq: msg.seq, success: true });
-				break;
-
-			case 'launch':
-				this._send({ type: 'response', command: 'launch', request_seq: msg.seq, success: true });
-				void this._executeLaunch(msg.arguments ?? {});
-				break;
-
+			case 'initialize': this._handleInitialize(msg); break;
+			case 'configurationDone': this._handleConfigurationDone(msg); break;
+			case 'launch': this._handleLaunch(msg); break;
+			case 'setBreakpoints': this._handleSetBreakpoints(msg); break;
+			case 'setFunctionBreakpoints': this._handleSetFunctionBreakpoints(msg); break;
+			case 'threads': this._handleThreads(msg); break;
+			case 'stackTrace': this._handleStackTrace(msg); break;
+			case 'scopes': this._handleScopes(msg); break;
+			case 'variables': this._handleVariables(msg); break;
+			case 'next': this._handleNext(msg); break;
+			case 'stepIn': this._handleStepIn(msg); break;
+			case 'stepOut': this._handleStepOut(msg); break;
+			case 'stepBack': this._handleStepBack(msg); break;
+			case 'continue': this._handleContinue(msg); break;
+			case 'evaluate': void this._handleEvaluate(msg); break;
+			case 'breakpointLocations': this._handleBreakpointLocations(msg); break;
+			case 'stepInTargets': this._handleStepInTargets(msg); break;
 			case 'disconnect':
 			case 'terminate':
-				this._queryRunner.cancel();
-				this._send({ type: 'response', command: msg.command, request_seq: msg.seq, success: true });
+				this._handleTerminate(msg);
 				break;
-
-			case 'threads':
-				this._send({
-					type: 'response',
-					command: 'threads',
-					request_seq: msg.seq,
-					success: true,
-					body: { threads: [{ id: 1, name: 'SQL' }] },
-				});
-				break;
-
 			default:
-				this._send({
-					type: 'response',
-					command: msg.command ?? 'unknown',
-					request_seq: msg.seq,
-					success: false,
-					message: `Unsupported request: ${msg.command}`,
-				});
+				this._respond(msg, false, `Unsupported request: ${msg.command}`);
 		}
 	}
 
-	private async _executeLaunch(args: Record<string, unknown>): Promise<void> {
+	// ──────────────────────────────────────────────────────────────
+	// DAP: initialize
+	// ──────────────────────────────────────────────────────────────
+
+	private _handleInitialize(msg: DapMessage): void {
+		this._send({
+			type: 'response',
+			command: 'initialize',
+			request_seq: msg.seq,
+			success: true,
+			body: {
+				supportsConfigurationDoneRequest: true,
+				supportsTerminateRequest: true,
+				supportsBreakpointLocationsRequest: true,
+				supportsStepBack: true,
+				supportsStepInTargetsRequest: true,
+				supportsFunctionBreakpoints: true,
+				supportsEvaluateForHovers: false,
+				supportsCompletionsRequest: false,
+				supportsRestartFrame: true,
+			},
+		});
+		this._send({ type: 'event', event: 'initialized' });
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// DAP: configurationDone
+	// ──────────────────────────────────────────────────────────────
+
+	private _handleConfigurationDone(msg: DapMessage): void {
+		this._respond(msg, true);
+		if (this._noDebug) return;
+		void (async () => {
+			await this._setupPromise;
+			// All breakpoints are now registered and frames are populated.
+			this._granularity = 'statement';
+			this._currentClauseIndex = 0;
+			if (this._breakpoints.length > 0) {
+				this._currentFrameIndex = 0;
+				void this._runToContinue();
+			} else {
+				this._currentFrameIndex = this._frames.length - 1;
+				void this._executeCurrentStep().then(() => this._sendStopped('entry'));
+			}
+		})();
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// DAP: launch
+	// ──────────────────────────────────────────────────────────────
+
+	private _handleLaunch(msg: DapMessage): void {
+		this._respond(msg, true);
+		const args = msg.arguments ?? {};
+		this._noDebug = args.noDebug === true;
+
+		if (this._noDebug) {
+			void this._executeLegacyLaunch(args);
+		} else {
+			this._setupPromise = this._executeDebugSetup(args);
+		}
+	}
+
+	private async _executeLegacyLaunch(args: Record<string, unknown>): Promise<void> {
 		const editor = vscode.window.activeTextEditor;
 		if (!editor || editor.document.languageId !== 'jinja-sql') {
 			this._output('No active dbt SQL file.\n');
@@ -93,43 +210,1039 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			return;
 		}
 
-		const category = this._pathResolver.classifyFile(editor.document.fileName);
-		if (category === 'model' || category === 'snapshot' || category === 'seed') {
-			this._output('Use the Run / Compile CodeLens to execute model files.\n');
+		this._sourceUri = editor.document.uri.toString();
+		const defaultLimit = vscode.workspace.getConfiguration('dbt-studio').get<number>('queryEditor.defaultLimit', 500);
+		this._limit = typeof args.limit === 'number' ? args.limit : defaultLimit;
+		this._scope = args.scope === 'all' ? 'all' : 'cursor';
+		this._resultLocation = typeof args.resultLocation === 'string' ? args.resultLocation : undefined;
+		this._lineOffset = typeof args.lineOffset === 'number' ? args.lineOffset : 0;
+
+		this._send({ type: 'event', event: 'thread', body: { threadId: 1, reason: 'started' } });
+		await this._runFinalQuery();
+		this._terminate();
+	}
+
+	private async _executeDebugSetup(args: Record<string, unknown>): Promise<void> {
+		const editor = vscode.window.activeTextEditor;
+		if (!editor || editor.document.languageId !== 'jinja-sql') {
+			this._logger.warn('Debug adapter: no active jinja-sql editor');
+			this._output('No active dbt SQL file.\n');
 			this._terminate();
 			return;
 		}
 
+		this._sourceUri = editor.document.uri.toString();
 		const defaultLimit = vscode.workspace.getConfiguration('dbt-studio').get<number>('queryEditor.defaultLimit', 500);
-		const limit = typeof args.limit === 'number' ? args.limit : defaultLimit;
-		const scope = args.scope === 'all' ? 'all' as const : 'cursor' as const;
-		const resultLocation = typeof args.resultLocation === 'string' ? args.resultLocation : undefined;
+		this._limit = typeof args.limit === 'number' ? args.limit : defaultLimit;
+		this._scope = args.scope === 'all' ? 'all' : 'cursor';
+		this._resultLocation = typeof args.resultLocation === 'string' ? args.resultLocation : undefined;
+		this._lineOffset = typeof args.lineOffset === 'number' ? args.lineOffset : 0;
 
-		const fileName = editor.document.fileName.split(/[\\/]/).pop() ?? 'query';
-		if (scope === 'all') {
-			this._threadName = `${fileName} — all statements`;
+		const fileName = editor.document.fileName;
+		const category = this._pathResolver.classifyFile(fileName);
+		let sql: string;
+
+		// If the launch config already contains a pre-split SQL string (fired from
+		// executeAll with multiple statements), use it directly.
+		if (typeof args.sql === 'string') {
+			sql = args.sql;
+		} else if (category === 'model' || category === 'analysis' || category === 'snapshot') {
+			const compiled = await this._compileModel(fileName);
+			if (!compiled) {
+				this._logger.warn('Debug adapter: compile failed');
+				this._output('Failed to compile. Check dbt output.\n');
+				this._terminate();
+				return;
+			}
+			sql = compiled;
 		} else {
-			const fullText = editor.document.getText();
-			const offset = editor.document.offsetAt(editor.selection.active);
-			const stmts = splitStatements(fullText);
-			const stmt = !editor.selection.isEmpty
-				? { sql: editor.document.getText(editor.selection) }
-				: findStatementAtOffset(stmts, offset);
-			const preview = stmt?.sql.replace(/\s+/g, ' ').trim().slice(0, 80) ?? fileName;
-			this._threadName = preview.length < (stmt?.sql.replace(/\s+/g, ' ').trim().length ?? 0) ? `${preview}…` : preview;
+			// For ad-hoc files, respect scope: debug only the statement under the cursor
+			// (same statement Ctrl+F5 would execute), not the whole buffer.
+			if (this._scope === 'all') {
+				sql = editor.document.getText();
+			} else {
+				const fullText = editor.document.getText();
+				const offset = editor.document.offsetAt(editor.selection.active);
+				const stmts = splitStatements(fullText);
+				const stmt = findStatementAtOffset(stmts, offset);
+				if (!stmt) {
+					this._output('No SQL statement found at cursor.\n');
+					this._terminate();
+					return;
+				}
+				sql = stmt.sql;
+			}
 		}
 
-		this._logger.info(`Debug adapter: launching (scope=${scope}, limit=${limit})`);
-		this._send({ type: 'event', event: 'thread', body: { threadId: 1, reason: 'started' } });
+		this._compiledSql = sql;
 
+		const adapterType = this._manifestIndexer.index?.adapterType;
+		if (!adapterType) {
+			this._logger.warn('Debug adapter: no manifest index — cannot determine adapter type');
+			this._output('No dbt manifest found. Run dbt compile first.\n');
+			this._terminate();
+			return;
+		}
+
+		this._output('Decomposing query structure…\n');
+		const decomposed = await this._decompose(sql, adapterType);
+
+		if (!decomposed) {
+			this._logger.warn('Debug adapter: decompose failed — running query without stepping');
+			this._output('Could not parse query structure — running without debugger.\n');
+			await this._runFinalQuery();
+			this._terminate();
+			return;
+		}
+
+		this._frames = decomposed.frames;
+		this._clauses = decomposed.clauses;
+		this._refs = decomposed.refs;
+
+		// Shift all line numbers by the statement's offset in the original document.
+		if (this._lineOffset > 0) {
+			for (const frame of this._frames) {
+				frame.line += this._lineOffset;
+				frame.endLine += this._lineOffset;
+			}
+			for (const clauses of Object.values(this._clauses)) {
+				for (const clause of clauses) {
+					clause.line += this._lineOffset;
+				}
+			}
+		}
+
+		if (this._frames.length === 0) {
+			this._logger.warn('Debug adapter: no frames in decomposed query');
+			this._output('No frames found in query.\n');
+			this._terminate();
+			return;
+		}
+
+		this._logger.info(`Debug adapter: decomposed into ${this._frames.length} frames`);
+		this._output(`Debug: ${this._frames.length} frame(s) — ${this._frames.map(f => f.name).join(', ')}\n`);
+		const previewLines = sql.split('\n').slice(0, 5);
+		const truncated = sql.split('\n').length > 5;
+		this._output(`SQL:\n${previewLines.join('\n')}${truncated ? '\n  …' : ''}\n`);
+		this._send({ type: 'event', event: 'thread', body: { threadId: 1, reason: 'started' } });
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// DAP: setBreakpoints
+	// ──────────────────────────────────────────────────────────────
+
+	private _handleSetBreakpoints(msg: DapMessage): void {
+		void this._handleSetBreakpointsAsync(msg);
+	}
+
+	private async _handleSetBreakpointsAsync(msg: DapMessage): Promise<void> {
+		await this._setupPromise;
+		const args = msg.arguments ?? {};
+		const sourceBreakpoints = (args.breakpoints as Array<{ line: number }>) ?? [];
+
+		this._breakpoints = this._breakpoints.filter(bp => bp.frameName !== undefined);
+
+		const verified: Array<{ id: number; verified: boolean; line: number; message?: string }> = [];
+
+		for (const sbp of sourceBreakpoints) {
+			const line = sbp.line - 1;
+			const id = this._nextBpId++;
+			const matchedFrame = this._frames.find(f => line >= f.line && line <= f.endLine);
+
+			this._breakpoints.push({ line, id });
+			verified.push({
+				id,
+				verified: matchedFrame !== undefined,
+				line: sbp.line,
+				message: matchedFrame ? `Frame: ${matchedFrame.name}` : 'No matching CTE frame — run dbt compile first',
+			});
+		}
+
+		this._send({
+			type: 'response',
+			command: 'setBreakpoints',
+			request_seq: msg.seq,
+			success: true,
+			body: { breakpoints: verified },
+		});
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// DAP: setFunctionBreakpoints
+	// ──────────────────────────────────────────────────────────────
+
+	private _handleSetFunctionBreakpoints(msg: DapMessage): void {
+		const args = msg.arguments ?? {};
+		const fbps = (args.breakpoints as Array<{ name: string }>) ?? [];
+
+		this._breakpoints = this._breakpoints.filter(bp => bp.frameName === undefined);
+
+		const verified: Array<{ id: number; verified: boolean; message?: string }> = [];
+
+		for (const fbp of fbps) {
+			const id = this._nextBpId++;
+			const matchedFrame = this._frames.find(f => f.name === fbp.name);
+
+			this._breakpoints.push({ line: matchedFrame?.line ?? -1, id, frameName: fbp.name });
+			verified.push({
+				id,
+				verified: matchedFrame !== undefined,
+				message: matchedFrame ? undefined : `CTE "${fbp.name}" not found`,
+			});
+		}
+
+		this._send({
+			type: 'response',
+			command: 'setFunctionBreakpoints',
+			request_seq: msg.seq,
+			success: true,
+			body: { breakpoints: verified },
+		});
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// DAP: breakpointLocations
+	// ──────────────────────────────────────────────────────────────
+
+	private _handleBreakpointLocations(msg: DapMessage): void {
+		const args = msg.arguments ?? {};
+		const startLine = (args.line as number) ?? 1;
+		const endLine = (args.endLine as number) ?? startLine;
+
+		const locations: Array<{ line: number }> = [];
+		for (const frame of this._frames) {
+			const frameLine = frame.line + 1;
+			if (frameLine >= startLine && frameLine <= endLine) {
+				locations.push({ line: frameLine });
+			}
+		}
+
+		this._send({
+			type: 'response',
+			command: 'breakpointLocations',
+			request_seq: msg.seq,
+			success: true,
+			body: { breakpoints: locations },
+		});
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// DAP: threads
+	// ──────────────────────────────────────────────────────────────
+
+	private _handleThreads(msg: DapMessage): void {
+		this._send({
+			type: 'response',
+			command: 'threads',
+			request_seq: msg.seq,
+			success: true,
+			body: { threads: [{ id: 1, name: 'SQL' }] },
+		});
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// DAP: stackTrace
+	// ──────────────────────────────────────────────────────────────
+
+	private _handleStackTrace(msg: DapMessage): void {
+		const source = this._sourceUri ? { path: vscode.Uri.parse(this._sourceUri).fsPath } : undefined;
+
+		if (this._granularity === 'line') {
+			const frame = this._frames[this._currentFrameIndex];
+			const clauses = this._clauses[frame.name] ?? [];
+			// VS Code positions the cursor at stackFrames[0]. Put the active clause
+			// first (most recent), then the preceding clauses in reverse order.
+			const ordered = [
+				this._currentClauseIndex ?? 0,
+				...Array.from({ length: clauses.length }, (_, i) => i).filter(i => i !== this._currentClauseIndex).reverse(),
+			];
+			const stackFrames = ordered.map(i => ({
+				id: encodeRef(this._currentFrameIndex, SCOPE_RESULT, i),
+				name: `${frame.name} → ${clauses[i].stage}`,
+				source,
+				line: clauses[i].line + 1,
+				column: 1,
+				presentationHint: i === this._currentClauseIndex ? 'normal' as const : 'subtle' as const,
+			}));
+
+			this._send({
+				type: 'response',
+				command: 'stackTrace',
+				request_seq: msg.seq,
+				success: true,
+				body: { stackFrames, totalFrames: stackFrames.length },
+			});
+		} else {
+			// VS Code positions the editor cursor at stackFrames[0]. We want the
+			// cursor at the current frame, so build the array with the current frame
+			// first, then work backwards through already-executed frames (like a real
+			// call stack: most recent at top). Future frames are omitted.
+			const stackFrames: Array<{
+				id: number; name: string; source: typeof source;
+				line: number; column: number; presentationHint: 'normal' | 'subtle';
+			}> = [];
+
+			for (let i = this._currentFrameIndex; i >= 0; i--) {
+				const frame = this._frames[i];
+				const clauses = this._clauses[frame.name] ?? [];
+				const displayLine = clauses.length > 0
+					? clauses[0].line + 1
+					: frame.line + 1;
+				stackFrames.push({
+					id: i,
+					name: frame.name,
+					source,
+					line: displayLine,
+					column: 1,
+					presentationHint: i === this._currentFrameIndex ? 'normal' as const : 'subtle' as const,
+				});
+			}
+
+			this._send({
+				type: 'response',
+				command: 'stackTrace',
+				request_seq: msg.seq,
+				success: true,
+				body: { stackFrames, totalFrames: stackFrames.length },
+			});
+		}
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// DAP: scopes
+	// ──────────────────────────────────────────────────────────────
+
+	private _handleScopes(msg: DapMessage): void {
+		const args = msg.arguments ?? {};
+		const frameId = (args.frameId as number) ?? 0;
+
+		const frameIndex = this._granularity === 'line'
+			? this._currentFrameIndex
+			: frameId;
+
+		const scopes = [
+			{
+				name: 'Result',
+				variablesReference: encodeRef(frameIndex, SCOPE_RESULT),
+				expensive: false,
+				presentationHint: 'locals',
+			},
+			{
+				name: 'Impact',
+				variablesReference: encodeRef(frameIndex, SCOPE_IMPACT),
+				expensive: false,
+			},
+			{
+				name: 'Query',
+				variablesReference: encodeRef(frameIndex, SCOPE_QUERY),
+				expensive: false,
+			},
+		];
+
+		this._send({
+			type: 'response',
+			command: 'scopes',
+			request_seq: msg.seq,
+			success: true,
+			body: { scopes },
+		});
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// DAP: variables
+	// ──────────────────────────────────────────────────────────────
+
+	private _handleVariables(msg: DapMessage): void {
+		const args = msg.arguments ?? {};
+		const ref = (args.variablesReference as number) ?? 0;
+		const { frameIndex, scope } = decodeRef(ref);
+		const frame = this._frames[frameIndex];
+
+		if (!frame) {
+			this._send({
+				type: 'response',
+				command: 'variables',
+				request_seq: msg.seq,
+				success: true,
+				body: { variables: [] },
+			});
+			return;
+		}
+
+		const cacheKey = this._cacheKey(frameIndex);
+		const cached = this._resultCache.get(cacheKey);
+
+		if (scope === SCOPE_RESULT) {
+			if (!cached) {
+				this._send({
+					type: 'response',
+					command: 'variables',
+					request_seq: msg.seq,
+					success: true,
+					body: { variables: [{ name: 'status', value: 'Not yet executed', variablesReference: 0 }] },
+				});
+				return;
+			}
+
+			const variables = cached.columns
+				.filter(c => c !== '__debug_count__')
+				.map(col => {
+					const values = cached.rows.map(r => r[col]);
+					const preview = values.slice(0, 5).map(v => v === null ? 'NULL' : String(v)).join(', ');
+					const suffix = cached.rows.length > 5 ? ', …' : '';
+					return {
+						name: col,
+						value: `[${preview}${suffix}]`,
+						type: cached.columnTypes?.[col] ?? 'unknown',
+						variablesReference: 0,
+					};
+				});
+
+			this._send({
+				type: 'response',
+				command: 'variables',
+				request_seq: msg.seq,
+				success: true,
+				body: { variables },
+			});
+		} else if (scope === SCOPE_IMPACT) {
+			const variables: Array<{ name: string; value: string; variablesReference: number }> = [];
+
+			if (cached) {
+				variables.push({ name: 'rows', value: String(cached.totalCount), variablesReference: 0 });
+				variables.push({ name: 'preview_rows', value: String(cached.rows.length), variablesReference: 0 });
+				variables.push({ name: 'columns', value: String(cached.columns.filter(c => c !== '__debug_count__').length), variablesReference: 0 });
+				variables.push({ name: 'execution_ms', value: String(cached.executionTimeMs), variablesReference: 0 });
+
+				const prevKey = this._cacheKey(frameIndex - 1);
+				const prevCached = this._resultCache.get(prevKey);
+				if (prevCached) {
+					const delta = cached.totalCount - prevCached.totalCount;
+					variables.push({ name: 'row_delta', value: `${delta >= 0 ? '+' : ''}${delta}`, variablesReference: 0 });
+					if (cached.totalCount > prevCached.totalCount) {
+						variables.push({ name: 'fan_out', value: '⚠ true', variablesReference: 0 });
+					}
+				}
+			} else {
+				variables.push({ name: 'status', value: 'Not yet executed', variablesReference: 0 });
+			}
+
+			this._send({
+				type: 'response',
+				command: 'variables',
+				request_seq: msg.seq,
+				success: true,
+				body: { variables },
+			});
+		} else if (scope === SCOPE_QUERY) {
+			const sql = this._getStepSql(frameIndex);
+			const variables = [
+				{ name: 'frame', value: frame.name, variablesReference: 0 },
+				{ name: 'type', value: frame.type, variablesReference: 0 },
+				{ name: 'sql', value: sql, variablesReference: 0 },
+			];
+
+			this._send({
+				type: 'response',
+				command: 'variables',
+				request_seq: msg.seq,
+				success: true,
+				body: { variables },
+			});
+		} else {
+			this._send({
+				type: 'response',
+				command: 'variables',
+				request_seq: msg.seq,
+				success: true,
+				body: { variables: [] },
+			});
+		}
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// DAP: stepping
+	// ──────────────────────────────────────────────────────────────
+
+	private _handleNext(msg: DapMessage): void {
+		this._respond(msg, true);
+
+		if (this._granularity === 'line') {
+			const frame = this._frames[this._currentFrameIndex];
+			const clauses = this._clauses[frame.name] ?? [];
+			if (this._currentClauseIndex < clauses.length - 1) {
+				this._currentClauseIndex++;
+				void this._executeCurrentStep().then(() => this._sendStopped('step'));
+			} else {
+				this._granularity = 'statement';
+				this._currentClauseIndex = 0;
+				if (this._currentFrameIndex < this._frames.length - 1) {
+					this._currentFrameIndex++;
+					void this._executeCurrentStep().then(() => this._sendStopped('step'));
+				} else {
+					this._terminate();
+				}
+			}
+		} else {
+			if (this._currentFrameIndex < this._frames.length - 1) {
+				this._currentFrameIndex++;
+				void this._executeCurrentStep().then(() => this._sendStopped('step'));
+			} else {
+				this._terminate();
+			}
+		}
+	}
+
+	private _handleStepIn(msg: DapMessage): void {
+		this._respond(msg, true);
+		const args = msg.arguments ?? {};
+		const targetId = args.targetId as number | undefined;
+
+		if (targetId !== undefined) {
+			const targetName = this._resolveStepInTarget(targetId);
+			if (targetName) {
+				const frameIdx = this._frames.findIndex(f => f.name === targetName);
+				if (frameIdx >= 0) {
+					this._currentFrameIndex = frameIdx;
+					this._granularity = 'statement';
+					this._currentClauseIndex = 0;
+					void this._executeCurrentStep().then(() => this._sendStopped('step'));
+					return;
+				}
+
+				void this._tryCrossModelStepIn(targetName);
+				return;
+			}
+		}
+
+		if (this._granularity === 'statement') {
+			const frame = this._frames[this._currentFrameIndex];
+			const clauses = this._clauses[frame.name];
+			if (clauses && clauses.length > 1) {
+				this._granularity = 'line';
+				this._currentClauseIndex = 0;
+				void this._executeCurrentStep().then(() => this._sendStopped('step'));
+			} else {
+				this._handleNext(msg);
+			}
+		} else {
+			this._handleNext(msg);
+		}
+	}
+
+	private _handleStepOut(msg: DapMessage): void {
+		this._respond(msg, true);
+
+		if (this._granularity === 'line') {
+			this._granularity = 'statement';
+			this._currentClauseIndex = 0;
+			void this._executeCurrentStep().then(() => this._sendStopped('step'));
+		} else {
+			this._terminate();
+		}
+	}
+
+	private _handleStepBack(msg: DapMessage): void {
+		this._respond(msg, true);
+
+		if (this._granularity === 'line') {
+			if (this._currentClauseIndex > 0) {
+				this._currentClauseIndex--;
+				this._sendStopped('step');
+			} else {
+				this._granularity = 'statement';
+				this._sendStopped('step');
+			}
+		} else {
+			if (this._currentFrameIndex > 0) {
+				this._currentFrameIndex--;
+				this._sendStopped('step');
+			} else {
+				this._sendStopped('step');
+			}
+		}
+	}
+
+	private _handleContinue(msg: DapMessage): void {
+		this._respond(msg, true);
+		void this._runToContinue();
+	}
+
+	private async _runToContinue(): Promise<void> {
+		// If we're already inside a frame at clause granularity, check for
+		// breakpoints on later clauses in the same frame before advancing.
+		if (this._granularity === 'line') {
+			const frame = this._frames[this._currentFrameIndex];
+			const clauses = this._clauses[frame.name] ?? [];
+			const nextBpClause = this._findNextBreakpointedClause(
+				frame, clauses, this._currentClauseIndex + 1,
+			);
+			if (nextBpClause !== undefined) {
+				this._currentClauseIndex = nextBpClause;
+				await this._executeCurrentStep();
+				this._sendStopped('breakpoint');
+				return;
+			}
+		}
+
+		while (this._currentFrameIndex < this._frames.length - 1) {
+			this._currentFrameIndex++;
+			const frame = this._frames[this._currentFrameIndex];
+
+			// Find ALL breakpoints in this frame, resolve each to a clause index,
+			// and pick the earliest in execution order (lowest index).  Using .find()
+			// would return the first bp in array order (source-line order), which
+			// picks `select` before `from` because SELECT appears first in source.
+			const frameBps = this._breakpoints.filter(bp => {
+				if (bp.frameName) return bp.frameName === frame.name;
+				return bp.line >= frame.line && bp.line <= frame.endLine;
+			});
+
+			if (frameBps.length > 0) {
+				let minClauseIndex: number | undefined;
+				for (const bp of frameBps) {
+					const ci = this._resolveClauseIndex(frame.name, bp.line);
+					if (ci !== undefined && (minClauseIndex === undefined || ci < minClauseIndex)) {
+						minClauseIndex = ci;
+					}
+				}
+				if (minClauseIndex !== undefined) {
+					this._granularity = 'line';
+					this._currentClauseIndex = minClauseIndex;
+				}
+				await this._executeCurrentStep();
+				this._sendStopped('breakpoint');
+				return;
+			}
+		}
+
+		await this._executeCurrentStep();
+		// No breakpoint hit — all frames executed. Run the full query and show results.
+		await this._runFinalQuery();
+		this._sendTerminated();
+	}
+
+	private async _runFinalQuery(): Promise<void> {
+		const editor = vscode.window.visibleTextEditors.find(e => e.document.uri.toString() === this._sourceUri)
+			?? vscode.window.activeTextEditor;
+		if (!editor) return;
 		try {
-			await this._queryRunner.executeWithConfig(editor, { limit, scope, resultLocation });
+			// If we already have the compiled/resolved SQL (from debug setup or pre-split launch),
+			// run it directly so we don't re-derive or re-compile.
+			if (this._compiledSql) {
+				await this._queryRunner.executeSql(this._compiledSql, this._limit);
+				return;
+			}
+			const category = this._pathResolver.classifyFile(editor.document.fileName);
+			if (category === 'model' || category === 'analysis' || category === 'snapshot') {
+				const sql = await this._compileModel(editor.document.fileName);
+				if (!sql) return;
+				await this._queryRunner.executeSql(sql, this._limit);
+			} else {
+				await this._queryRunner.executeWithConfig(editor, {
+					limit: this._limit,
+					scope: this._scope,
+					resultLocation: this._resultLocation,
+				});
+			}
 		} catch (err) {
 			this._output(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
 		}
+	}
 
+	/** Find the lowest clause index ≥ startIndex that has a breakpoint. */
+	private _findNextBreakpointedClause(
+		frame: { name: string; line: number; endLine: number },
+		_clauses: Array<{ stage: string; sql: string; line: number }>,
+		startIndex: number,
+	): number | undefined {
+		let best: number | undefined;
+		for (const bp of this._breakpoints) {
+			const inFrame = bp.frameName
+				? bp.frameName === frame.name
+				: bp.line >= frame.line && bp.line <= frame.endLine;
+			if (!inFrame) continue;
+			const ci = this._resolveClauseIndex(frame.name, bp.line);
+			if (ci !== undefined && ci >= startIndex && (best === undefined || ci < best)) {
+				best = ci;
+			}
+		}
+		return best;
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// DAP: stepInTargets
+	// ──────────────────────────────────────────────────────────────
+
+	private _handleStepInTargets(msg: DapMessage): void {
+		const frame = this._frames[this._currentFrameIndex];
+		const frameRefs = this._refs[frame.name] ?? [];
+
+		const targets = frameRefs.map((ref, i) => {
+			const isLocalCte = this._frames.some(f => f.name === ref);
+			return {
+				id: i,
+				label: isLocalCte ? `CTE: ${ref}` : `ref: ${ref}`,
+			};
+		});
+
+		this._send({
+			type: 'response',
+			command: 'stepInTargets',
+			request_seq: msg.seq,
+			success: true,
+			body: { targets },
+		});
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// DAP: evaluate
+	// ──────────────────────────────────────────────────────────────
+
+	private async _handleEvaluate(msg: DapMessage): Promise<void> {
+		const args = msg.arguments ?? {};
+		const expression = (args.expression as string) ?? '';
+		const context = (args.context as string) ?? 'repl';
+
+		// Only execute SQL when the user types into the debug console (repl).
+		// Other contexts ('variables', 'hover', 'clipboard', 'watch') are triggered
+		// by VS Code internally (e.g. Copy Value, hover tooltips) — for those we
+		// just echo the expression back as a plain string so the raw value is returned.
+		if (context !== 'repl') {
+			this._send({
+				type: 'response',
+				command: 'evaluate',
+				request_seq: msg.seq,
+				success: true,
+				body: { result: expression, variablesReference: 0 },
+			});
+			return;
+		}
+
+		if (!expression.trim()) {
+			this._respond(msg, false, 'Empty expression');
+			return;
+		}
+
+		const frame = this._frames[this._currentFrameIndex];
+		const sql = this._buildScopedSql(expression, frame.name);
+
+		try {
+			// Pass limit=-1: _buildScopedSql embeds no LIMIT so DuckdbProvider would
+			// wrap it in a subquery — which breaks WITH queries on DuckDB.
+			// Use -1 and rely on the provider to return all rows (capped by its own guard).
+			const result = await this._databaseProvider.query(sql, -1, this._abortController?.signal, Priority.User);
+			const preview = result.rows.length > 0
+				? result.columns.map(c => `${c}: ${result.rows[0][c]}`).join(', ')
+				: '(empty)';
+
+			this._send({
+				type: 'response',
+				command: 'evaluate',
+				request_seq: msg.seq,
+				success: true,
+				body: { result: `${result.rowCount} row(s): ${preview}`, variablesReference: 0 },
+			});
+		} catch (err) {
+			this._send({
+				type: 'response',
+				command: 'evaluate',
+				request_seq: msg.seq,
+				success: true,
+				body: { result: `Error: ${err instanceof Error ? err.message : String(err)}`, variablesReference: 0 },
+			});
+		}
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// DAP: disconnect / terminate
+	// ──────────────────────────────────────────────────────────────
+
+	private _handleTerminate(msg: DapMessage): void {
+		this._abortController?.abort();
+		this._queryRunner.cancel();
+		this._respond(msg, true);
 		this._terminate();
 	}
+
+	// ──────────────────────────────────────────────────────────────
+	// Query execution
+	// ──────────────────────────────────────────────────────────────
+
+	private _cacheKey(frameIndex: number): string {
+		if (this._granularity === 'line' && frameIndex === this._currentFrameIndex) {
+			return `${frameIndex}:clause:${this._currentClauseIndex}`;
+		}
+		return `${frameIndex}:frame`;
+	}
+
+	private _getStepSql(frameIndex: number): string {
+		const frame = this._frames[frameIndex];
+
+		if (this._granularity === 'line' && frameIndex === this._currentFrameIndex) {
+			const clauses = this._clauses[frame.name] ?? [];
+			const clause = clauses[this._currentClauseIndex];
+			if (clause) return clause.sql;
+		}
+
+		const clauses = this._clauses[frame.name] ?? [];
+		if (clauses.length > 0) {
+			return clauses[clauses.length - 1].sql;
+		}
+
+		return this._compiledSql;
+	}
+
+	private async _executeCurrentStep(): Promise<void> {
+		const cacheKey = this._cacheKey(this._currentFrameIndex);
+		if (this._resultCache.has(cacheKey)) return;
+
+		const sql = this._getStepSql(this._currentFrameIndex);
+		const frame = this._frames[this._currentFrameIndex];
+		const debugSql = this._wrapWithDebugCount(sql);
+
+		this._output(`Executing: ${frame.name}${this._granularity === 'line' ? ` → ${this._currentClauseName()}` : ''}…\n`);
+
+		try {
+			this._abortController = new AbortController();
+			// Pass limit=-1: _wrapWithDebugCount already embeds the LIMIT, so the
+			// provider must not add a second wrapping subquery around our SQL.
+			const result = await this._databaseProvider.query(debugSql, -1, this._abortController.signal, Priority.User);
+
+			let totalCount = result.rowCount;
+			if (result.rows.length > 0 && '__debug_count__' in result.rows[0]) {
+				const countVal = result.rows[0].__debug_count__;
+				if (typeof countVal === 'number') totalCount = countVal;
+				else if (typeof countVal === 'string') totalCount = parseInt(countVal, 10) || result.rowCount;
+			}
+
+			const stepResult: StepResult = {
+				rows: result.rows,
+				columns: result.columns,
+				columnTypes: result.columnTypes,
+				totalCount,
+				executionTimeMs: result.executionTimeMs,
+			};
+
+			this._resultCache.set(cacheKey, stepResult);
+
+			const displayCols = result.columns.filter(c => c !== '__debug_count__').length;
+			this._output(`  → ${totalCount} total rows, ${displayCols} columns (${result.executionTimeMs}ms)\n`);
+
+			this._sendResultToPanel(frame.name, result);
+		} catch (err) {
+			this._output(`  Error: ${err instanceof Error ? err.message : String(err)}\n`);
+		}
+	}
+
+	private _wrapWithDebugCount(sql: string): string {
+		// DuckDB (and most databases) reject WITH inside a subquery.
+		// When the SQL is a CTE query, hoist the wrapper as an extra CTE instead.
+		const trimmed = sql.trimStart();
+		if (/^with\s/i.test(trimmed)) {
+			const mainPos = this._findMainSelectPos(trimmed);
+			if (mainPos >= 0) {
+				const ctesPart = trimmed.slice(0, mainPos).trimEnd().replace(/,$/, '');
+				const mainSelect = trimmed.slice(mainPos).trimStart();
+				return `${ctesPart},\n__debug_inner__ AS (\n${mainSelect}\n)\nSELECT *, COUNT(*) OVER () AS __debug_count__ FROM __debug_inner__ LIMIT ${this._limit}`;
+			}
+		}
+		return `SELECT *, COUNT(*) OVER () AS __debug_count__ FROM (\n${sql}\n) AS __debug_wrapper__ LIMIT ${this._limit}`;
+	}
+
+	/** Returns the index of the first top-level SELECT (depth 0) in a WITH query. */
+	private _findMainSelectPos(sql: string): number {
+		let depth = 0;
+		let i = 0;
+		while (i < sql.length) {
+			const ch = sql[i];
+			if (ch === '(') { depth++; i++; continue; }
+			if (ch === ')') { depth--; i++; continue; }
+			// Skip string literals to avoid false matches inside quoted strings
+			if (ch === '\'' || ch === '"') {
+				const q = ch;
+				i++;
+				while (i < sql.length && sql[i] !== q) {
+					if (sql[i] === '\\') i++;
+					i++;
+				}
+				i++;
+				continue;
+			}
+			if (depth === 0 && /^select\b/i.test(sql.slice(i))) {
+				return i;
+			}
+			i++;
+		}
+		return -1;
+	}
+
+	private _currentClauseName(): string {
+		const frame = this._frames[this._currentFrameIndex];
+		const clauses = this._clauses[frame.name] ?? [];
+		return clauses[this._currentClauseIndex]?.stage ?? 'unknown';
+	}
+
+	private _buildScopedSql(expression: string, frameName: string): string {
+		const clauses = this._clauses[frameName] ?? [];
+		if (clauses.length === 0) return expression;
+
+		const frameSql = clauses[clauses.length - 1].sql;
+		const trimmed = expression.trim().toUpperCase();
+		if (trimmed.startsWith('SELECT') || trimmed.startsWith('WITH')) {
+			return expression;
+		}
+
+		return `WITH __debug_context__ AS (\n${frameSql}\n)\nSELECT ${expression} FROM __debug_context__`;
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// Model compilation
+	// ──────────────────────────────────────────────────────────────
+
+	private async _compileModel(filePath: string): Promise<string | undefined> {
+		const uniqueId = this._manifestIndexer.findModelByFilePath(filePath);
+		if (!uniqueId) {
+			this._output('Model not found in manifest. Run dbt parse first.\n');
+			return undefined;
+		}
+
+		const model = this._manifestIndexer.index?.models.get(uniqueId);
+		if (!model) return undefined;
+
+		const projectDir = this._manifestIndexer.projectDir;
+		const rawNode = this._manifestIndexer.getRawNode(uniqueId) as { original_file_path: string } | undefined;
+		if (!rawNode) return undefined;
+
+		this._output(`Compiling ${model.name}…\n`);
+		return this._compileCache.ensureCompiled(uniqueId, model.name, projectDir, rawNode.original_file_path);
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// Bridge communication
+	// ──────────────────────────────────────────────────────────────
+
+	private async _decompose(sql: string, dialect: string): Promise<DecomposeResult | undefined> {
+		try {
+			const result = await this._bridgeRunner.invokeRaw({
+				decompose_query: true,
+				compiled_sql: sql,
+				dialect,
+			});
+
+			if (result.data && result.data.success) {
+				return result.data as unknown as DecomposeResult;
+			}
+
+			if (result.data?.error) {
+				this._output(`Decompose error: ${result.data.error}\n`);
+			}
+			return undefined;
+		} catch (err) {
+			this._logger.error(`Bridge decompose_query failed: ${err}`);
+			return undefined;
+		}
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// Cross-model stepping
+	// ──────────────────────────────────────────────────────────────
+
+	private async _tryCrossModelStepIn(refName: string): Promise<void> {
+		const models = this._manifestIndexer.findModelsByName(refName);
+		if (models.length === 0) {
+			this._output(`Model "${refName}" not found in manifest.\n`);
+			this._sendStopped('step');
+			return;
+		}
+
+		const model = models[0];
+		this._output(`Stepping into ref('${refName}') → ${model.path}\n`);
+
+		this._send({
+			type: 'request',
+			command: 'startDebugging',
+			arguments: {
+				request: 'launch',
+				configuration: {
+					type: 'dbt-sql',
+					name: `Debug: ${refName}`,
+					request: 'launch',
+					file: model.path,
+					limit: this._limit,
+				},
+			},
+		});
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// Breakpoint matching
+	// ──────────────────────────────────────────────────────────────
+
+	private _findFirstBreakpointFrame(): number | undefined {
+		if (this._breakpoints.length === 0) return undefined;
+
+		for (let i = 0; i < this._frames.length; i++) {
+			const frame = this._frames[i];
+			const hit = this._breakpoints.find(bp => {
+				if (bp.frameName) return bp.frameName === frame.name;
+				return bp.line >= frame.line && bp.line <= frame.endLine;
+			});
+			if (hit) return i;
+		}
+		return undefined;
+	}
+
+	/** Resolve which clause index a breakpoint line maps to within a frame.
+	 * Called at hit-time (not at setBreakpoints time) so _clauses is populated. */
+	private _resolveClauseIndex(frameName: string, bpLine: number): number | undefined {
+		const clauses = this._clauses[frameName] ?? [];
+		let bestLine = -1;
+		let clauseIndex: number | undefined;
+		for (let ci = 0; ci < clauses.length; ci++) {
+			if (clauses[ci].line <= bpLine && clauses[ci].line > bestLine) {
+				bestLine = clauses[ci].line;
+				clauseIndex = ci;
+			}
+		}
+		return clauseIndex;
+	}
+
+	private _resolveStepInTarget(targetId: number): string | undefined {
+		const frame = this._frames[this._currentFrameIndex];
+		const frameRefs = this._refs[frame.name] ?? [];
+		return frameRefs[targetId];
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// Result panel integration
+	// ──────────────────────────────────────────────────────────────
+
+	private _sendResultToPanel(frameName: string, result: QueryResult): void {
+		this._send({
+			type: 'event',
+			event: 'output',
+			body: {
+				category: 'telemetry',
+				output: 'debugStepResult',
+				data: {
+					frameName,
+					columns: result.columns.filter(c => c !== '__debug_count__'),
+					rows: result.rows.map(r => {
+						const cleaned = { ...r };
+						delete cleaned.__debug_count__;
+						return cleaned;
+					}),
+					rowCount: result.rowCount,
+					executionTimeMs: result.executionTimeMs,
+				},
+			},
+		});
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// Protocol helpers
+	// ──────────────────────────────────────────────────────────────
 
 	private _output(text: string): void {
 		this._send({ type: 'event', event: 'output', body: { category: 'console', output: text } });
@@ -139,12 +1252,37 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		this._send({ type: 'event', event: 'terminated' });
 	}
 
+	private _sendStopped(reason: string): void {
+		this._send({
+			type: 'event',
+			event: 'stopped',
+			body: { reason, threadId: 1, allThreadsStopped: true },
+		});
+	}
+
+	private _sendTerminated(): void {
+		this._send({ type: 'event', event: 'terminated' });
+	}
+
+	private _respond(msg: DapMessage, success: boolean, message?: string): void {
+		this._send({
+			type: 'response',
+			command: msg.command ?? 'unknown',
+			request_seq: msg.seq,
+			success,
+			...(message ? { message } : {}),
+		});
+	}
+
 	private _send(msg: Record<string, unknown>): void {
 		msg.seq = this._seq++;
+		this._logger.debug(`DAP → ${String(msg.event ?? msg.command ?? msg.type)} seq=${msg.seq}`);
+		this._logger.trace(`DAP → payload: ${JSON.stringify(msg.body ?? '')}`);
 		this._onDidSendMessage.fire(msg as unknown as vscode.DebugProtocolMessage);
 	}
 
 	dispose(): void {
+		this._abortController?.abort();
 		this._onDidSendMessage.dispose();
 	}
 }

@@ -8,6 +8,7 @@ export class StatusBarManager implements vscode.Disposable {
 	private _activeJob: DbtJobInfo | null = null;
 	private _queueSize = 0;
 	private _errorCount = 0;
+	private _ready = false;
 
 	constructor(
 		service: DbtExecutionService,
@@ -39,6 +40,11 @@ export class StatusBarManager implements vscode.Disposable {
 		this._item.show();
 	}
 
+	setReady(): void {
+		this._ready = true;
+		this._update();
+	}
+
 	setErrorCount(count: number): void {
 		this._errorCount = count;
 		this._update();
@@ -58,6 +64,13 @@ export class StatusBarManager implements vscode.Disposable {
 			this._item.text = `$(error) dbt: ${this._errorCount} error${this._errorCount !== 1 ? 's' : ''}`;
 			this._item.tooltip = 'Click to show dbt errors';
 			this._item.command = 'workbench.action.showErrorsWarnings';
+			return;
+		}
+
+		if (!this._ready) {
+			this._item.text = '$(sync~spin) dbt: Initializing';
+			this._item.tooltip = 'dbt Studio — loading manifest';
+			this._item.command = undefined;
 			return;
 		}
 

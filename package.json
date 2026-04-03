@@ -333,6 +333,11 @@
 				}
 			]
 		},
+		"breakpoints": [
+			{
+				"language": "jinja-sql"
+			}
+		],
 		"debuggers": [
 			{
 				"type": "dbt-sql",
@@ -343,6 +348,10 @@
 				"configurationAttributes": {
 					"launch": {
 						"properties": {
+							"file": {
+								"type": "string",
+								"description": "Absolute path to the SQL file to debug. Defaults to the active editor."
+							},
 							"limit": {
 								"type": "number",
 								"description": "Row limit for query results. Use -1 for no limit.",
@@ -385,6 +394,15 @@
 							"type": "dbt-sql",
 							"request": "launch",
 							"scope": "cursor"
+						}
+					},
+					{
+						"label": "dbt SQL: Debug",
+						"description": "Debug SQL with CTE stepping",
+						"body": {
+							"name": "Debug SQL",
+							"type": "dbt-sql",
+							"request": "launch"
 						}
 					},
 					{

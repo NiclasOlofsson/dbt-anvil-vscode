@@ -61,6 +61,7 @@ import { QueryRunner } from './dbt/query-runner';
 import { QueryResultPanel } from './views/query-result-panel';
 import { SqlDebugAdapter } from './dbt/debug-adapter';
 import { SqlDebugConfigProvider } from './dbt/debug-config-provider';
+import { splitStatements } from './dbt/statement-splitter';
 import * as path from 'node:path';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -186,6 +187,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	// -------- Status bar --------
 	const statusBar = new StatusBarManager(executionService, logger);
+	// If the manifest was already indexed on startup, we're ready immediately.
+	// Otherwise the status bar stays in "Initializing" until onIndexRebuild fires.
+	if (manifestLoader.manifestExists()) {
+		statusBar.setReady();
+	}
 	context.subscriptions.push(statusBar);
 
 	// -------- External dbt monitor (detect conflicting terminal dbt commands) --------
@@ -268,6 +274,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// Refresh views whenever the manifest index is rebuilt (e.g. after dbt parse on save)
 	context.subscriptions.push(
 		manifestWatcher.onIndexRebuild(() => {
+			statusBar.setReady();
 			testExplorerProvider.refresh();
 			lineageGraphProvider.refreshGraph();
 			columnStorePersistence.save(manifestIndexer);
@@ -780,7 +787,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				void vscode.window.showInformationMessage('Use the Run / Compile CodeLens to execute model files.');
 				return;
 			}
-			await vscode.debug.startDebugging(undefined, { type: 'dbt-sql', request: 'launch', name: 'Run All SQL', scope: 'all' });
+			const stmts = splitStatements(editor.document.getText());
+			if (stmts.length <= 1) {
+				await vscode.debug.startDebugging(undefined, { type: 'dbt-sql', request: 'launch', name: 'Run All SQL', scope: 'all' });
+			} else {
+				await Promise.all(stmts.map(stmt =>
+					vscode.debug.startDebugging(undefined, { type: 'dbt-sql', request: 'launch', name: 'Run SQL', sql: stmt.sql }),
+				));
+			}
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.executeStatement', async (sql: string) => {
@@ -867,7 +881,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.debug.registerDebugAdapterDescriptorFactory('dbt-sql', {
 			createDebugAdapterDescriptor() {
 				return new vscode.DebugAdapterInlineImplementation(
-					new SqlDebugAdapter(queryRunner, pathResolver, logger),
+					new SqlDebugAdapter(queryRunner, pathResolver, logger, databaseProvider, sqlglotBridgeRunner, compileCache, manifestIndexer),
 				);
 			},
 		}),
