@@ -147,11 +147,48 @@ export interface SqlglotWarning {
 	endCol?: number;
 }
 
+export interface FinalSelectColumnInfo {
+	/** Output column name (alias or bare column name). */
+	name: string;
+	/** 0-based line of the start of the full expression (qualifier through alias). */
+	line: number;
+	/** 0-based start column of the full expression. */
+	col: number;
+	/** 0-based line of the end of the full expression. */
+	endLine: number;
+	/** 0-based exclusive end column of the full expression. */
+	endCol: number;
+	/** Source column name without qualifier or alias (e.g. "company_id"). */
+	expression?: string;
+	/** Table qualifier / alias (e.g. "co" in `co.company_id`). */
+	table?: string;
+	/** 0-based line of the alias identifier (AS clause only). */
+	aliasLine?: number;
+	/** 0-based start column of the alias identifier. */
+	aliasCol?: number;
+	/** 0-based exclusive end column of the alias identifier. */
+	aliasEndCol?: number;
+}
+
+export interface FinalSelectInfo {
+	/** 0-based line of the SELECT keyword. */
+	line: number;
+	/** 0-based start column of the SELECT keyword. */
+	col: number;
+	/** 0-based line of the last token in the SELECT clause. */
+	endLine: number;
+	/** 0-based exclusive end column of the last token. */
+	endCol: number;
+	columns: FinalSelectColumnInfo[];
+}
+
 export interface DocumentModel {
 	ctes: CteInfo[];
 	refs: RefInfo[];
 	sources: SourceInfo[];
 	finalColumns: ColumnInfo[];
+	/** Rich positional data for the final SELECT (replaces finalColumns over time). */
+	finalSelect?: FinalSelectInfo;
 	tokens: TokenInfo[];
 	timing: { parseMs: number; totalMs: number };
 	/** Structural warnings emitted by sqlglot during scope building. */
@@ -275,7 +312,10 @@ export function mergeModels(models: DocumentModel[]): DocumentModel {
 		totalMs: models.reduce((s, m) => s + m.timing.totalMs, 0),
 	};
 
-	return { ctes: [...cteMap.values()], refs, sources, finalColumns, tokens, timing, sqlglotWarnings, aliases };
+	// finalSelect: take the first model that has one (variants produce the same select)
+	const finalSelect = models.find(m => m.finalSelect)?.finalSelect;
+
+	return { ctes: [...cteMap.values()], refs, sources, finalColumns, finalSelect, tokens, timing, sqlglotWarnings, aliases };
 }
 
 /**
@@ -613,6 +653,7 @@ export class ParseService {
 				refs: d.refs ?? [],
 				sources: d.sources ?? [],
 				finalColumns: d.finalColumns ?? [],
+				finalSelect: d.finalSelect ?? undefined,
 				tokens: (d as unknown as Record<string, unknown>).tokens as TokenInfo[] ?? [],
 				timing: d.timing ?? { parseMs: 0, totalMs: 0 },
 				sqlglotWarnings: d.sqlglotWarnings ?? [],
