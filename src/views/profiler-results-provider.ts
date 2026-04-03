@@ -48,20 +48,13 @@ class ModelProfileItem extends vscode.TreeItem {
 	constructor(readonly result: ProfileResult) {
 		const label = result.modelName;
 
-		const collapsed = (result.cteProfiles.length > 0 || (result.pendingCteNames?.length ?? 0) > 0)
+		const collapsed = result.status !== 'error'
 			? vscode.TreeItemCollapsibleState.Expanded
 			: vscode.TreeItemCollapsibleState.None;
 
 		super(label, collapsed);
 
-		this.description = result.status === 'running'
-			? 'profiling…'
-			: result.status === 'error'
-				? `error: ${result.error}`
-				: _formatRows(result.totalRowCount);
-
 		this.tooltip = result.error ?? result.modelName;
-		this.iconPath = _modelIcon(result);
 		this.contextValue = 'profilerModel';
 	}
 }
@@ -101,9 +94,7 @@ export class ProfilerResultsProvider implements vscode.TreeDataProvider<TreeEntr
 
 		if (element instanceof ModelProfileItem) {
 			const { result } = element;
-			const lastCteMs = result.cteProfiles.length > 0 ? result.cteProfiles[result.cteProfiles.length - 1].queryTimeMs : 0;
-			const fullModelMs = result.totalTimeMs > 0 ? result.totalTimeMs - lastCteMs : 0;
-			const maxStepMs = Math.max(...result.cteProfiles.map(c => c.queryTimeMs), fullModelMs, 1);
+			const maxStepMs = Math.max(...result.cteProfiles.map(c => c.queryTimeMs), result.totalTimeMs, 1);
 
 			const completed = result.cteProfiles.map(cte => new StepItem(
 				cte.name, cte.queryTimeMs, cte.rowCount, maxStepMs,
@@ -116,10 +107,11 @@ export class ProfilerResultsProvider implements vscode.TreeDataProvider<TreeEntr
 				.map(n => new PendingCteItem(n));
 
 			const allCtesDone = pending.length === 0 && result.status !== 'error';
-			const fullModel: StepItem[] | PendingCteItem[] = allCtesDone
-				? [result.totalTimeMs > 0
-					? new StepItem(`full ${result.modelName}`, fullModelMs, result.totalRowCount, maxStepMs)
-					: new PendingCteItem(`full ${result.modelName}`)]
+			const fullModelLabel = `full ${result.modelName}`;
+			const fullModel: (StepItem | PendingCteItem)[] = result.status !== 'error'
+				? [allCtesDone && result.totalTimeMs > 0
+					? new StepItem(fullModelLabel, result.totalTimeMs, result.totalRowCount, maxStepMs, [result.sourceFilePath, '_main_'])
+					: new PendingCteItem(fullModelLabel)]
 				: [];
 
 			return [...completed, ...pending, ...fullModel];
@@ -153,12 +145,5 @@ function _tooltipTable(title: string, rows: [string, string][]): vscode.Markdown
 function _tierIcon(fraction: number): vscode.ThemeIcon {
 	if (fraction >= 0.5) return new vscode.ThemeIcon('flame', new vscode.ThemeColor('charts.red'));
 	if (fraction >= 0.2) return new vscode.ThemeIcon('warning', new vscode.ThemeColor('charts.yellow'));
-	return new vscode.ThemeIcon('testing-passed-icon', new vscode.ThemeColor('charts.green'));
-}
-
-function _modelIcon(result: ProfileResult): vscode.ThemeIcon {
-	if (result.status === 'running') return new vscode.ThemeIcon('loading~spin');
-	if (result.status === 'error') return new vscode.ThemeIcon('testing-error-icon', new vscode.ThemeColor('editorError.foreground'));
-	if (result.status === 'partial') return new vscode.ThemeIcon('testing-skipped-icon', new vscode.ThemeColor('editorWarning.foreground'));
-	return new vscode.ThemeIcon('testing-passed-icon', new vscode.ThemeColor('charts.green'));
+	return new vscode.ThemeIcon('circle-filled', new vscode.ThemeColor('charts.green'));
 }

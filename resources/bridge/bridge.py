@@ -1478,6 +1478,143 @@ def _projection_line(proj: Any) -> int:  # type: ignore[return]
     return 0
 
 
+def _identifier_pos(node: Any, name: str) -> "tuple[int, int, int] | None":
+    """Return (0-based line, 0-based start col, 0-based end col) for a leaf
+    sqlglot Identifier node, or None if position metadata is unavailable.
+
+    sqlglot stores 1-based line and 1-based exclusive-end col in meta.
+    Start col = meta["col"] - len(name).
+    """
+    line = node.meta.get("line")
+    col_end = node.meta.get("col")
+    if line and col_end:
+        return (max(0, line - 1), max(0, col_end - len(name)), col_end)
+    return None
+
+
+def _projection_bounds(
+    proj: Any, parse_line_starts: "list[int]", parse_sql: str, to_raw_line: "Any"
+) -> "tuple[int, int, int, int] | None":
+    """Return the (line, col, endLine, endCol) bounds of a projection expression
+    in raw-source coordinates, or None if positions cannot be determined.
+
+    Scans all leaf nodes in the projection subtree to find the leftmost and
+    rightmost positions.
+    """
+    from sqlglot import exp  # type: ignore[import-not-found]
+
+    min_line: int | None = None
+    min_col: int | None = None
+    max_line: int | None = None
+    max_col: int | None = None
+
+    for node in proj.walk():
+        meta_line = node.meta.get("line")
+        meta_col = node.meta.get("col")
+        if not meta_line or not meta_col:
+            continue
+        # Determine token name length to compute start col
+        if isinstance(node, exp.Identifier):
+            tok_name = node.name or ""
+        elif isinstance(node, exp.Literal):
+            raw = str(node.this or "")
+            # Include surrounding quotes for string literals
+            tok_name = raw if node.is_number else f"'{raw}'"
+        else:
+            tok_name = str(getattr(node, "name", "") or "")
+
+        tok_start_col = max(0, meta_col - len(tok_name))
+        tok_end_col = meta_col
+        tok_line_0 = max(0, meta_line - 1)
+        raw_line = to_raw_line(tok_line_0)
+
+        if (
+            min_line is None
+            or raw_line < min_line
+            or (raw_line == min_line and tok_start_col < (min_col or 0))
+        ):
+            min_line = raw_line
+            min_col = tok_start_col
+
+        if (
+            max_line is None
+            or raw_line > max_line
+            or (raw_line == max_line and tok_end_col > (max_col or 0))
+        ):
+            max_line = raw_line
+            max_col = tok_end_col
+
+    if min_line is None or min_col is None or max_line is None or max_col is None:
+        return None
+    return (min_line, min_col, max_line, max_col)
+
+
+def _build_final_select_column(
+    proj: Any,
+    parse_line_starts: "list[int]",
+    parse_sql: str,
+    to_raw_line: "Any",
+) -> "dict[str, Any] | None":
+    """Build a rich column entry for the finalSelect segment from a sqlglot
+    projection expression.
+
+    Returns a dict with:
+      name        — output name (alias or bare column/expression name)
+      line, col   — start of full projection expression in raw-source coords
+      endLine, endCol — end of full projection expression
+      expression  — source column name (e.g. "company_id" in "co.company_id AS Key")
+      table       — qualifier if present (e.g. "co")
+      aliasLine, aliasCol, aliasEndCol — position of alias identifier (AS clause only)
+    """
+    from sqlglot import exp  # type: ignore[import-not-found]
+
+    name = getattr(proj, "alias_or_name", None)
+    if not name:
+        return None
+
+    entry: dict[str, Any] = {"name": name}
+
+    # Full expression bounds
+    bounds = _projection_bounds(proj, parse_line_starts, parse_sql, to_raw_line)
+    if bounds:
+        entry["line"], entry["col"], entry["endLine"], entry["endCol"] = bounds
+
+    # Alias position (only when an AS clause is present)
+    if isinstance(proj, exp.Alias):
+        alias_id = proj.args.get("alias")
+        if isinstance(alias_id, exp.Identifier):
+            pos = _identifier_pos(alias_id, alias_id.name or "")
+            if pos:
+                entry["aliasLine"] = to_raw_line(pos[0])
+                entry["aliasCol"] = pos[1]
+                entry["aliasEndCol"] = pos[2]
+
+        # Expression info — the thing being aliased
+        inner = proj.this
+        if isinstance(inner, exp.Column):
+            col_id = inner.this
+            if isinstance(col_id, exp.Identifier):
+                entry["expression"] = col_id.name or ""
+            tbl = inner.table
+            if tbl:
+                entry["table"] = tbl
+        elif isinstance(inner, exp.Identifier):
+            entry["expression"] = inner.name or ""
+    else:
+        # Bare column or complex expression without alias
+        if isinstance(proj, exp.Column):
+            col_id = proj.this
+            if isinstance(col_id, exp.Identifier):
+                entry["expression"] = col_id.name or ""
+            tbl = proj.table
+            if tbl:
+                entry["table"] = tbl
+        elif isinstance(proj, exp.Identifier):
+            entry["expression"] = proj.name or ""
+
+    return entry
+
+
 def handle_parse_document(request: dict[str, Any]) -> None:
     """Parse a SQL document and return a structured DocumentModel as JSON.
 
@@ -1883,6 +2020,7 @@ def handle_parse_document(request: dict[str, Any]) -> None:
     # them as diagnostics in the Problems tab.
     # ------------------------------------------------------------------
     final_columns: list[dict[str, Any]] = []
+    final_select: dict[str, Any] | None = None
     scope_aliases: dict[str, list[str]] = {}
     sqlglot_warnings: list[dict[str, Any]] = []
     try:
@@ -2039,6 +2177,58 @@ def handle_parse_document(request: dict[str, Any]) -> None:
                         final_columns.append(
                             {"name": col, "line": to_raw_line(_projection_line(proj))}
                         )
+
+                # Build the richer finalSelect segment alongside existing finalColumns.
+                # Build column entries first so we can derive sel_line reliably.
+                fs_columns: list[dict[str, Any]] = []
+                for proj in sel.expressions:
+                    col_entry = _build_final_select_column(
+                        proj, parse_line_starts, parse_sql, to_raw_line
+                    )
+                    if col_entry:
+                        fs_columns.append(col_entry)
+
+                # sel.walk() visits the FROM clause before projections in sqlglot's
+                # arg order, so "first leaf" gives a CTE-reference line, not the
+                # SELECT keyword.  Instead, derive the start from the minimum column
+                # line (the first projection is always inside the final SELECT).
+                # Scan that line backward to locate the actual SELECT keyword.
+                col_lines = [c["line"] for c in fs_columns if "line" in c]
+                if col_lines:
+                    first_col_line = min(col_lines)
+                    sel_line: int = first_col_line
+                    sel_col: int = 0
+                    # Walk backward from the first column's line to find SELECT keyword.
+                    raw_lines = parse_sql.split("\n")
+                    for back in range(first_col_line, max(-1, first_col_line - 10), -1):
+                        raw_back = to_raw_line(back)
+                        if 0 <= raw_back < len(raw_lines):
+                            stripped = raw_lines[raw_back].lstrip()
+                            if stripped.lower().startswith("select"):
+                                sel_line = raw_back
+                                sel_col = len(raw_lines[raw_back]) - len(stripped)
+                                break
+                else:
+                    sel_line = 0
+                    sel_col = 0
+
+                # End of SELECT: last leaf token position across all column bounds.
+                sel_end_line: int = sel_line
+                sel_end_col: int = sel_col
+                for c in fs_columns:
+                    el = c.get("endLine", c.get("line", sel_end_line))
+                    ec = c.get("endCol", c.get("col", sel_end_col))
+                    if el > sel_end_line or (el == sel_end_line and ec > sel_end_col):
+                        sel_end_line = el
+                        sel_end_col = ec
+
+                final_select = {
+                    "line": sel_line,
+                    "col": sel_col,
+                    "endLine": sel_end_line,
+                    "endCol": sel_end_col,
+                    "columns": fs_columns,
+                }
         # Alias resolution — replaces the separate get_scope_columns round-trip.
         scope_aliases = (
             _aliases_from_scope(root_scope, request.get("schema_mapping", {}))
@@ -2241,6 +2431,7 @@ def handle_parse_document(request: dict[str, Any]) -> None:
                 "refs": refs,
                 "sources": sources,
                 "finalColumns": final_columns,
+                "finalSelect": final_select,
                 "tokens": tokens,
                 "aliases": scope_aliases,
                 "sqlglotWarnings": sqlglot_warnings,

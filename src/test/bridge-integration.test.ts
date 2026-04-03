@@ -366,6 +366,53 @@ select mkey, sourcename from warehouse`);
 		expect(coTok?.aliasEndCol).toBe(36);
 	}, 30_000);
 
+	it('finalSelect is emitted with column names', async () => {
+		const result = await parseSql(`with orders as (
+    select order_id, amount from raw_orders
+)
+select order_id, amount from orders`);
+		expect(result.success).toBe(true);
+		const data = result.data as Record<string, unknown>;
+		const fs = data['finalSelect'] as { line: number; col: number; endLine: number; endCol: number; columns: Array<{ name: string }> };
+		expect(fs).toBeDefined();
+		expect(fs.columns.map(c => c.name)).toContain('order_id');
+		expect(fs.columns.map(c => c.name)).toContain('amount');
+	}, 30_000);
+
+	it('finalSelect columns carry line/col positions', async () => {
+		const result = await parseSql(`with src as (
+    select id, name from raw_src
+)
+select
+    src.id as customer_id,
+    src.name
+from src`);
+		expect(result.success).toBe(true);
+		const data = result.data as Record<string, unknown>;
+		const fs = data['finalSelect'] as {
+			line: number; col: number; endLine: number; endCol: number;
+			columns: Array<{
+				name: string; line: number; col: number; endLine: number; endCol: number;
+				expression?: string; table?: string; aliasLine?: number; aliasCol?: number; aliasEndCol?: number;
+			}>;
+		};
+		expect(fs).toBeDefined();
+		// SELECT keyword is on line 3 (0-based); first column on line 4.
+		// The backward scan from the first column should land on the SELECT keyword.
+		expect(fs.line).toBe(3);
+		// customer_id: aliased column on line 4
+		const custCol = fs.columns.find(c => c.name === 'customer_id');
+		expect(custCol).toBeDefined();
+		expect(custCol!.line).toBe(4);
+		expect(custCol!.expression).toBe('id');
+		expect(custCol!.table).toBe('src');
+		expect(custCol!.aliasLine).toBe(4);
+		// name: bare qualified column on line 5
+		const nameCol = fs.columns.find(c => c.name === 'name');
+		expect(nameCol).toBeDefined();
+		expect(nameCol!.line).toBe(5);
+	}, 30_000);
+
 });
 
 describe('bridge parse_document – sqlglotWarnings', () => {

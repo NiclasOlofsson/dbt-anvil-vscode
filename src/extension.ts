@@ -713,8 +713,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			const doc = await vscode.workspace.openTextDocument(filePath);
 			const adapterType = manifestIndexer.index?.adapterType ?? 'ansi';
 			const model = await parseService.getDocumentModel(doc, adapterType, { skipEnrichment: true });
-			const cte = model?.ctes.find(c => c.name === cteName);
-			const pos = new vscode.Position(cte?.line ?? 0, 0);
+			let line: number;
+			if (cteName === '_main_') {
+				// Navigate to the final SELECT
+				line = model?.finalSelect?.line ?? model?.finalColumns[0]?.line ?? 0;
+			} else {
+				line = model?.ctes.find(c => c.name === cteName)?.line ?? 0;
+			}
+			const pos = new vscode.Position(line, 0);
 			await vscode.window.showTextDocument(doc, {
 				selection: new vscode.Range(pos, pos),
 				preserveFocus: false,

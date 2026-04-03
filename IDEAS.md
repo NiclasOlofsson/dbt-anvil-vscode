@@ -116,12 +116,12 @@ Rewrote the query result webview from scratch. Goal: best table view outside of 
 | **Multi-format export** | CSV, TSV, JSON, Markdown, and "Open in Editor" — from toolbar, context menu, or footer |
 | **Sort improvements** | NULLs sort to bottom; re-indexes data after sort for correct selection behavior |
 
-## Model editors
+## ✅ Model editors
 
 Please remove the top codelense because we have the buttons in the editor/title that works just fine.
 Also no "icons" in the Code lense. Use Text and ... to signify that it's a command.
 
-## Profiler fix
+## ✅ Profiler fix
 I don't like how the checkmark is shown. We can use a small green circle instead.
 We should add the full model node at the end, directly when we first open the tree and start running. it's uggly when it's added in the end.
 On the containing treenode (root) we don't have to show any status at all, just the model name.
