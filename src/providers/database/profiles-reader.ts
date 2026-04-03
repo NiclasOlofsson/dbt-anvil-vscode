@@ -25,6 +25,15 @@ export interface DatabricksConnection extends ProfileConnection {
 }
 
 /**
+ * DuckDB-specific connection fields from profiles.yml.
+ */
+export interface DuckdbConnection extends ProfileConnection {
+	type: 'duckdb';
+	path: string;
+	schema?: string;
+}
+
+/**
  * Reads and parses a dbt profiles.yml file, resolving the active target for
  * the given profile name and interpolating {{ env_var() }} expressions.
  *

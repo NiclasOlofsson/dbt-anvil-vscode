@@ -180,7 +180,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	logger.info(`  snapshotPaths: ${resolveSnapshotPaths(projectConfig, projectDir).join(', ')}`);
 	logger.info(`  testPaths: ${resolveTestPaths(projectConfig, projectDir).join(', ')}`);
 	const adapterType = manifestIndexer.index?.adapterType ?? 'ansi';
-	const databaseProvider = await createDatabaseProvider(adapterType, profileName, profilesDir, executionService, logger);
+	const databaseProvider = await createDatabaseProvider(adapterType, profileName, profilesDir, projectDir, executionService, logger);
 	container.setDatabaseProvider(databaseProvider);
 	describeCache.setProvider(databaseProvider);
 
