@@ -40,13 +40,13 @@ Useful for exploration, debugging, and verifying what a compiled query actually 
 
 ## Debugger
 
-Press F5 on a dbt model and it pauses at entry. F10 steps to the next CTE, executing it and showing the intermediate result. F11 steps into a CTE's clauses — `FROM`, `WHERE`, `GROUP BY`, `SELECT` — one at a time.
+The traditional approach to debugging a dbt model is to paste a CTE into a scratch file, run it, look at the results, paste the next one, and repeat until you find the join that multiplied your row count by twelve. This is fine. People do this daily. There is a better way.
 
-The Variables panel shows the data at each pause: column names and first-row values, row count and timing, and the SQL being run. The Data Pipeline view shows the dependency DAG as you step through it, with a warning on any clause that produced more rows than its input.
+Press F5 and the model pauses at entry. F10 steps to the next CTE, executing it and showing what came out. F11 steps into a CTE's individual clauses — `FROM`, `WHERE`, `GROUP BY`, `SELECT` — so you can watch the row count change at each step. The Data Pipeline view marks the exact clause where things went sideways.
 
-Step Back replays cached results — no re-execution. Breakpoints work by line or CTE name. The debug console evaluates SQL in the current CTE's scope. Edit a CTE mid-session and Restart Frame recompiles just that piece, keeping upstream results cached. Step Into a `ref()` and it opens a nested session for that model.
+Step Back replays cached results, so it's free. Breakpoints work by CTE name or line. Edit a CTE mid-session and Restart Frame recompiles just that piece. Step Into a `ref()` and it opens a nested session for that model.
 
-It follows the [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/), so the standard VS Code debug UI works as-is.
+It implements the [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/), so the toolbar, the variables panel, the call stack — it's the standard VS Code debugger. Just for SQL now.
 
 ## Profiler
 
