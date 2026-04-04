@@ -7,8 +7,8 @@
 			"request": "launch",
 			"internalConsoleOptions": "neverOpen",
 			"args": [
-				"--extensionDevelopmentPath=${workspaceFolder}",
-				"--folder-uri=file:///c:/Development/dbt_oatanalytics"
+				"c:/Development/dbt_oatanalytics",
+				"--extensionDevelopmentPath=${workspaceFolder}"
 			],
 			"outFiles": [
 				"${workspaceFolder}/dist/**/*.js"
@@ -20,8 +20,8 @@
 			"request": "launch",
 			"internalConsoleOptions": "neverOpen",
 			"args": [
-				"--extensionDevelopmentPath=${workspaceFolder}",
-				"--folder-uri=file:///c:/Development/github/dbt-core-mcp/examples/jaffle_shop"
+				"c:/Development/github/dbt-core-mcp/examples/jaffle_shop",
+				"--extensionDevelopmentPath=${workspaceFolder}"
 			],
 			"outFiles": [
 				"${workspaceFolder}/dist/**/*.js"
@@ -33,8 +33,8 @@
 			"request": "launch",
 			"internalConsoleOptions": "neverOpen",
 			"args": [
-				"--extensionDevelopmentPath=${workspaceFolder}",
-				"--folder-uri=${workspaceFolder}/samples/nba-monte-carlo"
+				"${workspaceFolder}/samples/nba-monte-carlo",
+				"--extensionDevelopmentPath=${workspaceFolder}"
 			],
 			"outFiles": [
 				"${workspaceFolder}/dist/**/*.js"
@@ -46,8 +46,8 @@
 			"request": "launch",
 			"internalConsoleOptions": "neverOpen",
 			"args": [
-				"--extensionDevelopmentPath=${workspaceFolder}",
-				"--folder-uri=file:///c:/Development/github/dbt-core-mcp/examples/jaffle_shop"
+				"c:/Development/github/dbt-core-mcp/examples/jaffle_shop",
+				"--extensionDevelopmentPath=${workspaceFolder}"
 			],
 			"outFiles": [
 				"${workspaceFolder}/dist/**/*.js"
