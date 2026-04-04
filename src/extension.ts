@@ -877,7 +877,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	);
 
 	// -------- Debug adapter (F5 → run SQL) --------
-	const dataPipelineProvider = new DataPipelineProvider();
+	const dataPipelineProvider = new DataPipelineProvider(context.extensionUri);
 	context.subscriptions.push(
 		vscode.debug.registerDebugConfigurationProvider('dbt-sql', new SqlDebugConfigProvider()),	vscode.debug.registerDebugConfigurationProvider('dbt-sql', new SqlDebugConfigProvider(), vscode.DebugConfigurationProviderTriggerKind.Dynamic),		vscode.debug.registerDebugAdapterDescriptorFactory('dbt-sql', {
 			createDebugAdapterDescriptor() {
