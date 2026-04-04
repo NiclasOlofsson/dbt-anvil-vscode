@@ -278,6 +278,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			testExplorerProvider.refresh();
 			lineageGraphProvider.refreshGraph();
 			columnStorePersistence.save(manifestIndexer);
+			void dbtBridgeRunner.invalidateManifestCache();
 		}),
 	);
 
@@ -876,9 +877,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	// -------- Debug adapter (F5 → run SQL) --------
 	context.subscriptions.push(
-		vscode.debug.registerDebugConfigurationProvider('dbt-sql', new SqlDebugConfigProvider()),
-		vscode.debug.registerDebugConfigurationProvider('dbt-sql', new SqlDebugConfigProvider(), vscode.DebugConfigurationProviderTriggerKind.Dynamic),
-		vscode.debug.registerDebugAdapterDescriptorFactory('dbt-sql', {
+		vscode.debug.registerDebugConfigurationProvider('dbt-sql', new SqlDebugConfigProvider()),	vscode.debug.registerDebugConfigurationProvider('dbt-sql', new SqlDebugConfigProvider(), vscode.DebugConfigurationProviderTriggerKind.Dynamic),		vscode.debug.registerDebugAdapterDescriptorFactory('dbt-sql', {
 			createDebugAdapterDescriptor() {
 				return new vscode.DebugAdapterInlineImplementation(
 					new SqlDebugAdapter(queryRunner, pathResolver, logger, databaseProvider, sqlglotBridgeRunner, compileCache, manifestIndexer),
@@ -896,21 +895,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 async function ensureLaunchConfig(folder: vscode.WorkspaceFolder | undefined): Promise<void> {
 	if (!folder) return;
 	const launchUri = vscode.Uri.joinPath(folder.uri, '.vscode', 'launch.json');
+
+	const dbtConfigs = [
+		{ name: 'Run SQL', type: 'dbt-sql', request: 'launch' },
+		{ name: 'Run All SQL', type: 'dbt-sql', request: 'launch', scope: 'all' },
+		{ name: 'Debug SQL', type: 'dbt-sql', request: 'launch' },
+	];
+
+	let existing: { version: string; configurations: Array<Record<string, unknown>> } = { version: '0.2.0', configurations: [] };
 	try {
-		await vscode.workspace.fs.stat(launchUri);
-		// Already exists — leave it alone.
+		const raw = await vscode.workspace.fs.readFile(launchUri);
+		existing = JSON.parse(Buffer.from(raw).toString('utf8'));
 	} catch {
-		// Create .vscode/ dir (may already exist) then write launch.json.
-		try { await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(folder.uri, '.vscode')); } catch { /* exists */ }
-		const config = {
-			version: '0.2.0',
-			configurations: [
-				{ name: 'Run SQL', type: 'dbt-sql', request: 'launch' },
-				{ name: 'Run All SQL', type: 'dbt-sql', request: 'launch', scope: 'all' },
-			],
-		};
-		await vscode.workspace.fs.writeFile(launchUri, Buffer.from(JSON.stringify(config, null, 4) + '\n', 'utf8'));
+		// File doesn't exist or is unparseable — start fresh.
 	}
+
+	const configs: Array<Record<string, unknown>> = Array.isArray(existing.configurations) ? existing.configurations : [];
+
+	// Only add configs that aren't already present (match by name+type).
+	const hasDbtConfig = configs.some(c => c.type === 'dbt-sql');
+	if (hasDbtConfig) return;
+
+	const merged = { version: existing.version ?? '0.2.0', configurations: [...configs, ...dbtConfigs] };
+	try { await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(folder.uri, '.vscode')); } catch { /* exists */ }
+	await vscode.workspace.fs.writeFile(launchUri, Buffer.from(JSON.stringify(merged, null, 4) + '\n', 'utf8'));
 }
 
 function getActiveModelName(): string | undefined {
