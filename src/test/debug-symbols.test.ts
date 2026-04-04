@@ -98,7 +98,7 @@ describe('injectMarkers', () => {
 		const result = injectMarkers(source, symbols, []);
 
 		// All original tokens should still appear in order
-		const stripped = result.replace(/\/\* @dbg:\w+:\w+:\w+ \*\/ /g, '').replace(/ \/\* \/@dbg \*\//g, '');
+		const stripped = result.replace(/\/\* @dbg:\w+:\w+:\w+(?::\w+)? \*\/ /g, '').replace(/ \/\* \/@dbg \*\//g, '');
 		expect(stripped).toBe(source);
 	});
 
@@ -132,6 +132,73 @@ describe('injectMarkers', () => {
 		// Original tokens preserved
 		expect(result).toContain('SELECT');
 		expect(result).toContain('FROM');
+	});
+
+	it('includes frameName in marker when present', () => {
+		const source = 'SELECT id FROM t';
+		const symbols: SymbolEntry[] = [
+			{ line: 0, col: 0, endCol: 6, role: 'select', frameName: 'base' },
+			{ line: 0, col: 7, endCol: 9, role: 'ident', frameName: 'base' },
+		];
+		const result = injectMarkers(source, symbols, []);
+
+		expect(result).toContain('/* @dbg:L0:C0:select:base */');
+		expect(result).toContain('/* @dbg:L0:C7:ident:base */');
+	});
+
+	it('omits frameName suffix when not present', () => {
+		const source = 'SELECT id FROM t';
+		const symbols: SymbolEntry[] = [
+			{ line: 0, col: 0, endCol: 6, role: 'select' },
+		];
+		const result = injectMarkers(source, symbols, []);
+
+		expect(result).toContain('/* @dbg:L0:C0:select */');
+		expect(result).not.toContain('/* @dbg:L0:C0:select:');
+	});
+
+	it('injects @ref markers around ref() Jinja spans', () => {
+		const source = "SELECT id FROM {{ ref('orders') }}";
+		const symbols: SymbolEntry[] = [
+			{ line: 0, col: 0, endCol: 6, role: 'select' },
+			{ line: 0, col: 7, endCol: 9, role: 'ident' },
+		];
+		const jinjaSpans = findJinjaSpans(source);
+		const result = injectMarkers(source, symbols, jinjaSpans, {
+			refMarkers: [{ name: 'orders', sourceLine: 0, startOffset: 15, endOffset: 34 }],
+		});
+
+		expect(result).toContain('/* @ref:name="orders" source_line=0 */');
+		expect(result).toContain('/* /@ref */');
+		expect(result).toContain("{{ ref('orders') }}");
+	});
+
+	it('injects @source markers around source() Jinja spans', () => {
+		const source = "SELECT id FROM {{ source('raw', 'data') }}";
+		const symbols: SymbolEntry[] = [
+			{ line: 0, col: 0, endCol: 6, role: 'select' },
+		];
+		const jinjaSpans = findJinjaSpans(source);
+		const result = injectMarkers(source, symbols, jinjaSpans, {
+			sourceMarkers: [{ schema: 'raw', name: 'data', sourceLine: 0, startOffset: 15, endOffset: 42 }],
+		});
+
+		expect(result).toContain('/* @source:schema="raw" name="data" source_line=0 */');
+		expect(result).toContain('/* /@source */');
+	});
+
+	it('injects @macro markers around macro Jinja spans', () => {
+		const source = "SELECT {{ my_macro(col) }} FROM t";
+		const symbols: SymbolEntry[] = [
+			{ line: 0, col: 0, endCol: 6, role: 'select' },
+		];
+		const jinjaSpans = findJinjaSpans(source);
+		const result = injectMarkers(source, symbols, jinjaSpans, {
+			macroSpans: [{ name: 'my_macro', sourceLine: 0, startOffset: 7, endOffset: 26 }],
+		});
+
+		expect(result).toContain('/* @macro:start name="my_macro" source_line=0 */');
+		expect(result).toContain('/* @macro:end */');
 	});
 });
 
@@ -270,5 +337,70 @@ describe('parseSourceMap', () => {
 
 		// Line 2, only anchor is compiled 0 (source 5), delta = 2-0 = 2, source = 7
 		expect(map.nearestSourceLine(2)).toBe(7);
+	});
+
+	it('parses frameName from marker when present', () => {
+		const compiled = '/* @dbg:L0:C0:select:base */ SELECT /* /@dbg */ /* @dbg:L0:C7:ident:base */ id /* /@dbg */';
+		const map = parseSourceMap(compiled);
+
+		expect(map.mappings).toHaveLength(2);
+		expect(map.mappings[0].frameName).toBe('base');
+		expect(map.mappings[1].frameName).toBe('base');
+	});
+
+	it('frameName is undefined for markers without it', () => {
+		const compiled = '/* @dbg:L0:C0:select */ SELECT /* /@dbg */';
+		const map = parseSourceMap(compiled);
+
+		expect(map.mappings).toHaveLength(1);
+		expect(map.mappings[0].frameName).toBeUndefined();
+	});
+
+	it('parses @macro open/close spans', () => {
+		const compiled = '/* @macro:start name="count_macro" source_line=5 */ COUNT(*) /* @macro:end */';
+		const map = parseSourceMap(compiled);
+
+		expect(map.macroSpans).toHaveLength(1);
+		expect(map.macroSpans[0].name).toBe('count_macro');
+		expect(map.macroSpans[0].sourceLine).toBe(5);
+		expect(map.macroSpans[0].compiledStartLine).toBe(0);
+		expect(map.macroSpans[0].compiledEndLine).toBe(0);
+	});
+
+	it('parses @ref markers', () => {
+		const compiled = '/* @ref:name="orders" source_line=3 */ "db"."schema"."orders" /* /@ref */';
+		const map = parseSourceMap(compiled);
+
+		expect(map.refMarkers).toHaveLength(1);
+		expect(map.refMarkers[0].name).toBe('orders');
+		expect(map.refMarkers[0].sourceLine).toBe(3);
+		expect(map.refMarkers[0].compiledLine).toBe(0);
+	});
+
+	it('parses @source markers', () => {
+		const compiled = '/* @source:schema="raw" name="data" source_line=7 */ "raw"."data" /* /@source */';
+		const map = parseSourceMap(compiled);
+
+		expect(map.sourceMarkers).toHaveLength(1);
+		expect(map.sourceMarkers[0].schema).toBe('raw');
+		expect(map.sourceMarkers[0].name).toBe('data');
+		expect(map.sourceMarkers[0].sourceLine).toBe(7);
+		expect(map.sourceMarkers[0].compiledLine).toBe(0);
+	});
+
+	it('isInsideMacro returns span when line is inside a macro', () => {
+		const compiled = 'line0\n/* @macro:start name="count_macro" source_line=5 */ COUNT(*) /* @macro:end */\nline2';
+		const map = parseSourceMap(compiled);
+
+		const span = map.isInsideMacro(1);
+		expect(span).toBeDefined();
+		expect(span!.sourceLine).toBe(5);
+	});
+
+	it('isInsideMacro returns undefined for lines outside macros', () => {
+		const compiled = '/* @macro:start name="count_macro" source_line=5 */ COUNT(*) /* @macro:end */\nSELECT 1';
+		const map = parseSourceMap(compiled);
+
+		expect(map.isInsideMacro(1)).toBeUndefined();
 	});
 });

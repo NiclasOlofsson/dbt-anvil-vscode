@@ -60,13 +60,13 @@ describe('emit_debug_symbols bridge integration', () => {
 
 		const symbols = getSymbols(result);
 		const selectSym = symbols.find(s => s.role === 'select');
-		expect(selectSym).toEqual({ line: 0, col: 0, endCol: 6, role: 'select' });
+		expect(selectSym).toMatchObject({ line: 0, col: 0, endCol: 6, role: 'select' });
 
 		const idSym = symbols.find(s => s.role === 'ident' && s.col === 7);
-		expect(idSym).toEqual({ line: 0, col: 7, endCol: 9, role: 'ident' });
+		expect(idSym).toMatchObject({ line: 0, col: 7, endCol: 9, role: 'ident' });
 
 		const fromSym = symbols.find(s => s.role === 'from');
-		expect(fromSym).toEqual({ line: 0, col: 10, endCol: 14, role: 'from' });
+		expect(fromSym).toMatchObject({ line: 0, col: 10, endCol: 14, role: 'from' });
 	});
 
 	it('handles multiline SQL', async () => {
@@ -109,6 +109,60 @@ describe('emit_debug_symbols bridge integration', () => {
 		expect(roles).toContain('from');
 		expect(roles).toContain('where');
 		expect(roles).toContain('star');
+	});
+
+	it('assigns _main_ frameName for simple queries', async () => {
+		const result = await bridge.invokeRaw({
+			emit_debug_symbols: true,
+			sql: 'SELECT id FROM t',
+			dialect: 'duckdb',
+		});
+
+		const symbols = getSymbols(result);
+		for (const sym of symbols) {
+			expect(sym.frameName).toBe('_main_');
+		}
+	});
+
+	it('assigns CTE names as frameName for CTE queries', async () => {
+		const sql = [
+			'WITH base AS (',
+			'  SELECT id, status FROM raw_orders',
+			'),',
+			'filtered AS (',
+			'  SELECT id FROM base WHERE status = \'completed\'',
+			')',
+			'SELECT * FROM filtered',
+		].join('\n');
+
+		const result = await bridge.invokeRaw({
+			emit_debug_symbols: true,
+			sql,
+			dialect: 'duckdb',
+		});
+
+		const symbols = getSymbols(result);
+
+		// Symbols on line 1 (inside "base" CTE) should have frameName "base"
+		const baseLine = symbols.filter(s => s.line === 1);
+		expect(baseLine.length).toBeGreaterThan(0);
+		for (const sym of baseLine) {
+			expect(sym.frameName).toBe('base');
+		}
+
+		// Symbols on line 4 (inside "filtered" CTE) should have frameName "filtered"
+		const filteredLine = symbols.filter(s => s.line === 4);
+		expect(filteredLine.length).toBeGreaterThan(0);
+		for (const sym of filteredLine) {
+			expect(sym.frameName).toBe('filtered');
+		}
+
+		// Symbols on line 6 (final SELECT) should have frameName "_main_"
+		const mainLine = symbols.filter(s => s.line === 6);
+		expect(mainLine.length).toBeGreaterThan(0);
+		for (const sym of mainLine) {
+			expect(sym.frameName).toBe('_main_');
+		}
 	});
 
 	it('filters out blanked Jinja tokens', async () => {

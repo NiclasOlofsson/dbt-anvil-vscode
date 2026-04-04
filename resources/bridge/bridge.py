@@ -2607,6 +2607,108 @@ def handle_emit_debug_symbols(request: dict[str, Any]) -> None:
         _TT.STAR: "star",
     }
 
+    # ── CTE range detection for frameName assignment ──
+    # Use parse_one() to get AST nodes with meta positions, mirroring the same
+    # node_line / paren-scan pattern used in handle_decompose_query.
+    # Blanking preserves character offsets, so meta positions are valid against
+    # raw_sql and offset_to_line() can be used directly.
+    cte_ranges: list[tuple[str, int, int]] = []  # (name, startLine_0, endLine_0)
+    try:
+        import sqlglot as _sg  # type: ignore[import-not-found]
+        from sqlglot import exp as _exp  # type: ignore[import-not-found]
+
+        _blanked_ast = _sg.parse_one(blanked, dialect=sqlglot_dialect, error_level=None)
+        _with = _blanked_ast.args.get("with_") if _blanked_ast else None
+        if _with:
+            for cte_node in _with.expressions:
+                cte_name = cte_node.alias or ""
+                if not cte_name:
+                    continue
+                # Start line: leftmost Identifier's meta line (1-based → 0-based)
+                start_line = 0
+                for ident in cte_node.find_all(_exp.Identifier):
+                    raw = ident.meta.get("line")
+                    if raw is not None:
+                        start_line = max(0, raw - 1)
+                        break
+                # End line: find node's first child offset, then paren-scan
+                first_start: int | None = None
+                for child in cte_node.walk():
+                    s = child.meta.get("start")
+                    if s is not None and (first_start is None or s < first_start):
+                        first_start = s
+                end_line = start_line
+                if first_start is not None:
+                    open_idx = blanked.find("(", first_start)
+                    if open_idx >= 0:
+                        depth = 0
+                        for idx in range(open_idx, len(blanked)):
+                            if blanked[idx] == "(":
+                                depth += 1
+                            elif blanked[idx] == ")":
+                                depth -= 1
+                                if depth == 0:
+                                    end_line = offset_to_line(idx)
+                                    break
+                cte_ranges.append((cte_name, start_line, end_line))
+    except Exception:
+        pass  # CTE detection is best-effort; symbols still work without frameName
+
+    def _frame_name_for_line(line_0: int) -> str:
+        """Return the CTE name for a given 0-based source line, or '_main_'."""
+        for name, start, end in cte_ranges:
+            if start <= line_0 <= end:
+                return name
+        return "_main_"
+
+    # Also classify Jinja spans for the four-marker system.
+    # Each Jinja tag is classified as ref/source/macro/other.
+    jinja_classifications: list[dict[str, Any]] = []
+    for start, end, tag in _iter_jinja_tags(raw_sql):
+        tag_start_line = offset_to_line(start)
+        tag_end_line = offset_to_line(max(start, end - 1))
+        ref_m = _REF_TAG_RE.fullmatch(tag)
+        if ref_m:
+            jinja_classifications.append(
+                {
+                    "type": "ref",
+                    "name": ref_m.group(1),
+                    "sourceLine": tag_start_line,
+                    "startOffset": start,
+                    "endOffset": end,
+                }
+            )
+            continue
+        src_m = _SOURCE_TAG_RE.fullmatch(tag)
+        if src_m:
+            jinja_classifications.append(
+                {
+                    "type": "source",
+                    "schema": src_m.group(1),
+                    "name": src_m.group(2),
+                    "sourceLine": tag_start_line,
+                    "startOffset": start,
+                    "endOffset": end,
+                }
+            )
+            continue
+        if tag.startswith("{{"):
+            macro_m = _MACRO_TAG_RE.match(tag)
+            if macro_m:
+                name = macro_m.group(1)
+                if name not in _STATEMENT_MACROS and name not in _VALUE_MACROS:
+                    jinja_classifications.append(
+                        {
+                            "type": "macro",
+                            "name": name,
+                            "sourceLine": tag_start_line,
+                            "startOffset": start,
+                            "endOffset": end,
+                        }
+                    )
+                    continue
+        # Other Jinja tags (block/comment/statement macros/value macros) — not classified
+
     # Build symbol table
     symbols: list[dict[str, Any]] = []
 
@@ -2646,10 +2748,49 @@ def handle_emit_debug_symbols(request: dict[str, Any]) -> None:
                 "col": col_0,
                 "endCol": end_col_on_line,
                 "role": role,
+                "frameName": _frame_name_for_line(line_0),
             }
         )
 
-    print(json.dumps({"success": True, "symbols": symbols}), flush=True)
+    # Build macro/ref/source span data from Jinja classifications
+    macro_spans = [c for c in jinja_classifications if c["type"] == "macro"]
+    ref_markers = [c for c in jinja_classifications if c["type"] == "ref"]
+    source_markers = [c for c in jinja_classifications if c["type"] == "source"]
+
+    response: dict[str, Any] = {"success": True, "symbols": symbols}
+    if macro_spans:
+        response["macroSpans"] = [
+            {
+                "name": m["name"],
+                "sourceLine": m["sourceLine"],
+                "startOffset": m["startOffset"],
+                "endOffset": m["endOffset"],
+            }
+            for m in macro_spans
+        ]
+    if ref_markers:
+        response["refMarkers"] = [
+            {
+                "name": r["name"],
+                "sourceLine": r["sourceLine"],
+                "startOffset": r["startOffset"],
+                "endOffset": r["endOffset"],
+            }
+            for r in ref_markers
+        ]
+    if source_markers:
+        response["sourceMarkers"] = [
+            {
+                "schema": s["schema"],
+                "name": s["name"],
+                "sourceLine": s["sourceLine"],
+                "startOffset": s["startOffset"],
+                "endOffset": s["endOffset"],
+            }
+            for s in source_markers
+        ]
+
+    print(json.dumps(response), flush=True)
 
 
 def handle_decompose_query(request: dict[str, Any]) -> None:
@@ -2908,6 +3049,30 @@ def handle_decompose_query(request: dict[str, Any]) -> None:
                 }
             )
 
+        # WINDOW stage
+        windows = select_node.args.get("windows")
+        if windows:
+            clauses.append(
+                {
+                    "stage": "window",
+                    "sql": "",
+                    "line": node_line(windows[0])
+                    if isinstance(windows, list) and windows
+                    else find_clause_line(select_node, "windows"),
+                }
+            )
+
+        # QUALIFY stage (BigQuery/Snowflake: filter after window functions)
+        qualify_node = select_node.args.get("qualify")
+        if qualify_node:
+            clauses.append(
+                {
+                    "stage": "qualify",
+                    "sql": "",
+                    "line": find_clause_line(select_node, "qualify"),
+                }
+            )
+
         # SELECT (final projection) — the full CTE body
         select_sql = select_node.sql(dialect=sqlglot_dialect)
         # SELECT (final projection) — the full CTE body.
@@ -2925,6 +3090,36 @@ def handle_decompose_query(request: dict[str, Any]) -> None:
                 "line": find_clause_line(select_node, "select"),
             }
         )
+
+        # ORDER BY stage (after SELECT projection)
+        order_node = select_node.args.get("order")
+        if order_node and from_node:
+            clauses.append(
+                {
+                    "stage": "order",
+                    "sql": with_prefix(select_node.sql(dialect=sqlglot_dialect))
+                    if not select_sql.lstrip().upper().startswith("WITH")
+                    else select_sql,
+                    "line": find_clause_line(select_node, "order"),
+                }
+            )
+
+        # LIMIT stage (after ORDER BY)
+        limit_node = select_node.args.get("limit")
+        if limit_node:
+            clauses.append(
+                {
+                    "stage": "limit",
+                    "sql": with_prefix(select_node.sql(dialect=sqlglot_dialect))
+                    if not select_sql.lstrip().upper().startswith("WITH")
+                    else select_sql,
+                    "line": find_clause_line(select_node, "limit"),
+                }
+            )
+
+        # Assign logical execution order
+        for idx, clause in enumerate(clauses):
+            clause["order"] = idx
 
         return clauses
 
