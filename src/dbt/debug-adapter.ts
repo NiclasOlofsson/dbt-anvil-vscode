@@ -194,6 +194,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			case 'stepOut': this._handleStepOut(msg); break;
 			case 'stepBack': this._handleStepBack(msg); break;
 			case 'continue': this._handleContinue(msg); break;
+			case 'restartFrame': void this._handleRestartFrame(msg); break;
 			case 'evaluate': void this._handleEvaluate(msg); break;
 			case 'breakpointLocations': this._handleBreakpointLocations(msg); break;
 			case 'stepInTargets': this._handleStepInTargets(msg); break;
@@ -527,11 +528,15 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		if (this._granularity === 'line') {
 			const frame = this._frames[this._currentFrameIndex];
 			const clauses = this._clauses[frame.name] ?? [];
-			// VS Code positions the cursor at stackFrames[0]. Put the active clause
-			// first (most recent), then the preceding clauses in reverse order.
+			// VS Code positions the cursor at stackFrames[0]. Clauses are ordered by
+			// SQL execution order (FROM→WHERE→GROUP→HAVING→SELECT). Show the current
+			// clause at top, then already-executed clauses in reverse execution order
+			// (most recent first) — exactly like a real call stack. Future clauses
+			// are omitted because they haven't run yet.
+			const currentIdx = this._currentClauseIndex ?? 0;
 			const ordered = [
-				this._currentClauseIndex ?? 0,
-				...Array.from({ length: clauses.length }, (_, i) => i).filter(i => i !== this._currentClauseIndex).reverse(),
+				currentIdx,
+				...Array.from({ length: currentIdx }, (_, i) => currentIdx - 1 - i),
 			];
 			const stackFrames = ordered.map(i => ({
 				id: encodeRef(this._currentFrameIndex, SCOPE_RESULT, i),
@@ -843,6 +848,99 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _handleContinue(msg: DapMessage): void {
 		this._respond(msg, true);
 		void this._runToContinue();
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// DAP: restartFrame  (Edit and Continue)
+	// ──────────────────────────────────────────────────────────────
+
+	private async _handleRestartFrame(msg: DapMessage): Promise<void> {
+		const args = msg.arguments ?? {};
+		// frameId is the DAP stack-frame id. In statement granularity it equals the
+		// frame index directly (see _handleStackTrace). Clip to valid range.
+		const frameId = typeof args.frameId === 'number' ? args.frameId : this._currentFrameIndex;
+		const restartIndex = Math.max(0, Math.min(frameId, this._frames.length - 1));
+
+		this._respond(msg, true);
+		this._output(`Restarting from frame "${this._frames[restartIndex]?.name ?? restartIndex}"…\n`);
+
+		// 1. Recompile the full model — dbt always compiles per-model, not per-CTE.
+		const editor = vscode.window.visibleTextEditors.find(e => e.document.uri.toString() === this._sourceUri)
+			?? vscode.window.activeTextEditor;
+		if (!editor) {
+			this._output('restartFrame: source editor not found.\n');
+			this._sendStopped('step');
+			return;
+		}
+
+		const adapterType = this._manifestIndexer.index?.adapterType ?? 'duckdb';
+		const sourceText = editor.document.getText();
+		const compileResult = await this._compileWithSymbols(sourceText, adapterType);
+		if (!compileResult) {
+			this._output('restartFrame: recompile failed — keeping current session.\n');
+			this._sendStopped('step');
+			return;
+		}
+
+		// 2. Re-decompose the fresh compiled SQL.
+		const decomposed = await this._decompose(compileResult.compiledSql, adapterType);
+		if (!decomposed) {
+			this._output('restartFrame: re-decompose failed — keeping current session.\n');
+			this._sendStopped('step');
+			return;
+		}
+
+		// 3. CTE structure check: if frame names or count differ, wipe the entire
+		//    cache — downstream cached results are no longer valid.
+		const oldNames = this._frames.map(f => f.name);
+		const newNames = decomposed.frames.map(f => f.name);
+		const structureChanged =
+			newNames.length !== oldNames.length ||
+			newNames.some((n, i) => n !== oldNames[i]);
+
+		if (structureChanged) {
+			this._output('  CTE structure changed — invalidating all cached results.\n');
+			this._resultCache.clear();
+		} else {
+			// 4. Targeted invalidation: evict the restarted frame and all downstream.
+			for (let i = restartIndex; i < this._frames.length; i++) {
+				const name = this._frames[i].name;
+				for (const key of [...this._resultCache.keys()]) {
+					if (key.startsWith(`${name}:`)) this._resultCache.delete(key);
+				}
+			}
+		}
+
+		// 5. Adopt the new decomposition and remap positions.
+		this._compiledSql = compileResult.compiledSql;
+		this._sourceMap = compileResult.sourceMap;
+		this._frames = decomposed.frames;
+		this._clauses = decomposed.clauses;
+		this._refs = decomposed.refs;
+
+		if (this._sourceMap) {
+			this._remapPositions();
+		}
+
+		if (this._lineOffset > 0) {
+			for (const frame of this._frames) {
+				frame.line += this._lineOffset;
+				frame.endLine += this._lineOffset;
+			}
+			for (const clauses of Object.values(this._clauses)) {
+				for (const clause of clauses) {
+					clause.line += this._lineOffset;
+				}
+			}
+		}
+
+		// 6. Re-execute from the restarted frame forward.
+		// Clamp restartIndex in case structure changed and the frame count shrank.
+		this._currentFrameIndex = Math.min(restartIndex, this._frames.length - 1);
+		this._granularity = 'statement';
+		this._currentClauseIndex = 0;
+		await this._executeCurrentStep();
+		this._sendStopped('restart');
 	}
 
 	private async _runToContinue(): Promise<void> {
