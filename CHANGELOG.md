@@ -2,9 +2,11 @@
 
 ## 0.1.9
 
-- **SQL Debugger** — A full step debugger for dbt SQL models. Press F5 on any model to start. CTEs are treated as functions in a call stack — F10 steps to the next CTE, F11 steps into clause-level execution (`FROM → JOIN → WHERE → GROUP BY → HAVING → SELECT`). Each step executes the CTE against your warehouse and shows the result set in a Variables panel. Step Back replays cached results at zero cost — no re-execution. Breakpoints work by line or CTE name. The debug console evaluates SQL expressions scoped to the current CTE. Edit a CTE mid-session and Restart Frame recompiles just that piece and resumes from it, keeping upstream results cached. If a model references another via `ref()`, Step Into opens a nested debug session for that model.
-- **Data Pipeline tree view** — A live CTE dependency DAG in the Debug sidebar that updates as you step. Frames you've visited are marked green; any clause that produced more rows than its input gets a warning flag so fan-out joins are visible at a glance.
-- **DuckDB native queries** — Projects targeting DuckDB now run queries natively without going through `dbt show`, the same direct path Databricks has had for a while.
+The headline for this release is a step debugger for dbt SQL. The paste-CTE-into-scratch-file workflow has served everyone well enough, but there's now an alternative that doesn't require leaving the editor or losing your place in the model.
+
+- **SQL Debugger** — Press F5 on any dbt model to start a debug session. F10 steps to the next CTE and shows what came out; F11 steps into clause-level execution so you can watch the row count change through `FROM → JOIN → WHERE → GROUP BY → SELECT`. Step Back replays cached results at zero cost. Breakpoints work by CTE name or line. The debug console evaluates SQL in the current CTE's scope. Edit a CTE mid-session and Restart Frame recompiles just that piece, keeping upstream results cached. Step Into a `ref()` and it opens a nested session for the referenced model.
+- **Data Pipeline tree view** — A live CTE dependency DAG in the Debug sidebar that updates as you step. Any clause that produced more rows than its input gets a warning flag, so the fan-out join is usually obvious within the first few steps.
+- **DuckDB native queries** — Projects targeting DuckDB now run queries directly without going through `dbt show`, the same path Databricks has had for a while. Windows only for now — other platforms are coming.
 
 ## 0.1.8
 
