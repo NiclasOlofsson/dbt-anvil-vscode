@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.9
+
+- **SQL Debugger** — A full step debugger for dbt SQL models. Press F5 on any model to start. CTEs are treated as functions in a call stack — F10 steps to the next CTE, F11 steps into clause-level execution (`FROM → JOIN → WHERE → GROUP BY → HAVING → SELECT`). Each step executes the CTE against your warehouse and shows the result set in a Variables panel. Step Back replays cached results at zero cost — no re-execution. Breakpoints work by line or CTE name. The debug console evaluates SQL expressions scoped to the current CTE. Edit a CTE mid-session and Restart Frame recompiles just that piece and resumes from it, keeping upstream results cached. If a model references another via `ref()`, Step Into opens a nested debug session for that model.
+- **Data Pipeline tree view** — A live CTE dependency DAG in the Debug sidebar that updates as you step. Frames you've visited are marked green; any clause that produced more rows than its input gets a warning flag so fan-out joins are visible at a glance.
+- **DuckDB native queries** — Projects targeting DuckDB now run queries natively without going through `dbt show`, the same direct path Databricks has had for a while.
+
 ## 0.1.8
 
 - **Fix Marketplace README image** — Demo image was not rendering on the VS Code Marketplace due to the repository being private. Images are now hosted publicly and load correctly on the extension page.

@@ -173,6 +173,8 @@ The bridge tokenizes the source using sqlglot's tokenizer, identifies Jinja regi
 - `clauses{}`: Per-frame breakdown into FROM, JOIN, WHERE, GROUP BY, HAVING, SELECT — each with SQL text, source line, and execution order
 - `refs{}`: Per-frame list of referenced CTEs (for the dependency DAG)
 
+Before extraction runs, a `promote_subqueries()` pass rewrites the AST in-place: any inline subquery in a `FROM` or `JOIN` clause is lifted out into a synthetic named CTE (named after the subquery's alias, or `__subq_N__` if none). This means the rest of the pipeline always sees a flat list of named CTEs — no special-casing for inline subqueries anywhere downstream.
+
 The decomposition uses sqlglot's AST parser. It walks the `WITH` clause to extract CTEs, then for each CTE's body, identifies clause boundaries by AST node type. The `order` field on each clause reflects SQL's logical execution order (FROM=0, JOIN=1, WHERE=2, etc.), which is the order the debugger steps through.
 
 **`compile_inline`** — Runs `dbt compile --inline <sql>` to resolve Jinja templates without executing. Used for the initial compilation before symbol injection.
@@ -268,7 +270,7 @@ Statement-level view (Step Over):          Clause-level view (Step Into):
 | `stepBack` | Move to previous frame (cached, free) | Move to previous clause (cached, free) |
 | `continue` (F5) | Run to next breakpoint | Run to next breakpoint |
 
-Step Back is free because every executed step's result is cached in `_resultCache`. The adapter simply decrements the index and replays the cached `StepResult`. No re-execution occurs. This is effectively reverse debugging without the overhead — possible because SQL CTEs are pure functions with no side effects.
+Step Back is free because every executed step's result is cached in `_resultCache`. The adapter pops one entry from `_navigationHistory` and restores that position, replaying the cached `StepResult`. No re-execution occurs. This is effectively reverse debugging without the overhead — possible because SQL CTEs are pure functions with no side effects.
 
 #### Execution and Caching
 
@@ -360,6 +362,8 @@ interface PipelineEventBody {
     refs: Record<string, string[]>;
     currentFrameIndex: number;
     executedFrames: Record<string, { rows: number; executionMs: number }>;
+    // Clause-level step progress for the current frame (only in line granularity)
+    clauseSteps?: PipelineClauseStep[];
 }
 ```
 
@@ -370,14 +374,18 @@ interface PipelineEventBody {
 
 Toggle via toolbar button on the view title.
 
+#### Visibility and Navigation History
+
+The TreeView's "executed" state is driven by `_navigationHistory` in the adapter, not by whether a frame has a cache entry. Only frames the user has actually navigated *to* appear as executed — frames silently evaluated as prerequisites (e.g. when hitting a breakpoint mid-pipeline) remain pending until explicitly visited. This prevents the tree from showing frames as green that the user has never seen.
+
 #### Node Appearance
 
 | State | Icon | Description |
 |-------|------|-------------|
-| Current frame | `$(debug-stackframe)` | Currently stopped here |
-| Executed | `$(check)` (green) | Row count shown |
+| Current frame / clause | custom orange arrow | Currently stopped here |
+| Executed | `$(circle-filled)` (green) | Row count shown |
 | Pending | `$(circle-outline)` | Not yet executed |
-| Fan-out detected | `$(warning)` (yellow) | Row count increased vs. dependency |
+| Fan-out detected | `$(warning)` (yellow) | Clause produced more rows than the previous clause — likely a bad join |
 | External ref | `$(database)` | Leaf node — external table or model |
 
 ### 3.6 Three-Tier Frame Taxonomy
