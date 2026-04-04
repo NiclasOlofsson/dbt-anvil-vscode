@@ -87,6 +87,20 @@ def run_command(
         args = [*args, "--target-path", extension_target_path]
     if "--log-format" not in args and len(args) > 0 and args[0] not in ("deps",):
         args = [*args, "--log-format", "text"]
+    # compile never needs warehouse introspection — skip the metastore scan.
+    # --no-populate-cache is a global flag (before subcommand).
+    # --no-introspect is a compile-specific flag (after subcommand).
+    if "compile" in args:
+        compile_idx = args.index("compile")
+        if "--no-populate-cache" not in args:
+            args = ["--no-populate-cache", *args]
+            compile_idx += 1  # offset by the prepended flag
+        if "--no-introspect" not in args:
+            args = [
+                *args[: compile_idx + 1],
+                "--no-introspect",
+                *args[compile_idx + 1 :],
+            ]
 
     try:
         print(f"[bridge] Running: {' '.join(args)}", file=sys.stderr, flush=True)
@@ -330,11 +344,13 @@ def handle_compile_inline(
     args = [
         "--no-populate-cache",
         "compile",
+        "--no-introspect",
+        "--no-write-json",
+        "--no-version-check",
         "--inline",
         sql,
         "--output",
         "json",
-        "--no-introspect",
         "--project-dir",
         project_dir,
         "--profiles-dir",
@@ -2507,6 +2523,135 @@ def handle_get_columns(request: dict[str, Any]) -> None:
         )
 
 
+def handle_emit_debug_symbols(request: dict[str, Any]) -> None:
+    """Generate a symbol table for debug symbol emission.
+
+    Input:  {"emit_debug_symbols": true, "sql": "...", "dialect": "duckdb"}
+    Output: {"success": true, "symbols": [{"line": 0, "col": 0, "endCol": 6, "role": "select"}, ...]}
+
+    Internally blanks Jinja tags via _blank_jinja (length-preserving) so
+    positions map directly back to the original source.  Returns 0-based
+    line/col values.
+    """
+    import bisect
+
+    from sqlglot import Dialect as _Dialect  # type: ignore[import-not-found]
+    from sqlglot.tokens import Tokenizer as _Tokenizer  # type: ignore[import-not-found]
+    from sqlglot.tokens import TokenType as _TT  # type: ignore[import-not-found]
+
+    raw_sql: str = request.get("sql", "")
+    dialect: str = request.get("dialect", "ansi")
+    sqlglot_dialect: str | None = dialect if dialect not in ("ansi", "", None) else None
+
+    if not raw_sql:
+        print(json.dumps({"success": True, "symbols": []}), flush=True)
+        return
+
+    # Blank Jinja so sqlglot sees pure SQL.  Length-preserving so all
+    # char offsets map 1:1 back to the original source.
+    blanked = _blank_jinja(raw_sql)
+
+    # Collect the char-offset ranges that were Jinja tags so we can
+    # filter out the placeholder tokens that _blank_jinja inserted.
+    jinja_ranges: list[tuple[int, int]] = [
+        (start, end) for start, end, _ in _iter_jinja_tags(raw_sql)
+    ]
+
+    def _in_jinja(offset: int) -> bool:
+        for js, je in jinja_ranges:
+            if js <= offset < je:
+                return True
+        return False
+
+    # Tokenize
+    try:
+        tokenizer = (
+            _Dialect.get_or_raise(sqlglot_dialect).tokenizer_class()
+            if sqlglot_dialect
+            else _Tokenizer()
+        )
+        token_list = tokenizer.tokenize(blanked)
+    except Exception:
+        print(json.dumps({"success": True, "symbols": []}), flush=True)
+        return
+
+    # line_starts for offset → (line, col) conversion
+    line_starts: list[int] = [0]
+    for i, ch in enumerate(raw_sql):
+        if ch == "\n":
+            line_starts.append(i + 1)
+
+    def offset_to_line(offset: int) -> int:
+        return max(0, bisect.bisect_right(line_starts, offset) - 1)
+
+    def offset_to_col(offset: int) -> int:
+        line = offset_to_line(offset)
+        return offset - line_starts[line]
+
+    # Token-type → role mapping  (only emit tokens we care about)
+    _ROLE_MAP: dict[_TT, str] = {
+        _TT.SELECT: "select",
+        _TT.FROM: "from",
+        _TT.JOIN: "join",
+        _TT.INNER: "join",
+        _TT.LEFT: "join",
+        _TT.RIGHT: "join",
+        _TT.CROSS: "join",
+        _TT.FULL: "join",
+        _TT.WHERE: "where",
+        _TT.GROUP_BY: "group",
+        _TT.HAVING: "having",
+        _TT.ORDER_BY: "order",
+        _TT.LIMIT: "limit",
+        _TT.WITH: "cte",
+        _TT.STAR: "star",
+    }
+
+    # Build symbol table
+    symbols: list[dict[str, Any]] = []
+
+    for idx, t in enumerate(token_list):
+        # Skip tokens inside blanked Jinja regions
+        if _in_jinja(t.start):
+            continue
+
+        role = _ROLE_MAP.get(t.token_type)
+
+        if role is None:
+            # Identifiers / vars
+            if t.token_type == _TT.VAR:
+                # Peek ahead: ident followed by L_PAREN → function call
+                next_tok = token_list[idx + 1] if idx + 1 < len(token_list) else None
+                if next_tok and next_tok.token_type == _TT.L_PAREN:
+                    role = "fn"
+                else:
+                    role = "ident"
+            elif t.token_type == _TT.NUMBER:
+                role = "lit"
+            elif t.token_type == _TT.STRING:
+                role = "lit"
+
+        if role is None:
+            continue
+
+        line_0 = offset_to_line(t.start)
+        col_0 = offset_to_col(t.start)
+        # endCol: exclusive, relative to the line t.end sits on
+        end_line_0 = offset_to_line(t.end)
+        end_col_on_line = t.end - line_starts[end_line_0] + 1
+
+        symbols.append(
+            {
+                "line": line_0,
+                "col": col_0,
+                "endCol": end_col_on_line,
+                "role": role,
+            }
+        )
+
+    print(json.dumps({"success": True, "symbols": symbols}), flush=True)
+
+
 def handle_decompose_query(request: dict[str, Any]) -> None:
     """Decompose a compiled SQL query into debug frames (CTEs + _main_) and per-frame clauses.
 
@@ -2545,7 +2690,7 @@ def handle_decompose_query(request: dict[str, Any]) -> None:
 
         return max(0, bisect.bisect_right(line_starts, offset) - 1)
 
-    def node_line(node: exp.Expression) -> int:
+    def node_line(node: "exp.Expression") -> int:  # type: ignore[name-defined]
         """Best-effort 0-based line for an AST node via its leftmost Identifier."""
         for ident in node.find_all(exp.Identifier):
             raw_line = ident.meta.get("line")
@@ -2556,31 +2701,32 @@ def handle_decompose_query(request: dict[str, Any]) -> None:
     # Build a list of (token_type, 0-based-line) from the tokenizer so we can
     # look up keyword positions for clause nodes that carry no Identifier children
     # (e.g. GROUP BY ALL parses to Group(all=True) with no children or meta).
-    from sqlglot import Dialect as _Dialect
-    from sqlglot import tokens as _tok
+    from sqlglot import Dialect as _Dialect  # type: ignore[import-not-found]
+    from sqlglot.tokens import Tokenizer as _Tokenizer  # type: ignore[import-not-found]
+    from sqlglot.tokens import TokenType as _TT  # type: ignore[import-not-found]
 
     try:
         _tokenizer = (
             _Dialect.get_or_raise(sqlglot_dialect).tokenizer_class()
             if sqlglot_dialect
-            else _tok.Tokenizer()
+            else _Tokenizer()
         )
         _token_list = _tokenizer.tokenize(compiled_sql)
     except Exception:
         _token_list = []
     # token.line is 1-based; store as 0-based. Also keep start char offset
     # so we can anchor clause searches to a specific select_node.
-    _token_positions: list[tuple[_tok.TokenType, int, int]] = [
+    _token_positions: list[tuple[_TT, int, int]] = [
         (t.token_type, t.line - 1, t.start) for t in _token_list
     ]
 
-    _CLAUSE_TOKEN_TYPES: dict[str, _tok.TokenType] = {
-        "select": _tok.TokenType.SELECT,
-        "from_": _tok.TokenType.FROM,
-        "where": _tok.TokenType.WHERE,
-        "group": _tok.TokenType.GROUP_BY,
-        "having": _tok.TokenType.HAVING,
-        "order": _tok.TokenType.ORDER_BY,
+    _CLAUSE_TOKEN_TYPES: dict[str, _TT] = {
+        "select": _TT.SELECT,
+        "from_": _TT.FROM,
+        "where": _TT.WHERE,
+        "group": _TT.GROUP_BY,
+        "having": _TT.HAVING,
+        "order": _TT.ORDER_BY,
     }
 
     def token_clause_line(clause_key: str, after_offset: int) -> int | None:
@@ -2597,7 +2743,7 @@ def handle_decompose_query(request: dict[str, Any]) -> None:
                 return tline
         return None
 
-    def node_end_line(node: exp.Expression) -> int:
+    def node_end_line(node: "exp.Expression") -> int:  # type: ignore[name-defined]
         """0-based last source line for an AST node.
 
         Mirrors the paren-scan approach used in handle_parse_query: finds the
@@ -2628,7 +2774,7 @@ def handle_decompose_query(request: dict[str, Any]) -> None:
 
         return offset_to_line(open_idx)
 
-    def _select_start_offset(select_node: exp.Expression) -> int:
+    def _select_start_offset(select_node: "exp.Expression") -> int:  # type: ignore[name-defined]
         """Character offset at the start of the line containing this SELECT.
 
         Mirrors handle_parse_query: use the node's 0-based start line to index
@@ -2638,7 +2784,7 @@ def handle_decompose_query(request: dict[str, Any]) -> None:
         line = node_line(select_node)
         return line_starts[line] if line < len(line_starts) else 0
 
-    def find_clause_line(select_node: exp.Expression, clause_key: str) -> int:
+    def find_clause_line(select_node: "exp.Expression", clause_key: str) -> int:  # type: ignore[name-defined]
         """Find the 0-based source line for a clause keyword within a SELECT.
 
         Uses the dialect tokenizer's exact token positions, anchored to the
@@ -2906,6 +3052,82 @@ def main() -> None:
             dbt = runner_class()
         return dbt
 
+    # Manifest caching for compile_inline: avoids a full project re-parse on
+    # every call.  On the first compile_inline request we run `dbt parse` once
+    # to obtain the Manifest Python object, then inject it into a dedicated
+    # dbtRunner instance via dbtRunner(manifest=...).  Subsequent calls skip
+    # ManifestLoader entirely and run in ~100-300 ms instead of ~500ms-2s.
+    _cached_manifest: Any = None
+    _compile_runner: Any = None
+
+    def get_compile_runner() -> Any:
+        """Return a dbtRunner pre-loaded with the cached manifest.
+
+        On the first call: runs `dbt parse` to populate the manifest cache and
+        creates a dedicated runner with `dbtRunner(manifest=_cached_manifest)`.
+        Falls back to the regular runner if parse fails.
+        """
+        nonlocal _cached_manifest, _compile_runner
+        if _compile_runner is not None:
+            return _compile_runner
+        d = get_dbt()
+        if d is None:
+            return None
+        if _cached_manifest is None:
+            print(
+                "[bridge] compile_inline: bootstrapping manifest cache via dbt parse",
+                file=sys.stderr,
+                flush=True,
+            )
+            parse_result = d.invoke(
+                [
+                    "--no-populate-cache",
+                    "parse",
+                    "--no-write-json",
+                    "--no-version-check",
+                    "--project-dir",
+                    project_dir,
+                    "--profiles-dir",
+                    profiles_dir,
+                    "--target-path",
+                    extension_target_path,
+                    "--log-format",
+                    "json",
+                ]
+            )
+            sys.stdout.flush()
+            sys.stderr.flush()
+            if parse_result.success and parse_result.result is not None:
+                _cached_manifest = parse_result.result
+                print(
+                    "[bridge] manifest cache: bootstrapped successfully",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            else:
+                print(
+                    "[bridge] manifest cache: parse failed, falling back to uncached runner",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return d
+        runner_class = import_dbt_runner()
+        if runner_class is None:
+            return d
+        _compile_runner = runner_class(manifest=_cached_manifest)
+        return _compile_runner
+
+    def invalidate_manifest_cache() -> None:
+        """Reset the cached manifest and compile runner.
+
+        Called when the TypeScript side detects that manifest.json has been
+        rebuilt (e.g. after `dbt run` or `dbt compile` changes the project).
+        """
+        nonlocal _cached_manifest, _compile_runner
+        _cached_manifest = None
+        _compile_runner = None
+        print("[bridge] manifest cache invalidated", file=sys.stderr, flush=True)
+
     # Signal ready
     print(json.dumps({"type": "ready"}), flush=True)
 
@@ -2954,7 +3176,7 @@ def main() -> None:
                 request, d, project_dir, profiles_dir, extension_target_path
             )
         elif "compile_inline" in request:
-            d = get_dbt()
+            d = get_compile_runner()
             if d is None:
                 print(
                     json.dumps({"success": False, "error": "dbt not available"}),
@@ -2964,8 +3186,13 @@ def main() -> None:
             handle_compile_inline(
                 request, d, project_dir, profiles_dir, extension_target_path
             )
+        elif request.get("invalidate_manifest"):
+            invalidate_manifest_cache()
+            print(json.dumps({"success": True}), flush=True)
         elif "get_columns" in request:
             handle_get_columns(request)
+        elif "emit_debug_symbols" in request:
+            handle_emit_debug_symbols(request)
         elif "command" in request:
             command_args: list = request["command"]
             if not command_args:

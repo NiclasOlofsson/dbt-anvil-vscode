@@ -90,6 +90,56 @@ describe('bridge integration', () => {
 		await bridge.shutdown();
 	});
 
+	it('compile_inline resolves ref() to a concrete relation', async () => {
+		const result = await bridge.invokeRaw({
+			compile_inline: "select * from {{ ref('stg_customers') }}",
+		});
+		expect(result.success).toBe(true);
+		const compiled = result.data?.['compiled_sql'] as string;
+		expect(compiled).toBeDefined();
+		// ref() should be replaced — no Jinja remaining
+		expect(compiled).not.toContain('{{');
+		// Should reference the actual table name
+		expect(compiled.toLowerCase()).toContain('stg_customers');
+	}, 60_000);
+
+	it('compile_inline is fast on repeated calls (manifest cache)', async () => {
+		const RUNS = 5;
+		const timesUncached: number[] = [];
+		const timesCached: number[] = [];
+
+		// Uncached: invalidate before each call to force a full re-parse every time
+		for (let i = 0; i < RUNS; i++) {
+			await bridge.invokeRaw({ invalidate_manifest: true });
+			const t0 = Date.now();
+			const result = await bridge.invokeRaw({
+				compile_inline: "select * from {{ ref('stg_customers') }}",
+			});
+			timesUncached.push(Date.now() - t0);
+			expect(result.success).toBe(true);
+		}
+
+		// Cached: manifest already warm after the uncached runs bootstrapped it; just compile
+		for (let i = 0; i < RUNS; i++) {
+			const t0 = Date.now();
+			const result = await bridge.invokeRaw({
+				compile_inline: "select * from {{ ref('stg_customers') }}",
+			});
+			timesCached.push(Date.now() - t0);
+			expect(result.success).toBe(true);
+		}
+
+		const medianUncached = [...timesUncached].sort((a, b) => a - b)[Math.floor(RUNS / 2)];
+		const medianCached = [...timesCached].sort((a, b) => a - b)[Math.floor(RUNS / 2)];
+		console.log(`compile_inline uncached (ms): ${timesUncached.join(', ')}  median=${medianUncached}`);
+		console.log(`compile_inline cached   (ms): ${timesCached.join(', ')}  median=${medianCached}`);
+		console.log(`speedup: ${(medianUncached / medianCached).toFixed(1)}x`);
+
+		// Both paths should complete well within 5s per call regardless of cache state.
+		expect(medianUncached).toBeLessThan(5_000);
+		expect(medianCached).toBeLessThan(5_000);
+	}, 300_000);
+
 	it.skip('describe_table returns columns for stg_customers', async () => {
 		const result = await bridge.invokeRaw({ describe_table: true, name: 'stg_customers' });
 		expect(result.success).toBe(true);

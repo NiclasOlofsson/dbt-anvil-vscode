@@ -330,6 +330,7 @@ export const window = {
 	showQuickPick: vi.fn(),
 	showInputBox: vi.fn(),
 	activeTextEditor: undefined as TextEditor | undefined,
+	visibleTextEditors: [] as TextEditor[],
 	onDidChangeActiveTextEditor: vi.fn(),
 	createWebviewPanel: vi.fn(),
 	registerWebviewViewProvider: vi.fn(),

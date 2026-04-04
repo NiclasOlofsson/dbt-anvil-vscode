@@ -478,7 +478,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		this._columnCollection.forEach((_, diags) => { colCount += diags.length; });
 		this._sqlglotCollection.forEach((_, diags) => { sqlglotCount += diags.length; });
 		const total = parseCount + refCount + colCount + sqlglotCount;
-		this.logger.debug(`[diagnostics] counts — parse:${parseCount} refs:${refCount} columns:${colCount} sqlglot:${sqlglotCount} total:${total}`);
+		this.logger.trace(`[diagnostics] counts — parse:${parseCount} refs:${refCount} columns:${colCount} sqlglot:${sqlglotCount} total:${total}`);
 		this.statusBar.setErrorCount(total);
 	}
 

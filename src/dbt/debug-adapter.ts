@@ -8,6 +8,8 @@ import type { CompileCache } from './compile-cache';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import { Priority } from './execution-service';
 import { splitStatements, findStatementAtOffset } from './statement-splitter';
+import { emitDebugSymbols, parseSourceMap } from './debug-symbols';
+import type { SourceMap } from './debug-symbols';
 
 interface DapMessage {
 	seq: number;
@@ -52,19 +54,72 @@ interface StepResult {
 
 // ── Scope/variable reference encoding ──
 // We pack frameIndex + scopeKind into a single variablesReference integer.
-const SCOPE_RESULT = 1;
-const SCOPE_IMPACT = 2;
-const SCOPE_QUERY = 3;
+export const SCOPE_RESULT = 1;
+export const SCOPE_IMPACT = 2;
+export const SCOPE_QUERY = 3;
 
-function encodeRef(frameIndex: number, scope: number, _extra = 0): number {
+export function encodeRef(frameIndex: number, scope: number, _extra = 0): number {
 	return ((frameIndex & 0xFFFF) << 16) | ((scope & 0xFF) << 8) | (_extra & 0xFF);
 }
-function decodeRef(ref: number): { frameIndex: number; scope: number; extra: number } {
+export function decodeRef(ref: number): { frameIndex: number; scope: number; extra: number } {
 	return {
 		frameIndex: (ref >> 16) & 0xFFFF,
 		scope: (ref >> 8) & 0xFF,
 		extra: ref & 0xFF,
 	};
+}
+
+export function wrapWithDebugCount(sql: string, limit: number): string {
+	// DuckDB (and most databases) reject WITH inside a subquery.
+	// When the SQL is a CTE query, hoist the wrapper as an extra CTE instead.
+	const trimmed = sql.trimStart();
+	if (/^with\s/i.test(trimmed)) {
+		const mainPos = findMainSelectPos(trimmed);
+		if (mainPos >= 0) {
+			const ctesPart = trimmed.slice(0, mainPos).trimEnd().replace(/,$/, '');
+			const mainSelect = trimmed.slice(mainPos).trimStart();
+			return `${ctesPart},\n__debug_inner__ AS (\n${mainSelect}\n)\nSELECT *, COUNT(*) OVER () AS __debug_count__ FROM __debug_inner__ LIMIT ${limit}`;
+		}
+	}
+	return `SELECT *, COUNT(*) OVER () AS __debug_count__ FROM (\n${sql}\n) AS __debug_wrapper__ LIMIT ${limit}`;
+}
+
+export function findMainSelectPos(sql: string): number {
+	let depth = 0;
+	let i = 0;
+	while (i < sql.length) {
+		const ch = sql[i];
+		if (ch === '(') { depth++; i++; continue; }
+		if (ch === ')') { depth--; i++; continue; }
+		// Skip string literals to avoid false matches inside quoted strings
+		if (ch === '\'' || ch === '"') {
+			const q = ch;
+			i++;
+			while (i < sql.length && sql[i] !== q) {
+				if (sql[i] === '\\') i++;
+				i++;
+			}
+			i++;
+			continue;
+		}
+		if (depth === 0 && /^select\b/i.test(sql.slice(i))) {
+			return i;
+		}
+		i++;
+	}
+	return -1;
+}
+
+export function buildScopedSql(expression: string, clauses: Array<{ sql: string }>): string {
+	if (clauses.length === 0) return expression;
+
+	const frameSql = clauses[clauses.length - 1].sql;
+	const trimmed = expression.trim().toUpperCase();
+	if (trimmed.startsWith('SELECT') || trimmed.startsWith('WITH')) {
+		return expression;
+	}
+
+	return `WITH __debug_context__ AS (\n${frameSql}\n)\nSELECT ${expression} FROM __debug_context__`;
 }
 
 /**
@@ -95,8 +150,8 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _resultLocation: string | undefined;
 	private _lineOffset = 0;
 	private _noDebug = false;
-	private _setupPromise: Promise<void> | undefined;
 	private _abortController: AbortController | undefined;
+	private _sourceMap: SourceMap | undefined;
 
 	constructor(
 		private readonly _queryRunner: QueryRunner,
@@ -106,7 +161,8 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		private readonly _bridgeRunner: BridgeRunner,
 		private readonly _compileCache: CompileCache,
 		private readonly _manifestIndexer: ManifestIndexer,
-	) {}
+	) {
+	}
 
 	handleMessage(message: vscode.DebugProtocolMessage): void {
 		const msg = message as unknown as DapMessage;
@@ -161,7 +217,6 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 				supportsRestartFrame: true,
 			},
 		});
-		this._send({ type: 'event', event: 'initialized' });
 	}
 
 	// ──────────────────────────────────────────────────────────────
@@ -171,19 +226,17 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _handleConfigurationDone(msg: DapMessage): void {
 		this._respond(msg, true);
 		if (this._noDebug) return;
-		void (async () => {
-			await this._setupPromise;
-			// All breakpoints are now registered and frames are populated.
-			this._granularity = 'statement';
-			this._currentClauseIndex = 0;
-			if (this._breakpoints.length > 0) {
-				this._currentFrameIndex = 0;
-				void this._runToContinue();
-			} else {
-				this._currentFrameIndex = this._frames.length - 1;
-				void this._executeCurrentStep().then(() => this._sendStopped('entry'));
-			}
-		})();
+		// Frames are already populated — launch completed setup before responding.
+		this._granularity = 'statement';
+		this._currentClauseIndex = 0;
+		if (this._breakpoints.length > 0) {
+			// Start at -1 so _runToContinue's loop increments to 0 and checks frame[0] first.
+			this._currentFrameIndex = -1;
+			void this._runToContinue();
+		} else {
+			this._currentFrameIndex = this._frames.length - 1;
+			void this._executeCurrentStep().then(() => this._sendStopped('entry'));
+		}
 	}
 
 	// ──────────────────────────────────────────────────────────────
@@ -191,14 +244,24 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	// ──────────────────────────────────────────────────────────────
 
 	private _handleLaunch(msg: DapMessage): void {
-		this._respond(msg, true);
+		void this._handleLaunchAsync(msg);
+	}
+
+	private async _handleLaunchAsync(msg: DapMessage): Promise<void> {
 		const args = msg.arguments ?? {};
 		this._noDebug = args.noDebug === true;
 
 		if (this._noDebug) {
+			this._respond(msg, true);
 			void this._executeLegacyLaunch(args);
 		} else {
-			this._setupPromise = this._executeDebugSetup(args);
+			try {
+				await this._executeDebugSetup(args);
+				this._respond(msg, true);
+			} catch (err) {
+				this._logger.error(`Launch setup failed: ${err}`);
+				this._respond(msg, false, String(err));
+			}
 		}
 	}
 
@@ -247,14 +310,16 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		if (typeof args.sql === 'string') {
 			sql = args.sql;
 		} else if (category === 'model' || category === 'analysis' || category === 'snapshot') {
-			const compiled = await this._compileModel(fileName);
-			if (!compiled) {
+			const sourceText = editor.document.getText();
+			const symbolResult = await this._compileWithSymbols(sourceText, this._manifestIndexer.index?.adapterType ?? 'duckdb');
+			if (!symbolResult) {
 				this._logger.warn('Debug adapter: compile failed');
 				this._output('Failed to compile. Check dbt output.\n');
 				this._terminate();
 				return;
 			}
-			sql = compiled;
+			sql = symbolResult.compiledSql;
+			this._sourceMap = symbolResult.sourceMap;
 		} else {
 			// For ad-hoc files, respect scope: debug only the statement under the cursor
 			// (same statement Ctrl+F5 would execute), not the whole buffer.
@@ -299,6 +364,11 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		this._clauses = decomposed.clauses;
 		this._refs = decomposed.refs;
 
+		// Remap frame/clause positions from compiled→source using the source map.
+		if (this._sourceMap) {
+			this._remapPositions();
+		}
+
 		// Shift all line numbers by the statement's offset in the original document.
 		if (this._lineOffset > 0) {
 			for (const frame of this._frames) {
@@ -324,6 +394,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		const previewLines = sql.split('\n').slice(0, 5);
 		const truncated = sql.split('\n').length > 5;
 		this._output(`SQL:\n${previewLines.join('\n')}${truncated ? '\n  …' : ''}\n`);
+		this._send({ type: 'event', event: 'initialized' });
 		this._send({ type: 'event', event: 'thread', body: { threadId: 1, reason: 'started' } });
 	}
 
@@ -332,11 +403,6 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	// ──────────────────────────────────────────────────────────────
 
 	private _handleSetBreakpoints(msg: DapMessage): void {
-		void this._handleSetBreakpointsAsync(msg);
-	}
-
-	private async _handleSetBreakpointsAsync(msg: DapMessage): Promise<void> {
-		await this._setupPromise;
 		const args = msg.arguments ?? {};
 		const sourceBreakpoints = (args.breakpoints as Array<{ line: number }>) ?? [];
 
@@ -1036,45 +1102,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	}
 
 	private _wrapWithDebugCount(sql: string): string {
-		// DuckDB (and most databases) reject WITH inside a subquery.
-		// When the SQL is a CTE query, hoist the wrapper as an extra CTE instead.
-		const trimmed = sql.trimStart();
-		if (/^with\s/i.test(trimmed)) {
-			const mainPos = this._findMainSelectPos(trimmed);
-			if (mainPos >= 0) {
-				const ctesPart = trimmed.slice(0, mainPos).trimEnd().replace(/,$/, '');
-				const mainSelect = trimmed.slice(mainPos).trimStart();
-				return `${ctesPart},\n__debug_inner__ AS (\n${mainSelect}\n)\nSELECT *, COUNT(*) OVER () AS __debug_count__ FROM __debug_inner__ LIMIT ${this._limit}`;
-			}
-		}
-		return `SELECT *, COUNT(*) OVER () AS __debug_count__ FROM (\n${sql}\n) AS __debug_wrapper__ LIMIT ${this._limit}`;
-	}
-
-	/** Returns the index of the first top-level SELECT (depth 0) in a WITH query. */
-	private _findMainSelectPos(sql: string): number {
-		let depth = 0;
-		let i = 0;
-		while (i < sql.length) {
-			const ch = sql[i];
-			if (ch === '(') { depth++; i++; continue; }
-			if (ch === ')') { depth--; i++; continue; }
-			// Skip string literals to avoid false matches inside quoted strings
-			if (ch === '\'' || ch === '"') {
-				const q = ch;
-				i++;
-				while (i < sql.length && sql[i] !== q) {
-					if (sql[i] === '\\') i++;
-					i++;
-				}
-				i++;
-				continue;
-			}
-			if (depth === 0 && /^select\b/i.test(sql.slice(i))) {
-				return i;
-			}
-			i++;
-		}
-		return -1;
+		return wrapWithDebugCount(sql, this._limit);
 	}
 
 	private _currentClauseName(): string {
@@ -1085,15 +1113,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 
 	private _buildScopedSql(expression: string, frameName: string): string {
 		const clauses = this._clauses[frameName] ?? [];
-		if (clauses.length === 0) return expression;
-
-		const frameSql = clauses[clauses.length - 1].sql;
-		const trimmed = expression.trim().toUpperCase();
-		if (trimmed.startsWith('SELECT') || trimmed.startsWith('WITH')) {
-			return expression;
-		}
-
-		return `WITH __debug_context__ AS (\n${frameSql}\n)\nSELECT ${expression} FROM __debug_context__`;
+		return buildScopedSql(expression, clauses);
 	}
 
 	// ──────────────────────────────────────────────────────────────
@@ -1141,6 +1161,113 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		} catch (err) {
 			this._logger.error(`Bridge decompose_query failed: ${err}`);
 			return undefined;
+		}
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// Source-map compilation
+	// ──────────────────────────────────────────────────────────────
+
+	private async _compileWithSymbols(
+		sourceText: string,
+		dialect: string,
+	): Promise<{ compiledSql: string; sourceMap: SourceMap | undefined } | undefined> {
+		try {
+			const emitResult = await emitDebugSymbols(
+				sourceText,
+				dialect,
+				(req) => this._bridgeRunner.invokeRaw(req),
+			);
+
+			if (!emitResult) {
+				this._logger.info('Debug adapter: no debug symbols emitted — falling back to plain compile');
+				const compiled = await this._bridgeRunner.compileInlineSql(sourceText);
+				return { compiledSql: compiled, sourceMap: undefined };
+			}
+
+			this._output('Compiling with debug symbols…\n');
+			const compiledSql = await this._bridgeRunner.compileInlineSql(emitResult.annotatedSource);
+			const sourceMap = parseSourceMap(compiledSql);
+
+			this._logger.info(`Debug adapter: source map has ${sourceMap.mappings.length} mappings`);
+			return { compiledSql, sourceMap };
+		} catch (err) {
+			this._logger.warn(`Debug adapter: compile with symbols failed: ${err}`);
+			return undefined;
+		}
+	}
+
+	private _remapPositions(): void {
+		const sm = this._sourceMap;
+		if (!sm) return;
+		const originalFrameRanges = this._frames.map(f => ({
+			name: f.name,
+			start: f.line,
+			end: f.endLine,
+			type: f.type,
+		}));
+
+		// First remap clause lines. Clauses are anchored to SQL keywords/tokens that
+		// usually carry debug markers, so this is the most reliable source position.
+		for (const clauses of Object.values(this._clauses)) {
+			for (const clause of clauses) {
+				const sourceLine = sm.compiledLineToSourceLine(clause.line);
+				if (sourceLine !== undefined) {
+					clause.line = sourceLine;
+				}
+			}
+		}
+
+		// Then remap frame ranges.
+		// Primary path: use ALL source-map entries overlapping each frame's compiled
+		// range, so frame bounds are derived from real mapped symbols in that frame.
+		// This avoids relying on exact boundary-line hits.
+		for (const frame of this._frames) {
+			const compiledRange = originalFrameRanges.find(r => r.name === frame.name);
+			if (compiledRange) {
+				const overlaps = sm.mappings.filter(m =>
+					m.compiledLine <= compiledRange.end && m.compiledEndLine >= compiledRange.start,
+				);
+				if (overlaps.length > 0) {
+					const minSource = Math.min(...overlaps.map(m => m.sourceLine));
+					const maxSource = Math.max(...overlaps.map(m => m.sourceLine));
+					frame.line = minSource;
+					frame.endLine = Math.max(frame.line, maxSource);
+					continue;
+				}
+			}
+
+			// Fallback: derive from remapped clause lines if available.
+			const clauses = this._clauses[frame.name] ?? [];
+			if (clauses.length > 0) {
+				const clauseLines = clauses.map(c => c.line);
+				const minClause = Math.min(...clauseLines);
+				const maxClause = Math.max(...clauseLines);
+
+				if (frame.type === 'cte') {
+					// Include CTE header and trailing close line around the clause body.
+					frame.line = Math.max(0, minClause - 1);
+					frame.endLine = Math.max(frame.line, maxClause + 1);
+				} else {
+					frame.line = minClause;
+					frame.endLine = Math.max(frame.line, maxClause);
+				}
+				continue;
+			}
+
+			const start = sm.compiledLineToSourceLine(frame.line);
+			const end = sm.compiledLineToSourceLine(frame.endLine);
+			if (start !== undefined) frame.line = start;
+			if (end !== undefined) frame.endLine = Math.max(frame.line, end);
+		}
+
+		// Ensure ordered non-overlapping frame ranges after remap.
+		for (let i = 0; i < this._frames.length - 1; i++) {
+			const current = this._frames[i];
+			const next = this._frames[i + 1];
+			if (current.endLine >= next.line) {
+				current.endLine = Math.max(current.line, next.line - 1);
+			}
 		}
 	}
 

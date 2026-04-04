@@ -354,6 +354,15 @@ export class BridgeRunner {
 		});
 	}
 
+	/**
+	 * Notify the bridge that the dbt manifest has been rebuilt so it discards
+	 * the cached Manifest object.  The next compile_inline call will re-parse.
+	 */
+	async invalidateManifestCache(): Promise<void> {
+		if (!this.isRunning) return;
+		await this.invokeRaw({ invalidate_manifest: true });
+	}
+
 	async shutdown(): Promise<void> {
 		if (!this._process) return;
 
