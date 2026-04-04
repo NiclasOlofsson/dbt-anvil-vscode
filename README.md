@@ -40,19 +40,13 @@ Useful for exploration, debugging, and verifying what a compiled query actually 
 
 ## Debugger
 
-SQL has never had a real debugger. This is a real debugger.
+Press F5 on a dbt model and it pauses at entry. F10 steps to the next CTE, executing it and showing the intermediate result. F11 steps into a CTE's clauses — `FROM`, `WHERE`, `GROUP BY`, `SELECT` — one at a time.
 
-The key insight is that CTE-heavy SQL already has structure that maps cleanly onto debugger concepts. CTEs are functions — each one takes input, transforms it, and produces a named intermediate result. The final `SELECT` is `main()`. And within each CTE, SQL has a well-defined execution order: `FROM → JOIN → WHERE → GROUP BY → HAVING → SELECT`. Those are your instructions.
+The Variables panel shows the data at each pause: column names and first-row values, row count and timing, and the SQL being run. The Data Pipeline view shows the dependency DAG as you step through it, with a warning on any clause that produced more rows than its input.
 
-Press F5 on a dbt model and it pauses at entry. F10 steps to the next CTE, executing it and showing the result. F11 steps *into* a CTE's clauses — you can walk through `FROM`, then `WHERE`, see the rows survive the filter, then `GROUP BY`, see them collapse. The Variables panel shows the actual data at each pause: column names and first-row values in Result, row count and timing in Impact, and the SQL text being executed in Query.
+Step Back replays cached results — no re-execution. Breakpoints work by line or CTE name. The debug console evaluates SQL in the current CTE's scope. Edit a CTE mid-session and Restart Frame recompiles just that piece, keeping upstream results cached. Step Into a `ref()` and it opens a nested session for that model.
 
-Step Back is free. Every executed step is cached, so reversing costs nothing — no re-execution, just replaying what's already there. There are no side effects in a CTE pipeline, so this actually works cleanly.
-
-The Data Pipeline tree view in the Debug sidebar shows the CTE dependency DAG as you step through it — green circles for frames you've visited, a warning flag on any clause that produced more rows than its input (the join that blew up your dataset is usually obvious in retrospect).
-
-Breakpoints work by CTE name or line. The debug console accepts SQL expressions evaluated against the current CTE's scope. If a CTE references another model via `ref()`, Step Into opens a nested debug session for that model. Edit a CTE mid-session and Restart Frame recompiles just that CTE and resumes from it — upstream results stay cached.
-
-It follows the [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/), so all the standard VS Code debug UI — call stack, variables, breakpoint gutter, stepping toolbar — works exactly as you'd expect. Because it's just the debugger. For SQL.
+It follows the [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/), so the standard VS Code debug UI works as-is.
 
 ## Profiler
 
