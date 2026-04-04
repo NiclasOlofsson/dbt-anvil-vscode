@@ -38,6 +38,22 @@ Vanilla SQL or Jinja macros — it doesn't matter. dbt Studio compiles Jinja bef
 
 Useful for exploration, debugging, and verifying what a compiled query actually returns before you build it into a model.
 
+## Debugger
+
+SQL has never had a real debugger. This is a real debugger.
+
+The key insight is that CTE-heavy SQL already has structure that maps cleanly onto debugger concepts. CTEs are functions — each one takes input, transforms it, and produces a named intermediate result. The final `SELECT` is `main()`. And within each CTE, SQL has a well-defined execution order: `FROM → JOIN → WHERE → GROUP BY → HAVING → SELECT`. Those are your instructions.
+
+Press F5 on a dbt model and it pauses at entry. F10 steps to the next CTE, executing it and showing the result. F11 steps *into* a CTE's clauses — you can walk through `FROM`, then `WHERE`, see the rows survive the filter, then `GROUP BY`, see them collapse. The Variables panel shows the actual data at each pause: column names and first-row values in Result, row count and timing in Impact, and the SQL text being executed in Query.
+
+Step Back is free. Every executed step is cached, so reversing costs nothing — no re-execution, just replaying what's already there. There are no side effects in a CTE pipeline, so this actually works cleanly.
+
+The Data Pipeline tree view in the Debug sidebar shows the CTE dependency DAG as you step through it — green circles for frames you've visited, a warning flag on any clause that produced more rows than its input (the join that blew up your dataset is usually obvious in retrospect).
+
+Breakpoints work by CTE name or line. The debug console accepts SQL expressions evaluated against the current CTE's scope. If a CTE references another model via `ref()`, Step Into opens a nested debug session for that model. Edit a CTE mid-session and Restart Frame recompiles just that CTE and resumes from it — upstream results stay cached.
+
+It follows the [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/), so all the standard VS Code debug UI — call stack, variables, breakpoint gutter, stepping toolbar — works exactly as you'd expect. Because it's just the debugger. For SQL.
+
 ## Profiler
 
 Not a real profiler. A real profiler instruments query plans, tracks memory allocation, and produces flame graphs. This is not that.
@@ -98,6 +114,7 @@ You've read the prose. You skipped to here anyway. Fine.
 - Interactive lineage graph — model-level and column-level, follows your active editor
 - SQL editor — run ad-hoc queries with F5, results panel with stats, copy, and export
 - CTE Profiler — per-CTE row counts and timing, gutter icons, sidebar summary
+- SQL Debugger — step through CTEs and clauses with F10/F11, inspect intermediate results, step back for free, breakpoints by name or line, edit and continue, cross-model step-in
 - Model Explorer — browse the project tree with materialisation icons
 - Test Explorer — pass/fail/warn by status, integrates with VS Code Testing panel
 - Copilot tools — 14 tools for project info, lineage, queries, and dbt execution
