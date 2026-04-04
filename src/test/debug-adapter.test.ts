@@ -595,7 +595,7 @@ describe('SqlDebugAdapter', () => {
 			harness.clear();
 		});
 
-		it('returns stack frames in statement mode (current first, backwards)', async () => {
+		it('returns stack frames with clause-level detail (current clause first, backwards)', async () => {
 			// configurationDone triggers execution and stopped event
 			harness.send('configurationDone');
 			await vi.waitFor(() => {
@@ -608,9 +608,12 @@ describe('SqlDebugAdapter', () => {
 			const resp = harness.lastResponse('stackTrace');
 			expect(resp.success).toBe(true);
 			const frames = (resp.body as Record<string, unknown>).stackFrames as Array<{ name: string; presentationHint: string }>;
-			// Current frame (last = _main_ with no breakpoints) should be first
-			expect(frames[0].name).toBe('_main_');
+			// Entry auto-enters clause-level for _main_ — first clause shown
+			expect(frames[0].name).toContain('_main_ \u2192');
 			expect(frames[0].presentationHint).toBe('normal');
+			// base was never executed (just F5, no stepping) — must NOT appear as dimmed
+			const dimmedFrame = frames.find(f => f.name === 'base');
+			expect(dimmedFrame).toBeUndefined();
 		});
 	});
 
@@ -748,12 +751,23 @@ describe('SqlDebugAdapter', () => {
 			});
 		});
 
-		it('next at last frame terminates', async () => {
+		it('next past last clause of last frame terminates', async () => {
 			harness.send('configurationDone');
 			await vi.waitFor(() => {
 				expect(harness.events('stopped')).toHaveLength(1);
 			});
 
+			// Entry is at clause 0 of _main_. Advance through all remaining clauses.
+			const clauseCount = (harness.adapter as unknown as { _clauses: Record<string, unknown[]> })._clauses._main_.length;
+			for (let i = 1; i < clauseCount; i++) {
+				harness.clear();
+				harness.send('next', { threadId: 1 });
+				await vi.waitFor(() => {
+					expect(harness.events('stopped')).toHaveLength(1);
+				});
+			}
+
+			// One more next should terminate (past last clause of last frame)
 			harness.clear();
 			harness.send('next', { threadId: 1 });
 
@@ -762,13 +776,13 @@ describe('SqlDebugAdapter', () => {
 			});
 		});
 
-		it('stepBack decrements frame index', async () => {
+		it('stepBack goes to previous frame last clause', async () => {
 			harness.send('configurationDone');
 			await vi.waitFor(() => {
 				expect(harness.events('stopped')).toHaveLength(1);
 			});
 
-			// We're at frame 1 (_main_). Step back should go to frame 0 (base)
+			// We're at clause 0 of _main_. Step back should go to base's last clause.
 			harness.clear();
 			harness.send('stepBack', { threadId: 1 });
 
@@ -778,20 +792,29 @@ describe('SqlDebugAdapter', () => {
 				expect(stopped[0].body?.reason).toBe('step');
 			});
 
-			// Verify stack trace now shows base frame as current
+			// Verify stack trace now shows base's last clause
 			harness.clear();
 			harness.send('stackTrace', { threadId: 1 });
 			const resp = harness.lastResponse('stackTrace');
 			const frames = (resp.body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
-			expect(frames[0].name).toBe('base');
+			expect(frames[0].name).toContain('base \u2192');
 		});
 
-		it('stepOut at statement level terminates', async () => {
+		it('stepOut from clause-level returns to statement, then stepOut terminates', async () => {
 			harness.send('configurationDone');
 			await vi.waitFor(() => {
 				expect(harness.events('stopped')).toHaveLength(1);
 			});
 
+			// Entry is at clause-level. StepOut returns to statement-level.
+			harness.clear();
+			harness.send('stepOut', { threadId: 1 });
+
+			await vi.waitFor(() => {
+				expect(harness.events('stopped')).toHaveLength(1);
+			});
+
+			// Now at statement-level for _main_. StepOut should terminate.
 			harness.clear();
 			harness.send('stepOut', { threadId: 1 });
 
@@ -845,6 +868,27 @@ describe('SqlDebugAdapter', () => {
 			const resp = harness.lastResponse('stackTrace');
 			const frames = (resp.body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
 			expect(frames[0].name).toContain('→');
+		});
+
+		it('stepIn on FROM clause jumps to the referenced CTE frame', async () => {
+			harness.send('configurationDone');
+			await vi.waitFor(() => {
+				expect(harness.events('stopped')).toHaveLength(1);
+			});
+
+			// Entry lands at _main_ → from (clause 0). F11 should jump into `base`.
+			harness.clear();
+			harness.send('stepIn', { threadId: 1 });
+			await vi.waitFor(() => {
+				expect(harness.events('stopped')).toHaveLength(1);
+			});
+
+			harness.clear();
+			harness.send('stackTrace', { threadId: 1 });
+			const resp = harness.lastResponse('stackTrace');
+			const frames = (resp.body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
+			// Should now be inside the `base` CTE frame at clause-level
+			expect(frames[0].name).toContain('base \u2192');
 		});
 
 		it('stepOut from line granularity returns to statement', async () => {
@@ -995,7 +1039,8 @@ describe('SqlDebugAdapter', () => {
 			harness.send('stackTrace', { threadId: 1 });
 			const resp = harness.lastResponse('stackTrace');
 			const frames = (resp.body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
-			expect(frames[0].name).toBe('base');
+			// Restart enters clause-level for the restarted frame
+			expect(frames[0].name).toContain('base \u2192');
 		});
 
 		it('evicts restarted frame and downstream from cache', async () => {
@@ -1054,12 +1099,12 @@ describe('SqlDebugAdapter', () => {
 				expect(harness.events('stopped').length).toBeGreaterThan(0);
 			});
 
-			// Stack trace should now show the renamed frame
+			// Stack trace should now show the renamed frame with clause detail
 			harness.clear();
 			harness.send('stackTrace', { threadId: 1 });
 			const resp = harness.lastResponse('stackTrace');
 			const frames = (resp.body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
-			expect(frames[0].name).toBe('renamed_base');
+			expect(frames[0].name).toContain('renamed_base \u2192');
 		});
 	});
 
