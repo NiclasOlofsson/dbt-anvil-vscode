@@ -1208,7 +1208,7 @@ describe('SqlDebugAdapter', () => {
 		});
 
 		it('echoes expression in non-repl context', () => {
-			harness.send('evaluate', { expression: 'some_value', context: 'hover' });
+			harness.send('evaluate', { expression: 'some_value', context: 'watch' });
 
 			const resp = harness.lastResponse('evaluate');
 			expect(resp.success).toBe(true);
@@ -1696,6 +1696,205 @@ describe('SqlDebugAdapter', () => {
 			// The topmost frame should be cte_home_losses, not _main_
 			expect(stackFrames[0].name).toContain('cte_home_losses');
 			expect(stackFrames[0].name).not.toContain('_main_');
+		});
+	});
+
+	describe('completions', () => {
+		let harness: DapHarness;
+
+		beforeEach(async () => {
+			setActiveEditor('-- orders model\n'.repeat(10), '/models/orders.sql');
+			harness = new DapHarness();
+			harness.send('initialize');
+			harness.send('launch', { noDebug: false, sql: '-- placeholder' });
+			await vi.waitFor(() => expect(harness.events('thread')).toHaveLength(1));
+			harness.send('configurationDone');
+			await vi.waitFor(() => expect(harness.events('stopped')).toHaveLength(1));
+		});
+
+		afterEach(() => { harness.dispose(); clearActiveEditor(); });
+
+		it('returns column names from active frame result', () => {
+			harness.clear();
+			harness.send('completions', { text: '', column: 0, frameId: 0 });
+			const resp = harness.lastResponse('completions');
+			expect(resp.success).toBe(true);
+			const targets = (resp.body as Record<string, unknown>).targets as Array<{ label: string; type: string }>;
+			// id and status are in the mock result (excluding __debug_count__)
+			expect(targets.some(t => t.label === 'id')).toBe(true);
+			expect(targets.some(t => t.label === 'status')).toBe(true);
+			expect(targets.some(t => t.label === '__debug_count__')).toBe(false);
+		});
+
+		it('includes CTE names as function targets', () => {
+			harness.clear();
+			harness.send('completions', { text: '', column: 0, frameId: 0 });
+			const resp = harness.lastResponse('completions');
+			const targets = (resp.body as Record<string, unknown>).targets as Array<{ label: string; type: string }>;
+			// Current frame is _main_ (last frame, where configurationDone stops without breakpoints).
+			// 'base' is the other frame and should appear as a function target.
+			expect(targets.some(t => t.label === 'base' && t.type === 'function')).toBe(true);
+			// Current frame itself should NOT appear.
+			expect(targets.some(t => t.label === '_main_' && t.type === 'function')).toBe(false);
+		});
+	});
+
+	describe('reverseContinue', () => {
+		let harness: DapHarness;
+
+		beforeEach(async () => {
+			setActiveEditor('-- orders model\n'.repeat(10), '/models/orders.sql');
+			harness = new DapHarness();
+			harness.send('initialize');
+			harness.send('launch', { noDebug: false, sql: '-- placeholder' });
+			await vi.waitFor(() => expect(harness.events('thread')).toHaveLength(1));
+			harness.send('configurationDone');
+			await vi.waitFor(() => expect(harness.events('stopped')).toHaveLength(1));
+		});
+
+		afterEach(() => { harness.dispose(); clearActiveEditor(); });
+
+		it('stops at beginning when no history and no breakpoints', () => {
+			harness.clear();
+			harness.send('reverseContinue', { threadId: 1 });
+			const stopped = harness.events('stopped');
+			expect(stopped).toHaveLength(1);
+			expect(stopped[0].body).toMatchObject({ reason: 'step' });
+		});
+
+		it('stops at breakpointed frame when stepping back through history', async () => {
+			// Re-launch with a breakpoint on 'base' so the session starts at frame 0 ('base').
+			harness.dispose();
+			setActiveEditor('-- orders model\n'.repeat(10), '/models/orders.sql');
+			harness = new DapHarness();
+			harness.send('initialize');
+			harness.send('launch', { noDebug: false, sql: '-- placeholder' });
+			await vi.waitFor(() => expect(harness.events('thread')).toHaveLength(1));
+			// Set function breakpoint on 'base' BEFORE configurationDone so it stops there.
+			harness.send('setFunctionBreakpoints', { breakpoints: [{ name: 'base' }] });
+			harness.send('configurationDone');
+			await vi.waitFor(() => expect(harness.events('stopped')).toHaveLength(1));
+			// Verify we stopped at 'base'.
+			harness.clear();
+			harness.send('stackTrace', { threadId: 1 });
+			const st = harness.lastResponse('stackTrace');
+			const frames = (st.body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
+			expect(frames[0].name).toContain('base');
+
+			// Now step forward to _main_ — this pushes 'base' position into history.
+			harness.clear();
+			harness.send('next', { threadId: 1 });
+			await vi.waitFor(() => expect(harness.events('stopped')).toHaveLength(1));
+
+			// reverseContinue: should walk history backwards and find 'base' has a breakpoint.
+			harness.clear();
+			harness.send('reverseContinue', { threadId: 1 });
+			await vi.waitFor(() => expect(harness.events('stopped')).toHaveLength(1));
+			const stopped = harness.events('stopped')[0];
+			expect(stopped.body).toMatchObject({ reason: 'breakpoint' });
+		});
+	});
+
+	describe('evaluateForHovers', () => {
+		let harness: DapHarness;
+
+		beforeEach(async () => {
+			setActiveEditor('-- orders model\n'.repeat(10), '/models/orders.sql');
+			harness = new DapHarness();
+			harness.send('initialize');
+			harness.send('launch', { noDebug: false, sql: '-- placeholder' });
+			await vi.waitFor(() => expect(harness.events('thread')).toHaveLength(1));
+			harness.send('configurationDone');
+			await vi.waitFor(() => expect(harness.events('stopped')).toHaveLength(1));
+		});
+
+		afterEach(() => { harness.dispose(); clearActiveEditor(); });
+
+		it('returns first-row value for a known column', () => {
+			harness.clear();
+			harness.send('evaluate', { expression: 'id', context: 'hover', frameId: 0 });
+			const resp = harness.lastResponse('evaluate');
+			expect(resp.success).toBe(true);
+			expect((resp.body as Record<string, unknown>).result).toBe('1');
+		});
+
+		it('fails gracefully for unknown column', () => {
+			harness.clear();
+			harness.send('evaluate', { expression: 'nonexistent_col', context: 'hover', frameId: 0 });
+			const resp = harness.lastResponse('evaluate');
+			expect(resp.success).toBe(false);
+		});
+	});
+
+	describe('setExceptionBreakpoints', () => {
+		let harness: DapHarness;
+
+		afterEach(() => { harness?.dispose(); clearActiveEditor(); });
+
+		it('responds with success', async () => {
+			setActiveEditor('-- orders\n'.repeat(5), '/models/orders.sql');
+			harness = new DapHarness();
+			harness.send('initialize');
+			harness.send('setExceptionBreakpoints', { filters: ['emptyResult'] });
+			const resp = harness.lastResponse('setExceptionBreakpoints');
+			expect(resp.success).toBe(true);
+		});
+
+		it('breaks on emptyResult when filter active', async () => {
+			setActiveEditor('-- orders\n'.repeat(5), '/models/orders.sql');
+			const emptyDb: DatabaseProvider = {
+				adapterType: 'duckdb',
+				query: vi.fn().mockResolvedValue({
+					columns: ['id', '__debug_count__'],
+					rows: [{ id: 1, __debug_count__: 0 }],
+					rowCount: 1,
+					executionTimeMs: 5,
+				}),
+			} as unknown as DatabaseProvider;
+			harness = new DapHarness({ databaseProvider: emptyDb });
+			harness.send('initialize');
+			harness.send('setExceptionBreakpoints', { filters: ['emptyResult'] });
+			harness.send('launch', { noDebug: false, sql: '-- placeholder' });
+			await vi.waitFor(() => expect(harness.events('thread')).toHaveLength(1));
+			harness.send('configurationDone');
+			await vi.waitFor(() => expect(harness.events('stopped')).toHaveLength(1));
+			const stopped = harness.events('stopped')[0];
+			expect(stopped.body).toMatchObject({ reason: 'exception' });
+		});
+	});
+
+	describe('gotoTargets and goto', () => {
+		let harness: DapHarness;
+
+		beforeEach(async () => {
+			setActiveEditor('-- orders model\n'.repeat(10), '/models/orders.sql');
+			harness = new DapHarness();
+			harness.send('initialize');
+			harness.send('launch', { noDebug: false, sql: '-- placeholder' });
+			await vi.waitFor(() => expect(harness.events('thread')).toHaveLength(1));
+			harness.send('configurationDone');
+			await vi.waitFor(() => expect(harness.events('stopped')).toHaveLength(1));
+		});
+
+		afterEach(() => { harness.dispose(); clearActiveEditor(); });
+
+		it('gotoTargets returns all frame names', () => {
+			harness.clear();
+			harness.send('gotoTargets', { source: {}, line: 1 });
+			const resp = harness.lastResponse('gotoTargets');
+			expect(resp.success).toBe(true);
+			const targets = (resp.body as Record<string, unknown>).targets as Array<{ id: number; label: string }>;
+			expect(targets.map(t => t.label)).toContain('base');
+			expect(targets.map(t => t.label)).toContain('_main_');
+		});
+
+		it('goto jumps to target frame and emits stopped', async () => {
+			harness.clear();
+			// Jump to frame index 0 (base)
+			harness.send('goto', { threadId: 1, targetId: 0 });
+			await vi.waitFor(() => expect(harness.events('stopped')).toHaveLength(1));
+			const stopped = harness.events('stopped')[0];
+			expect(stopped.body).toMatchObject({ reason: 'goto' });
 		});
 	});
 });
