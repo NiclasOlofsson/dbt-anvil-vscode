@@ -55,12 +55,9 @@ export interface SourceMap {
 	compiledToSource(line: number): SourceMapping[];
 	/**
 	 * Dense mapping for compiled SQL lines that contain SQL text.
-	 * Returns undefined for blank/marker-only lines.
+	 * Returns undefined for blank/marker-only lines, or lines with no marker coverage.
 	 */
 	compiledLineToSourceLine(compiledLine: number): number | undefined;
-	/** Given a compiled line, return the best-guess source line.
-	 *  Exact match if available, otherwise interpolates from the nearest mapped line. */
-	nearestSourceLine(compiledLine: number): number | undefined;
 	isInsideMacro(compiledLine: number): MacroSpan | undefined;
 }
 
@@ -457,10 +454,7 @@ export function parseSourceMap(compiledSql: string): SourceMap {
 			if (!hasSqlTextOnCompiledLine(compiledLine)) return undefined;
 			const exact = byCompiledLine.get(compiledLine);
 			if (exact && exact.length > 0) return exact[0].sourceLine;
-			return nearestInterpolated(compiledLine);
-		},
-		nearestSourceLine(compiledLine: number): number | undefined {
-			return nearestInterpolated(compiledLine);
+			return undefined;
 		},
 		isInsideMacro(compiledLine: number): MacroSpan | undefined {
 			return macroSpans.find(s => compiledLine >= s.compiledStartLine && compiledLine <= s.compiledEndLine);

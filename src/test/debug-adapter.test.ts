@@ -1207,7 +1207,8 @@ describe('SqlDebugAdapter', () => {
 				'  /* @dbg:L72:C2:where */ where /* /@dbg */ lr.home_team = lr.losing_team',
 				'  group by all',
 				')',
-				'select * from cte_home_losses',
+				// _main_ has a marker so it remaps into source space (required after removing interpolation)
+				'/* @dbg:L76:C0:select */ select /* /@dbg */ * from cte_home_losses',
 			].join('\n');
 
 			const bridge = {

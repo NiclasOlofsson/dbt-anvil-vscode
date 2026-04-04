@@ -292,53 +292,6 @@ describe('parseSourceMap', () => {
 		expect(annotated).toContain('/* @dbg:L0:C7:ident */');
 	});
 
-	it('nearestSourceLine returns exact match when available', () => {
-		const compiled = '/* @dbg:L0:C0:select */ SELECT /* /@dbg */\n/* @dbg:L5:C2:ident */ id /* /@dbg */';
-		const map = parseSourceMap(compiled);
-
-		expect(map.nearestSourceLine(0)).toBe(0);
-		expect(map.nearestSourceLine(1)).toBe(5);
-	});
-
-	it('nearestSourceLine interpolates for unmapped lines', () => {
-		// Source lines 0 and 10 are mapped at compiled lines 0 and 5
-		const compiled = [
-			'/* @dbg:L0:C0:select */ SELECT /* /@dbg */',
-			'unmapped line 1',
-			'unmapped line 2',
-			'unmapped line 3',
-			'unmapped line 4',
-			'/* @dbg:L10:C0:ident */ id /* /@dbg */',
-		].join('\n');
-		const map = parseSourceMap(compiled);
-
-		// Compiled line 2 is closer to anchor at compiled 0 (source 0)
-		// delta = 2 - 0 = 2, so source = 0 + 2 = 2
-		expect(map.nearestSourceLine(2)).toBe(2);
-
-		// Compiled line 4 is closer to anchor at compiled 5 (source 10)
-		// delta = 4 - 5 = -1, so source = 10 + (-1) = 9
-		expect(map.nearestSourceLine(4)).toBe(9);
-
-		// Compiled line 3 equidistant — binary search picks higher anchor
-		// closest is compiled 5 (source 10), delta = 3-5 = -2, source = 8
-		// but prev (compiled 0, source 0) has |0-3|=3 > |5-3|=2, so best stays at compiled 5
-		expect(map.nearestSourceLine(3)).toBe(8);
-	});
-
-	it('nearestSourceLine returns undefined for empty map', () => {
-		const map = parseSourceMap('SELECT 1 FROM t');
-		expect(map.nearestSourceLine(0)).toBeUndefined();
-	});
-
-	it('nearestSourceLine handles lines beyond mapped range', () => {
-		const compiled = '/* @dbg:L5:C0:select */ SELECT /* /@dbg */\nunmapped\nunmapped';
-		const map = parseSourceMap(compiled);
-
-		// Line 2, only anchor is compiled 0 (source 5), delta = 2-0 = 2, source = 7
-		expect(map.nearestSourceLine(2)).toBe(7);
-	});
-
 	it('parses frameName from marker when present', () => {
 		const compiled = '/* @dbg:L0:C0:select:base */ SELECT /* /@dbg */ /* @dbg:L0:C7:ident:base */ id /* /@dbg */';
 		const map = parseSourceMap(compiled);
