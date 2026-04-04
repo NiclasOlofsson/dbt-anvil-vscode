@@ -891,21 +891,51 @@ describe('SqlDebugAdapter', () => {
 			expect(frames[0].name).toContain('base \u2192');
 		});
 
-		it('stepOut from line granularity returns to statement', async () => {
+		it('stepOut after stepIn returns to the caller frame and clause', async () => {
+			harness.send('configurationDone');
+			await vi.waitFor(() => {
+				expect(harness.events('stopped')).toHaveLength(1);
+			});
+
+			// Entry is at _main_ → from base (clause 0). Confirm the clause label.
+			harness.send('stackTrace', { threadId: 1 });
+			const entryFrames = (harness.lastResponse('stackTrace').body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
+			expect(entryFrames[0].name).toContain('from base');
+
+			// F11 into `base`.
+			harness.clear();
+			harness.send('stepIn', { threadId: 1 });
+			await vi.waitFor(() => {
+				expect(harness.events('stopped')).toHaveLength(1);
+			});
+
+			// Confirm we're inside base.
+			harness.clear();
+			harness.send('stackTrace', { threadId: 1 });
+			const inBase = (harness.lastResponse('stackTrace').body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
+			expect(inBase[0].name).toContain('base \u2192');
+
+			// stepOut should return to _main_ at the SAME clause we came from (from base).
+			harness.clear();
+			harness.send('stepOut', { threadId: 1 });
+			await vi.waitFor(() => {
+				expect(harness.events('stopped')).toHaveLength(1);
+			});
+
+			harness.clear();
+			harness.send('stackTrace', { threadId: 1 });
+			const backInMain = (harness.lastResponse('stackTrace').body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
+			// Must be back on the exact same clause — "from base", not clause 0 by accident
+			expect(backInMain[0].name).toContain('_main_ \u2192');
+			expect(backInMain[0].name).toContain('from base');
+		});
+
+		it('stepOut from line granularity returns to statement when no history', async () => {
 			harness.send('configurationDone');
 			await vi.waitFor(() => { expect(harness.events('stopped')).toHaveLength(1); });
 
-			// Navigate to base frame
-			harness.clear();
-			harness.send('stepBack', { threadId: 1 });
-			await vi.waitFor(() => { expect(harness.events('stopped')).toHaveLength(1); });
-
-			// Enter line granularity
-			harness.clear();
-			harness.send('stepIn', { threadId: 1 });
-			await vi.waitFor(() => { expect(harness.events('stopped')).toHaveLength(1); });
-
-			// stepOut should return to statement granularity
+			// configurationDone puts us at _main_, line granularity, history empty.
+			// stepOut with no history → drops to statement granularity.
 			harness.clear();
 			harness.send('stepOut', { threadId: 1 });
 
@@ -914,12 +944,48 @@ describe('SqlDebugAdapter', () => {
 				expect(stopped).toHaveLength(1);
 			});
 
-			// Stack trace should show frame names without arrow
+			// Stack trace should show frame names without arrow (statement granularity).
 			harness.clear();
 			harness.send('stackTrace', { threadId: 1 });
 			const resp = harness.lastResponse('stackTrace');
 			const frames = (resp.body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
 			expect(frames[0].name).not.toContain('→');
+		});
+
+		it('stepBack after stepIn returns to the pre-stepIn position via history', async () => {
+			harness.send('configurationDone');
+			await vi.waitFor(() => { expect(harness.events('stopped')).toHaveLength(1); });
+
+			// Entry: _main_, line, clause 0 (from base). F11 → pushes history, jumps to base.
+			harness.clear();
+			harness.send('stepIn', { threadId: 1 });
+			await vi.waitFor(() => { expect(harness.events('stopped')).toHaveLength(1); });
+
+			harness.clear();
+			harness.send('stackTrace', { threadId: 1 });
+			const inBase = (harness.lastResponse('stackTrace').body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
+			expect(inBase[0].name).toContain('base \u2192');
+
+			// Step-back pops the history entry → restores _main_, line, clause 0 (from base).
+			harness.clear();
+			harness.send('stepBack', { threadId: 1 });
+			await vi.waitFor(() => { expect(harness.events('stopped')).toHaveLength(1); });
+
+			harness.clear();
+			harness.send('stackTrace', { threadId: 1 });
+			const afterBack = (harness.lastResponse('stackTrace').body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
+			expect(afterBack[0].name).toContain('_main_ \u2192');
+			expect(afterBack[0].name).toContain('from base');
+
+			// History is now empty. stepOut falls back to: drop line → statement.
+			harness.clear();
+			harness.send('stepOut', { threadId: 1 });
+			await vi.waitFor(() => { expect(harness.events('stopped')).toHaveLength(1); });
+
+			harness.clear();
+			harness.send('stackTrace', { threadId: 1 });
+			const afterOut = (harness.lastResponse('stackTrace').body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
+			expect(afterOut[0].name).not.toContain('\u2192');
 		});
 	});
 
@@ -1045,7 +1111,7 @@ describe('SqlDebugAdapter', () => {
 
 		it('evicts restarted frame and downstream from cache', async () => {
 			// Prime the cache by reaching last frame
-			const db = harness.adapter['_databaseProvider'] as { query: ReturnType<typeof vi.fn> };
+			const db = harness.adapter['_databaseProvider'] as unknown as { query: ReturnType<typeof vi.fn> };
 			const callsBefore = db.query.mock.calls.length;
 
 			harness.clear();
@@ -1079,7 +1145,7 @@ describe('SqlDebugAdapter', () => {
 
 			// Replace the bridge runner so the second decompose call returns renamed frames
 			let callCount = 0;
-			const bridge = harness.adapter['_bridgeRunner'] as { invokeRaw: ReturnType<typeof vi.fn> };
+			const bridge = harness.adapter['_bridgeRunner'] as unknown as { invokeRaw: ReturnType<typeof vi.fn> };
 			bridge.invokeRaw.mockImplementation((req: Record<string, unknown>) => {
 				if (req.decompose_query) {
 					callCount++;

@@ -1,8 +1,16 @@
 import { describe, expect, it, beforeEach } from 'vitest';
+import { Uri } from 'vscode';
 import { DataPipelineProvider } from '../dbt/debug-pipeline-provider';
+import type { FrameNode } from '../dbt/debug-pipeline-provider';
 import type { PipelineEventBody } from '../dbt/debug-adapter';
 
+const stubExtensionUri = Uri.file('/stub');
+
 // ── Helpers ──
+
+function frames(nodes: ReturnType<typeof DataPipelineProvider.prototype['getChildren']>): FrameNode[] {
+	return nodes as FrameNode[];
+}
 
 function makeEvent(overrides: Partial<PipelineEventBody> = {}): PipelineEventBody {
 	return {
@@ -32,30 +40,30 @@ describe('DataPipelineProvider', () => {
 	let provider: DataPipelineProvider;
 
 	beforeEach(() => {
-		provider = new DataPipelineProvider();
+		provider = new DataPipelineProvider(stubExtensionUri);
 	});
 
 	describe('DAG construction', () => {
 		it('builds nodes from frames and refs', () => {
 			provider.handlePipelineEvent(makeEvent());
-			const roots = provider.getChildren();
+			const roots = frames(provider.getChildren());
 			expect(roots).toHaveLength(1);
 			expect(roots[0].name).toBe('_main_');
 		});
 
 		it('expands dependencies as children', () => {
 			provider.handlePipelineEvent(makeEvent());
-			const roots = provider.getChildren();
-			const mainDeps = provider.getChildren(roots[0]);
+			const roots = frames(provider.getChildren());
+			const mainDeps = frames(provider.getChildren(roots[0]));
 			expect(mainDeps.map(d => d.name).sort()).toEqual(['cte_orders', 'cte_payments']);
 		});
 
 		it('handles diamond dependencies', () => {
 			provider.handlePipelineEvent(makeEvent());
-			const roots = provider.getChildren();
-			const mainDeps = provider.getChildren(roots[0]);
-			const ordersDeps = provider.getChildren(mainDeps.find(d => d.name === 'cte_orders')!);
-			const paymentsDeps = provider.getChildren(mainDeps.find(d => d.name === 'cte_payments')!);
+			const roots = frames(provider.getChildren());
+			const mainDeps = frames(provider.getChildren(roots[0]));
+			const ordersDeps = frames(provider.getChildren(mainDeps.find(d => d.name === 'cte_orders')!));
+			const paymentsDeps = frames(provider.getChildren(mainDeps.find(d => d.name === 'cte_payments')!));
 			expect(ordersDeps).toHaveLength(1);
 			expect(ordersDeps[0].name).toBe('cte_items');
 			expect(paymentsDeps).toHaveLength(1);
@@ -83,30 +91,32 @@ describe('DataPipelineProvider', () => {
 			provider.handlePipelineEvent(makeEvent({ currentFrameIndex: 1 }));
 			provider.toggleMode();
 			expect(provider.mode).toBe('stack');
-			const roots = provider.getChildren();
+			const roots = frames(provider.getChildren());
 			expect(roots).toHaveLength(1);
 			expect(roots[0].name).toBe('_main_');
-			const mainDeps = provider.getChildren(roots[0]);
+			const mainDeps = frames(provider.getChildren(roots[0]));
 			// In stack mode for cte_orders: only cte_orders visible, not cte_payments
 			expect(mainDeps.map(d => d.name)).toEqual(['cte_orders']);
 		});
 	});
 
 	describe('TreeItem rendering', () => {
-		it('marks current frame with debug-stackframe icon', () => {
+		it('marks current frame with custom SVG icon', () => {
 			provider.handlePipelineEvent(makeEvent({ currentFrameIndex: 1 }));
-			const roots = provider.getChildren();
-			const mainDeps = provider.getChildren(roots[0]);
+			const roots = frames(provider.getChildren());
+			const mainDeps = frames(provider.getChildren(roots[0]));
 			const current = mainDeps.find(d => d.name === 'cte_orders')!;
 			const item = provider.getTreeItem(current);
-			expect((item.iconPath as { id: string }).id).toBe('debug-stackframe');
+			const icon = item.iconPath as { light: { fsPath: string }; dark: { fsPath: string } };
+			expect(icon.dark.fsPath).toContain('debug-current-dark');
+			expect(icon.light.fsPath).toContain('debug-current-light');
 		});
 
 		it('shows row count for executed frames', () => {
 			provider.handlePipelineEvent(makeEvent());
-			const roots = provider.getChildren();
-			const mainDeps = provider.getChildren(roots[0]);
-			const ordersDeps = provider.getChildren(mainDeps.find(d => d.name === 'cte_orders')!);
+			const roots = frames(provider.getChildren());
+			const mainDeps = frames(provider.getChildren(roots[0]));
+			const ordersDeps = frames(provider.getChildren(mainDeps.find(d => d.name === 'cte_orders')!));
 			const items = ordersDeps.find(d => d.name === 'cte_items')!;
 			const item = provider.getTreeItem(items);
 			expect(item.description).toContain('42');
@@ -116,8 +126,8 @@ describe('DataPipelineProvider', () => {
 		it('shows pending for unexecuted non-current frames', () => {
 			provider.handlePipelineEvent(makeEvent({ currentFrameIndex: 0 }));
 			// cte_payments is not executed, not current
-			const roots = provider.getChildren();
-			const mainDeps = provider.getChildren(roots[0]);
+			const roots = frames(provider.getChildren());
+			const mainDeps = frames(provider.getChildren(roots[0]));
 			const payments = mainDeps.find(d => d.name === 'cte_payments')!;
 			const item = provider.getTreeItem(payments);
 			expect(item.description).toBe('pending');
@@ -157,9 +167,9 @@ describe('DataPipelineProvider', () => {
 				},
 			});
 			provider.handlePipelineEvent(event);
-			const roots = provider.getChildren();
-			const mainDeps = provider.getChildren(roots[0]);
-			const ordersDeps = provider.getChildren(mainDeps.find(d => d.name === 'cte_orders')!);
+			const roots = frames(provider.getChildren());
+			const mainDeps = frames(provider.getChildren(roots[0]));
+			const ordersDeps = frames(provider.getChildren(mainDeps.find(d => d.name === 'cte_orders')!));
 			expect(ordersDeps).toHaveLength(1);
 			expect(ordersDeps[0].name).toBe('raw_orders');
 			// External ref is a leaf

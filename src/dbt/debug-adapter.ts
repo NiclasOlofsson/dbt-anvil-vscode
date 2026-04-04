@@ -55,12 +55,27 @@ interface StepResult {
 
 // ── Pipeline event (custom DAP event consumed by DataPipelineProvider) ──
 
+export interface PipelineClauseStep {
+	label: string;
+	line: number;
+	executed: boolean;
+	rows: number | undefined;
+	isCurrent: boolean;
+	/** True when this clause produced more rows than the previous clause — likely a fan-out join. */
+	fanOut: boolean;
+}
+
 export interface PipelineEventBody {
 	frames: DecomposeFrame[];
 	refs: Record<string, string[]>;
 	currentFrameIndex: number;
 	/** Per-frame execution info keyed by frame name. */
 	executedFrames: Record<string, { rows: number; executionMs: number }>;
+	/**
+	 * Clause-level step progress for the current frame.
+	 * Only populated when stepping at clause granularity (`line` mode).
+	 */
+	clauseSteps?: PipelineClauseStep[];
 }
 
 // ── Scope/variable reference encoding ──
@@ -151,8 +166,11 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _currentFrameIndex = 0;
 	private _granularity: 'statement' | 'line' = 'statement';
 	private _currentClauseIndex = 0;
+	/** Navigation history. Every deliberate forward move (F10 advance, F11 enter-clause,
+	 *  F11 jump-to-frame) pushes the current position before moving. Step-back pops one
+	 *  entry; step-out pops entries until the frame index changes. Cleared on continue. */
+	private _navigationHistory: Array<{ frameIndex: number; clauseIndex: number; granularity: 'statement' | 'line' }> = [];
 	private _resultCache = new Map<string, StepResult>();
-	private _executedFrameIndices = new Set<number>();
 	private _breakpoints: Array<{ line: number; id: number; frameName?: string; clauseIndex?: number }> = [];
 	private _nextBpId = 1;
 	private _compiledSql = '';
@@ -554,7 +572,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 
 			// Append actually-executed frames below the clause entries (dimmed).
 			for (let i = this._currentFrameIndex - 1; i >= 0; i--) {
-				if (!this._executedFrameIndices.has(i)) continue;
+				if (!this._resultCache.has(`${this._frames[i].name}:frame`)) continue;
 				const prevFrame = this._frames[i];
 				const prevClauses = this._clauses[prevFrame.name] ?? [];
 				const displayLine = prevClauses.length > 0
@@ -586,7 +604,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			}> = [];
 
 			for (let i = this._currentFrameIndex; i >= 0; i--) {
-				if (i !== this._currentFrameIndex && !this._executedFrameIndices.has(i)) continue;
+				if (i !== this._currentFrameIndex && !this._resultCache.has(`${this._frames[i].name}:frame`)) continue;
 				const frame = this._frames[i];
 				const clauses = this._clauses[frame.name] ?? [];
 				const displayLine = clauses.length > 0
@@ -774,6 +792,14 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		this._currentClauseIndex = 0;
 	}
 
+	private _pushHistory(): void {
+		this._navigationHistory.push({
+			frameIndex: this._currentFrameIndex,
+			clauseIndex: this._currentClauseIndex,
+			granularity: this._granularity,
+		});
+	}
+
 	private _handleNext(msg: DapMessage): void {
 		this._respond(msg, true);
 
@@ -781,10 +807,12 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			const frame = this._frames[this._currentFrameIndex];
 			const clauses = this._clauses[frame.name] ?? [];
 			if (this._currentClauseIndex < clauses.length - 1) {
+				this._pushHistory();
 				this._currentClauseIndex++;
 				void this._executeCurrentStep().then(() => this._sendStopped('step'));
 			} else if (this._currentFrameIndex < this._frames.length - 1) {
 				// Advance to next frame — stay in clause-level.
+				this._pushHistory();
 				this._currentFrameIndex++;
 				this._enterClauseLevel();
 				void this._executeCurrentStep().then(() => this._sendStopped('step'));
@@ -793,6 +821,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			}
 		} else {
 			if (this._currentFrameIndex < this._frames.length - 1) {
+				this._pushHistory();
 				this._currentFrameIndex++;
 				this._enterClauseLevel();
 				void this._executeCurrentStep().then(() => this._sendStopped('step'));
@@ -812,6 +841,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			if (targetName) {
 				const frameIdx = this._frames.findIndex(f => f.name === targetName);
 				if (frameIdx >= 0) {
+					this._pushHistory();
 					this._currentFrameIndex = frameIdx;
 					this._granularity = 'statement';
 					this._currentClauseIndex = 0;
@@ -828,6 +858,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			const frame = this._frames[this._currentFrameIndex];
 			const clauses = this._clauses[frame.name];
 			if (clauses && clauses.length > 1) {
+				this._pushHistory();
 				this._granularity = 'line';
 				this._currentClauseIndex = 0;
 				void this._executeCurrentStep().then(() => this._sendStopped('step'));
@@ -840,6 +871,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			if (target) {
 				const frameIdx = this._frames.findIndex(f => f.name === target);
 				if (frameIdx >= 0) {
+					this._pushHistory();
 					this._currentFrameIndex = frameIdx;
 					this._enterClauseLevel();
 					void this._executeCurrentStep().then(() => this._sendStopped('step'));
@@ -855,6 +887,22 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _handleStepOut(msg: DapMessage): void {
 		this._respond(msg, true);
 
+		// Pop history entries while they belong to the current frame — the first entry
+		// from a different frame is the position we jumped from, so restore it.
+		const currentFrame = this._currentFrameIndex;
+		while (this._navigationHistory.length > 0 && this._navigationHistory[this._navigationHistory.length - 1].frameIndex === currentFrame) {
+			this._navigationHistory.pop();
+		}
+		if (this._navigationHistory.length > 0) {
+			const caller = this._navigationHistory.pop()!;
+			this._currentFrameIndex = caller.frameIndex;
+			this._granularity = caller.granularity;
+			this._currentClauseIndex = caller.clauseIndex;
+			void this._executeCurrentStep().then(() => this._sendStopped('step'));
+			return;
+		}
+
+		// No history — fall back to dropping granularity or terminating.
 		if (this._granularity === 'line') {
 			this._granularity = 'statement';
 			this._currentClauseIndex = 0;
@@ -867,6 +915,17 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _handleStepBack(msg: DapMessage): void {
 		this._respond(msg, true);
 
+		// If there is navigation history, pop one entry and restore that exact position.
+		if (this._navigationHistory.length > 0) {
+			const prev = this._navigationHistory.pop()!;
+			this._currentFrameIndex = prev.frameIndex;
+			this._granularity = prev.granularity;
+			this._currentClauseIndex = prev.clauseIndex;
+			this._sendStopped('step');
+			return;
+		}
+
+		// No history — sequential backward crawl as fallback.
 		if (this._granularity === 'line') {
 			if (this._currentClauseIndex > 0) {
 				this._currentClauseIndex--;
@@ -947,7 +1006,6 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		if (structureChanged) {
 			this._output('  CTE structure changed — invalidating all cached results.\n');
 			this._resultCache.clear();
-			this._executedFrameIndices.clear();
 		} else {
 			// 4. Targeted invalidation: evict the restarted frame and all downstream.
 			for (let i = restartIndex; i < this._frames.length; i++) {
@@ -955,7 +1013,6 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 				for (const key of [...this._resultCache.keys()]) {
 					if (key.startsWith(`${name}:`)) this._resultCache.delete(key);
 				}
-				this._executedFrameIndices.delete(i);
 			}
 		}
 
@@ -991,6 +1048,9 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	}
 
 	private async _runToContinue(): Promise<void> {
+		// Discard navigation history — we're running freely.
+		this._navigationHistory = [];
+
 		// If we're already inside a frame at clause granularity, check for
 		// breakpoints on later clauses in the same frame before advancing.
 		if (this._granularity === 'line') {
@@ -1247,7 +1307,6 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			};
 
 			this._resultCache.set(cacheKey, stepResult);
-			this._executedFrameIndices.add(this._currentFrameIndex);
 
 			const displayCols = result.columns.filter(c => c !== '__debug_count__').length;
 			this._output(`  → ${totalCount} total rows, ${displayCols} columns (${result.executionTimeMs}ms)\n`);
@@ -1589,14 +1648,56 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	}
 
 	private _sendPipelineEvent(): void {
+		// Frames that should appear as "executed" (green) are those whose frame index
+		// is the current position OR appears in the navigation history.  Once you step
+		// back past a frame it is no longer in the visible forward path.
+		const visibleFrameIndices = new Set([
+			this._currentFrameIndex,
+			...this._navigationHistory.map(h => h.frameIndex),
+		]);
+
 		const executedFrames: Record<string, { rows: number; executionMs: number }> = {};
 		for (const [key, result] of this._resultCache) {
 			// Only include frame-level entries (not clause-level) to avoid noise.
 			if (key.includes(':clause:')) continue;
 			// Key format is "frameName:frame" — extract the frame name.
 			const frameName = key.replace(/:frame$/, '');
+			const frameIdx = this._frames.findIndex(f => f.name === frameName);
+			if (!visibleFrameIndices.has(frameIdx)) continue;
 			executedFrames[frameName] = { rows: result.totalCount, executionMs: result.executionTimeMs };
 		}
+
+		// Build clause-step progress for the current frame when stepping at clause granularity.
+		let clauseSteps: PipelineClauseStep[] | undefined;
+		if (this._granularity === 'line') {
+			const frame = this._frames[this._currentFrameIndex];
+			if (frame) {
+				const frameClauses = this._clauses[frame.name] ?? [];
+				clauseSteps = frameClauses.map((clause, idx) => {
+					const key = `${frame.name}:clause:${idx}`;
+					const result = this._resultCache.get(key);
+					const prevResult = idx > 0 ? this._resultCache.get(`${frame.name}:clause:${idx - 1}`) : undefined;
+					// A clause is "executed" (green) when the cursor is strictly past it —
+					// regardless of whether its result is cached. "Continue" jumps directly
+					// to a breakpointed clause without caching the preceding ones, but they
+					// are still logically behind us. Row count is shown only when available.
+					const executed = idx < this._currentClauseIndex;
+					const fanOut = executed
+						&& result !== undefined
+						&& prevResult !== undefined
+						&& result.totalCount > prevResult.totalCount;
+					return {
+						label: this._clauseLabel(frame.name, idx, frameClauses),
+						line: clause.line,
+						executed,
+						rows: result?.totalCount,
+						isCurrent: idx === this._currentClauseIndex,
+						fanOut,
+					};
+				});
+			}
+		}
+
 		this._send({
 			type: 'event',
 			event: 'dbt-sql:pipeline',
@@ -1605,6 +1706,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 				refs: this._refs,
 				currentFrameIndex: this._currentFrameIndex,
 				executedFrames,
+				clauseSteps,
 			} satisfies PipelineEventBody,
 		});
 	}

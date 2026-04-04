@@ -1,15 +1,29 @@
 import * as vscode from 'vscode';
-import type { PipelineEventBody } from './debug-adapter';
+import type { PipelineClauseStep, PipelineEventBody } from './debug-adapter';
 
 // ── DAG node used as TreeItem element identity ──
 
-interface PipelineNode {
+export interface FrameNode {
+	kind: 'frame';
 	name: string;
 	type: 'cte' | 'select' | 'subquery';
 	line: number;
 	/** Direct dependencies (tables/CTEs referenced by this frame's FROM/JOIN). */
 	deps: string[];
 }
+
+interface ClauseNode {
+	kind: 'clause';
+	/** Display label e.g. "from nba_teams", "join cte_wins" */
+	label: string;
+	line: number;
+	executed: boolean;
+	rows: number | undefined;
+	isCurrent: boolean;
+	fanOut: boolean;
+}
+
+type PipelineNode = FrameNode | ClauseNode;
 
 type ViewMode = 'full' | 'stack';
 
@@ -27,12 +41,22 @@ export class DataPipelineProvider implements vscode.TreeDataProvider<PipelineNod
 	private readonly _onDidChangeTreeData = new vscode.EventEmitter<PipelineNode | undefined | void>();
 	readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
+	private readonly _currentIcon: { light: vscode.Uri; dark: vscode.Uri };
+
 	// ── State populated by pipeline events from the debug adapter ──
-	private _nodes = new Map<string, PipelineNode>();
+	private _nodes = new Map<string, FrameNode>();
 	private _currentFrameName: string | undefined;
 	private _executedFrames = new Map<string, { rows: number; executionMs: number }>();
+	private _clauseSteps: PipelineClauseStep[] | undefined;
 	private _mode: ViewMode = 'full';
 	private _sourceUri: string | undefined;
+
+	constructor(extensionUri: vscode.Uri) {
+		this._currentIcon = {
+			light: vscode.Uri.joinPath(extensionUri, 'resources', 'icons', 'debug-current-light.svg'),
+			dark: vscode.Uri.joinPath(extensionUri, 'resources', 'icons', 'debug-current-dark.svg'),
+		};
+	}
 
 	// ──────────────────────────────────────────────────────────────
 	// Public API — called from extension.ts
@@ -46,6 +70,7 @@ export class DataPipelineProvider implements vscode.TreeDataProvider<PipelineNod
 		for (const [name, info] of Object.entries(body.executedFrames)) {
 			this._executedFrames.set(name, info);
 		}
+		this._clauseSteps = body.clauseSteps;
 		this._onDidChangeTreeData.fire();
 	}
 
@@ -53,6 +78,7 @@ export class DataPipelineProvider implements vscode.TreeDataProvider<PipelineNod
 		this._nodes.clear();
 		this._currentFrameName = undefined;
 		this._executedFrames.clear();
+		this._clauseSteps = undefined;
 		this._sourceUri = undefined;
 		this._onDidChangeTreeData.fire();
 	}
@@ -72,23 +98,58 @@ export class DataPipelineProvider implements vscode.TreeDataProvider<PipelineNod
 	// ──────────────────────────────────────────────────────────────
 
 	getTreeItem(element: PipelineNode): vscode.TreeItem {
+		// ── Clause step node ──
+		if (element.kind === 'clause') {
+			const item = new vscode.TreeItem(
+				element.label,
+				vscode.TreeItemCollapsibleState.None,
+			);
+			if (element.isCurrent) {
+				item.iconPath = this._currentIcon;
+				item.description = element.rows !== undefined ? `${element.rows.toLocaleString()} rows` : '…';
+			} else if (element.executed) {
+				if (element.fanOut) {
+					item.iconPath = new vscode.ThemeIcon('warning', new vscode.ThemeColor('editorWarning.foreground'));
+					item.description = element.rows !== undefined ? `${element.rows.toLocaleString()} rows ⚠ fan-out` : '⚠ fan-out';
+				} else {
+					item.iconPath = new vscode.ThemeIcon('circle-filled', new vscode.ThemeColor('testing.iconPassed'));
+					item.description = element.rows !== undefined ? `${element.rows.toLocaleString()} rows` : '';
+				}
+			} else {
+				item.iconPath = new vscode.ThemeIcon('circle-outline');
+				item.description = 'pending';
+			}
+			if (this._sourceUri) {
+				item.command = {
+					command: 'dbt-sql.dataPipeline.goToFrame',
+					title: 'Go to Line',
+					arguments: [this._sourceUri, element.line],
+				};
+			}
+			item.contextValue = element.isCurrent ? 'pipelineClauseCurrent' : element.executed ? 'pipelineClauseExecuted' : 'pipelineClausePending';
+			return item;
+		}
+
+		// ── Frame node ──
 		const isCurrent = element.name === this._currentFrameName;
 		const executed = this._executedFrames.get(element.name);
 		const hasDeps = element.deps.some(d => this._nodes.has(d));
-		const visibleDeps = this._visibleDeps(element);
+		// Current frame shows clause steps as children when clause-stepping.
+		const clauseChildren = isCurrent && this._clauseSteps !== undefined;
+		const visibleDeps = clauseChildren ? [] : this._visibleDeps(element);
 
 		const item = new vscode.TreeItem(
 			element.name,
-			visibleDeps.length > 0
+			clauseChildren || visibleDeps.length > 0
 				? vscode.TreeItemCollapsibleState.Expanded
 				: vscode.TreeItemCollapsibleState.None,
 		);
 
 		// Icon
 		if (isCurrent) {
-			item.iconPath = new vscode.ThemeIcon('debug-stackframe');
+			item.iconPath = this._currentIcon;
 		} else if (executed) {
-			item.iconPath = new vscode.ThemeIcon('check', new vscode.ThemeColor('testing.iconPassed'));
+			item.iconPath = new vscode.ThemeIcon('circle-filled', new vscode.ThemeColor('testing.iconPassed'));
 		} else if (hasDeps || element.type === 'select') {
 			item.iconPath = new vscode.ThemeIcon('circle-outline');
 		} else {
@@ -96,8 +157,12 @@ export class DataPipelineProvider implements vscode.TreeDataProvider<PipelineNod
 			item.iconPath = new vscode.ThemeIcon('database');
 		}
 
-		// Description — row count for executed frames
-		if (executed) {
+		// Description — row count for executed frames, clause progress for current frame
+		if (isCurrent && this._clauseSteps !== undefined) {
+			const done = this._clauseSteps.filter(c => c.executed).length;
+			const total = this._clauseSteps.length;
+			item.description = `${done}/${total} clauses`;
+		} else if (executed) {
 			const prev = this._previousFrameRows(element);
 			if (prev !== undefined && executed.rows > prev) {
 				item.description = `${executed.rows.toLocaleString()} rows ⚠ fan-out`;
@@ -137,6 +202,22 @@ export class DataPipelineProvider implements vscode.TreeDataProvider<PipelineNod
 			return roots;
 		}
 
+		// Clause nodes have no children.
+		if (element.kind === 'clause') return [];
+
+		// Current frame in clause-stepping mode: show clause steps instead of CTE deps.
+		if (element.name === this._currentFrameName && this._clauseSteps !== undefined) {
+			return this._clauseSteps.map((step): ClauseNode => ({
+				kind: 'clause',
+				label: step.label,
+				line: step.line,
+				executed: step.executed,
+				rows: step.rows,
+				isCurrent: step.isCurrent,
+				fanOut: step.fanOut,
+			}));
+		}
+
 		const deps = this._visibleDeps(element);
 		return deps.map(name => this._nodes.get(name)!);
 	}
@@ -154,6 +235,7 @@ export class DataPipelineProvider implements vscode.TreeDataProvider<PipelineNod
 			for (const ref of refs[frame.name] ?? []) {
 				if (!frameNames.has(ref)) {
 					this._nodes.set(ref, {
+						kind: 'frame',
 						name: ref,
 						type: 'select',
 						line: 0,
@@ -166,6 +248,7 @@ export class DataPipelineProvider implements vscode.TreeDataProvider<PipelineNod
 		// Second pass: add frame nodes with all deps (both frames and external refs).
 		for (const frame of frames) {
 			this._nodes.set(frame.name, {
+				kind: 'frame',
 				name: frame.name,
 				type: frame.type,
 				line: frame.line,
@@ -175,12 +258,12 @@ export class DataPipelineProvider implements vscode.TreeDataProvider<PipelineNod
 	}
 
 	/** Find root nodes — frames that no other frame depends on. */
-	private _findRoots(): PipelineNode[] {
+	private _findRoots(): FrameNode[] {
 		const referenced = new Set<string>();
 		for (const node of this._nodes.values()) {
 			for (const dep of node.deps) referenced.add(dep);
 		}
-		const roots: PipelineNode[] = [];
+		const roots: FrameNode[] = [];
 		for (const node of this._nodes.values()) {
 			if (!referenced.has(node.name)) roots.push(node);
 		}
@@ -241,15 +324,15 @@ export class DataPipelineProvider implements vscode.TreeDataProvider<PipelineNod
 	}
 
 	/** Get deps for an element, filtered by mode. */
-	private _visibleDeps(element: PipelineNode): string[] {
-		if (this._mode === 'full') return element.deps.filter(d => this._nodes.has(d));
+	private _visibleDeps(element: FrameNode): string[] {
+		if (this._mode === 'full') return element.deps.filter((d: string) => this._nodes.has(d));
 		if (!this._currentFrameName) return [];
 		const ancestors = this._ancestorsOf(this._currentFrameName);
-		return element.deps.filter(d => this._nodes.has(d) && ancestors.has(d));
+		return element.deps.filter((d: string) => this._nodes.has(d) && ancestors.has(d));
 	}
 
 	/** Get the row count of the "previous" frame (first dep) for fan-out detection. */
-	private _previousFrameRows(element: PipelineNode): number | undefined {
+	private _previousFrameRows(element: FrameNode): number | undefined {
 		for (const dep of element.deps) {
 			const info = this._executedFrames.get(dep);
 			if (info) return info.rows;

@@ -3134,11 +3134,121 @@ def handle_decompose_query(request: dict[str, Any]) -> None:
                 refs.append(name)
         return refs
 
+    def promote_subqueries(the_ast: "exp.Expression") -> None:  # type: ignore[name-defined]
+        """Promote inline subqueries in FROM/JOIN to synthetic named CTEs.
+
+        Mutates the_ast in-place.  Innermost subqueries are promoted first
+        (depth-first) so the resulting WITH clause is in valid dependency order.
+
+        Naming: the subquery's alias becomes the CTE name when that alias is
+        unique; otherwise a synthetic ``__subq_N__`` name is generated.
+        """
+        the_with_node: "exp.With | None" = the_ast.args.get("with_")  # type: ignore[assignment]
+
+        existing_names: set[str] = set()
+        if the_with_node:
+            for _c in the_with_node.expressions:
+                if _c.alias:
+                    existing_names.add(_c.alias)
+
+        counter: list[int] = [0]
+
+        def make_name(preferred: str) -> str:
+            if preferred and preferred not in existing_names:
+                existing_names.add(preferred)
+                return preferred
+            counter[0] += 1
+            name = f"__subq_{counter[0]}__"
+            existing_names.add(name)
+            return name
+
+        def insert_before(new_cte: "exp.CTE", before_alias: str) -> None:  # type: ignore[name-defined]
+            nonlocal the_with_node
+            if the_with_node is None:
+                the_with_node = exp.With(expressions=[new_cte])
+                the_ast.set("with_", the_with_node)
+            else:
+                exprs = list(the_with_node.expressions)
+                idx = next(
+                    (i for i, c in enumerate(exprs) if (c.alias or "") == before_alias),
+                    len(exprs),
+                )
+                exprs.insert(idx, new_cte)
+                the_with_node.set("expressions", exprs)
+
+        def promote_in_select(select_node: "exp.Select", before_alias: str) -> None:  # type: ignore[name-defined]
+            from_node = select_node.args.get("from_")
+            if from_node and isinstance(from_node.this, exp.Subquery):
+                _promote(from_node, from_node.this, before_alias)
+            for join in list(select_node.args.get("joins") or []):
+                if isinstance(join.this, exp.Subquery):
+                    _promote(join, join.this, before_alias)
+
+        def _promote(
+            parent: "exp.Expression", subq: "exp.Subquery", before_alias: str
+        ) -> None:  # type: ignore[name-defined]
+            alias_str: str = subq.alias or ""
+            cte_name = make_name(alias_str)
+
+            inner_select = subq.find(exp.Select)
+            if not inner_select:
+                return
+
+            # Depth-first: promote any sub-subqueries before handling this one.
+            promote_in_select(inner_select, cte_name)
+
+            # Re-find after inner promotion (nodes may have been replaced).
+            inner_select = subq.find(exp.Select)
+            if not inner_select:
+                return
+
+            new_cte = exp.CTE(
+                this=inner_select.copy(),
+                alias=exp.TableAlias(this=exp.Identifier(this=cte_name)),
+            )
+
+            # Replace the subquery with a plain table reference.
+            # The alias is no longer needed on the table ref since the CTE name
+            # already matches — but preserve it when alias differs from cte_name
+            # (i.e. a synthetic __subq_N__ name was used).
+            new_table = exp.Table(this=exp.Identifier(this=cte_name))
+            if alias_str and alias_str != cte_name:
+                new_table.set(
+                    "alias",
+                    exp.TableAlias(this=exp.Identifier(this=alias_str)),
+                )
+            parent.set("this", new_table)
+
+            insert_before(new_cte, before_alias)
+
+        # Process each original CTE (snapshot list to avoid mutation confusion).
+        if the_with_node:
+            original_ctes = list(the_with_node.expressions)
+            for cte_node in original_ctes:
+                cte_alias = cte_node.alias or ""
+                inner = cte_node.find(exp.Select)
+                if inner:
+                    promote_in_select(inner, cte_alias)
+
+        # Process _main_.
+        if isinstance(the_ast, exp.Select):
+            main_sel: "exp.Select | None" = the_ast
+        elif hasattr(the_ast, "this") and isinstance(the_ast.this, exp.Select):
+            main_sel = the_ast.this
+        else:
+            main_sel = the_ast.find(exp.Select)
+        if main_sel:
+            promote_in_select(main_sel, "_main_")
+
     try:
         frames: list[dict[str, Any]] = []
         clauses_map: dict[str, list[dict[str, Any]]] = {}
         refs_map: dict[str, list[str]] = {}
         cte_names: list[str] = []
+
+        # Promote inline subqueries to synthetic named CTEs before extracting
+        # frames, so all subsequent logic treats them identically to real CTEs.
+        promote_subqueries(ast)
 
         # Extract CTE frames
         with_node = ast.args.get("with_")
