@@ -61,6 +61,7 @@ import { QueryRunner } from './dbt/query-runner';
 import { QueryResultPanel } from './views/query-result-panel';
 import { SqlDebugAdapter } from './dbt/debug-adapter';
 import { SqlDebugConfigProvider } from './dbt/debug-config-provider';
+import { DataPipelineProvider } from './dbt/debug-pipeline-provider';
 import { splitStatements } from './dbt/statement-splitter';
 import * as path from 'node:path';
 
@@ -876,6 +877,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	);
 
 	// -------- Debug adapter (F5 → run SQL) --------
+	const dataPipelineProvider = new DataPipelineProvider();
 	context.subscriptions.push(
 		vscode.debug.registerDebugConfigurationProvider('dbt-sql', new SqlDebugConfigProvider()),	vscode.debug.registerDebugConfigurationProvider('dbt-sql', new SqlDebugConfigProvider(), vscode.DebugConfigurationProviderTriggerKind.Dynamic),		vscode.debug.registerDebugAdapterDescriptorFactory('dbt-sql', {
 			createDebugAdapterDescriptor() {
@@ -883,6 +885,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 					new SqlDebugAdapter(queryRunner, pathResolver, logger, databaseProvider, sqlglotBridgeRunner, compileCache, manifestIndexer),
 				);
 			},
+		}),
+		vscode.window.createTreeView(DataPipelineProvider.viewId, {
+			treeDataProvider: dataPipelineProvider,
+			showCollapseAll: true,
+		}),
+		vscode.debug.onDidReceiveDebugSessionCustomEvent(e => {
+			if (e.session.type === 'dbt-sql' && e.event === 'dbt-sql:pipeline') {
+				const sourceUri = e.session.configuration.file as string | undefined;
+				dataPipelineProvider.handlePipelineEvent(e.body, sourceUri);
+			}
+		}),
+		vscode.debug.onDidTerminateDebugSession(session => {
+			if (session.type === 'dbt-sql') dataPipelineProvider.clear();
+		}),
+		vscode.commands.registerCommand('dbt-sql.dataPipeline.toggleModeFull', () => dataPipelineProvider.toggleMode()),
+		vscode.commands.registerCommand('dbt-sql.dataPipeline.toggleModeStack', () => dataPipelineProvider.toggleMode()),
+		vscode.commands.registerCommand('dbt-sql.dataPipeline.goToFrame', async (uri: string, line: number) => {
+			if (!uri || line === undefined) return;
+			const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri));
+			const editor = await vscode.window.showTextDocument(doc, { preview: false });
+			const pos = new vscode.Position(line, 0);
+			editor.selection = new vscode.Selection(pos, pos);
+			editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
 		}),
 	);
 

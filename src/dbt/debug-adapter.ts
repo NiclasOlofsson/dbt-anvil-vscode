@@ -32,6 +32,7 @@ interface DecomposeClause {
 	stage: string;
 	sql: string;
 	line: number;
+	order?: number;
 }
 
 interface DecomposeResult {
@@ -50,6 +51,16 @@ interface StepResult {
 	columnTypes?: Record<string, string>;
 	totalCount: number;
 	executionTimeMs: number;
+}
+
+// ── Pipeline event (custom DAP event consumed by DataPipelineProvider) ──
+
+export interface PipelineEventBody {
+	frames: DecomposeFrame[];
+	refs: Record<string, string[]>;
+	currentFrameIndex: number;
+	/** Per-frame execution info keyed by frame name. */
+	executedFrames: Record<string, { rows: number; executionMs: number }>;
 }
 
 // ── Scope/variable reference encoding ──
@@ -1036,10 +1047,12 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	// ──────────────────────────────────────────────────────────────
 
 	private _cacheKey(frameIndex: number): string {
+		const frame = this._frames[frameIndex];
+		const id = frame ? frame.name : String(frameIndex);
 		if (this._granularity === 'line' && frameIndex === this._currentFrameIndex) {
-			return `${frameIndex}:clause:${this._currentClauseIndex}`;
+			return `${id}:clause:${this._currentClauseIndex}`;
 		}
-		return `${frameIndex}:frame`;
+		return `${id}:frame`;
 	}
 
 	private _getStepSql(frameIndex: number): string {
@@ -1209,8 +1222,14 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 
 		// First remap clause lines. Clauses are anchored to SQL keywords/tokens that
 		// usually carry debug markers, so this is the most reliable source position.
+		// If a clause line falls inside a macro span, use the macro's sourceLine.
 		for (const clauses of Object.values(this._clauses)) {
 			for (const clause of clauses) {
+				const macroSpan = sm.isInsideMacro(clause.line);
+				if (macroSpan) {
+					clause.line = macroSpan.sourceLine;
+					continue;
+				}
 				const sourceLine = sm.compiledLineToSourceLine(clause.line);
 				if (sourceLine !== undefined) {
 					clause.line = sourceLine;
@@ -1384,6 +1403,28 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			type: 'event',
 			event: 'stopped',
 			body: { reason, threadId: 1, allThreadsStopped: true },
+		});
+		this._sendPipelineEvent();
+	}
+
+	private _sendPipelineEvent(): void {
+		const executedFrames: Record<string, { rows: number; executionMs: number }> = {};
+		for (const [key, result] of this._resultCache) {
+			// Only include frame-level entries (not clause-level) to avoid noise.
+			if (key.includes(':clause:')) continue;
+			// Key format is "frameName:frame" — extract the frame name.
+			const frameName = key.replace(/:frame$/, '');
+			executedFrames[frameName] = { rows: result.totalCount, executionMs: result.executionTimeMs };
+		}
+		this._send({
+			type: 'event',
+			event: 'dbt-sql:pipeline',
+			body: {
+				frames: this._frames,
+				refs: this._refs,
+				currentFrameIndex: this._currentFrameIndex,
+				executedFrames,
+			} satisfies PipelineEventBody,
 		});
 	}
 

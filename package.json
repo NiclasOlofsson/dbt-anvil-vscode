@@ -274,6 +274,20 @@
 			{
 				"command": "dbt-studio.queryResult.export.markdown",
 				"title": "Export as Markdown"
+			},
+			{
+				"command": "dbt-sql.dataPipeline.toggleModeFull",
+				"title": "Show Full DAG",
+				"icon": "$(list-tree)"
+			},
+			{
+				"command": "dbt-sql.dataPipeline.toggleModeStack",
+				"title": "Show Current Stack Only",
+				"icon": "$(git-merge)"
+			},
+			{
+				"command": "dbt-sql.dataPipeline.goToFrame",
+				"title": "Go to Frame"
 			}
 		],
 		"viewsContainers": {
@@ -330,6 +344,13 @@
 					"id": "dbt-studio.queryResults",
 					"name": "Query Results",
 					"when": "dbt-studio.queryResultInPanel"
+				}
+			],
+			"debug": [
+				{
+					"id": "dbt-sql.dataPipeline",
+					"name": "Data Pipeline",
+					"when": "inDebugMode && debugType == 'dbt-sql'"
 				}
 			]
 		},
@@ -597,6 +618,16 @@
 				{
 					"command": "dbt-studio.profiler.hideDecorations",
 					"when": "view == dbt-studio.profilerResults && dbt-studio.profilerDecorationsVisible",
+					"group": "navigation"
+				},
+				{
+					"command": "dbt-sql.dataPipeline.toggleModeFull",
+					"when": "view == dbt-sql.dataPipeline && dbt-sql.pipelineModeStack",
+					"group": "navigation"
+				},
+				{
+					"command": "dbt-sql.dataPipeline.toggleModeStack",
+					"when": "view == dbt-sql.dataPipeline && !dbt-sql.pipelineModeStack",
 					"group": "navigation"
 				}
 			],

@@ -3,6 +3,7 @@ export interface SymbolEntry {
 	col: number;
 	endCol: number;
 	role: string;
+	frameName?: string;
 }
 
 export interface JinjaSpan {
@@ -18,10 +19,38 @@ export interface SourceMapping {
 	compiledEndLine: number;
 	compiledEndCol: number;
 	role: string;
+	frameName?: string;
+}
+
+export interface MacroSpan {
+	name: string;
+	sourceLine: number;
+	compiledStartLine: number;
+	compiledEndLine: number;
+}
+
+export interface RefMarker {
+	name: string;
+	sourceLine: number;
+	compiledLine: number;
+	compiledCol: number;
+	compiledEndCol: number;
+}
+
+export interface SourceMarker {
+	schema: string;
+	name: string;
+	sourceLine: number;
+	compiledLine: number;
+	compiledCol: number;
+	compiledEndCol: number;
 }
 
 export interface SourceMap {
 	mappings: SourceMapping[];
+	macroSpans: MacroSpan[];
+	refMarkers: RefMarker[];
+	sourceMarkers: SourceMarker[];
 	sourceToCompiled(line: number): SourceMapping[];
 	compiledToSource(line: number): SourceMapping[];
 	/**
@@ -32,10 +61,17 @@ export interface SourceMap {
 	/** Given a compiled line, return the best-guess source line.
 	 *  Exact match if available, otherwise interpolates from the nearest mapped line. */
 	nearestSourceLine(compiledLine: number): number | undefined;
+	isInsideMacro(compiledLine: number): MacroSpan | undefined;
 }
 
-const MARKER_OPEN_RE = /\/\* @dbg:L(\d+):C(\d+):(\w+) \*\//g;
+const MARKER_OPEN_RE = /\/\* @dbg:L(\d+):C(\d+):(\w+)(?::([^\s*]+))? \*\//g;
 const MARKER_CLOSE_RE = /\/\* \/@dbg \*\//g;
+const MACRO_START_RE = /\/\* @macro:start name="([^"]+)" source_line=(\d+) \*\//g;
+const MACRO_END_RE = /\/\* @macro:end \*\//g;
+const REF_OPEN_RE = /\/\* @ref:name="([^"]+)" source_line=(\d+) \*\//g;
+const REF_CLOSE_RE = /\/\* \/@ref \*\//g;
+const SOURCE_OPEN_RE = /\/\* @source:schema="([^"]+)" name="([^"]+)" source_line=(\d+) \*\//g;
+const SOURCE_CLOSE_RE = /\/\* \/@source \*\//g;
 
 export function findJinjaSpans(source: string): JinjaSpan[] {
 	const spans: JinjaSpan[] = [];
@@ -91,10 +127,17 @@ export function findJinjaSpans(source: string): JinjaSpan[] {
 	return spans;
 }
 
+export interface JinjaClassification {
+	macroSpans?: BridgeMacroSpan[];
+	refMarkers?: BridgeRefMarker[];
+	sourceMarkers?: BridgeSourceMarker[];
+}
+
 export function injectMarkers(
 	source: string,
 	symbols: SymbolEntry[],
 	jinjaSpans: JinjaSpan[],
+	jinjaClassifications?: JinjaClassification,
 ): string {
 	// Build line_starts for (line, col) → char offset conversion
 	const lineStarts: number[] = [0];
@@ -115,22 +158,110 @@ export function injectMarkers(
 		return false;
 	}
 
+	// Collect Jinja span markers (inserted around Jinja regions, not SQL tokens)
+	type SpanEntry = { startOffset: number; endOffset: number; openMarker: string; closeMarker: string };
+	const jinjaEntries: SpanEntry[] = [];
+
+	if (jinjaClassifications) {
+		for (const m of jinjaClassifications.macroSpans ?? []) {
+			jinjaEntries.push({
+				startOffset: m.startOffset,
+				endOffset: m.endOffset,
+				openMarker: `/* @macro:start name="${m.name}" source_line=${m.sourceLine} */`,
+				closeMarker: '/* @macro:end */',
+			});
+		}
+		for (const r of jinjaClassifications.refMarkers ?? []) {
+			jinjaEntries.push({
+				startOffset: r.startOffset,
+				endOffset: r.endOffset,
+				openMarker: `/* @ref:name="${r.name}" source_line=${r.sourceLine} */`,
+				closeMarker: '/* /@ref */',
+			});
+		}
+		for (const s of jinjaClassifications.sourceMarkers ?? []) {
+			jinjaEntries.push({
+				startOffset: s.startOffset,
+				endOffset: s.endOffset,
+				openMarker: `/* @source:schema="${s.schema}" name="${s.name}" source_line=${s.sourceLine} */`,
+				closeMarker: '/* /@source */',
+			});
+		}
+	}
+
 	// Filter + compute char offsets, then sort descending for right-to-left insertion
 	const entries = symbols
-		.map(s => ({
-			startOffset: toOffset(s.line, s.col),
-			endOffset: toOffset(s.line, s.endCol),
-			marker: `/* @dbg:L${s.line}:C${s.col}:${s.role} */`,
-		}))
+		.map(s => {
+			const framePart = s.frameName ? `:${s.frameName}` : '';
+			return {
+				startOffset: toOffset(s.line, s.col),
+				endOffset: toOffset(s.line, s.endCol),
+				marker: `/* @dbg:L${s.line}:C${s.col}:${s.role}${framePart} */`,
+			};
+		})
 		.filter(e => !inJinja(e.startOffset))
 		.sort((a, b) => b.startOffset - a.startOffset);
 
 	let result = source;
+
+	// First pass: insert @dbg markers (right-to-left)
 	for (const e of entries) {
-		// Insert close marker AFTER the token, open marker BEFORE the token
-		// Right-to-left: close first (higher offset), then open
 		result = result.slice(0, e.endOffset) + ' /* /@dbg */' + result.slice(e.endOffset);
 		result = result.slice(0, e.startOffset) + e.marker + ' ' + result.slice(e.startOffset);
+	}
+
+	// Second pass: insert Jinja span markers (right-to-left).
+	// We must work on the ORIGINAL offsets, but since @dbg markers only apply
+	// to non-Jinja regions, the Jinja span offsets still index into the
+	// original source. So we compute shifts caused by @dbg insertions.
+	if (jinjaEntries.length > 0) {
+		// Sort entries descending by startOffset for right-to-left
+		const sortedJinja = [...jinjaEntries].sort((a, b) => b.startOffset - a.startOffset);
+
+		// Compute shift from @dbg marker insertions:
+		// Each entry adds an open marker + space BEFORE and space + close marker AFTER
+		// Build a sorted array of (offset, delta) for binary-search shift lookup.
+		type Insertion = { offset: number; delta: number };
+		const insertions: Insertion[] = [];
+		for (const e of entries) {
+			// Entries are already sorted descending, but let's build ascending
+			insertions.push({ offset: e.startOffset, delta: e.marker.length + 1 });
+			insertions.push({ offset: e.endOffset, delta: ' /* /@dbg */'.length });
+		}
+		insertions.sort((a, b) => a.offset - b.offset);
+
+		// Compute cumulative shift at each insertion point
+		const cumShifts: { offset: number; cumDelta: number }[] = [];
+		let cum = 0;
+		for (const ins of insertions) {
+			cum += ins.delta;
+			cumShifts.push({ offset: ins.offset, cumDelta: cum });
+		}
+
+		function shiftAt(origOffset: number): number {
+			// Binary search for how much shift has been applied before this offset
+			let lo = 0;
+			let hi = cumShifts.length - 1;
+			let shift = 0;
+			while (lo <= hi) {
+				const mid = (lo + hi) >> 1;
+				if (cumShifts[mid].offset < origOffset) {
+					shift = cumShifts[mid].cumDelta;
+					lo = mid + 1;
+				} else {
+					hi = mid - 1;
+				}
+			}
+			return shift;
+		}
+
+		for (const je of sortedJinja) {
+			const adjustedStart = je.startOffset + shiftAt(je.startOffset);
+			const adjustedEnd = je.endOffset + shiftAt(je.endOffset);
+			// Insert close marker after the Jinja span, then open marker before (right-to-left)
+			result = result.slice(0, adjustedEnd) + ' ' + je.closeMarker + result.slice(adjustedEnd);
+			result = result.slice(0, adjustedStart) + je.openMarker + ' ' + result.slice(adjustedStart);
+		}
 	}
 
 	return result;
@@ -165,7 +296,7 @@ export function parseSourceMap(compiledSql: string): SourceMap {
 	}
 
 	// Find all open markers and pair with immediately following close marker
-	const openRe = /\/\* @dbg:L(\d+):C(\d+):(\w+) \*\//g;
+	const openRe = /\/\* @dbg:L(\d+):C(\d+):(\w+)(?::([^\s*]+))? \*\//g;
 	const closeRe = /\/\* \/@dbg \*\//g;
 	let openMatch: RegExpExecArray | null;
 
@@ -173,6 +304,7 @@ export function parseSourceMap(compiledSql: string): SourceMap {
 		const sourceLine = parseInt(openMatch[1], 10);
 		const sourceCol = parseInt(openMatch[2], 10);
 		const role = openMatch[3];
+		const frameName = openMatch[4]; // undefined when no frameName in marker
 
 		// The compiled content starts right after the open marker + space
 		const contentStart = openMatch.index + openMatch[0].length + 1;
@@ -185,7 +317,7 @@ export function parseSourceMap(compiledSql: string): SourceMap {
 		// Content ends at the space before the close marker
 		const contentEnd = closeMatch.index - 1;
 
-		mappings.push({
+		const mapping: SourceMapping = {
 			sourceLine,
 			sourceCol,
 			compiledLine: offsetToLine(contentStart),
@@ -193,6 +325,70 @@ export function parseSourceMap(compiledSql: string): SourceMap {
 			compiledEndLine: offsetToLine(contentEnd),
 			compiledEndCol: offsetToCol(contentEnd),
 			role,
+		};
+		if (frameName) mapping.frameName = frameName;
+		mappings.push(mapping);
+	}
+
+	// Parse @macro:start / @macro:end span markers
+	const macroSpans: MacroSpan[] = [];
+	const macroStartRe = /\/\* @macro:start name="([^"]+)" source_line=(\d+) \*\//g;
+	const macroEndRe = /\/\* @macro:end \*\//g;
+	let macroStartMatch: RegExpExecArray | null;
+	while ((macroStartMatch = macroStartRe.exec(compiledSql)) !== null) {
+		const macroName = macroStartMatch[1];
+		const macroSourceLine = parseInt(macroStartMatch[2], 10);
+		const startLine = offsetToLine(macroStartMatch.index);
+		macroEndRe.lastIndex = macroStartMatch.index + macroStartMatch[0].length;
+		const macroEndMatch = macroEndRe.exec(compiledSql);
+		if (!macroEndMatch) continue;
+		const endLine = offsetToLine(macroEndMatch.index);
+		macroSpans.push({ name: macroName, sourceLine: macroSourceLine, compiledStartLine: startLine, compiledEndLine: endLine });
+	}
+
+	// Parse @ref markers
+	const refMarkers: RefMarker[] = [];
+	const refOpenRe = /\/\* @ref:name="([^"]+)" source_line=(\d+) \*\//g;
+	const refCloseRe = /\/\* \/@ref \*\//g;
+	let refMatch: RegExpExecArray | null;
+	while ((refMatch = refOpenRe.exec(compiledSql)) !== null) {
+		const refName = refMatch[1];
+		const refSourceLine = parseInt(refMatch[2], 10);
+		const contentStart = refMatch.index + refMatch[0].length + 1;
+		refCloseRe.lastIndex = contentStart;
+		const refCloseMatch = refCloseRe.exec(compiledSql);
+		if (!refCloseMatch) continue;
+		const contentEnd = refCloseMatch.index - 1;
+		refMarkers.push({
+			name: refName,
+			sourceLine: refSourceLine,
+			compiledLine: offsetToLine(contentStart),
+			compiledCol: offsetToCol(contentStart),
+			compiledEndCol: offsetToCol(contentEnd),
+		});
+	}
+
+	// Parse @source markers
+	const sourceMarkers: SourceMarker[] = [];
+	const srcOpenRe = /\/\* @source:schema="([^"]+)" name="([^"]+)" source_line=(\d+) \*\//g;
+	const srcCloseRe = /\/\* \/@source \*\//g;
+	let srcMatch: RegExpExecArray | null;
+	while ((srcMatch = srcOpenRe.exec(compiledSql)) !== null) {
+		const srcSchema = srcMatch[1];
+		const srcName = srcMatch[2];
+		const srcSourceLine = parseInt(srcMatch[3], 10);
+		const contentStart = srcMatch.index + srcMatch[0].length + 1;
+		srcCloseRe.lastIndex = contentStart;
+		const srcCloseMatch = srcCloseRe.exec(compiledSql);
+		if (!srcCloseMatch) continue;
+		const contentEnd = srcCloseMatch.index - 1;
+		sourceMarkers.push({
+			schema: srcSchema,
+			name: srcName,
+			sourceLine: srcSourceLine,
+			compiledLine: offsetToLine(contentStart),
+			compiledCol: offsetToCol(contentStart),
+			compiledEndCol: offsetToCol(contentEnd),
 		});
 	}
 
@@ -248,6 +444,9 @@ export function parseSourceMap(compiledSql: string): SourceMap {
 
 	return {
 		mappings,
+		macroSpans,
+		refMarkers,
+		sourceMarkers,
 		sourceToCompiled(line: number): SourceMapping[] {
 			return bySourceLine.get(line) ?? [];
 		},
@@ -263,12 +462,40 @@ export function parseSourceMap(compiledSql: string): SourceMap {
 		nearestSourceLine(compiledLine: number): number | undefined {
 			return nearestInterpolated(compiledLine);
 		},
+		isInsideMacro(compiledLine: number): MacroSpan | undefined {
+			return macroSpans.find(s => compiledLine >= s.compiledStartLine && compiledLine <= s.compiledEndLine);
+		},
 	};
+}
+
+export interface BridgeMacroSpan {
+	name: string;
+	sourceLine: number;
+	startOffset: number;
+	endOffset: number;
+}
+
+export interface BridgeRefMarker {
+	name: string;
+	sourceLine: number;
+	startOffset: number;
+	endOffset: number;
+}
+
+export interface BridgeSourceMarker {
+	schema: string;
+	name: string;
+	sourceLine: number;
+	startOffset: number;
+	endOffset: number;
 }
 
 export interface EmitResult {
 	annotatedSource: string;
 	symbols: SymbolEntry[];
+	macroSpans: BridgeMacroSpan[];
+	refMarkers: BridgeRefMarker[];
+	sourceMarkers: BridgeSourceMarker[];
 }
 
 export async function emitDebugSymbols(
@@ -285,8 +512,16 @@ export async function emitDebugSymbols(
 	const symbols = result.data?.['symbols'] as SymbolEntry[] | undefined;
 	if (!symbols || symbols.length === 0) return undefined;
 
-	const jinjaSpans = findJinjaSpans(source);
-	const annotatedSource = injectMarkers(source, symbols, jinjaSpans);
+	const macroSpans = (result.data?.['macroSpans'] as BridgeMacroSpan[] | undefined) ?? [];
+	const refMarkers = (result.data?.['refMarkers'] as BridgeRefMarker[] | undefined) ?? [];
+	const sourceMarkers = (result.data?.['sourceMarkers'] as BridgeSourceMarker[] | undefined) ?? [];
 
-	return { annotatedSource, symbols };
+	const jinjaSpans = findJinjaSpans(source);
+	const annotatedSource = injectMarkers(source, symbols, jinjaSpans, {
+		macroSpans,
+		refMarkers,
+		sourceMarkers,
+	});
+
+	return { annotatedSource, symbols, macroSpans, refMarkers, sourceMarkers };
 }
