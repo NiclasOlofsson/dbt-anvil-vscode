@@ -173,6 +173,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _resultCache = new Map<string, StepResult>();
 	private _breakpoints: Array<{ line: number; id: number; frameName?: string; clauseIndex?: number }> = [];
 	private _nextBpId = 1;
+	private _exceptionFilters: Set<string> = new Set();
 	private _compiledSql = '';
 	private _sourceUri = '';
 	private _limit = 50;
@@ -215,8 +216,13 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			case 'continue': this._handleContinue(msg); break;
 			case 'restartFrame': void this._handleRestartFrame(msg); break;
 			case 'evaluate': void this._handleEvaluate(msg); break;
+			case 'completions': void this._handleCompletions(msg); break;
 			case 'breakpointLocations': this._handleBreakpointLocations(msg); break;
 			case 'stepInTargets': this._handleStepInTargets(msg); break;
+			case 'reverseContinue': this._handleReverseContinue(msg); break;
+			case 'setExceptionBreakpoints': this._handleSetExceptionBreakpoints(msg); break;
+			case 'gotoTargets': this._handleGotoTargets(msg); break;
+			case 'goto': void this._handleGoto(msg); break;
 			case 'disconnect':
 			case 'terminate':
 				this._handleTerminate(msg);
@@ -243,9 +249,16 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 				supportsStepBack: true,
 				supportsStepInTargetsRequest: true,
 				supportsFunctionBreakpoints: true,
-				supportsEvaluateForHovers: false,
-				supportsCompletionsRequest: false,
+				supportsEvaluateForHovers: true,
+				supportsCompletionsRequest: true,
 				supportsRestartFrame: true,
+				supportsReverseContinue: true,
+				supportsGotoTargetsRequest: true,
+				supportsExceptionOptions: false,
+				exceptionBreakpointFilters: [
+					{ filter: 'emptyResult', label: 'Break on empty result', default: false },
+					{ filter: 'fanOut', label: 'Break on fan-out', default: false },
+				],
 			},
 		});
 	}
@@ -267,7 +280,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		} else {
 			this._currentFrameIndex = this._frames.length - 1;
 			this._enterClauseLevel();
-			void this._executeCurrentStep().then(() => this._sendStopped('entry'));
+			this._executeStep('entry');
 		}
 	}
 
@@ -809,13 +822,13 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			if (this._currentClauseIndex < clauses.length - 1) {
 				this._pushHistory();
 				this._currentClauseIndex++;
-				void this._executeCurrentStep().then(() => this._sendStopped('step'));
+				this._executeStep('step');
 			} else if (this._currentFrameIndex < this._frames.length - 1) {
 				// Advance to next frame — stay in clause-level.
 				this._pushHistory();
 				this._currentFrameIndex++;
 				this._enterClauseLevel();
-				void this._executeCurrentStep().then(() => this._sendStopped('step'));
+				this._executeStep('step');
 			} else {
 				this._terminate();
 			}
@@ -824,7 +837,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 				this._pushHistory();
 				this._currentFrameIndex++;
 				this._enterClauseLevel();
-				void this._executeCurrentStep().then(() => this._sendStopped('step'));
+				this._executeStep('step');
 			} else {
 				this._terminate();
 			}
@@ -845,7 +858,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 					this._currentFrameIndex = frameIdx;
 					this._granularity = 'statement';
 					this._currentClauseIndex = 0;
-					void this._executeCurrentStep().then(() => this._sendStopped('step'));
+					this._executeStep('step');
 					return;
 				}
 
@@ -861,7 +874,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 				this._pushHistory();
 				this._granularity = 'line';
 				this._currentClauseIndex = 0;
-				void this._executeCurrentStep().then(() => this._sendStopped('step'));
+				this._executeStep('step');
 			} else {
 				this._handleNext(msg);
 			}
@@ -874,7 +887,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 					this._pushHistory();
 					this._currentFrameIndex = frameIdx;
 					this._enterClauseLevel();
-					void this._executeCurrentStep().then(() => this._sendStopped('step'));
+					this._executeStep('step');
 					return;
 				}
 				void this._tryCrossModelStepIn(target);
@@ -898,7 +911,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			this._currentFrameIndex = caller.frameIndex;
 			this._granularity = caller.granularity;
 			this._currentClauseIndex = caller.clauseIndex;
-			void this._executeCurrentStep().then(() => this._sendStopped('step'));
+			this._executeStep('step');
 			return;
 		}
 
@@ -906,7 +919,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		if (this._granularity === 'line') {
 			this._granularity = 'statement';
 			this._currentClauseIndex = 0;
-			void this._executeCurrentStep().then(() => this._sendStopped('step'));
+			this._executeStep('step');
 		} else {
 			this._terminate();
 		}
@@ -1043,7 +1056,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		// Clamp restartIndex in case structure changed and the frame count shrank.
 		this._currentFrameIndex = Math.min(restartIndex, this._frames.length - 1);
 		this._enterClauseLevel();
-		await this._executeCurrentStep();
+		if (await this._executeCurrentStep()) return;
 		this._sendStopped('restart');
 	}
 
@@ -1061,7 +1074,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			);
 			if (nextBpClause !== undefined) {
 				this._currentClauseIndex = nextBpClause;
-				await this._executeCurrentStep();
+				if (await this._executeCurrentStep()) return;
 				this._sendStopped('breakpoint');
 				return;
 			}
@@ -1090,13 +1103,13 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 				}
 				this._granularity = 'line';
 				this._currentClauseIndex = minClauseIndex ?? 0;
-				await this._executeCurrentStep();
+				if (await this._executeCurrentStep()) return;
 				this._sendStopped('breakpoint');
 				return;
 			}
 		}
 
-		await this._executeCurrentStep();
+		if (await this._executeCurrentStep()) return;
 		// No breakpoint hit — all frames executed. Run the full query and show results.
 		await this._runFinalQuery();
 		this._sendTerminated();
@@ -1188,6 +1201,28 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		// Other contexts ('variables', 'hover', 'clipboard', 'watch') are triggered
 		// by VS Code internally (e.g. Copy Value, hover tooltips) — for those we
 		// just echo the expression back as a plain string so the raw value is returned.
+		if (context === 'hover') {
+			// Return the current value of the hovered column from the active frame's result.
+			const cacheKey = this._cacheKey(this._currentFrameIndex);
+			const cached = this._resultCache.get(cacheKey);
+			if (cached && cached.columns.includes(expression) && cached.rows.length > 0) {
+				const firstVal = cached.rows[0][expression];
+				const display = firstVal === null ? 'NULL' : String(firstVal);
+				const type = cached.columnTypes?.[expression] ?? 'unknown';
+				this._send({
+					type: 'response',
+					command: 'evaluate',
+					request_seq: msg.seq,
+					success: true,
+					body: { result: display, type, variablesReference: 0 },
+				});
+				return;
+			}
+			// Column not in current result — fail gracefully so VS Code shows no tooltip.
+			this._respond(msg, false, 'Not available');
+			return;
+		}
+
 		if (context !== 'repl') {
 			this._send({
 				type: 'response',
@@ -1235,6 +1270,155 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	}
 
 	// ──────────────────────────────────────────────────────────────
+	// DAP: completions
+	// ──────────────────────────────────────────────────────────────
+
+	private async _handleCompletions(msg: DapMessage): Promise<void> {
+		const frame = this._frames[this._currentFrameIndex];
+		const cacheKey = this._cacheKey(this._currentFrameIndex);
+		const cached = this._resultCache.get(cacheKey);
+
+		const targets: Array<{ label: string; type: string }> = [];
+
+		if (cached) {
+			for (const col of cached.columns.filter(c => c !== '__debug_count__')) {
+				targets.push({ label: col, type: 'field' });
+			}
+		}
+
+		// Also offer other CTE names as completion targets.
+		for (const f of this._frames) {
+			if (f !== frame) {
+				targets.push({ label: f.name, type: 'function' });
+			}
+		}
+
+		this._send({
+			type: 'response',
+			command: 'completions',
+			request_seq: msg.seq,
+			success: true,
+			body: { targets },
+		});
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// DAP: reverseContinue
+	// ──────────────────────────────────────────────────────────────
+
+	private _handleReverseContinue(msg: DapMessage): void {
+		this._respond(msg, true);
+
+		if (this._navigationHistory.length === 0) {
+			// Already at start — stay put.
+			this._sendStopped('step');
+			return;
+		}
+
+		// Step backwards until we hit a breakpoint or run out of history.
+		while (this._navigationHistory.length > 0) {
+			const prev = this._navigationHistory[this._navigationHistory.length - 1];
+			const prevFrame = this._frames[prev.frameIndex];
+			const hitBp = prevFrame && this._breakpoints.some(bp => {
+				if (bp.frameName) return bp.frameName === prevFrame.name;
+				return bp.line >= prevFrame.line && bp.line <= prevFrame.endLine;
+			});
+
+			if (hitBp) {
+				const entry = this._navigationHistory.pop()!;
+				this._currentFrameIndex = entry.frameIndex;
+				this._granularity = entry.granularity;
+				this._currentClauseIndex = entry.clauseIndex;
+				this._sendStopped('breakpoint');
+				return;
+			}
+
+			const entry = this._navigationHistory.pop()!;
+			this._currentFrameIndex = entry.frameIndex;
+			this._granularity = entry.granularity;
+			this._currentClauseIndex = entry.clauseIndex;
+		}
+
+		// No breakpoint found — stopped at beginning of history.
+		this._sendStopped('step');
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// DAP: setExceptionBreakpoints
+	// ──────────────────────────────────────────────────────────────
+
+	private _handleSetExceptionBreakpoints(msg: DapMessage): void {
+		const args = msg.arguments ?? {};
+		const filters = (args.filters as string[]) ?? [];
+		this._exceptionFilters = new Set(filters);
+		this._respond(msg, true);
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// DAP: gotoTargets
+	// ──────────────────────────────────────────────────────────────
+
+	private _handleGotoTargets(msg: DapMessage): void {
+		const source = this._sourceUri ? { path: vscode.Uri.parse(this._sourceUri).fsPath } : undefined;
+		const targets = this._frames.map((frame, i) => ({
+			id: i,
+			label: frame.name,
+			line: frame.line + 1,
+			endLine: frame.endLine + 1,
+			instructionPointerReference: undefined,
+			column: 1,
+			endColumn: undefined,
+			// Include source so VS Code can display context.
+			...(source ? { hint: frame.type } : {}),
+		}));
+
+		this._send({
+			type: 'response',
+			command: 'gotoTargets',
+			request_seq: msg.seq,
+			success: true,
+			body: { targets },
+		});
+	}
+
+	private async _handleGoto(msg: DapMessage): Promise<void> {
+		const args = msg.arguments ?? {};
+		const targetId = (args.targetId as number) ?? 0;
+		const targetIndex = Math.max(0, Math.min(targetId, this._frames.length - 1));
+
+		this._respond(msg, true);
+
+		// Execute any uncached frames between current position and target.
+		const from = Math.min(this._currentFrameIndex, targetIndex);
+		const to = targetIndex;
+
+		for (let i = from; i <= to; i++) {
+			const cacheKey = `${this._frames[i].name}:frame`;
+			if (!this._resultCache.has(cacheKey)) {
+				const prevGranularity = this._granularity;
+				const prevClause = this._currentClauseIndex;
+				const prevFrame = this._currentFrameIndex;
+
+				this._currentFrameIndex = i;
+				this._granularity = 'statement';
+				this._currentClauseIndex = 0;
+				if (await this._executeCurrentStep()) return;
+
+				// Restore if we haven't reached target yet.
+				if (i < to) {
+					this._currentFrameIndex = prevFrame;
+					this._granularity = prevGranularity;
+					this._currentClauseIndex = prevClause;
+				}
+			}
+		}
+
+		this._currentFrameIndex = targetIndex;
+		this._enterClauseLevel();
+		this._sendStopped('goto');
+	}
+
+	// ──────────────────────────────────────────────────────────────
 	// DAP: disconnect / terminate
 	// ──────────────────────────────────────────────────────────────
 
@@ -1275,9 +1459,15 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		return this._compiledSql;
 	}
 
-	private async _executeCurrentStep(): Promise<void> {
+	/** Execute the current step then send a stopped event, unless an exception stop was already sent. */
+	private _executeStep(reason: string): void {
+		void this._executeCurrentStep().then(halted => { if (!halted) this._sendStopped(reason); });
+	}
+
+	/** Execute the current step. Returns `true` if an exception stop was sent (caller must not send another stopped event). */
+	private async _executeCurrentStep(): Promise<boolean> {
 		const cacheKey = this._cacheKey(this._currentFrameIndex);
-		if (this._resultCache.has(cacheKey)) return;
+		if (this._resultCache.has(cacheKey)) return false;
 
 		const sql = this._getStepSql(this._currentFrameIndex);
 		const frame = this._frames[this._currentFrameIndex];
@@ -1312,9 +1502,28 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			this._output(`  → ${totalCount} total rows, ${displayCols} columns (${result.executionTimeMs}ms)\n`);
 
 			this._sendResultToPanel(frame.name, result);
+
+			// Exception filter checks.
+			if (this._exceptionFilters.has('emptyResult') && totalCount === 0) {
+				this._output(`  ⚠ Exception: "${frame.name}" returned 0 rows.\n`);
+				this._sendStoppedException(`"${frame.name}" returned 0 rows`);
+				return true;
+			}
+			if (this._granularity === 'statement' && this._exceptionFilters.has('fanOut')) {
+				const prevFrameKey = this._currentFrameIndex > 0
+					? `${this._frames[this._currentFrameIndex - 1].name}:frame`
+					: undefined;
+				const prev = prevFrameKey ? this._resultCache.get(prevFrameKey) : undefined;
+				if (prev && totalCount > prev.totalCount) {
+					this._output(`  ⚠ Exception: fan-out in "${frame.name}" (${prev.totalCount} → ${totalCount} rows).\n`);
+					this._sendStoppedException(`Fan-out in "${frame.name}": ${prev.totalCount} → ${totalCount} rows`);
+					return true;
+				}
+			}
 		} catch (err) {
 			this._output(`  Error: ${err instanceof Error ? err.message : String(err)}\n`);
 		}
+		return false;
 	}
 
 	private _wrapWithDebugCount(sql: string): string {
@@ -1643,6 +1852,15 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			type: 'event',
 			event: 'stopped',
 			body: { reason, threadId: 1, allThreadsStopped: true },
+		});
+		this._sendPipelineEvent();
+	}
+
+	private _sendStoppedException(description: string): void {
+		this._send({
+			type: 'event',
+			event: 'stopped',
+			body: { reason: 'exception', description, threadId: 1, allThreadsStopped: true },
 		});
 		this._sendPipelineEvent();
 	}
