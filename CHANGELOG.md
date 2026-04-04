@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.9
+## 0.1.10
 
 The headline for this release is a step debugger for dbt SQL. The paste-CTE-into-scratch-file workflow has served everyone well enough, but there's now an alternative that doesn't require leaving the editor or losing your place in the model.
 
