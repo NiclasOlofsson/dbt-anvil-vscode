@@ -152,6 +152,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _granularity: 'statement' | 'line' = 'statement';
 	private _currentClauseIndex = 0;
 	private _resultCache = new Map<string, StepResult>();
+	private _executedFrameIndices = new Set<number>();
 	private _breakpoints: Array<{ line: number; id: number; frameName?: string; clauseIndex?: number }> = [];
 	private _nextBpId = 1;
 	private _compiledSql = '';
@@ -239,14 +240,15 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		this._respond(msg, true);
 		if (this._noDebug) return;
 		// Frames are already populated — launch completed setup before responding.
-		this._granularity = 'statement';
 		this._currentClauseIndex = 0;
 		if (this._breakpoints.length > 0) {
 			// Start at -1 so _runToContinue's loop increments to 0 and checks frame[0] first.
 			this._currentFrameIndex = -1;
+			this._granularity = 'statement';
 			void this._runToContinue();
 		} else {
 			this._currentFrameIndex = this._frames.length - 1;
+			this._enterClauseLevel();
 			void this._executeCurrentStep().then(() => this._sendStopped('entry'));
 		}
 	}
@@ -538,14 +540,35 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 				currentIdx,
 				...Array.from({ length: currentIdx }, (_, i) => currentIdx - 1 - i),
 			];
-			const stackFrames = ordered.map(i => ({
+			const stackFrames: Array<{
+				id: number; name: string; source: typeof source;
+				line: number; column: number; presentationHint: 'normal' | 'subtle';
+			}> = ordered.map(i => ({
 				id: encodeRef(this._currentFrameIndex, SCOPE_RESULT, i),
-				name: `${frame.name} → ${clauses[i].stage}`,
+				name: `${frame.name} → ${this._clauseLabel(frame.name, i, clauses)}`,
 				source,
 				line: clauses[i].line + 1,
 				column: 1,
 				presentationHint: i === this._currentClauseIndex ? 'normal' as const : 'subtle' as const,
 			}));
+
+			// Append actually-executed frames below the clause entries (dimmed).
+			for (let i = this._currentFrameIndex - 1; i >= 0; i--) {
+				if (!this._executedFrameIndices.has(i)) continue;
+				const prevFrame = this._frames[i];
+				const prevClauses = this._clauses[prevFrame.name] ?? [];
+				const displayLine = prevClauses.length > 0
+					? prevClauses[0].line + 1
+					: prevFrame.line + 1;
+				stackFrames.push({
+					id: encodeRef(i, 0, 0),
+					name: prevFrame.name,
+					source,
+					line: displayLine,
+					column: 1,
+					presentationHint: 'subtle' as const,
+				});
+			}
 
 			this._send({
 				type: 'response',
@@ -555,23 +578,22 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 				body: { stackFrames, totalFrames: stackFrames.length },
 			});
 		} else {
-			// VS Code positions the editor cursor at stackFrames[0]. We want the
-			// cursor at the current frame, so build the array with the current frame
-			// first, then work backwards through already-executed frames (like a real
-			// call stack: most recent at top). Future frames are omitted.
+			// Statement-level overview (reached via Step Out). Show current frame
+			// first, then actually-executed frames in reverse order.
 			const stackFrames: Array<{
 				id: number; name: string; source: typeof source;
 				line: number; column: number; presentationHint: 'normal' | 'subtle';
 			}> = [];
 
 			for (let i = this._currentFrameIndex; i >= 0; i--) {
+				if (i !== this._currentFrameIndex && !this._executedFrameIndices.has(i)) continue;
 				const frame = this._frames[i];
 				const clauses = this._clauses[frame.name] ?? [];
 				const displayLine = clauses.length > 0
 					? clauses[0].line + 1
 					: frame.line + 1;
 				stackFrames.push({
-					id: i,
+					id: encodeRef(i, 0, 0),
 					name: frame.name,
 					source,
 					line: displayLine,
@@ -596,11 +618,12 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 
 	private _handleScopes(msg: DapMessage): void {
 		const args = msg.arguments ?? {};
-		const frameId = (args.frameId as number) ?? 0;
+		const rawFrameId = (args.frameId as number) ?? 0;
 
-		const frameIndex = this._granularity === 'line'
-			? this._currentFrameIndex
-			: frameId;
+		// Stack frame IDs are encoded via encodeRef(). Decode to extract the
+		// real frame index. For clause entries the scope component is non-zero;
+		// for plain frame entries scope === 0 — either way frameIndex is correct.
+		const frameIndex = decodeRef(rawFrameId).frameIndex;
 
 		const scopes = [
 			{
@@ -746,6 +769,11 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	// DAP: stepping
 	// ──────────────────────────────────────────────────────────────
 
+	private _enterClauseLevel(): void {
+		this._granularity = 'line';
+		this._currentClauseIndex = 0;
+	}
+
 	private _handleNext(msg: DapMessage): void {
 		this._respond(msg, true);
 
@@ -755,19 +783,18 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			if (this._currentClauseIndex < clauses.length - 1) {
 				this._currentClauseIndex++;
 				void this._executeCurrentStep().then(() => this._sendStopped('step'));
+			} else if (this._currentFrameIndex < this._frames.length - 1) {
+				// Advance to next frame — stay in clause-level.
+				this._currentFrameIndex++;
+				this._enterClauseLevel();
+				void this._executeCurrentStep().then(() => this._sendStopped('step'));
 			} else {
-				this._granularity = 'statement';
-				this._currentClauseIndex = 0;
-				if (this._currentFrameIndex < this._frames.length - 1) {
-					this._currentFrameIndex++;
-					void this._executeCurrentStep().then(() => this._sendStopped('step'));
-				} else {
-					this._terminate();
-				}
+				this._terminate();
 			}
 		} else {
 			if (this._currentFrameIndex < this._frames.length - 1) {
 				this._currentFrameIndex++;
+				this._enterClauseLevel();
 				void this._executeCurrentStep().then(() => this._sendStopped('step'));
 			} else {
 				this._terminate();
@@ -808,6 +835,19 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 				this._handleNext(msg);
 			}
 		} else {
+			// Clause-level: try to step INTO the table referenced by FROM/JOIN.
+			const target = this._resolveClauseStepInTarget();
+			if (target) {
+				const frameIdx = this._frames.findIndex(f => f.name === target);
+				if (frameIdx >= 0) {
+					this._currentFrameIndex = frameIdx;
+					this._enterClauseLevel();
+					void this._executeCurrentStep().then(() => this._sendStopped('step'));
+					return;
+				}
+				void this._tryCrossModelStepIn(target);
+				return;
+			}
 			this._handleNext(msg);
 		}
 	}
@@ -831,8 +871,14 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			if (this._currentClauseIndex > 0) {
 				this._currentClauseIndex--;
 				this._sendStopped('step');
+			} else if (this._currentFrameIndex > 0) {
+				// Step back to previous frame's last clause.
+				this._currentFrameIndex--;
+				const prevFrame = this._frames[this._currentFrameIndex];
+				const prevClauses = this._clauses[prevFrame.name] ?? [];
+				this._currentClauseIndex = Math.max(0, prevClauses.length - 1);
+				this._sendStopped('step');
 			} else {
-				this._granularity = 'statement';
 				this._sendStopped('step');
 			}
 		} else {
@@ -856,10 +902,10 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 
 	private async _handleRestartFrame(msg: DapMessage): Promise<void> {
 		const args = msg.arguments ?? {};
-		// frameId is the DAP stack-frame id. In statement granularity it equals the
-		// frame index directly (see _handleStackTrace). Clip to valid range.
-		const frameId = typeof args.frameId === 'number' ? args.frameId : this._currentFrameIndex;
-		const restartIndex = Math.max(0, Math.min(frameId, this._frames.length - 1));
+		// frameId is encoded via encodeRef() — decode to get the real frame index.
+		const rawFrameId = typeof args.frameId === 'number' ? args.frameId : this._currentFrameIndex;
+		const frameIndex = rawFrameId < this._frames.length ? rawFrameId : decodeRef(rawFrameId).frameIndex;
+		const restartIndex = Math.max(0, Math.min(frameIndex, this._frames.length - 1));
 
 		this._respond(msg, true);
 		this._output(`Restarting from frame "${this._frames[restartIndex]?.name ?? restartIndex}"…\n`);
@@ -901,6 +947,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		if (structureChanged) {
 			this._output('  CTE structure changed — invalidating all cached results.\n');
 			this._resultCache.clear();
+			this._executedFrameIndices.clear();
 		} else {
 			// 4. Targeted invalidation: evict the restarted frame and all downstream.
 			for (let i = restartIndex; i < this._frames.length; i++) {
@@ -908,6 +955,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 				for (const key of [...this._resultCache.keys()]) {
 					if (key.startsWith(`${name}:`)) this._resultCache.delete(key);
 				}
+				this._executedFrameIndices.delete(i);
 			}
 		}
 
@@ -937,8 +985,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		// 6. Re-execute from the restarted frame forward.
 		// Clamp restartIndex in case structure changed and the frame count shrank.
 		this._currentFrameIndex = Math.min(restartIndex, this._frames.length - 1);
-		this._granularity = 'statement';
-		this._currentClauseIndex = 0;
+		this._enterClauseLevel();
 		await this._executeCurrentStep();
 		this._sendStopped('restart');
 	}
@@ -981,10 +1028,8 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 						minClauseIndex = ci;
 					}
 				}
-				if (minClauseIndex !== undefined) {
-					this._granularity = 'line';
-					this._currentClauseIndex = minClauseIndex;
-				}
+				this._granularity = 'line';
+				this._currentClauseIndex = minClauseIndex ?? 0;
 				await this._executeCurrentStep();
 				this._sendStopped('breakpoint');
 				return;
@@ -1202,6 +1247,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			};
 
 			this._resultCache.set(cacheKey, stepResult);
+			this._executedFrameIndices.add(this._currentFrameIndex);
 
 			const displayCols = result.columns.filter(c => c !== '__debug_count__').length;
 			this._output(`  → ${totalCount} total rows, ${displayCols} columns (${result.executionTimeMs}ms)\n`);
@@ -1450,6 +1496,43 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			}
 		}
 		return clauseIndex;
+	}
+
+	/** Display label for a single clause in the call stack.
+	 *  FROM/JOIN clauses include the target table name for clarity. */
+	private _clauseLabel(
+		frameName: string,
+		clauseIndex: number,
+		clauses: Array<{ stage: string }>,
+	): string {
+		const clause = clauses[clauseIndex];
+		if (!clause) return '';
+		if (clause.stage !== 'from' && clause.stage !== 'join') return clause.stage;
+		const refs = this._refs[frameName] ?? [];
+		const refIndex = clauses
+			.slice(0, clauseIndex + 1)
+			.filter(c => c.stage === 'from' || c.stage === 'join')
+			.length - 1;
+		const target = refs[refIndex];
+		return target ? `${clause.stage} ${target}` : clause.stage;
+	}
+
+	/** Return the table/CTE name targeted by the current FROM or JOIN clause.
+	 *  Uses the structured refs list (already extracted by sqlglot) — no regex. */
+	private _resolveClauseStepInTarget(): string | undefined {
+		const frame = this._frames[this._currentFrameIndex];
+		const clauses = this._clauses[frame.name] ?? [];
+		const clause = clauses[this._currentClauseIndex];
+		if (!clause || (clause.stage !== 'from' && clause.stage !== 'join')) return undefined;
+
+		// _refs lists all FROM/JOIN targets in declaration order (from sqlglot AST).
+		// The ref index is the position of this clause among the from/join clauses.
+		const refs = this._refs[frame.name] ?? [];
+		const refIndex = clauses
+			.slice(0, this._currentClauseIndex + 1)
+			.filter(c => c.stage === 'from' || c.stage === 'join')
+			.length - 1;
+		return refs[refIndex];
 	}
 
 	private _resolveStepInTarget(targetId: number): string | undefined {
