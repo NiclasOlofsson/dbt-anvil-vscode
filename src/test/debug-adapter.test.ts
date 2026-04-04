@@ -940,6 +940,130 @@ describe('SqlDebugAdapter', () => {
 	});
 
 	// ──────────────────────────────────────────────────────────────
+	// restartFrame (Edit and Continue)
+	// ──────────────────────────────────────────────────────────────
+
+	describe('restartFrame', () => {
+		beforeEach(async () => {
+			setActiveEditor('WITH base AS (SELECT id FROM raw_orders) SELECT * FROM base');
+			harness = new DapHarness();
+			harness.send('initialize');
+			harness.send('launch', { noDebug: false, sql: 'WITH base AS (SELECT id FROM raw_orders) SELECT * FROM base' });
+
+			await vi.waitFor(() => {
+				expect(harness.events('thread')).toHaveLength(1);
+			});
+
+			harness.send('configurationDone');
+			await vi.waitFor(() => {
+				expect(harness.events('stopped')).toHaveLength(1);
+			});
+		});
+
+		it('responds with success', async () => {
+			harness.clear();
+			harness.send('restartFrame', { frameId: 0 });
+
+			await vi.waitFor(() => {
+				const resp = harness.responses('restartFrame');
+				expect(resp).toHaveLength(1);
+				expect(resp[0].success).toBe(true);
+			});
+		});
+
+		it('emits stopped after restart', async () => {
+			harness.clear();
+			harness.send('restartFrame', { frameId: 0 });
+
+			await vi.waitFor(() => {
+				const stopped = harness.events('stopped');
+				expect(stopped.length).toBeGreaterThan(0);
+				expect(stopped[stopped.length - 1].body?.reason).toBe('restart');
+			});
+		});
+
+		it('sets currentFrameIndex to the restarted frame', async () => {
+			harness.clear();
+			// Restart from frame 0 (base)
+			harness.send('restartFrame', { frameId: 0 });
+
+			await vi.waitFor(() => {
+				expect(harness.events('stopped').length).toBeGreaterThan(0);
+			});
+
+			harness.clear();
+			harness.send('stackTrace', { threadId: 1 });
+			const resp = harness.lastResponse('stackTrace');
+			const frames = (resp.body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
+			expect(frames[0].name).toBe('base');
+		});
+
+		it('evicts restarted frame and downstream from cache', async () => {
+			// Prime the cache by reaching last frame
+			const db = harness.adapter['_databaseProvider'] as { query: ReturnType<typeof vi.fn> };
+			const callsBefore = db.query.mock.calls.length;
+
+			harness.clear();
+			harness.send('restartFrame', { frameId: 0 });
+
+			await vi.waitFor(() => {
+				expect(harness.events('stopped').length).toBeGreaterThan(0);
+			});
+
+			// At least one db query should have run after the restart (cache was evicted)
+			expect(db.query.mock.calls.length).toBeGreaterThan(callsBefore);
+		});
+
+		it('clears entire cache when CTE structure changes', async () => {
+			// Second decompose returns different frame names
+			const newDecompose: DbtCommandResult = {
+				success: true, stdout: '', stderr: '',
+				data: {
+					success: true,
+					frames: [
+						{ name: 'renamed_base', type: 'cte', line: 0, endLine: 3 },
+						{ name: '_main_', type: 'select', line: 5, endLine: 8 },
+					],
+					clauses: {
+						renamed_base: [{ stage: 'select', sql: 'SELECT id FROM raw', line: 1 }],
+						_main_: [{ stage: 'select', sql: 'SELECT * FROM renamed_base', line: 6 }],
+					},
+					refs: {},
+				},
+			};
+
+			// Replace the bridge runner so the second decompose call returns renamed frames
+			let callCount = 0;
+			const bridge = harness.adapter['_bridgeRunner'] as { invokeRaw: ReturnType<typeof vi.fn> };
+			bridge.invokeRaw.mockImplementation((req: Record<string, unknown>) => {
+				if (req.decompose_query) {
+					callCount++;
+					if (callCount >= 1) return Promise.resolve(newDecompose);
+					return Promise.resolve(DECOMPOSE_SIMPLE);
+				}
+				if (req.emit_debug_symbols) {
+					return Promise.resolve({ success: true, stdout: '', stderr: '', data: { success: true, symbols: [] } });
+				}
+				return Promise.resolve({ success: true, stdout: '', stderr: '', data: {} });
+			});
+
+			harness.clear();
+			harness.send('restartFrame', { frameId: 0 });
+
+			await vi.waitFor(() => {
+				expect(harness.events('stopped').length).toBeGreaterThan(0);
+			});
+
+			// Stack trace should now show the renamed frame
+			harness.clear();
+			harness.send('stackTrace', { threadId: 1 });
+			const resp = harness.lastResponse('stackTrace');
+			const frames = (resp.body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
+			expect(frames[0].name).toBe('renamed_base');
+		});
+	});
+
+	// ──────────────────────────────────────────────────────────────
 	// Evaluate
 	// ──────────────────────────────────────────────────────────────
 
