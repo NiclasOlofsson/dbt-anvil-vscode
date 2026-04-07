@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.11
+
+This release rounds out the debugger with several new DAP capabilities and fixes a handful of rough edges from the initial launch.
+
+- **Debug console completions** — The debug console now offers completions as you type: CTE names, column aliases, SQL keywords, and dbt Jinja functions (`ref`, `source`, `config`, etc.) all surface contextually.
+- **Reverse continue** — Step backwards through the CTE chain to any earlier frame. Cached results make this instant.
+- **Hover evaluation** — Hovering over a column or expression in the editor during a debug session evaluates it in-place and shows the result, without touching the debug console.
+- **Goto targets** — Jump directly to any CTE frame from the editor context menu during a debug session.
+- **Exception breakpoints** — `setExceptionBreakpoints` is now handled so the debug adapter no longer rejects the request that VS Code sends on every session start.
+- **Fix: debug console in `_main_` frame** — Evaluating expressions in the top-level (non-CTE) frame now works correctly; `@dbg` annotations are stripped before the query is sent to the warehouse.
+- **Fix: encoded frame IDs** — Frame IDs containing special characters are now decoded properly in evaluate requests.
+- **Fix: leading block comments** — Models that start with a `/* ... */` block comment before the `WITH` keyword are now decomposed correctly instead of being treated as a single frame.
+
 ## 0.1.10
 
 The headline for this release is a step debugger for dbt SQL. The paste-CTE-into-scratch-file workflow has served everyone well enough, but there's now an alternative that doesn't require leaving the editor or losing your place in the model.
