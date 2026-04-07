@@ -92,7 +92,7 @@ describe('bridge integration', () => {
 
 	it('compile_inline resolves ref() to a concrete relation', async () => {
 		const result = await bridge.invokeRaw({
-			compile_inline: "select * from {{ ref('stg_customers') }}",
+			compile_inline: 'select * from {{ ref(\'stg_customers\') }}',
 		});
 		expect(result.success).toBe(true);
 		const compiled = result.data?.['compiled_sql'] as string;
@@ -113,7 +113,7 @@ describe('bridge integration', () => {
 			await bridge.invokeRaw({ invalidate_manifest: true });
 			const t0 = Date.now();
 			const result = await bridge.invokeRaw({
-				compile_inline: "select * from {{ ref('stg_customers') }}",
+				compile_inline: 'select * from {{ ref(\'stg_customers\') }}',
 			});
 			timesUncached.push(Date.now() - t0);
 			expect(result.success).toBe(true);
@@ -123,7 +123,7 @@ describe('bridge integration', () => {
 		for (let i = 0; i < RUNS; i++) {
 			const t0 = Date.now();
 			const result = await bridge.invokeRaw({
-				compile_inline: "select * from {{ ref('stg_customers') }}",
+				compile_inline: 'select * from {{ ref(\'stg_customers\') }}',
 			});
 			timesCached.push(Date.now() - t0);
 			expect(result.success).toBe(true);
