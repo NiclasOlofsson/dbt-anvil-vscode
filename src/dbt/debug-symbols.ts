@@ -63,12 +63,6 @@ export interface SourceMap {
 
 const MARKER_OPEN_RE = /\/\* @dbg:L(\d+):C(\d+):(\w+)(?::([^\s*]+))? \*\//g;
 const MARKER_CLOSE_RE = /\/\* \/@dbg \*\//g;
-const MACRO_START_RE = /\/\* @macro:start name="([^"]+)" source_line=(\d+) \*\//g;
-const MACRO_END_RE = /\/\* @macro:end \*\//g;
-const REF_OPEN_RE = /\/\* @ref:name="([^"]+)" source_line=(\d+) \*\//g;
-const REF_CLOSE_RE = /\/\* \/@ref \*\//g;
-const SOURCE_OPEN_RE = /\/\* @source:schema="([^"]+)" name="([^"]+)" source_line=(\d+) \*\//g;
-const SOURCE_CLOSE_RE = /\/\* \/@source \*\//g;
 
 export function findJinjaSpans(source: string): JinjaSpan[] {
 	const spans: JinjaSpan[] = [];
@@ -400,33 +394,6 @@ export function parseSourceMap(compiledSql: string): SourceMap {
 		const cl = byCompiledLine.get(m.compiledLine);
 		if (cl) cl.push(m);
 		else byCompiledLine.set(m.compiledLine, [m]);
-	}
-
-	// Pre-sort by compiledLine for binary-search interpolation
-	const sortedByCompiled = [...mappings].sort((a, b) => a.compiledLine - b.compiledLine);
-
-	function nearestInterpolated(compiledLine: number): number | undefined {
-		if (sortedByCompiled.length === 0) return undefined;
-		const exact = byCompiledLine.get(compiledLine);
-		if (exact && exact.length > 0) return exact[0].sourceLine;
-
-		// Binary search for nearest mapped compiled line
-		let lo = 0;
-		let hi = sortedByCompiled.length - 1;
-		while (lo < hi) {
-			const mid = (lo + hi) >> 1;
-			if (sortedByCompiled[mid].compiledLine < compiledLine) lo = mid + 1;
-			else hi = mid;
-		}
-		let best = sortedByCompiled[lo];
-		if (lo > 0) {
-			const prev = sortedByCompiled[lo - 1];
-			if (Math.abs(prev.compiledLine - compiledLine) < Math.abs(best.compiledLine - compiledLine)) {
-				best = prev;
-			}
-		}
-		// Interpolate: same delta from nearest anchor
-		return best.sourceLine + (compiledLine - best.compiledLine);
 	}
 
 	function hasSqlTextOnCompiledLine(compiledLine: number): boolean {

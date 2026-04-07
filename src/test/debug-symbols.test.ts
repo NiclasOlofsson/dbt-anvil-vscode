@@ -8,7 +8,7 @@ import {
 
 describe('findJinjaSpans', () => {
 	it('finds expression tags {{ }}', () => {
-		const source = "SELECT {{ ref('orders') }} FROM t";
+		const source = 'SELECT {{ ref(\'orders\') }} FROM t';
 		const spans = findJinjaSpans(source);
 		expect(spans).toEqual([{ start: 7, end: 26 }]);
 	});
@@ -29,7 +29,7 @@ describe('findJinjaSpans', () => {
 	});
 
 	it('finds all three types in one string', () => {
-		const source = "{% if x %}SELECT {{ ref('t') }} FROM t{# note #}";
+		const source = '{% if x %}SELECT {{ ref(\'t\') }} FROM t{# note #}';
 		const spans = findJinjaSpans(source);
 		expect(spans).toHaveLength(3);
 		expect(spans[0]).toEqual({ start: 0, end: 10 });
@@ -38,7 +38,7 @@ describe('findJinjaSpans', () => {
 	});
 
 	it('handles nested {{ }} (brace counting)', () => {
-		const source = "{{ config(post_hook=\"COPY {{ this }}\") }}";
+		const source = '{{ config(post_hook="COPY {{ this }}") }}';
 		const spans = findJinjaSpans(source);
 		// Should be one span covering the entire outer {{ }}
 		expect(spans).toHaveLength(1);
@@ -103,7 +103,7 @@ describe('injectMarkers', () => {
 	});
 
 	it('skips symbols inside Jinja spans', () => {
-		const source = "SELECT {{ ref('orders') }} FROM t";
+		const source = 'SELECT {{ ref(\'orders\') }} FROM t';
 		const spans = findJinjaSpans(source);
 		// Pretend the bridge returned a symbol at position 7 (inside {{ }})
 		const symbols: SymbolEntry[] = [
@@ -158,7 +158,7 @@ describe('injectMarkers', () => {
 	});
 
 	it('injects @ref markers around ref() Jinja spans', () => {
-		const source = "SELECT id FROM {{ ref('orders') }}";
+		const source = 'SELECT id FROM {{ ref(\'orders\') }}';
 		const symbols: SymbolEntry[] = [
 			{ line: 0, col: 0, endCol: 6, role: 'select' },
 			{ line: 0, col: 7, endCol: 9, role: 'ident' },
@@ -170,11 +170,11 @@ describe('injectMarkers', () => {
 
 		expect(result).toContain('/* @ref:name="orders" source_line=0 */');
 		expect(result).toContain('/* /@ref */');
-		expect(result).toContain("{{ ref('orders') }}");
+		expect(result).toContain('{{ ref(\'orders\') }}');
 	});
 
 	it('injects @source markers around source() Jinja spans', () => {
-		const source = "SELECT id FROM {{ source('raw', 'data') }}";
+		const source = 'SELECT id FROM {{ source(\'raw\', \'data\') }}';
 		const symbols: SymbolEntry[] = [
 			{ line: 0, col: 0, endCol: 6, role: 'select' },
 		];
@@ -188,7 +188,7 @@ describe('injectMarkers', () => {
 	});
 
 	it('injects @macro markers around macro Jinja spans', () => {
-		const source = "SELECT {{ my_macro(col) }} FROM t";
+		const source = 'SELECT {{ my_macro(col) }} FROM t';
 		const symbols: SymbolEntry[] = [
 			{ line: 0, col: 0, endCol: 6, role: 'select' },
 		];
@@ -272,7 +272,7 @@ describe('parseSourceMap', () => {
 	});
 
 	it('roundtrip: inject then parse preserves Jinja integrity', () => {
-		const source = "SELECT id, {{ ref('orders') }} as tbl FROM {{ source('raw', 'data') }}";
+		const source = 'SELECT id, {{ ref(\'orders\') }} as tbl FROM {{ source(\'raw\', \'data\') }}';
 		const jinjaSpans = findJinjaSpans(source);
 
 		// Mock symbols (only non-Jinja tokens)
@@ -284,8 +284,8 @@ describe('parseSourceMap', () => {
 		const annotated = injectMarkers(source, symbols, jinjaSpans);
 
 		// Jinja blocks should remain intact
-		expect(annotated).toContain("{{ ref('orders') }}");
-		expect(annotated).toContain("{{ source('raw', 'data') }}");
+		expect(annotated).toContain('{{ ref(\'orders\') }}');
+		expect(annotated).toContain('{{ source(\'raw\', \'data\') }}');
 
 		// Markers should be present
 		expect(annotated).toContain('/* @dbg:L0:C0:select */');
