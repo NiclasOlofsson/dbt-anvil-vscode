@@ -95,19 +95,27 @@ export function decodeRef(ref: number): { frameIndex: number; scope: number; ext
 	};
 }
 
-export function wrapWithDebugCount(sql: string, limit: number): string {
-	// DuckDB (and most databases) reject WITH inside a subquery.
-	// When the SQL is a CTE query, hoist the wrapper as an extra CTE instead.
-	const trimmed = sql.trimStart();
+/**
+ * Build the CTE preamble that defines `__debug_context__`, handling the case where
+ * `sql` is itself a WITH query (hoists its CTEs to avoid illegal nested WITH).
+ * Caller appends the final `SELECT` clause.
+ */
+export function buildEvalBaseSql(sql: string): string {
+	const stripped = sql.replace(/\/\*\s*@dbg[^*]*\*\/\s*\/\*\s*\/@dbg\s*\*\/\s*/g, '');
+	const trimmed = stripped.trimStart();
 	if (/^with\s/i.test(trimmed)) {
 		const mainPos = findMainSelectPos(trimmed);
 		if (mainPos >= 0) {
 			const ctesPart = trimmed.slice(0, mainPos).trimEnd().replace(/,$/, '');
 			const mainSelect = trimmed.slice(mainPos).trimStart();
-			return `${ctesPart},\n__debug_inner__ AS (\n${mainSelect}\n)\nSELECT *, COUNT(*) OVER () AS __debug_count__ FROM __debug_inner__ LIMIT ${limit}`;
+			return `${ctesPart},\n__debug_context__ AS (\n${mainSelect}\n)\n`;
 		}
 	}
-	return `SELECT *, COUNT(*) OVER () AS __debug_count__ FROM (\n${sql}\n) AS __debug_wrapper__ LIMIT ${limit}`;
+	return `WITH __debug_context__ AS (\n${stripped}\n)\n`;
+}
+
+export function wrapWithDebugCount(sql: string, limit: number): string {
+	return `${buildEvalBaseSql(sql)}SELECT *, COUNT(*) OVER () AS __debug_count__ FROM __debug_context__ LIMIT ${limit}`;
 }
 
 export function findMainSelectPos(sql: string): number {
@@ -139,13 +147,13 @@ export function findMainSelectPos(sql: string): number {
 export function buildScopedSql(expression: string, clauses: Array<{ sql: string }>): string {
 	if (clauses.length === 0) return expression;
 
-	const frameSql = clauses[clauses.length - 1].sql;
-	const trimmed = expression.trim().toUpperCase();
-	if (trimmed.startsWith('SELECT') || trimmed.startsWith('WITH')) {
+	const exprTrimmed = expression.trim().toUpperCase();
+	if (exprTrimmed.startsWith('SELECT') || exprTrimmed.startsWith('WITH')) {
 		return expression;
 	}
 
-	return `WITH __debug_context__ AS (\n${frameSql}\n)\nSELECT ${expression} FROM __debug_context__`;
+	const frameSql = clauses[clauses.length - 1].sql;
+	return `${buildEvalBaseSql(frameSql)}SELECT ${expression} FROM __debug_context__`;
 }
 
 /**
@@ -1206,8 +1214,10 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			const cacheKey = this._cacheKey(this._currentFrameIndex);
 			const cached = this._resultCache.get(cacheKey);
 			if (cached && cached.columns.includes(expression) && cached.rows.length > 0) {
-				const firstVal = cached.rows[0][expression];
-				const display = firstVal === null ? 'NULL' : String(firstVal);
+				const values = cached.rows.map(r => r[expression]);
+				const preview = values.slice(0, 5).map(v => v === null ? 'NULL' : String(v)).join(', ');
+				const suffix = cached.rows.length > 5 ? ', …' : '';
+				const display = `[${preview}${suffix}]`;
 				const type = cached.columnTypes?.[expression] ?? 'unknown';
 				this._send({
 					type: 'response',
@@ -1239,11 +1249,24 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			return;
 		}
 
-		const frame = this._frames[this._currentFrameIndex];
-		const sql = this._buildScopedSql(expression, frame.name);
+		const exprTrimmed = expression.trim().toUpperCase();
+		if (exprTrimmed.startsWith('SELECT') || exprTrimmed.startsWith('WITH')
+			|| exprTrimmed.startsWith('FROM') || exprTrimmed.startsWith('JOIN')
+			|| exprTrimmed.startsWith('WHERE') || exprTrimmed.startsWith('GROUP')
+			|| exprTrimmed.startsWith('ORDER') || exprTrimmed.startsWith('HAVING')) {
+			this._respond(msg, false, 'Not an expression (SQL clause selected)');
+			return;
+		}
+
+		// Use the frameId from the request to evaluate in the correct CTE context,
+		// not necessarily the currently paused frame.
+		const frameIndex = typeof args.frameId === 'number'
+			? Math.max(0, Math.min(args.frameId, this._frames.length - 1))
+			: this._currentFrameIndex;
+		const sql = `${buildEvalBaseSql(this._getStepSql(frameIndex))}SELECT ${expression} FROM __debug_context__`;
 
 		try {
-			// Pass limit=-1: _buildScopedSql embeds no LIMIT so DuckdbProvider would
+			// Pass limit=-1: evalBaseSql embeds no LIMIT so DuckdbProvider would
 			// wrap it in a subquery — which breaks WITH queries on DuckDB.
 			// Use -1 and rely on the provider to return all rows (capped by its own guard).
 			const result = await this._databaseProvider.query(sql, -1, this._abortController?.signal, Priority.User);
@@ -1534,11 +1557,6 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		const frame = this._frames[this._currentFrameIndex];
 		const clauses = this._clauses[frame.name] ?? [];
 		return clauses[this._currentClauseIndex]?.stage ?? 'unknown';
-	}
-
-	private _buildScopedSql(expression: string, frameName: string): string {
-		const clauses = this._clauses[frameName] ?? [];
-		return buildScopedSql(expression, clauses);
 	}
 
 	// ──────────────────────────────────────────────────────────────
