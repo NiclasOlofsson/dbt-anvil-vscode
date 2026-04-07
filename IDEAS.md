@@ -131,3 +131,12 @@ On the containing treenode (root) we don't have to show any status at all, just 
 Seipel suggested I'd implement breakpoints. Not sure how I would do it, but since we have the debugger interface implemented, we could just as well use it. Can do it on a CTE level, as well as line level. Up to us how we do it, and what we make out of it. But it's a cool idea that I haven't seen elsewhere. Also with cache, this can be really rewarding and we can do stuff stepping back, that many can't do .. which is cool.
 
 For debugging, dynamic breaks .. i could imagine pausing on events we emit, like before parse, after parse, etc. Like we create our own stuff for that.
+
+## More checks
+
+Known problems colliding with our SQL registration (and isn't needed).
+Better Jinja
+SQLFluff
+Better Yaml (or something like that). But then we need to make sure we support.
+
+If we can't handle this, we have to investigate how we can make sure we "win" over them :D
