@@ -306,17 +306,17 @@ describe('standalone utilities', () => {
 	});
 
 	describe('wrapWithDebugCount', () => {
-		it('wraps plain SELECT as subquery', () => {
+		it('wraps plain SELECT via __debug_context__', () => {
 			const result = wrapWithDebugCount('SELECT 1', 100);
-			expect(result).toContain('__debug_wrapper__');
+			expect(result).toContain('__debug_context__');
 			expect(result).toContain('LIMIT 100');
 			expect(result).toContain('__debug_count__');
 		});
 
 		it('wraps CTE query using extra CTE', () => {
 			const result = wrapWithDebugCount('WITH a AS (SELECT 1) SELECT * FROM a', 50);
-			expect(result).toContain('__debug_inner__');
-			expect(result).not.toContain('__debug_wrapper__');
+			expect(result).toContain('__debug_context__');
+			expect(result).not.toMatch(/AS\s*\(\s*WITH/i);
 			expect(result).toContain('LIMIT 50');
 		});
 	});
@@ -340,6 +340,17 @@ describe('standalone utilities', () => {
 		it('returns full WITH query unchanged', () => {
 			const result = buildScopedSql('WITH a AS (SELECT 1) SELECT * FROM a', [{ sql: 'SELECT 1' }]);
 			expect(result).toBe('WITH a AS (SELECT 1) SELECT * FROM a');
+		});
+
+		it('hoists CTEs when frame SQL is a WITH query', () => {
+			const frameSql = 'WITH cte_a AS (SELECT 1 AS x)\nSELECT * FROM cte_a';
+			const result = buildScopedSql('x', [{ sql: frameSql }]);
+			// Must NOT nest WITH inside another CTE body.
+			expect(result).not.toMatch(/AS\s*\(\s*WITH/i);
+			// Should still produce valid-looking SQL with __debug_context__.
+			expect(result).toContain('__debug_context__');
+			expect(result).toContain('cte_a');
+			expect(result).toMatch(/SELECT x FROM __debug_context__/);
 		});
 	});
 });
@@ -1197,7 +1208,7 @@ describe('SqlDebugAdapter', () => {
 		});
 
 		it('executes SQL in repl context', async () => {
-			harness.send('evaluate', { expression: 'SELECT 1', context: 'repl' });
+			harness.send('evaluate', { expression: 'id', context: 'repl' });
 
 			await vi.waitFor(() => {
 				const resp = harness.lastResponse('evaluate');
@@ -1810,12 +1821,13 @@ describe('SqlDebugAdapter', () => {
 
 		afterEach(() => { harness.dispose(); clearActiveEditor(); });
 
-		it('returns first-row value for a known column', () => {
+		it('returns all-rows list for a known column', () => {
 			harness.clear();
 			harness.send('evaluate', { expression: 'id', context: 'hover', frameId: 0 });
 			const resp = harness.lastResponse('evaluate');
 			expect(resp.success).toBe(true);
-			expect((resp.body as Record<string, unknown>).result).toBe('1');
+			// Hover now shows the full column as a list (same format as Variables panel)
+			expect((resp.body as Record<string, unknown>).result).toMatch(/^\[.+\]$/);
 		});
 
 		it('fails gracefully for unknown column', () => {
