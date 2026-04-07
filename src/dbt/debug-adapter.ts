@@ -101,9 +101,8 @@ export function decodeRef(ref: number): { frameIndex: number; scope: number; ext
  * Caller appends the final `SELECT` clause.
  */
 export function buildEvalBaseSql(sql: string): string {
-	const stripped = sql.replace(/\/\*\s*@dbg[^*]*\*\/\s*\/\*\s*\/@dbg\s*\*\/\s*/g, '');
-	const trimmed = stripped.trimStart();
-	if (/^with\s/i.test(trimmed)) {
+	const trimmed = sql.trimStart();
+	if (/^(?:\/\*[^*]*\*\/\s*)*with\s/i.test(trimmed)) {
 		const mainPos = findMainSelectPos(trimmed);
 		if (mainPos >= 0) {
 			const ctesPart = trimmed.slice(0, mainPos).trimEnd().replace(/,$/, '');
@@ -111,7 +110,7 @@ export function buildEvalBaseSql(sql: string): string {
 			return `${ctesPart},\n__debug_context__ AS (\n${mainSelect}\n)\n`;
 		}
 	}
-	return `WITH __debug_context__ AS (\n${stripped}\n)\n`;
+	return `WITH __debug_context__ AS (\n${sql}\n)\n`;
 }
 
 export function wrapWithDebugCount(sql: string, limit: number): string {
@@ -1261,7 +1260,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		// Use the frameId from the request to evaluate in the correct CTE context,
 		// not necessarily the currently paused frame.
 		const frameIndex = typeof args.frameId === 'number'
-			? Math.max(0, Math.min(args.frameId, this._frames.length - 1))
+			? Math.max(0, Math.min(decodeRef(args.frameId).frameIndex, this._frames.length - 1))
 			: this._currentFrameIndex;
 		const sql = `${buildEvalBaseSql(this._getStepSql(frameIndex))}SELECT ${expression} FROM __debug_context__`;
 

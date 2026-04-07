@@ -352,6 +352,24 @@ describe('standalone utilities', () => {
 			expect(result).toContain('cte_a');
 			expect(result).toMatch(/SELECT x FROM __debug_context__/);
 		});
+
+		it('hoists CTEs when frame SQL has leading @dbg annotations', () => {
+			const frameSql = '/* @dbg:L2:C0:cte:_main_ */ /* /@dbg */ WITH cte_a AS (SELECT 1 AS x)\nSELECT * FROM cte_a';
+			const result = buildScopedSql('x', [{ sql: frameSql }]);
+			expect(result).not.toMatch(/AS\s*\(\s*(?:\/\*[^*]*\*\/\s*)*WITH/i);
+			expect(result).toContain('__debug_context__');
+			expect(result).toContain('cte_a');
+			expect(result).toMatch(/SELECT x FROM __debug_context__/);
+		});
+
+		it('wraps CTE-frame SQL that has inline @dbg annotations', () => {
+			// Simulates a clause SQL from a CTE frame — annotations embedded throughout, no leading WITH
+			const frameSql = 'WITH cte_wins /* @dbg:L3:C4:ident:cte_wins */ /* /@dbg */ AS (/* @dbg:L4:C8:select:cte_wins */ SELECT winning_team, COUNT(*) AS wins FROM "main"."nba_latest_results" GROUP BY ALL)\nSELECT losing_team, COUNT(*) AS losses FROM "main"."nba_latest_results" GROUP BY ALL';
+			const result = buildScopedSql('losses', [{ sql: frameSql }]);
+			expect(result).not.toMatch(/AS\s*\(\s*(?:\/\*[^*]*\*\/\s*)*WITH/i);
+			expect(result).toContain('__debug_context__');
+			expect(result).toMatch(/SELECT losses FROM __debug_context__/);
+		});
 	});
 });
 
