@@ -187,6 +187,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _scope: 'cursor' | 'all' = 'cursor';
 	private _resultLocation: string | undefined;
 	private _lineOffset = 0;
+	private _paused = true;
 	private _noDebug = false;
 	private _abortController: AbortController | undefined;
 	private _sourceMap: SourceMap | undefined;
@@ -277,17 +278,14 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _handleConfigurationDone(msg: DapMessage): void {
 		this._respond(msg, true);
 		if (this._noDebug) return;
-		// Frames are already populated — launch completed setup before responding.
-		this._currentClauseIndex = 0;
+		this._currentFrameIndex = 0;
+		this._enterClauseLevel();
 		if (this._breakpoints.length > 0) {
-			// Start at -1 so _runToContinue's loop increments to 0 and checks frame[0] first.
-			this._currentFrameIndex = -1;
-			this._granularity = 'statement';
 			void this._runToContinue();
 		} else {
 			this._currentFrameIndex = this._frames.length - 1;
 			this._enterClauseLevel();
-			this._executeStep('entry');
+			void this._onLanded('entry');
 		}
 	}
 
@@ -820,6 +818,110 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		});
 	}
 
+	private _isBreakpointAtCurrentPosition(): boolean {
+		const frame = this._frames[this._currentFrameIndex];
+		if (!frame) return false;
+		for (const bp of this._breakpoints) {
+			const inFrame = bp.frameName
+				? bp.frameName === frame.name
+				: bp.line >= frame.line && bp.line <= frame.endLine;
+			if (!inFrame) continue;
+			if (this._granularity === 'line') {
+				if (bp.frameName) {
+					if (this._currentClauseIndex === 0) return true;
+				} else {
+					const ci = this._resolveClauseIndex(frame.name, bp.line);
+					if (ci === this._currentClauseIndex) return true;
+				}
+			} else {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private async _onLanded(reason: string): Promise<boolean> {
+		if (this._isBreakpointAtCurrentPosition()) {
+			this._paused = true;
+			reason = 'breakpoint';
+		}
+		if (!this._paused) return false;
+
+		const halted = await this._executeCurrentStep();
+		if (!halted) this._sendStopped(reason);
+		return true;
+	}
+
+	// At clause-level granularity: advance to the next clause within the current frame.
+	// At statement-level (or at the last clause): fall through to the next sequential frame.
+	// Returns false when there are no more frames to advance to (caller should terminate).
+	private _advanceOneStep(): boolean {
+		const frame = this._frames[this._currentFrameIndex];
+		if (frame) {
+			const clauses = this._clauses[frame.name] ?? [];
+			if (this._granularity === 'line' && this._currentClauseIndex < clauses.length - 1) {
+				this._currentClauseIndex++;
+				return true;
+			}
+		}
+		const nextFrame = this._currentFrameIndex + 1;
+		if (nextFrame >= this._frames.length) return false;
+		this._currentFrameIndex = nextFrame;
+		this._enterClauseLevel();
+		return true;
+	}
+
+	// F10 "step over" at the last position of a stepped-into (non-adjacent) frame.
+	// Pops back to the call site in the caller frame and advances one step past it —
+	// as if the entire CTE executed atomically from the caller's perspective.
+	private _nextPastFrame(): void {
+		const currentFrame = this._currentFrameIndex;
+
+		// Scan backward through navigation history to find the most recent entry that
+		// belongs to a different frame — that is the call site we stepped in from.
+		let callerIdx = this._navigationHistory.length - 1;
+		while (callerIdx >= 0 && this._navigationHistory[callerIdx].frameIndex === currentFrame) {
+			callerIdx--;
+		}
+
+		if (callerIdx >= 0) {
+			// Found a call site: restore position to it and truncate forward history.
+			const caller = this._navigationHistory[callerIdx];
+			this._navigationHistory.length = callerIdx;
+			this._currentFrameIndex = caller.frameIndex;
+			this._granularity = caller.granularity;
+			this._currentClauseIndex = caller.clauseIndex;
+
+			// Now advance one step past the call site — same logic as a normal F10.
+			const frame = this._frames[this._currentFrameIndex];
+			const clauses = this._clauses[frame.name] ?? [];
+			if (this._granularity === 'line' && this._currentClauseIndex < clauses.length - 1) {
+				// More clauses remain in the caller frame — move to the next clause.
+				this._pushHistory();
+				this._currentClauseIndex++;
+				void this._onLanded('step');
+			} else if (this._currentFrameIndex < this._frames.length - 1) {
+				// Caller was at its last clause — advance to the next sequential frame.
+				this._pushHistory();
+				this._currentFrameIndex++;
+				this._enterClauseLevel();
+				void this._onLanded('step');
+			} else {
+				// Caller was also the last frame — nothing left to execute.
+				this._terminate();
+			}
+		} else if (this._currentFrameIndex < this._frames.length - 1) {
+			// No call site in history (entered via sequential stepping, not stepIn).
+			// Fall through to the next sequential frame as a normal F10 would.
+			this._pushHistory();
+			this._currentFrameIndex++;
+			this._enterClauseLevel();
+			void this._onLanded('step');
+		} else {
+			this._terminate();
+		}
+	}
+
 	private _handleNext(msg: DapMessage): void {
 		this._respond(msg, true);
 
@@ -829,22 +931,16 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			if (this._currentClauseIndex < clauses.length - 1) {
 				this._pushHistory();
 				this._currentClauseIndex++;
-				this._executeStep('step');
-			} else if (this._currentFrameIndex < this._frames.length - 1) {
-				// Advance to next frame — stay in clause-level.
-				this._pushHistory();
-				this._currentFrameIndex++;
-				this._enterClauseLevel();
-				this._executeStep('step');
+				void this._onLanded('step');
 			} else {
-				this._terminate();
+				this._nextPastFrame();
 			}
 		} else {
 			if (this._currentFrameIndex < this._frames.length - 1) {
 				this._pushHistory();
 				this._currentFrameIndex++;
 				this._enterClauseLevel();
-				this._executeStep('step');
+				void this._onLanded('step');
 			} else {
 				this._terminate();
 			}
@@ -865,7 +961,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 					this._currentFrameIndex = frameIdx;
 					this._granularity = 'statement';
 					this._currentClauseIndex = 0;
-					this._executeStep('step');
+					void this._onLanded('step');
 					return;
 				}
 
@@ -881,7 +977,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 				this._pushHistory();
 				this._granularity = 'line';
 				this._currentClauseIndex = 0;
-				this._executeStep('step');
+				void this._onLanded('step');
 			} else {
 				this._handleNext(msg);
 			}
@@ -894,7 +990,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 					this._pushHistory();
 					this._currentFrameIndex = frameIdx;
 					this._enterClauseLevel();
-					this._executeStep('step');
+					void this._onLanded('step');
 					return;
 				}
 				void this._tryCrossModelStepIn(target);
@@ -918,7 +1014,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			this._currentFrameIndex = caller.frameIndex;
 			this._granularity = caller.granularity;
 			this._currentClauseIndex = caller.clauseIndex;
-			this._executeStep('step');
+			void this._onLanded('step');
 			return;
 		}
 
@@ -926,7 +1022,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		if (this._granularity === 'line') {
 			this._granularity = 'statement';
 			this._currentClauseIndex = 0;
-			this._executeStep('step');
+			void this._onLanded('step');
 		} else {
 			this._terminate();
 		}
@@ -1063,63 +1159,25 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		// Clamp restartIndex in case structure changed and the frame count shrank.
 		this._currentFrameIndex = Math.min(restartIndex, this._frames.length - 1);
 		this._enterClauseLevel();
-		if (await this._executeCurrentStep()) return;
-		this._sendStopped('restart');
+		await this._onLanded('restart');
 	}
 
 	private async _runToContinue(): Promise<void> {
-		// Discard navigation history — we're running freely.
+		this._paused = false;
 		this._navigationHistory = [];
 
-		// If we're already inside a frame at clause granularity, check for
-		// breakpoints on later clauses in the same frame before advancing.
-		if (this._granularity === 'line') {
-			const frame = this._frames[this._currentFrameIndex];
-			const clauses = this._clauses[frame.name] ?? [];
-			const nextBpClause = this._findNextBreakpointedClause(
-				frame, clauses, this._currentClauseIndex + 1,
-			);
-			if (nextBpClause !== undefined) {
-				this._currentClauseIndex = nextBpClause;
-				if (await this._executeCurrentStep()) return;
-				this._sendStopped('breakpoint');
-				return;
-			}
+		// Check the current position first (handles configurationDone starting at frame 0).
+		if (await this._onLanded('breakpoint')) return;
+
+		// Walk forward one position at a time, checking for breakpoints at each.
+		while (this._advanceOneStep()) {
+			this._pushHistory();
+			if (await this._onLanded('breakpoint')) return;
 		}
 
-		while (this._currentFrameIndex < this._frames.length - 1) {
-			this._currentFrameIndex++;
-			const frame = this._frames[this._currentFrameIndex];
-
-			// Find ALL breakpoints in this frame, resolve each to a clause index,
-			// and pick the earliest in execution order (lowest index).  Using .find()
-			// would return the first bp in array order (source-line order), which
-			// picks `select` before `from` because SELECT appears first in source.
-			const frameBps = this._breakpoints.filter(bp => {
-				if (bp.frameName) return bp.frameName === frame.name;
-				return bp.line >= frame.line && bp.line <= frame.endLine;
-			});
-
-			if (frameBps.length > 0) {
-				let minClauseIndex: number | undefined;
-				for (const bp of frameBps) {
-					const ci = this._resolveClauseIndex(frame.name, bp.line);
-					if (ci !== undefined && (minClauseIndex === undefined || ci < minClauseIndex)) {
-						minClauseIndex = ci;
-					}
-				}
-				this._granularity = 'line';
-				this._currentClauseIndex = minClauseIndex ?? 0;
-				if (await this._executeCurrentStep()) return;
-				this._sendStopped('breakpoint');
-				return;
-			}
-		}
-
-		if (await this._executeCurrentStep()) return;
-		// No breakpoint hit — all frames executed. Run the full query and show results.
+		// Walked past the last frame — run final query and terminate.
 		await this._runFinalQuery();
-		this._sendTerminated();
+		this._terminate();
 	}
 
 	private async _runFinalQuery(): Promise<void> {
@@ -1148,26 +1206,6 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		} catch (err) {
 			this._output(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
 		}
-	}
-
-	/** Find the lowest clause index ≥ startIndex that has a breakpoint. */
-	private _findNextBreakpointedClause(
-		frame: { name: string; line: number; endLine: number },
-		_clauses: Array<{ stage: string; sql: string; line: number }>,
-		startIndex: number,
-	): number | undefined {
-		let best: number | undefined;
-		for (const bp of this._breakpoints) {
-			const inFrame = bp.frameName
-				? bp.frameName === frame.name
-				: bp.line >= frame.line && bp.line <= frame.endLine;
-			if (!inFrame) continue;
-			const ci = this._resolveClauseIndex(frame.name, bp.line);
-			if (ci !== undefined && ci >= startIndex && (best === undefined || ci < best)) {
-				best = ci;
-			}
-		}
-		return best;
 	}
 
 	// ──────────────────────────────────────────────────────────────
@@ -1437,7 +1475,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 
 		this._currentFrameIndex = targetIndex;
 		this._enterClauseLevel();
-		this._sendStopped('goto');
+		void this._onLanded('goto');
 	}
 
 	// ──────────────────────────────────────────────────────────────
@@ -1479,11 +1517,6 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		}
 
 		return this._compiledSql;
-	}
-
-	/** Execute the current step then send a stopped event, unless an exception stop was already sent. */
-	private _executeStep(reason: string): void {
-		void this._executeCurrentStep().then(halted => { if (!halted) this._sendStopped(reason); });
 	}
 
 	/** Execute the current step. Returns `true` if an exception stop was sent (caller must not send another stopped event). */
@@ -1944,10 +1977,6 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 				clauseSteps,
 			} satisfies PipelineEventBody,
 		});
-	}
-
-	private _sendTerminated(): void {
-		this._send({ type: 'event', event: 'terminated' });
 	}
 
 	private _respond(msg: DapMessage, success: boolean, message?: string): void {

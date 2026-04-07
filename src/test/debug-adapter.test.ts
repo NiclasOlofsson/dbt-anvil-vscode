@@ -88,6 +88,42 @@ const DECOMPOSE_SIMPLE: DbtCommandResult = {
 	},
 };
 
+// 3-frame fixture where _main_ directly references stg_orders (skipping the middle `orders` CTE).
+// Used to test that F10 at the last clause of a stepped-into CTE returns to the caller,
+// not to the next sequential frame (which would be `orders`, not `_main_`).
+const DECOMPOSE_THREE_FRAMES: DbtCommandResult = {
+	success: true,
+	stdout: '',
+	stderr: '',
+	data: {
+		success: true,
+		frames: [
+			{ name: 'stg_orders', type: 'cte', line: 0, endLine: 3 },
+			{ name: 'orders', type: 'cte', line: 4, endLine: 7 },
+			{ name: '_main_', type: 'select', line: 8, endLine: 11 },
+		],
+		clauses: {
+			stg_orders: [
+				{ stage: 'from', sql: 'SELECT * FROM raw', line: 1 },
+				{ stage: 'select', sql: 'SELECT id, status FROM raw', line: 3 },
+			],
+			orders: [
+				{ stage: 'from', sql: 'SELECT * FROM stg_orders', line: 5 },
+				{ stage: 'select', sql: 'SELECT * FROM stg_orders', line: 7 },
+			],
+			_main_: [
+				{ stage: 'from', sql: 'SELECT * FROM stg_orders', line: 9 },
+				{ stage: 'select', sql: 'SELECT * FROM stg_orders', line: 11 },
+			],
+		},
+		refs: {
+			stg_orders: ['raw'],
+			orders: ['stg_orders'],
+			_main_: ['stg_orders'],
+		},
+	},
+};
+
 function mockBridgeRunner(decomposeResult?: DbtCommandResult): BridgeRunner {
 	return {
 		invokeRaw: vi.fn().mockImplementation((req: Record<string, unknown>) => {
@@ -1015,6 +1051,62 @@ describe('SqlDebugAdapter', () => {
 			harness.send('stackTrace', { threadId: 1 });
 			const afterOut = (harness.lastResponse('stackTrace').body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
 			expect(afterOut[0].name).not.toContain('\u2192');
+		});
+
+		it('next past last clause of non-adjacent stepped-into frame advances past the call site', async () => {
+			// Use the 3-frame fixture where _main_ (frame 2) directly references stg_orders (frame 0).
+			// F10 at the end of stg_orders should behave like "step over the whole CTE" — it restores
+			// to the call site (_main_ → from stg_orders) and then advances one step forward to the
+			// next clause (_main_ → select). It must NOT fall through to `orders` (frame 1).
+			harness.dispose();
+			harness = new DapHarness({ bridgeRunner: mockBridgeRunner(DECOMPOSE_THREE_FRAMES) });
+			harness.send('initialize');
+			harness.send('launch', { noDebug: false, sql: 'WITH stg_orders AS (...) SELECT * FROM stg_orders' });
+
+			await vi.waitFor(() => {
+				expect(harness.events('thread')).toHaveLength(1);
+			});
+
+			harness.send('configurationDone');
+			await vi.waitFor(() => {
+				expect(harness.events('stopped')).toHaveLength(1);
+			});
+
+			// Entry: _main_ (frame 2), FROM clause (clause 0). F11 jumps into stg_orders (frame 0).
+			harness.clear();
+			harness.send('stepIn', { threadId: 1 });
+			await vi.waitFor(() => {
+				expect(harness.events('stopped')).toHaveLength(1);
+			});
+
+			harness.clear();
+			harness.send('stackTrace', { threadId: 1 });
+			const inStg = (harness.lastResponse('stackTrace').body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
+			expect(inStg[0].name).toContain('stg_orders');
+
+			// Step through stg_orders' two clauses (from → select).
+			harness.clear();
+			harness.send('next', { threadId: 1 });
+			await vi.waitFor(() => {
+				expect(harness.events('stopped')).toHaveLength(1);
+			});
+
+			// F10 at the last clause of stg_orders (select).
+			// Should restore to _main_ → from stg_orders (the call site) then advance one step
+			// to _main_ → select. Must NOT fall through to `orders` (the next sequential frame).
+			harness.clear();
+			harness.send('next', { threadId: 1 });
+			await vi.waitFor(() => {
+				expect(harness.events('stopped')).toHaveLength(1);
+			});
+
+			harness.clear();
+			harness.send('stackTrace', { threadId: 1 });
+			const backInMain = (harness.lastResponse('stackTrace').body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
+			expect(backInMain[0].name).toContain('_main_');
+			// Must be on the SELECT clause — one step past where we stepped in from.
+			expect(backInMain[0].name).toContain('select');
+			expect(backInMain[0].name).not.toContain('from stg_orders');
 		});
 	});
 
