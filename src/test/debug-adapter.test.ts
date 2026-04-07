@@ -980,7 +980,7 @@ describe('SqlDebugAdapter', () => {
 			const inBase = (harness.lastResponse('stackTrace').body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
 			expect(inBase[0].name).toContain('base \u2192');
 
-			// stepOut should return to _main_ at the SAME clause we came from (from base).
+			// stepOut should advance past the call site — we already executed `base`.
 			harness.clear();
 			harness.send('stepOut', { threadId: 1 });
 			await vi.waitFor(() => {
@@ -990,9 +990,9 @@ describe('SqlDebugAdapter', () => {
 			harness.clear();
 			harness.send('stackTrace', { threadId: 1 });
 			const backInMain = (harness.lastResponse('stackTrace').body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
-			// Must be back on the exact same clause — "from base", not clause 0 by accident
+			// Must be one past the call site: _main_ → select (not from base)
 			expect(backInMain[0].name).toContain('_main_ \u2192');
-			expect(backInMain[0].name).toContain('from base');
+			expect(backInMain[0].name).toContain('select');
 		});
 
 		it('stepOut from line granularity returns to statement when no history', async () => {
@@ -1662,6 +1662,14 @@ describe('SqlDebugAdapter', () => {
 					],
 					_main_: [
 						{ stage: 'from', sql: 'SELECT * FROM nba_teams', line: 92 },
+						{ stage: 'join', sql: 'LEFT JOIN cte_wins USING(team)', line: 93 },
+						{ stage: 'join', sql: 'LEFT JOIN cte_losses USING(team)', line: 94 },
+						{ stage: 'join', sql: 'LEFT JOIN cte_favored_wins USING(team)', line: 95 },
+						{ stage: 'join', sql: 'LEFT JOIN cte_favored_losses USING(team)', line: 96 },
+						{ stage: 'join', sql: 'LEFT JOIN cte_avg_opponent_wins USING(team)', line: 97 },
+						{ stage: 'join', sql: 'LEFT JOIN cte_avg_opponent_losses USING(team)', line: 98 },
+						{ stage: 'join', sql: 'LEFT JOIN cte_home_wins USING(team)', line: 99 },
+						{ stage: 'join', sql: 'LEFT JOIN cte_home_losses USING(team)', line: 100 },
 						{ stage: 'select', sql: 'SELECT t.team, ... FROM nba_teams t LEFT JOIN ...', line: 76 },
 					],
 				},

@@ -278,13 +278,15 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _handleConfigurationDone(msg: DapMessage): void {
 		this._respond(msg, true);
 		if (this._noDebug) return;
-		this._currentFrameIndex = 0;
+
+		// Start at _main_ (last frame) — the DAG root for stepping.
+		// The user will F11 from here; history builds naturally as they step.
+		this._currentFrameIndex = this._frames.length - 1;
 		this._enterClauseLevel();
+
 		if (this._breakpoints.length > 0) {
 			void this._runToContinue();
 		} else {
-			this._currentFrameIndex = this._frames.length - 1;
-			this._enterClauseLevel();
 			void this._onLanded('entry');
 		}
 	}
@@ -852,99 +854,110 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		return true;
 	}
 
-	// At clause-level granularity: advance to the next clause within the current frame.
-	// At statement-level (or at the last clause): fall through to the next sequential frame.
-	// Returns false when there are no more frames to advance to (caller should terminate).
-	private _advanceOneStep(): boolean {
-		const frame = this._frames[this._currentFrameIndex];
-		if (frame) {
-			const clauses = this._clauses[frame.name] ?? [];
-			if (this._granularity === 'line' && this._currentClauseIndex < clauses.length - 1) {
-				this._currentClauseIndex++;
-				return true;
-			}
-		}
-		const nextFrame = this._currentFrameIndex + 1;
-		if (nextFrame >= this._frames.length) return false;
-		this._currentFrameIndex = nextFrame;
-		this._enterClauseLevel();
-		return true;
-	}
 
-	// F10 "step over" at the last position of a stepped-into (non-adjacent) frame.
-	// Pops back to the call site in the caller frame and advances one step past it —
-	// as if the entire CTE executed atomically from the caller's perspective.
-	private _nextPastFrame(): void {
-		const currentFrame = this._currentFrameIndex;
+	private _handleNext(msg: DapMessage): void {
+		this._respond(msg, true);
 
-		// Scan backward through navigation history to find the most recent entry that
-		// belongs to a different frame — that is the call site we stepped in from.
-		let callerIdx = this._navigationHistory.length - 1;
-		while (callerIdx >= 0 && this._navigationHistory[callerIdx].frameIndex === currentFrame) {
-			callerIdx--;
-		}
-
-		if (callerIdx >= 0) {
-			// Found a call site: restore position to it and truncate forward history.
-			const caller = this._navigationHistory[callerIdx];
-			this._navigationHistory.length = callerIdx;
-			this._currentFrameIndex = caller.frameIndex;
-			this._granularity = caller.granularity;
-			this._currentClauseIndex = caller.clauseIndex;
-
-			// Now advance one step past the call site — same logic as a normal F10.
-			const frame = this._frames[this._currentFrameIndex];
-			const clauses = this._clauses[frame.name] ?? [];
-			if (this._granularity === 'line' && this._currentClauseIndex < clauses.length - 1) {
-				// More clauses remain in the caller frame — move to the next clause.
-				this._pushHistory();
-				this._currentClauseIndex++;
-				void this._onLanded('step');
-			} else if (this._currentFrameIndex < this._frames.length - 1) {
-				// Caller was at its last clause — advance to the next sequential frame.
-				this._pushHistory();
-				this._currentFrameIndex++;
-				this._enterClauseLevel();
-				void this._onLanded('step');
-			} else {
-				// Caller was also the last frame — nothing left to execute.
-				this._terminate();
-			}
-		} else if (this._currentFrameIndex < this._frames.length - 1) {
-			// No call site in history (entered via sequential stepping, not stepIn).
-			// Fall through to the next sequential frame as a normal F10 would.
-			this._pushHistory();
-			this._currentFrameIndex++;
-			this._enterClauseLevel();
+		if (this._stepOver()) {
 			void this._onLanded('step');
 		} else {
 			this._terminate();
 		}
 	}
 
-	private _handleNext(msg: DapMessage): void {
-		this._respond(msg, true);
-
-		if (this._granularity === 'line') {
+	// Core F11 logic: advance one position using step-in semantics.
+	// If a FROM/JOIN clause references a local CTE, pushes history and jumps into it.
+	// Otherwise advances to the next clause (F10). At the last clause, steps out to
+	// the caller and advances past the call site. Returns false when there is nowhere
+	// left to go (all frames visited). Does NOT call _onLanded — caller decides.
+	private _stepIn(): boolean {
+		if (this._granularity === 'statement') {
 			const frame = this._frames[this._currentFrameIndex];
-			const clauses = this._clauses[frame.name] ?? [];
-			if (this._currentClauseIndex < clauses.length - 1) {
+			const clauses = this._clauses[frame.name];
+			if (clauses && clauses.length > 1) {
+				this._pushHistory();
+				this._granularity = 'line';
+				this._currentClauseIndex = 0;
+				return true;
+			}
+			return this._stepOver();
+		}
+
+		// Clause-level: try to step INTO the local CTE referenced by FROM/JOIN.
+		const target = this._resolveClauseStepInTarget();
+		if (target) {
+			const frameIdx = this._frames.findIndex(f => f.name === target);
+			if (frameIdx >= 0) {
+				this._pushHistory();
+				this._currentFrameIndex = frameIdx;
+				this._enterClauseLevel();
+				return true;
+			}
+		}
+
+		// Non-steppable clause or external ref — advance like F10.
+		return this._stepOver();
+	}
+
+	// Advance one position using F10 (step-over) semantics. Within a frame: move to
+	// the next clause. At the last clause: step out to the caller's call site and
+	// advance past it. Returns false when there is nowhere left to go.
+	private _stepOver(): boolean {
+		const frame = this._frames[this._currentFrameIndex];
+		const clauses = this._clauses[frame.name] ?? [];
+
+		if (this._granularity === 'line' && this._currentClauseIndex < clauses.length - 1) {
+			this._pushHistory();
+			this._currentClauseIndex++;
+			return true;
+		}
+
+		// Last clause (or statement level) — step out to caller.
+		return this._stepOutAndAdvance();
+	}
+
+	// Step out of the current frame and advance one position past the call site
+	// in the caller frame. Returns false when there is nowhere left to go.
+	private _stepOutAndAdvance(): boolean {
+		const currentFrame = this._currentFrameIndex;
+
+		// Find the call site: most recent history entry from a different frame.
+		let callerIdx = this._navigationHistory.length - 1;
+		while (callerIdx >= 0 && this._navigationHistory[callerIdx].frameIndex === currentFrame) {
+			callerIdx--;
+		}
+
+		if (callerIdx >= 0) {
+			const caller = this._navigationHistory[callerIdx];
+			this._navigationHistory.length = callerIdx;
+			this._currentFrameIndex = caller.frameIndex;
+			this._granularity = caller.granularity;
+			this._currentClauseIndex = caller.clauseIndex;
+
+			const callerFrame = this._frames[this._currentFrameIndex];
+			const callerClauses = this._clauses[callerFrame.name] ?? [];
+			if (this._granularity === 'line' && this._currentClauseIndex < callerClauses.length - 1) {
 				this._pushHistory();
 				this._currentClauseIndex++;
-				void this._onLanded('step');
-			} else {
-				this._nextPastFrame();
+				return true;
 			}
-		} else {
 			if (this._currentFrameIndex < this._frames.length - 1) {
 				this._pushHistory();
 				this._currentFrameIndex++;
 				this._enterClauseLevel();
-				void this._onLanded('step');
-			} else {
-				this._terminate();
+				return true;
 			}
+			return false;
 		}
+
+		// No call site in history — advance sequentially.
+		if (this._currentFrameIndex < this._frames.length - 1) {
+			this._pushHistory();
+			this._currentFrameIndex++;
+			this._enterClauseLevel();
+			return true;
+		}
+		return false;
 	}
 
 	private _handleStepIn(msg: DapMessage): void {
@@ -952,6 +965,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		const args = msg.arguments ?? {};
 		const targetId = args.targetId as number | undefined;
 
+		// Explicit target (from StepInTargets) — jump directly.
 		if (targetId !== undefined) {
 			const targetName = this._resolveStepInTarget(targetId);
 			if (targetName) {
@@ -964,39 +978,24 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 					void this._onLanded('step');
 					return;
 				}
-
 				void this._tryCrossModelStepIn(targetName);
 				return;
 			}
 		}
 
-		if (this._granularity === 'statement') {
-			const frame = this._frames[this._currentFrameIndex];
-			const clauses = this._clauses[frame.name];
-			if (clauses && clauses.length > 1) {
-				this._pushHistory();
-				this._granularity = 'line';
-				this._currentClauseIndex = 0;
-				void this._onLanded('step');
-			} else {
-				this._handleNext(msg);
-			}
-		} else {
-			// Clause-level: try to step INTO the table referenced by FROM/JOIN.
+		// Try local stepIn. If it can't go deeper (external ref), try cross-model.
+		if (this._granularity === 'line') {
 			const target = this._resolveClauseStepInTarget();
-			if (target) {
-				const frameIdx = this._frames.findIndex(f => f.name === target);
-				if (frameIdx >= 0) {
-					this._pushHistory();
-					this._currentFrameIndex = frameIdx;
-					this._enterClauseLevel();
-					void this._onLanded('step');
-					return;
-				}
+			if (target && !this._frames.some(f => f.name === target)) {
 				void this._tryCrossModelStepIn(target);
 				return;
 			}
-			this._handleNext(msg);
+		}
+
+		if (this._stepIn()) {
+			void this._onLanded('step');
+		} else {
+			this._terminate();
 		}
 	}
 
@@ -1004,7 +1003,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		this._respond(msg, true);
 
 		// Pop history entries while they belong to the current frame — the first entry
-		// from a different frame is the position we jumped from, so restore it.
+		// from a different frame is the call site we jumped from.
 		const currentFrame = this._currentFrameIndex;
 		while (this._navigationHistory.length > 0 && this._navigationHistory[this._navigationHistory.length - 1].frameIndex === currentFrame) {
 			this._navigationHistory.pop();
@@ -1014,6 +1013,14 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			this._currentFrameIndex = caller.frameIndex;
 			this._granularity = caller.granularity;
 			this._currentClauseIndex = caller.clauseIndex;
+
+			// Advance past the call site — the CTE we just left is already executed.
+			const callerFrame = this._frames[this._currentFrameIndex];
+			const callerClauses = this._clauses[callerFrame.name] ?? [];
+			if (this._granularity === 'line' && this._currentClauseIndex < callerClauses.length - 1) {
+				this._currentClauseIndex++;
+			}
+
 			void this._onLanded('step');
 			return;
 		}
@@ -1169,9 +1176,9 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		// Check the current position first (handles configurationDone starting at frame 0).
 		if (await this._onLanded('breakpoint')) return;
 
-		// Walk forward one position at a time, checking for breakpoints at each.
-		while (this._advanceOneStep()) {
-			this._pushHistory();
+		// Walk the DAG using F11 (step-in) semantics — follows refs into local CTEs,
+		// building _navigationHistory naturally. This gives a proper call stack.
+		while (this._stepIn()) {
 			if (await this._onLanded('breakpoint')) return;
 		}
 
