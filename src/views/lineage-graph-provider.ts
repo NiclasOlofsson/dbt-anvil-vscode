@@ -423,7 +423,7 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 		if (nodes.length === 0) return;
 
 		const g = new dagre.graphlib.Graph();
-		g.setGraph({ rankdir: 'LR', nodesep: 40, ranksep: 100, marginx: 20, marginy: 20 });
+		g.setGraph({ rankdir: 'LR', nodesep: 20, ranksep: 100, marginx: 20, marginy: 10 });
 		g.setDefaultEdgeLabel(() => ({}));
 
 		for (const node of nodes) {
@@ -440,6 +440,8 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 			node.x = pos.x;
 			node.y = pos.y;
 		}
+		// Column wrapping and relaxation are handled in the webview JS
+		// where the viewport dimensions are known.
 	}
 
 	private _getHtml(): string {
@@ -674,6 +676,100 @@ svg.edges polygon {
 	/* Per-model saved state: expanded cards, column trace, pan/zoom */
 	const savedStates = new Map();
 
+	/* ── Column Wrapping + Relaxation ──
+	 * Splits tall dagre columns into sub-columns and re-centres columns
+	 * around their parents' Y centroid. maxPerCol is derived from the
+	 * available viewport height so the graph fills the panel efficiently.
+	 * Always reads from node._origX/_origY so it is safe to call repeatedly
+	 * (e.g. on resize). */
+	function applyColumnWrapping(nodes, edges) {
+		const HEADER_H = 44;
+		const SUBCOL_GAP = 16;
+		const NODE_VSEP = 20;
+		const CARD_W = 180;
+		const availableH = wrapEl.clientHeight - 40;
+		const maxPerCol = Math.max(2, Math.min(20, Math.floor(availableH / (HEADER_H + NODE_VSEP))));
+
+		// Reset to original dagre positions before re-wrapping
+		for (var i = 0; i < nodes.length; i++) {
+			nodes[i].x = nodes[i]._origX;
+			nodes[i].y = nodes[i]._origY;
+		}
+
+		// Parent lookup for relaxation
+		var parentsOfW = new Map();
+		for (var ei = 0; ei < edges.length; ei++) {
+			var e = edges[ei];
+			if (!parentsOfW.has(e.target)) parentsOfW.set(e.target, []);
+			parentsOfW.get(e.target).push(e.source);
+		}
+		var nodeByIdW = new Map();
+		for (var ni = 0; ni < nodes.length; ni++) nodeByIdW.set(nodes[ni].id, nodes[ni]);
+
+		// Group by rank (rounded origX)
+		var rankMapW = new Map();
+		for (var ri = 0; ri < nodes.length; ri++) {
+			var rx = Math.round(nodes[ri]._origX);
+			if (!rankMapW.has(rx)) rankMapW.set(rx, []);
+			rankMapW.get(rx).push(nodes[ri]);
+		}
+
+		var sortedRanksW = Array.from(rankMapW.keys()).sort(function(a, b) { return a - b; });
+		var extraX = 0;
+
+		for (var si = 0; si < sortedRanksW.length; si++) {
+			var rankX = sortedRanksW[si];
+			var col = rankMapW.get(rankX);
+			var baseX = rankX + extraX;
+
+			for (var ci = 0; ci < col.length; ci++) col[ci].x = baseX;
+
+			if (col.length > maxPerCol) {
+				col.sort(function(a, b) { return a._origY - b._origY; });
+				var numSubcols = Math.ceil(col.length / maxPerCol);
+				var minY = col[0]._origY - HEADER_H / 2;
+				var maxYv = col[col.length - 1]._origY + HEADER_H / 2;
+				var colCenterY = (minY + maxYv) / 2;
+
+				for (var sc = 0; sc < numSubcols; sc++) {
+					var start = sc * maxPerCol;
+					var subNodes = col.slice(start, Math.min(start + maxPerCol, col.length));
+					var n = subNodes.length;
+					var totalH = n * HEADER_H + (n - 1) * NODE_VSEP;
+					var firstCY = colCenterY - totalH / 2 + HEADER_H / 2;
+					var subX = baseX + sc * (CARD_W + SUBCOL_GAP);
+					for (var sni = 0; sni < n; sni++) {
+						subNodes[sni].x = subX;
+						subNodes[sni].y = firstCY + sni * (HEADER_H + NODE_VSEP);
+					}
+				}
+				extraX += (numSubcols - 1) * (CARD_W + SUBCOL_GAP);
+			} else {
+				// Relaxation: re-centre around the centroid of parents' Y positions
+				var parentYsW = [];
+				for (var pci = 0; pci < col.length; pci++) {
+					var pids = parentsOfW.get(col[pci].id) || [];
+					for (var pii = 0; pii < pids.length; pii++) {
+						var p = nodeByIdW.get(pids[pii]);
+						if (p) parentYsW.push(p.y);
+					}
+				}
+				if (parentYsW.length > 0) {
+					var sumY = 0;
+					for (var pyi = 0; pyi < parentYsW.length; pyi++) sumY += parentYsW[pyi];
+					var centerYr = sumY / parentYsW.length;
+					col.sort(function(a, b) { return a._origY - b._origY; });
+					var nr = col.length;
+					var totalHr = nr * HEADER_H + (nr - 1) * NODE_VSEP;
+					var firstCYr = centerYr - totalHr / 2 + HEADER_H / 2;
+					for (var rni = 0; rni < nr; rni++) {
+						col[rni].y = firstCYr + rni * (HEADER_H + NODE_VSEP);
+					}
+				}
+			}
+		}
+	}
+
 	/* ── Pan & Zoom ── */
 	function applyTransform() {
 		canvas.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + scale + ')';
@@ -773,6 +869,14 @@ svg.edges polygon {
 		}
 
 		graphData = data;
+
+		/* Store original dagre positions so applyColumnWrapping can reset and re-wrap. */
+		for (var wni = 0; wni < data.nodes.length; wni++) {
+			data.nodes[wni]._origX = data.nodes[wni].x;
+			data.nodes[wni]._origY = data.nodes[wni].y;
+		}
+		applyColumnWrapping(data.nodes, data.edges);
+
 		emptyEl.style.display = 'none';
 		wrapEl.style.display = 'block';
 		canvas.innerHTML = '';
@@ -929,7 +1033,7 @@ svg.edges polygon {
 	/* ── Re-layout after column expand/collapse ── */
 	function relayoutAfterToggle() {
 		if (!graphData) return;
-		const GAP = 40;
+		const GAP = 16;
 
 		const rankMap = new Map();
 		for (const node of graphData.nodes) {
@@ -989,6 +1093,28 @@ svg.edges polygon {
 			if (fp) vscode.postMessage({ command: 'openFile', filePath: fp });
 		}
 	});
+
+	/* Re-wrap on resize so maxPerCol stays proportional to the available height. */
+	new ResizeObserver(function() {
+		if (!graphData) return;
+		applyColumnWrapping(graphData.nodes, graphData.edges);
+		const CARD_W = 180;
+		for (var rwi = 0; rwi < graphData.nodes.length; rwi++) {
+			var rn = graphData.nodes[rwi];
+			var rc = canvas.querySelector('[data-id="' + CSS.escape(rn.id) + '"]');
+			if (rc) {
+				rc.style.left = (rn.x - CARD_W / 2) + 'px';
+				rc.style.top = (rn.y - rn.height / 2) + 'px';
+			}
+		}
+		nodeInitialTops.clear();
+		for (var rwj = 0; rwj < graphData.nodes.length; rwj++) {
+			var rnj = graphData.nodes[rwj];
+			nodeInitialTops.set(rnj.id, rnj.y - rnj.height / 2);
+		}
+		drawEdges(graphData);
+		requestAnimationFrame(redrawColumnEdges);
+	}).observe(wrapEl);
 
 	/* Redraw column edges on col-list scroll so the line tracks the scrolled position.
 	 * Scroll events don't bubble, so use capture phase on the canvas container. */
