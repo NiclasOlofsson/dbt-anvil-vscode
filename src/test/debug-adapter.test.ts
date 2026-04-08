@@ -841,13 +841,14 @@ describe('SqlDebugAdapter', () => {
 			});
 		});
 
-		it('stepBack goes to previous frame last clause', async () => {
+		it('stepBack with no history stays at current position', async () => {
 			harness.send('configurationDone');
 			await vi.waitFor(() => {
 				expect(harness.events('stopped')).toHaveLength(1);
 			});
 
-			// We're at clause 0 of _main_. Step back should go to base's last clause.
+			// No navigation has happened — _fullHistory is empty.
+			// stepBack should stay at current position.
 			harness.clear();
 			harness.send('stepBack', { threadId: 1 });
 
@@ -857,12 +858,12 @@ describe('SqlDebugAdapter', () => {
 				expect(stopped[0].body?.reason).toBe('step');
 			});
 
-			// Verify stack trace now shows base's last clause
+			// Stack trace still shows _main_
 			harness.clear();
 			harness.send('stackTrace', { threadId: 1 });
 			const resp = harness.lastResponse('stackTrace');
 			const frames = (resp.body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
-			expect(frames[0].name).toContain('base \u2192');
+			expect(frames[0].name).toContain('_main_ \u2192');
 		});
 
 		it('stepOut from clause-level returns to statement, then stepOut terminates', async () => {
@@ -905,29 +906,14 @@ describe('SqlDebugAdapter', () => {
 			});
 		});
 
-		it('stepIn switches to line granularity and starts at clause 0', async () => {
+		it('configurationDone enters clause-level granularity at clause 0', async () => {
 			harness.send('configurationDone');
 			await vi.waitFor(() => {
 				expect(harness.events('stopped')).toHaveLength(1);
 			});
 
-			// Step back to get to a frame with multiple clauses (frame 0 = base has 2 clauses)
-			harness.clear();
-			harness.send('stepBack', { threadId: 1 });
-			await vi.waitFor(() => {
-				expect(harness.events('stopped')).toHaveLength(1);
-			});
-
-			// stepIn should enter clause-level granularity
-			harness.clear();
-			harness.send('stepIn', { threadId: 1 });
-
-			await vi.waitFor(() => {
-				const stopped = harness.events('stopped');
-				expect(stopped).toHaveLength(1);
-			});
-
-			// Stack trace should show clause-level frames
+			// configurationDone enters clause level directly — stack trace should
+			// show clause-level frames (arrow notation).
 			harness.clear();
 			harness.send('stackTrace', { threadId: 1 });
 			const resp = harness.lastResponse('stackTrace');
@@ -2008,20 +1994,36 @@ describe('SqlDebugAdapter', () => {
 
 		afterEach(() => { harness.dispose(); clearActiveEditor(); });
 
-		it('gotoTargets returns all frame names', () => {
+		it('gotoTargets returns the frame containing the clicked line', () => {
 			harness.clear();
-			harness.send('gotoTargets', { source: {}, line: 1 });
+			// line 2 (1-indexed) = line 1 (0-indexed) — inside 'base' (lines 0-3).
+			harness.send('gotoTargets', { source: {}, line: 2 });
 			const resp = harness.lastResponse('gotoTargets');
 			expect(resp.success).toBe(true);
 			const targets = (resp.body as Record<string, unknown>).targets as Array<{ id: number; label: string }>;
-			expect(targets.map(t => t.label)).toContain('base');
-			expect(targets.map(t => t.label)).toContain('_main_');
+			expect(targets).toHaveLength(1);
+			expect(targets[0].label).toBe('base');
 		});
 
-		it('goto jumps to target frame and emits stopped', async () => {
+		it('gotoTargets returns empty for a line outside all frames', () => {
 			harness.clear();
-			// Jump to frame index 0 (base)
-			harness.send('goto', { threadId: 1, targetId: 0 });
+			// line 5 (1-indexed) = line 4 (0-indexed) — between base (0-3) and _main_ (5-8).
+			harness.send('gotoTargets', { source: {}, line: 5 });
+			const resp = harness.lastResponse('gotoTargets');
+			const targets = (resp.body as Record<string, unknown>).targets as Array<unknown>;
+			expect(targets).toHaveLength(0);
+		});
+
+		it('goto resets and runs forward to the clicked position', async () => {
+			harness.clear();
+			// Ask for goto targets on line 2 (inside 'base'), get the step index back.
+			harness.send('gotoTargets', { source: {}, line: 2 });
+			const targResp = harness.lastResponse('gotoTargets');
+			const targets = (targResp.body as Record<string, unknown>).targets as Array<{ id: number; label: string }>;
+			expect(targets).toHaveLength(1);
+
+			harness.clear();
+			harness.send('goto', { threadId: 1, targetId: targets[0].id });
 			await vi.waitFor(() => expect(harness.events('stopped')).toHaveLength(1));
 			const stopped = harness.events('stopped')[0];
 			expect(stopped.body).toMatchObject({ reason: 'goto' });

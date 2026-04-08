@@ -4,7 +4,6 @@ import type { DbtExecutionService } from '../../dbt/execution-service';
 import type { DatabaseProvider } from './database-provider';
 import { DatabricksProvider } from './databricks-provider';
 import { DbtDatabaseProvider } from './dbt-database-provider';
-import { DuckdbProvider } from './duckdb-provider';
 import { ProfilesReader, type DatabricksConnection, type DuckdbConnection } from './profiles-reader';
 
 /**
@@ -53,6 +52,9 @@ export async function createDatabaseProvider(
 
 		if (connection && connection.type === 'duckdb') {
 			logger.info('DatabaseProviderFactory: using DuckdbProvider');
+			// Dynamic import keeps @duckdb/node-api out of the module graph on non-Windows
+			// platforms where the native binary is not bundled.
+			const { DuckdbProvider } = await import('./duckdb-provider.js');
 			return new DuckdbProvider(
 				connection as DuckdbConnection,
 				projectDir,
