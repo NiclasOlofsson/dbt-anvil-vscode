@@ -264,7 +264,8 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 				supportsCompletionsRequest: true,
 				supportsRestartFrame: true,
 				supportsReverseContinue: true,
-				supportsGotoTargetsRequest: true,
+				// TODO: re-enable once goto lands mid-CTE at a specific clause (skip join/where/etc.)
+				// supportsGotoTargetsRequest: true,
 				supportsExceptionOptions: false,
 				exceptionBreakpointFilters: [
 					{ filter: 'emptyResult', label: 'Break on empty result', default: false },
@@ -281,6 +282,10 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _handleConfigurationDone(msg: DapMessage): void {
 		this._respond(msg, true);
 		if (this._noDebug) return;
+
+		// Fresh session — clear traversal state.
+		this._navigationHistory = [];
+		this._fullHistory = [];
 
 		// Start at _main_ (last frame) — the DAG root for stepping.
 		// The user will F11 from here; history builds naturally as they step.
@@ -972,7 +977,9 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			return true;
 		}
 
-		// Case 3: last clause, can't step in → pop to caller.
+		// Case 3: last clause — record it in history before popping so SELECT
+		// (the final clause) appears in the call stack trace.
+		this._pushHistory();
 		return this._popToCallerAndAdvance();
 	}
 
@@ -1204,8 +1211,6 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 
 	private async _runToContinue(): Promise<void> {
 		this._paused = false;
-		this._navigationHistory = [];
-		this._fullHistory = [];
 
 		// Check the current position first (handles configurationDone starting at frame 0).
 		if (await this._onLanded('breakpoint')) return;
@@ -1495,6 +1500,18 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		return positions;
 	}
 
+	// Future: "Set Next Statement" (drag yellow arrow / right-click Jump to Cursor) has
+	// interesting SQL-specific semantics beyond what a normal debugger can offer.
+	// Because we control SQL generation, landing *inside* a CTE at a specific clause
+	// could truncate that CTE's SQL at the target clause — effectively skipping it.
+	// Use cases:
+	//   - Skip a JOIN  → see the result set without that join applied
+	//   - Skip a WHERE → see unfiltered rows before the predicate
+	//   - Skip a GROUP BY → inspect pre-aggregation data
+	//   - Skip a HAVING → see what the filter would have removed
+	// This would turn goto from a navigation tool into an ad-hoc "disable this clause"
+	// toggle, much more useful than its C# equivalent where skipping forward leaves
+	// variables uninitialised.
 	private _handleGotoTargets(msg: DapMessage): void {
 		const args = msg.arguments ?? {};
 		const line0 = ((args.line as number) ?? 1) - 1; // DAP is 1-indexed
@@ -1523,6 +1540,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		}
 
 		const source = this._sourceUri ? { path: vscode.Uri.parse(this._sourceUri).fsPath } : undefined;
+		const clauseLine = (this._clauses[frame.name]?.[targetCi]?.line ?? frame.line) + 1;
 		this._send({
 			type: 'response',
 			command: 'gotoTargets',
@@ -1532,8 +1550,8 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 				targets: [{
 					id: nextIdx,
 					label: frame.name,
-					line: frame.line + 1,
-					...(source ? { hint: frame.type } : {}),
+					line: clauseLine,
+					...(source ? { source, hint: frame.type } : {}),
 				}],
 			},
 		});
