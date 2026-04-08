@@ -607,3 +607,10 @@ export class CallHierarchyOutgoingCall {
 		public fromRanges: Range[],
 	) {}
 }
+
+// Shared emitter so tests can fire onDidTerminateDebugSession events.
+export const _debugTerminateEmitter = new EventEmitter<{ type: string; name: string }>();
+
+export const debug = {
+	onDidTerminateDebugSession: _debugTerminateEmitter.event,
+};

@@ -3124,13 +3124,15 @@ def handle_decompose_query(request: dict[str, Any]) -> None:
         return clauses
 
     def extract_table_refs(select_node: exp.Select) -> list[str]:
-        """Extract table/CTE references from a SELECT's FROM and JOINs."""
+        """Extract table/CTE references from a SELECT's FROM and JOINs.
+
+        Returns one entry per FROM/JOIN clause in encounter order, including
+        duplicates so the list stays parallel with the clause list.
+        """
         refs: list[str] = []
-        seen: set[str] = set()
         for tbl in select_node.find_all(exp.Table):
             name = tbl.name
-            if name and name not in seen:
-                seen.add(name)
+            if name:
                 refs.append(name)
         return refs
 
