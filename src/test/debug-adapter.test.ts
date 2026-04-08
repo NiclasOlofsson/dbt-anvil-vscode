@@ -1386,6 +1386,494 @@ describe('SqlDebugAdapter', () => {
 	});
 
 	// ──────────────────────────────────────────────────────────────
+	// Cross-model stepping
+	// ──────────────────────────────────────────────────────────────
+
+	describe('cross-model stepping', () => {
+		afterEach(() => { harness?.dispose(); clearActiveEditor(); });
+
+		it('stepIn on external ref loads child model inline (no separate session)', async () => {
+			// Parent model: _main_ with a FROM clause referencing external 'orders'.
+			const DECOMPOSE_PARENT: DbtCommandResult = {
+				success: true, stdout: '', stderr: '',
+				data: {
+					success: true,
+					frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
+					clauses: {
+						_main_: [
+							{ stage: 'from', sql: 'SELECT * FROM orders', line: 1 },
+							{ stage: 'select', sql: 'SELECT id FROM orders', line: 0 },
+						],
+					},
+					refs: { _main_: ['orders'] },
+				},
+			};
+			// Child model (orders): a simple single-frame query.
+			const DECOMPOSE_CHILD: DbtCommandResult = {
+				success: true, stdout: '', stderr: '',
+				data: {
+					success: true,
+					frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
+					clauses: {
+						_main_: [
+							{ stage: 'select', sql: 'SELECT id FROM raw_orders', line: 0 },
+						],
+					},
+					refs: { _main_: [] },
+				},
+			};
+
+			// Bridge returns parent decompose first, then child decompose on subsequent calls.
+			let decomposeCallCount = 0;
+			const bridge: BridgeRunner = {
+				invokeRaw: vi.fn().mockImplementation((req: Record<string, unknown>) => {
+					if (req.decompose_query) {
+						decomposeCallCount++;
+						return Promise.resolve(decomposeCallCount === 1 ? DECOMPOSE_PARENT : DECOMPOSE_CHILD);
+					}
+					if (req.emit_debug_symbols) {
+						return Promise.resolve({
+							success: true, stdout: '', stderr: '',
+							data: { success: true, symbols: [] },
+						});
+					}
+					return Promise.resolve({ success: true, stdout: '', stderr: '', data: {} });
+				}),
+				compileInlineSql: vi.fn().mockResolvedValue('SELECT id FROM raw_orders'),
+			} as unknown as BridgeRunner;
+
+			// Mock fs.readFile so the child model source can be read.
+			(vscode.workspace.fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue(
+				new TextEncoder().encode('SELECT id FROM raw_orders'),
+			);
+
+			setActiveEditor('SELECT id FROM orders');
+			harness = new DapHarness({ bridgeRunner: bridge });
+			harness.send('initialize');
+			harness.send('launch', { noDebug: false, sql: 'SELECT id FROM orders' });
+
+			await vi.waitFor(() => {
+				expect(harness.events('thread')).toHaveLength(1);
+			});
+
+			harness.send('configurationDone');
+			await vi.waitFor(() => {
+				expect(harness.events('stopped')).toHaveLength(1);
+			});
+
+			// F11 on the FROM clause — 'orders' is external.
+			harness.clear();
+			harness.send('stepIn', { threadId: 1 });
+
+			await vi.waitFor(() => {
+				expect(harness.events('stopped')).toHaveLength(1);
+			});
+
+			// Inline stepping: stopped event fires, NO startDebugging request.
+			expect(harness.events('stopped')[0].body).toMatchObject({ reason: 'step' });
+			const startDbg = harness.messages.find(m => m.type === 'request' && m.command === 'startDebugging');
+			expect(startDbg).toBeUndefined();
+		});
+
+		it('stepIn on external ref with unknown model stays stopped with error', async () => {
+			const DECOMPOSE_EXTERNAL: DbtCommandResult = {
+				success: true, stdout: '', stderr: '',
+				data: {
+					success: true,
+					frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
+					clauses: {
+						_main_: [
+							{ stage: 'from', sql: 'SELECT * FROM unknown_model', line: 1 },
+							{ stage: 'select', sql: 'SELECT * FROM unknown_model', line: 0 },
+						],
+					},
+					refs: { _main_: ['unknown_model'] },
+				},
+			};
+
+			const indexer = mockManifestIndexer();
+			(indexer.findModelsByName as ReturnType<typeof vi.fn>).mockReturnValue([]);
+
+			setActiveEditor('SELECT * FROM unknown_model');
+			harness = new DapHarness({
+				bridgeRunner: mockBridgeRunner(DECOMPOSE_EXTERNAL),
+				manifestIndexer: indexer,
+			});
+			harness.send('initialize');
+			harness.send('launch', { noDebug: false, sql: 'SELECT * FROM unknown_model' });
+
+			await vi.waitFor(() => {
+				expect(harness.events('thread')).toHaveLength(1);
+			});
+
+			harness.send('configurationDone');
+			await vi.waitFor(() => {
+				expect(harness.events('stopped')).toHaveLength(1);
+			});
+
+			harness.clear();
+			harness.send('stepIn', { threadId: 1 });
+
+			await vi.waitFor(() => {
+				expect(harness.events('stopped')).toHaveLength(1);
+			});
+
+			// Session must still be stopped (not terminated or stuck).
+			expect(harness.events('stopped')).toHaveLength(1);
+			expect(harness.events('terminated')).toHaveLength(0);
+		});
+
+		it('Shift+F11 from child top frame pops back to parent and advances', async () => {
+			const DECOMPOSE_PARENT: DbtCommandResult = {
+				success: true, stdout: '', stderr: '',
+				data: {
+					success: true,
+					frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
+					clauses: {
+						_main_: [
+							{ stage: 'from', sql: 'SELECT * FROM orders', line: 1 },
+							{ stage: 'select', sql: 'SELECT id FROM orders', line: 0 },
+						],
+					},
+					refs: { _main_: ['orders'] },
+				},
+			};
+			const DECOMPOSE_CHILD: DbtCommandResult = {
+				success: true, stdout: '', stderr: '',
+				data: {
+					success: true,
+					frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
+					clauses: {
+						_main_: [
+							{ stage: 'select', sql: 'SELECT id FROM raw_orders', line: 0 },
+						],
+					},
+					refs: { _main_: [] },
+				},
+			};
+
+			let decomposeCallCount = 0;
+			const bridge: BridgeRunner = {
+				invokeRaw: vi.fn().mockImplementation((req: Record<string, unknown>) => {
+					if (req.decompose_query) {
+						decomposeCallCount++;
+						return Promise.resolve(decomposeCallCount === 1 ? DECOMPOSE_PARENT : DECOMPOSE_CHILD);
+					}
+					if (req.emit_debug_symbols) {
+						return Promise.resolve({
+							success: true, stdout: '', stderr: '',
+							data: { success: true, symbols: [] },
+						});
+					}
+					return Promise.resolve({ success: true, stdout: '', stderr: '', data: {} });
+				}),
+				compileInlineSql: vi.fn().mockResolvedValue('SELECT id FROM raw_orders'),
+			} as unknown as BridgeRunner;
+
+			(vscode.workspace.fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue(
+				new TextEncoder().encode('SELECT id FROM raw_orders'),
+			);
+
+			setActiveEditor('SELECT id FROM orders');
+			harness = new DapHarness({ bridgeRunner: bridge });
+			harness.send('initialize');
+			harness.send('launch', { noDebug: false, sql: 'SELECT id FROM orders' });
+
+			await vi.waitFor(() => {
+				expect(harness.events('thread')).toHaveLength(1);
+			});
+
+			harness.send('configurationDone');
+			await vi.waitFor(() => {
+				expect(harness.events('stopped')).toHaveLength(1);
+			});
+
+			// Step into external ref — now inside the child model.
+			harness.clear();
+			harness.send('stepIn', { threadId: 1 });
+			await vi.waitFor(() => {
+				expect(harness.events('stopped')).toHaveLength(1);
+			});
+
+			// Shift+F11 from the child's top frame — should pop back to parent.
+			harness.clear();
+			harness.send('stepOut', { threadId: 1 });
+
+			// Parent must resume — either next stopped (at the select clause) or terminated.
+			await vi.waitFor(() => {
+				expect(
+					harness.events('stopped').length + harness.events('terminated').length,
+				).toBeGreaterThan(0);
+			});
+		});
+
+		it('multi-thread: emits thread events and serves per-thread stack traces', async () => {
+			// Same parent/child setup used by the cross-model tests above.
+			const DECOMPOSE_PARENT: DbtCommandResult = {
+				success: true, stdout: '', stderr: '',
+				data: {
+					success: true,
+					frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
+					clauses: {
+						_main_: [
+							{ stage: 'from', sql: 'SELECT * FROM orders', line: 1 },
+							{ stage: 'select', sql: 'SELECT id FROM orders', line: 0 },
+						],
+					},
+					refs: { _main_: ['orders'] },
+				},
+			};
+			const DECOMPOSE_CHILD: DbtCommandResult = {
+				success: true, stdout: '', stderr: '',
+				data: {
+					success: true,
+					frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
+					clauses: { _main_: [{ stage: 'select', sql: 'SELECT id FROM raw_orders', line: 0 }] },
+					refs: { _main_: [] },
+				},
+			};
+
+			let decomposeCallCount = 0;
+			const bridge: BridgeRunner = {
+				invokeRaw: vi.fn().mockImplementation((req: Record<string, unknown>) => {
+					if (req.decompose_query) {
+						decomposeCallCount++;
+						return Promise.resolve(decomposeCallCount === 1 ? DECOMPOSE_PARENT : DECOMPOSE_CHILD);
+					}
+					if (req.emit_debug_symbols) {
+						return Promise.resolve({ success: true, stdout: '', stderr: '', data: { success: true, symbols: [] } });
+					}
+					return Promise.resolve({ success: true, stdout: '', stderr: '', data: {} });
+				}),
+				compileInlineSql: vi.fn().mockResolvedValue('SELECT id FROM raw_orders'),
+			} as unknown as BridgeRunner;
+
+			(vscode.workspace.fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue(
+				new TextEncoder().encode('SELECT id FROM raw_orders'),
+			);
+
+			setActiveEditor('SELECT id FROM orders');
+			harness = new DapHarness({ bridgeRunner: bridge });
+			harness.send('initialize');
+			harness.send('launch', { noDebug: false, sql: 'SELECT id FROM orders' });
+			await vi.waitFor(() => expect(harness.events('thread')).toHaveLength(1));
+
+			harness.send('configurationDone');
+			await vi.waitFor(() => expect(harness.events('stopped')).toHaveLength(1));
+
+			// configurationDone already lands at the FROM clause (clause level).
+			// One F11 from the FROM clause → external ref → steps into child model (Thread 2).
+			harness.clear();
+			harness.send('stepIn', { threadId: 1 });
+			await vi.waitFor(() => expect(harness.events('stopped')).toHaveLength(1));
+
+			// thread(started, 2) event must have fired.
+			const threadStarted = harness.events('thread').find(e => (e.body as Record<string, unknown>).reason === 'started');
+			expect(threadStarted?.body).toMatchObject({ reason: 'started', threadId: 2 });
+
+			// stopped event: child thread, not all threads.
+			expect(harness.events('stopped')[0].body).toMatchObject({
+				reason: 'step',
+				threadId: 2,
+				allThreadsStopped: false,
+			});
+
+			// threadsRequest while inside child → 2 threads.
+			harness.send('threads');
+			const threadsBody = harness.lastResponse('threads').body as { threads: Array<{ id: number }> };
+			expect(threadsBody.threads).toHaveLength(2);
+			expect(threadsBody.threads[0].id).toBe(1);
+			expect(threadsBody.threads[1].id).toBe(2);
+
+			// stackTrace(threadId: 1) → parent frozen frame.
+			harness.send('stackTrace', { threadId: 1 });
+			const parentFrames = (harness.lastResponse('stackTrace').body as { stackFrames: Array<{ name: string }> }).stackFrames;
+			expect(parentFrames).toHaveLength(1);
+			expect(parentFrames[0].name).toContain('_main_');
+
+			// Shift+F11 from child (threadId: 2) → pops back to parent → thread(exited, 2).
+			harness.clear();
+			harness.send('stepOut', { threadId: 2 });
+			await vi.waitFor(() => {
+				expect(
+					harness.events('stopped').length + harness.events('terminated').length,
+				).toBeGreaterThan(0);
+			});
+
+			const threadExited = harness.events('thread').find(e => (e.body as Record<string, unknown>).reason === 'exited');
+			expect(threadExited?.body).toMatchObject({ reason: 'exited', threadId: 2 });
+
+			const stoppedEvt = harness.events('stopped')[0];
+			if (stoppedEvt) {
+				expect(stoppedEvt.body).toMatchObject({ threadId: 1, allThreadsStopped: true });
+			}
+		});
+
+		it('guards stepping requests for non-active (frozen) threads', async () => {
+			const DECOMPOSE_PARENT: DbtCommandResult = {
+				success: true, stdout: '', stderr: '',
+				data: {
+					success: true,
+					frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
+					clauses: {
+						_main_: [
+							{ stage: 'from', sql: 'SELECT * FROM orders', line: 1 },
+							{ stage: 'select', sql: 'SELECT id FROM orders', line: 0 },
+						],
+					},
+					refs: { _main_: ['orders'] },
+				},
+			};
+			const DECOMPOSE_CHILD: DbtCommandResult = {
+				success: true, stdout: '', stderr: '',
+				data: {
+					success: true,
+					frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
+					clauses: { _main_: [{ stage: 'select', sql: 'SELECT id FROM raw_orders', line: 0 }] },
+					refs: { _main_: [] },
+				},
+			};
+
+			let decomposeCallCount = 0;
+			const bridge: BridgeRunner = {
+				invokeRaw: vi.fn().mockImplementation((req: Record<string, unknown>) => {
+					if (req.decompose_query) {
+						decomposeCallCount++;
+						return Promise.resolve(decomposeCallCount === 1 ? DECOMPOSE_PARENT : DECOMPOSE_CHILD);
+					}
+					if (req.emit_debug_symbols) {
+						return Promise.resolve({ success: true, stdout: '', stderr: '', data: { success: true, symbols: [] } });
+					}
+					return Promise.resolve({ success: true, stdout: '', stderr: '', data: {} });
+				}),
+				compileInlineSql: vi.fn().mockResolvedValue('SELECT id FROM raw_orders'),
+			} as unknown as BridgeRunner;
+
+			(vscode.workspace.fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue(
+				new TextEncoder().encode('SELECT id FROM raw_orders'),
+			);
+
+			setActiveEditor('SELECT id FROM orders');
+			harness = new DapHarness({ bridgeRunner: bridge });
+			harness.send('initialize');
+			harness.send('launch', { noDebug: false, sql: 'SELECT id FROM orders' });
+			await vi.waitFor(() => expect(harness.events('thread')).toHaveLength(1));
+
+			harness.send('configurationDone');
+			await vi.waitFor(() => expect(harness.events('stopped')).toHaveLength(1));
+
+			// configurationDone lands at the FROM clause → one F11 goes into child (Thread 2).
+			harness.send('stepIn', { threadId: 1 });
+			await vi.waitFor(() => expect(harness.events('stopped')).toHaveLength(2));
+			// Now in child (Thread 2).
+
+			// Attempt to step frozen parent thread (Thread 1) → guard fires, stays in child.
+			harness.clear();
+			harness.send('stepOut', { threadId: 1 });
+			await vi.waitFor(() => expect(harness.events('stopped')).toHaveLength(1));
+
+			// We must still be in Thread 2 (child not exited).
+			expect(harness.events('stopped')[0].body).toMatchObject({ threadId: 2, allThreadsStopped: false });
+			expect(harness.events('thread')).toHaveLength(0); // no thread(exited) fired
+		});
+	});
+
+	// ──────────────────────────────────────────────────────────────
+	// Self-join ref alignment
+	// ──────────────────────────────────────────────────────────────
+
+	describe('self-join ref alignment', () => {
+		afterEach(() => { harness?.dispose(); clearActiveEditor(); });
+
+		it('stepIn on JOIN clause resolves to same CTE when refs are duplicated', async () => {
+			const DECOMPOSE_SELF_JOIN: DbtCommandResult = {
+				success: true,
+				stdout: '',
+				stderr: '',
+				data: {
+					success: true,
+					frames: [
+						{ name: 'base', type: 'cte', line: 0, endLine: 3 },
+						{ name: '_main_', type: 'select', line: 4, endLine: 8 },
+					],
+					clauses: {
+						base: [
+							{ stage: 'from', sql: 'SELECT * FROM raw', line: 1 },
+							{ stage: 'select', sql: 'SELECT id FROM raw', line: 0 },
+						],
+						_main_: [
+							{ stage: 'from', sql: 'FROM base b1', line: 5 },
+							{ stage: 'join', sql: 'JOIN base b2 ON b1.id = b2.id', line: 6 },
+							{ stage: 'select', sql: 'SELECT b1.id, b2.id', line: 4 },
+						],
+					},
+					refs: {
+						base: ['raw'],
+						_main_: ['base', 'base'],
+					},
+				},
+			};
+
+			setActiveEditor('WITH base AS (SELECT id FROM raw) SELECT b1.id, b2.id FROM base b1 JOIN base b2 ON b1.id = b2.id');
+			harness = new DapHarness({
+				bridgeRunner: mockBridgeRunner(DECOMPOSE_SELF_JOIN),
+			});
+			harness.send('initialize');
+			harness.send('launch', {
+				noDebug: false,
+				sql: 'WITH base AS (SELECT id FROM raw) SELECT b1.id, b2.id FROM base b1 JOIN base b2 ON b1.id = b2.id',
+			});
+
+			await vi.waitFor(() => {
+				expect(harness.events('thread')).toHaveLength(1);
+			});
+
+			harness.send('configurationDone');
+			await vi.waitFor(() => {
+				expect(harness.events('stopped')).toHaveLength(1);
+			});
+
+			// Entry at _main_ → from base (clause 0). Step into base via FROM.
+			harness.clear();
+			harness.send('stepIn', { threadId: 1 });
+			await vi.waitFor(() => {
+				expect(harness.events('stopped')).toHaveLength(1);
+			});
+
+			harness.clear();
+			harness.send('stackTrace', { threadId: 1 });
+			let frames = (harness.lastResponse('stackTrace').body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
+			expect(frames[0].name).toContain('base');
+
+			// Step out back to _main_. Should advance past the FROM to the JOIN clause.
+			harness.clear();
+			harness.send('stepOut', { threadId: 1 });
+			await vi.waitFor(() => {
+				expect(harness.events('stopped')).toHaveLength(1);
+			});
+
+			harness.clear();
+			harness.send('stackTrace', { threadId: 1 });
+			frames = (harness.lastResponse('stackTrace').body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
+			expect(frames[0].name).toContain('_main_');
+			expect(frames[0].name).toContain('join');
+
+			// Step into the JOIN clause — must also resolve to 'base' (not undefined).
+			harness.clear();
+			harness.send('stepIn', { threadId: 1 });
+			await vi.waitFor(() => {
+				expect(harness.events('stopped')).toHaveLength(1);
+			});
+
+			harness.clear();
+			harness.send('stackTrace', { threadId: 1 });
+			frames = (harness.lastResponse('stackTrace').body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
+			// With deduped refs this would fail — JOIN would get refs[1]=undefined and skip the step-in.
+			expect(frames[0].name).toContain('base');
+		});
+	});
+
+	// ──────────────────────────────────────────────────────────────
 	// Source map integration
 	// ──────────────────────────────────────────────────────────────
 

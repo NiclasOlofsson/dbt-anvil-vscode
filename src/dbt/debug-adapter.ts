@@ -43,6 +43,24 @@ interface DecomposeResult {
 	refs: Record<string, string[]>;
 }
 
+// ── Cross-model call frame — saved parent state for inline step-in ──
+
+interface ModelCallFrame {
+	frames: DecomposeFrame[];
+	clauses: Record<string, DecomposeClause[]>;
+	refs: Record<string, string[]>;
+	sourceUri: string;
+	compiledSql: string;
+	sourceMap: SourceMap | undefined;
+	lineOffset: number;
+	resultCache: Map<string, StepResult>;
+	navigationHistory: Array<{ frameIndex: number; clauseIndex: number; granularity: 'statement' | 'line' }>;
+	fullHistory: Array<{ frameIndex: number; clauseIndex: number; granularity: 'statement' | 'line' }>;
+	// Position within the parent that was stepped into (the FROM clause).
+	frameIndex: number;
+	clauseIndex: number;
+}
+
 // ── Cached step result ──
 
 interface StepResult {
@@ -194,6 +212,13 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _noDebug = false;
 	private _abortController: AbortController | undefined;
 	private _sourceMap: SourceMap | undefined;
+	/** Inline cross-model call stack. Pushed on F11 into external ref, popped on Shift+F11. */
+	private _modelCallStack: ModelCallFrame[] = [];
+
+	/** DAP thread ID: 1 for the root model, N+1 when N models are on the call stack. */
+	private get _currentThreadId(): number {
+		return 1 + this._modelCallStack.length;
+	}
 
 	constructor(
 		private readonly _queryRunner: QueryRunner,
@@ -557,12 +582,26 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	// ──────────────────────────────────────────────────────────────
 
 	private _handleThreads(msg: DapMessage): void {
+		const uriName = (uri: string, fallback: string): string => {
+			if (!uri) return fallback;
+			try { return vscode.Uri.parse(uri).fsPath.split(/[\/\\]/).pop() ?? fallback; } catch { return fallback; }
+		};
+		const threads = [
+			...this._modelCallStack.map((frame, i) => ({
+				id: i + 1,
+				name: uriName(frame.sourceUri, `model-${i + 1}`),
+			})),
+			{
+				id: this._currentThreadId,
+				name: uriName(this._sourceUri, 'SQL'),
+			},
+		];
 		this._send({
 			type: 'response',
 			command: 'threads',
 			request_seq: msg.seq,
 			success: true,
-			body: { threads: [{ id: 1, name: 'SQL' }] },
+			body: { threads },
 		});
 	}
 
@@ -571,6 +610,37 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	// ──────────────────────────────────────────────────────────────
 
 	private _handleStackTrace(msg: DapMessage): void {
+		const args = msg.arguments ?? {};
+		const requestedThreadId = (args.threadId as number | undefined) ?? 1;
+		const currentThreadId = this._currentThreadId;
+
+		// Frozen parent thread — serve snapshot from _modelCallStack.
+		if (requestedThreadId < currentThreadId && requestedThreadId >= 1) {
+			const snapshot = this._modelCallStack[requestedThreadId - 1];
+			const snapSource = snapshot.sourceUri
+				? { path: vscode.Uri.parse(snapshot.sourceUri).fsPath }
+				: undefined;
+			const frame = snapshot.frames[snapshot.frameIndex];
+			const clauses = snapshot.clauses[frame.name] ?? [];
+			const line = (clauses[snapshot.clauseIndex]?.line ?? frame.line) + 1;
+			const label = clauses.length > 0
+				? `${frame.name} \u2192 ${this._clauseLabel(frame.name, snapshot.clauseIndex, clauses)}`
+				: frame.name;
+			// Use high-bit sentinel so _handleScopes returns empty for this frozen frame.
+			const frozenFrameId = 0x80000000 | ((requestedThreadId & 0xFF) << 8);
+			this._send({
+				type: 'response',
+				command: 'stackTrace',
+				request_seq: msg.seq,
+				success: true,
+				body: {
+					stackFrames: [{ id: frozenFrameId, name: label, source: snapSource, line, column: 1, presentationHint: 'subtle' as const }],
+					totalFrames: 1,
+				},
+			});
+			return;
+		}
+
 		const source = this._sourceUri ? { path: vscode.Uri.parse(this._sourceUri).fsPath } : undefined;
 		type StackFrame = {
 			id: number; name: string; source: typeof source;
@@ -713,6 +783,18 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _handleScopes(msg: DapMessage): void {
 		const args = msg.arguments ?? {};
 		const rawFrameId = (args.frameId as number) ?? 0;
+
+		// High-bit sentinel: frozen parent thread frame — no live variables.
+		if (rawFrameId & 0x80000000) {
+			this._send({
+				type: 'response',
+				command: 'scopes',
+				request_seq: msg.seq,
+				success: true,
+				body: { scopes: [] },
+			});
+			return;
+		}
 
 		// Stack frame IDs are encoded via encodeRef(). Decode to extract the
 		// real frame index. For clause entries the scope component is non-zero;
@@ -916,6 +998,12 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _handleNext(msg: DapMessage): void {
 		this._respond(msg, true);
 
+		// Guard: ignore steps for non-active threads (frozen parent threads).
+		if (((msg.arguments?.threadId as number | undefined) ?? 1) !== this._currentThreadId) {
+			this._sendStopped('step');
+			return;
+		}
+
 		// F10 = run _stepIn() in a loop until we land back at the same frame (or
 		// an outer scope if the frame ended). Intermediate positions are BP-checked
 		// but not query-executed — only the final landing runs the query.
@@ -1021,6 +1109,13 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _handleStepIn(msg: DapMessage): void {
 		this._respond(msg, true);
 		const args = msg.arguments ?? {};
+
+		// Guard: ignore steps for non-active threads (frozen parent threads).
+		if (((args.threadId as number | undefined) ?? 1) !== this._currentThreadId) {
+			this._sendStopped('step');
+			return;
+		}
+
 		const targetId = args.targetId as number | undefined;
 
 		// Explicit target (from StepInTargets) — jump directly.
@@ -1060,12 +1155,23 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _handleStepOut(msg: DapMessage): void {
 		this._respond(msg, true);
 
-		// No history — fall back to dropping granularity or terminating.
+		// Guard: ignore steps for non-active threads (frozen parent threads).
+		if (((msg.arguments?.threadId as number | undefined) ?? 1) !== this._currentThreadId) {
+			this._sendStopped('step');
+			return;
+		}
+
+		// No history — fall back to dropping granularity, popping model stack, or terminating.
 		if (this._navigationHistory.length === 0) {
-			if (this._granularity === 'line') {
+			if (this._granularity === 'line' && this._modelCallStack.length === 0) {
+				// In root model at clause level — drop to statement level.
 				this._granularity = 'statement';
 				this._currentClauseIndex = 0;
 				void this._onLanded('step');
+			} else if (this._modelCallStack.length > 0) {
+				// At root entry point of a child model (clause or statement level) — pop back to parent.
+				this._popModelCallStack();
+				this._doNext();
 			} else {
 				this._terminate();
 			}
@@ -1090,6 +1196,12 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 
 	private _handleStepBack(msg: DapMessage): void {
 		this._respond(msg, true);
+
+		// Guard: ignore steps for non-active threads (frozen parent threads).
+		if (((msg.arguments?.threadId as number | undefined) ?? 1) !== this._currentThreadId) {
+			this._sendStopped('step');
+			return;
+		}
 
 		// Pop one entry from _fullHistory and restore that position.
 		// Also sync _navigationHistory by removing the matching tail entry if present.
@@ -1871,7 +1983,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	}
 
 	// ──────────────────────────────────────────────────────────────
-	// Cross-model stepping
+	// Cross-model stepping (inline — no child session)
 	// ──────────────────────────────────────────────────────────────
 
 	private async _tryCrossModelStepIn(refName: string): Promise<void> {
@@ -1885,20 +1997,119 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		const model = models[0];
 		this._output(`Stepping into ref('${refName}') → ${model.path}\n`);
 
-		this._send({
-			type: 'request',
-			command: 'startDebugging',
-			arguments: {
-				request: 'launch',
-				configuration: {
-					type: 'dbt-sql',
-					name: `Debug: ${refName}`,
-					request: 'launch',
-					file: model.path,
-					limit: this._limit,
-				},
-			},
+		const adapterType = this._manifestIndexer.index?.adapterType ?? 'duckdb';
+
+		// Read the child model's source file.
+		const childUri = vscode.Uri.file(model.path);
+		let sourceText: string;
+		try {
+			const bytes = await vscode.workspace.fs.readFile(childUri);
+			sourceText = new TextDecoder().decode(bytes);
+		} catch {
+			this._output(`Could not read ${model.path}\n`);
+			this._sendStopped('step');
+			return;
+		}
+
+		// Compile + decompose the child model.
+		const symbolResult = await this._compileWithSymbols(sourceText, adapterType);
+		if (!symbolResult) {
+			this._output(`Failed to compile ${refName}.\n`);
+			this._sendStopped('step');
+			return;
+		}
+
+		const decomposed = await this._decompose(symbolResult.compiledSql, adapterType);
+		if (!decomposed || decomposed.frames.length === 0) {
+			this._output(`Could not decompose ${refName}.\n`);
+			this._sendStopped('step');
+			return;
+		}
+
+		// Save parent state onto the model call stack.
+		this._modelCallStack.push({
+			frames: this._frames,
+			clauses: this._clauses,
+			refs: this._refs,
+			sourceUri: this._sourceUri,
+			compiledSql: this._compiledSql,
+			sourceMap: this._sourceMap,
+			lineOffset: this._lineOffset,
+			resultCache: this._resultCache,
+			navigationHistory: this._navigationHistory,
+			fullHistory: this._fullHistory,
+			frameIndex: this._currentFrameIndex,
+			clauseIndex: this._currentClauseIndex,
 		});
+
+		// Switch adapter state to child model.
+		this._frames = decomposed.frames;
+		this._clauses = decomposed.clauses;
+		this._refs = decomposed.refs;
+		this._sourceUri = childUri.toString();
+		this._compiledSql = symbolResult.compiledSql;
+		this._sourceMap = symbolResult.sourceMap;
+		this._lineOffset = 0;
+		this._resultCache = new Map();
+		this._navigationHistory = [];
+		this._fullHistory = [];
+		this._currentFrameIndex = this._frames.length - 1;
+		this._enterClauseLevel();
+
+		if (this._sourceMap) this._remapPositions();
+
+		this._output(`Debug: ${this._frames.length} frame(s) in ${refName} — ${this._frames.map(f => f.name).join(', ')}\n`);
+
+		// Announce the new child thread so VS Code shows it in the Call Stack panel.
+		this._send({ type: 'event', event: 'thread', body: { reason: 'started', threadId: this._currentThreadId } });
+
+		void this._onLanded('step');
+	}
+
+	/** Restore the parent model state after leaving a child model. */
+	private _popModelCallStack(): void {
+		// Announce thread exit before restoring parent state.
+		const exitingThreadId = this._currentThreadId;
+		this._send({ type: 'event', event: 'thread', body: { reason: 'exited', threadId: exitingThreadId } });
+		const parent = this._modelCallStack.pop()!;
+		this._frames = parent.frames;
+		this._clauses = parent.clauses;
+		this._refs = parent.refs;
+		this._sourceUri = parent.sourceUri;
+		this._compiledSql = parent.compiledSql;
+		this._sourceMap = parent.sourceMap;
+		this._lineOffset = parent.lineOffset;
+		this._resultCache = parent.resultCache;
+		this._navigationHistory = parent.navigationHistory;
+		this._fullHistory = parent.fullHistory;
+		this._currentFrameIndex = parent.frameIndex;
+		this._currentClauseIndex = parent.clauseIndex;
+		this._granularity = 'line';
+	}
+
+	// Step-over: advance past the FROM clause that was stepped into.
+	private _doNext(): void {
+		const startFrame = this._currentFrameIndex;
+		const startDepth = this._navigationHistory.length;
+
+		while (this._stepIn()) {
+			if (this._currentFrameIndex === startFrame || this._navigationHistory.length < startDepth) {
+				void this._onLanded('step');
+				return;
+			}
+			if (this._isBreakpointAtCurrentPosition()) {
+				this._paused = true;
+				void this._onLanded('breakpoint');
+				return;
+			}
+		}
+		// Popped all the way to the top—check for outer model call stack.
+		if (this._modelCallStack.length > 0) {
+			this._popModelCallStack();
+			this._doNext();
+		} else {
+			this._terminate();
+		}
 	}
 
 	// ──────────────────────────────────────────────────────────────
@@ -2016,19 +2227,21 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	}
 
 	private _sendStopped(reason: string): void {
+		const threadId = this._currentThreadId;
 		this._send({
 			type: 'event',
 			event: 'stopped',
-			body: { reason, threadId: 1, allThreadsStopped: true },
+			body: { reason, threadId, allThreadsStopped: threadId === 1 },
 		});
 		this._sendPipelineEvent();
 	}
 
 	private _sendStoppedException(description: string): void {
+		const threadId = this._currentThreadId;
 		this._send({
 			type: 'event',
 			event: 'stopped',
-			body: { reason: 'exception', description, threadId: 1, allThreadsStopped: true },
+			body: { reason: 'exception', description, threadId, allThreadsStopped: threadId === 1 },
 		});
 		this._sendPipelineEvent();
 	}

@@ -19,6 +19,10 @@
 	"js/ts.preferences.importModuleSpecifier": "relative",
 	"js/ts.preferences.quoteStyle": "single",
 	"js/ts.tsc.autoDetect": "off",
+	// --- Files ---
+	"files.exclude": {
+		"**/node_modules": true
+	},
 	// --- Search ---
 	"search.exclude": {
 		"**/node_modules": true,

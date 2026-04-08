@@ -140,3 +140,9 @@ SQLFluff
 Better Yaml (or something like that). But then we need to make sure we support.
 
 If we can't handle this, we have to investigate how we can make sure we "win" over them :D
+
+## DBT Metric Flow
+
+Just do it! Work together with Microsoft on this feature to surface in Fabric and replace runtime of metric flow.
+
+
