@@ -177,6 +177,9 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	 *  F11 jump-to-frame) pushes the current position before moving. Step-back pops one
 	 *  entry; step-out pops entries until the frame index changes. Cleared on continue. */
 	private _navigationHistory: Array<{ frameIndex: number; clauseIndex: number; granularity: 'statement' | 'line' }> = [];
+	/** Append-only history of every position visited. Never truncated by step-out
+	 *  or step-back — only cleared on continue/restart. Useful for full trace. */
+	private _fullHistory: Array<{ frameIndex: number; clauseIndex: number; granularity: 'statement' | 'line' }> = [];
 	private _resultCache = new Map<string, StepResult>();
 	private _breakpoints: Array<{ line: number; id: number; frameName?: string; clauseIndex?: number }> = [];
 	private _nextBpId = 1;
@@ -564,6 +567,54 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 
 	private _handleStackTrace(msg: DapMessage): void {
 		const source = this._sourceUri ? { path: vscode.Uri.parse(this._sourceUri).fsPath } : undefined;
+		type StackFrame = {
+			id: number; name: string; source: typeof source;
+			line: number; column: number; presentationHint: 'normal' | 'subtle';
+		};
+
+		const toStackFrame = (frameIndex: number, clauseIndex: number, granularity: 'statement' | 'line', hint: 'normal' | 'subtle'): StackFrame => {
+			const f = this._frames[frameIndex];
+			const clauses = this._clauses[f.name] ?? [];
+			if (granularity === 'line' && clauses.length > 0) {
+				return {
+					id: encodeRef(frameIndex, SCOPE_RESULT, clauseIndex),
+					name: `${f.name} \u2192 ${this._clauseLabel(f.name, clauseIndex, clauses)}`,
+					source,
+					line: (clauses[clauseIndex]?.line ?? f.line) + 1,
+					column: 1,
+					presentationHint: hint,
+				};
+			}
+			return {
+				id: encodeRef(frameIndex, 0, 0),
+				name: f.name,
+				source,
+				line: (clauses[0]?.line ?? f.line) + 1,
+				column: 1,
+				presentationHint: hint,
+			};
+		};
+
+		// Current position first, then _fullHistory in reverse (most recent first).
+		const stackFrames: StackFrame[] = [
+			toStackFrame(this._currentFrameIndex, this._currentClauseIndex, this._granularity, 'normal'),
+			...Array.from({ length: this._fullHistory.length }, (_, i) => {
+				const h = this._fullHistory[this._fullHistory.length - 1 - i];
+				return toStackFrame(h.frameIndex, h.clauseIndex, h.granularity, 'subtle');
+			}),
+		];
+
+		this._send({
+			type: 'response',
+			command: 'stackTrace',
+			request_seq: msg.seq,
+			success: true,
+			body: { stackFrames, totalFrames: stackFrames.length },
+		});
+	}
+
+	private _handleStackTraceOld(msg: DapMessage): void {
+		const source = this._sourceUri ? { path: vscode.Uri.parse(this._sourceUri).fsPath } : undefined;
 
 		if (this._granularity === 'line') {
 			const frame = this._frames[this._currentFrameIndex];
@@ -813,11 +864,13 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	}
 
 	private _pushHistory(): void {
-		this._navigationHistory.push({
+		const entry = {
 			frameIndex: this._currentFrameIndex,
 			clauseIndex: this._currentClauseIndex,
 			granularity: this._granularity,
-		});
+		};
+		this._navigationHistory.push(entry);
+		this._fullHistory.push(entry);
 	}
 
 	private _isBreakpointAtCurrentPosition(): boolean {
@@ -858,32 +911,47 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _handleNext(msg: DapMessage): void {
 		this._respond(msg, true);
 
-		if (this._stepOver()) {
-			void this._onLanded('step');
-		} else {
-			this._terminate();
+		// F10 = run _stepIn() in a loop until we land back at the same frame (or
+		// an outer scope if the frame ended). Intermediate positions are BP-checked
+		// but not query-executed — only the final landing runs the query.
+		const startFrame = this._currentFrameIndex;
+		const startDepth = this._navigationHistory.length;
+
+		while (this._stepIn()) {
+			if (this._currentFrameIndex === startFrame || this._navigationHistory.length < startDepth) {
+				void this._onLanded('step');
+				return;
+			}
+			if (this._isBreakpointAtCurrentPosition()) {
+				this._paused = true;
+				void this._onLanded('breakpoint');
+				return;
+			}
 		}
+		this._terminate();
 	}
 
-	// Core F11 logic: advance one position using step-in semantics.
-	// If a FROM/JOIN clause references a local CTE, pushes history and jumps into it.
-	// Otherwise advances to the next clause (F10). At the last clause, steps out to
-	// the caller and advances past the call site. Returns false when there is nowhere
-	// left to go (all frames visited). Does NOT call _onLanded — caller decides.
+	// Core F11 logic — the single workhorse that drives ALL navigation.
+	// One atomic forward step. Returns false when there is nowhere left to go.
+	// Three cases:
+	//   1. FROM/JOIN with local CTE ref → push history, jump into CTE
+	//   2. More clauses in current frame → push history, advance clauseIndex
+	//   3. Last clause, can't step in → pop to caller and advance past call site
+	// Does NOT call _onLanded — caller decides when to stop and land.
 	private _stepIn(): boolean {
+		// Statement granularity: enter clause level first.
 		if (this._granularity === 'statement') {
 			const frame = this._frames[this._currentFrameIndex];
 			const clauses = this._clauses[frame.name];
-			if (clauses && clauses.length > 1) {
+			if (clauses && clauses.length > 0) {
 				this._pushHistory();
-				this._granularity = 'line';
-				this._currentClauseIndex = 0;
+				this._enterClauseLevel();
 				return true;
 			}
-			return this._stepOver();
+			return this._popToCallerAndAdvance();
 		}
 
-		// Clause-level: try to step INTO the local CTE referenced by FROM/JOIN.
+		// Case 1: FROM/JOIN clause references a local CTE → step into it.
 		const target = this._resolveClauseStepInTarget();
 		if (target) {
 			const frameIdx = this._frames.findIndex(f => f.name === target);
@@ -895,30 +963,23 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			}
 		}
 
-		// Non-steppable clause or external ref — advance like F10.
-		return this._stepOver();
-	}
-
-	// Advance one position using F10 (step-over) semantics. Within a frame: move to
-	// the next clause. At the last clause: step out to the caller's call site and
-	// advance past it. Returns false when there is nowhere left to go.
-	private _stepOver(): boolean {
+		// Case 2: more clauses in current frame → advance.
 		const frame = this._frames[this._currentFrameIndex];
 		const clauses = this._clauses[frame.name] ?? [];
-
-		if (this._granularity === 'line' && this._currentClauseIndex < clauses.length - 1) {
+		if (this._currentClauseIndex < clauses.length - 1) {
 			this._pushHistory();
 			this._currentClauseIndex++;
 			return true;
 		}
 
-		// Last clause (or statement level) — step out to caller.
-		return this._stepOutAndAdvance();
+		// Case 3: last clause, can't step in → pop to caller.
+		return this._popToCallerAndAdvance();
 	}
 
-	// Step out of the current frame and advance one position past the call site
-	// in the caller frame. Returns false when there is nowhere left to go.
-	private _stepOutAndAdvance(): boolean {
+	// Pop navigation history back to the caller frame and advance one clause past
+	// the call site. If the caller is also at its last clause, cascades (recurses).
+	// Returns false when there is no caller (top level — execution done).
+	private _popToCallerAndAdvance(): boolean {
 		const currentFrame = this._currentFrameIndex;
 
 		// Find the call site: most recent history entry from a different frame.
@@ -934,29 +995,19 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			this._granularity = caller.granularity;
 			this._currentClauseIndex = caller.clauseIndex;
 
+			// Advance past the call site.
 			const callerFrame = this._frames[this._currentFrameIndex];
 			const callerClauses = this._clauses[callerFrame.name] ?? [];
 			if (this._granularity === 'line' && this._currentClauseIndex < callerClauses.length - 1) {
-				this._pushHistory();
 				this._currentClauseIndex++;
 				return true;
 			}
-			if (this._currentFrameIndex < this._frames.length - 1) {
-				this._pushHistory();
-				this._currentFrameIndex++;
-				this._enterClauseLevel();
-				return true;
-			}
-			return false;
+
+			// Caller is also at its last clause — cascade step-out.
+			return this._popToCallerAndAdvance();
 		}
 
-		// No call site in history — advance sequentially.
-		if (this._currentFrameIndex < this._frames.length - 1) {
-			this._pushHistory();
-			this._currentFrameIndex++;
-			this._enterClauseLevel();
-			return true;
-		}
+		// No caller in history — top level, done.
 		return false;
 	}
 
@@ -1002,45 +1053,48 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _handleStepOut(msg: DapMessage): void {
 		this._respond(msg, true);
 
-		// Pop history entries while they belong to the current frame — the first entry
-		// from a different frame is the call site we jumped from.
-		const currentFrame = this._currentFrameIndex;
-		while (this._navigationHistory.length > 0 && this._navigationHistory[this._navigationHistory.length - 1].frameIndex === currentFrame) {
-			this._navigationHistory.pop();
-		}
-		if (this._navigationHistory.length > 0) {
-			const caller = this._navigationHistory.pop()!;
-			this._currentFrameIndex = caller.frameIndex;
-			this._granularity = caller.granularity;
-			this._currentClauseIndex = caller.clauseIndex;
-
-			// Advance past the call site — the CTE we just left is already executed.
-			const callerFrame = this._frames[this._currentFrameIndex];
-			const callerClauses = this._clauses[callerFrame.name] ?? [];
-			if (this._granularity === 'line' && this._currentClauseIndex < callerClauses.length - 1) {
-				this._currentClauseIndex++;
+		// No history — fall back to dropping granularity or terminating.
+		if (this._navigationHistory.length === 0) {
+			if (this._granularity === 'line') {
+				this._granularity = 'statement';
+				this._currentClauseIndex = 0;
+				void this._onLanded('step');
+			} else {
+				this._terminate();
 			}
-
-			void this._onLanded('step');
 			return;
 		}
 
-		// No history — fall back to dropping granularity or terminating.
-		if (this._granularity === 'line') {
-			this._granularity = 'statement';
-			this._currentClauseIndex = 0;
-			void this._onLanded('step');
-		} else {
-			this._terminate();
+		// StepOut = run _stepIn() until history depth decreases (left current scope).
+		const startDepth = this._navigationHistory.length;
+		while (this._stepIn()) {
+			if (this._navigationHistory.length < startDepth) {
+				void this._onLanded('step');
+				return;
+			}
+			if (this._isBreakpointAtCurrentPosition()) {
+				this._paused = true;
+				void this._onLanded('breakpoint');
+				return;
+			}
 		}
+		this._terminate();
 	}
 
 	private _handleStepBack(msg: DapMessage): void {
 		this._respond(msg, true);
 
-		// If there is navigation history, pop one entry and restore that exact position.
-		if (this._navigationHistory.length > 0) {
-			const prev = this._navigationHistory.pop()!;
+		// Pop one entry from _fullHistory and restore that position.
+		// Also sync _navigationHistory by removing the matching tail entry if present.
+		if (this._fullHistory.length > 0) {
+			const prev = this._fullHistory.pop()!;
+			// Keep _navigationHistory consistent — remove its tail if it points to the same slot.
+			if (
+				this._navigationHistory.length > 0 &&
+				this._navigationHistory[this._navigationHistory.length - 1] === prev
+			) {
+				this._navigationHistory.pop();
+			}
 			this._currentFrameIndex = prev.frameIndex;
 			this._granularity = prev.granularity;
 			this._currentClauseIndex = prev.clauseIndex;
@@ -1048,29 +1102,8 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			return;
 		}
 
-		// No history — sequential backward crawl as fallback.
-		if (this._granularity === 'line') {
-			if (this._currentClauseIndex > 0) {
-				this._currentClauseIndex--;
-				this._sendStopped('step');
-			} else if (this._currentFrameIndex > 0) {
-				// Step back to previous frame's last clause.
-				this._currentFrameIndex--;
-				const prevFrame = this._frames[this._currentFrameIndex];
-				const prevClauses = this._clauses[prevFrame.name] ?? [];
-				this._currentClauseIndex = Math.max(0, prevClauses.length - 1);
-				this._sendStopped('step');
-			} else {
-				this._sendStopped('step');
-			}
-		} else {
-			if (this._currentFrameIndex > 0) {
-				this._currentFrameIndex--;
-				this._sendStopped('step');
-			} else {
-				this._sendStopped('step');
-			}
-		}
+		// No history at all — stay put.
+		this._sendStopped('step');
 	}
 
 	private _handleContinue(msg: DapMessage): void {
@@ -1172,6 +1205,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private async _runToContinue(): Promise<void> {
 		this._paused = false;
 		this._navigationHistory = [];
+		this._fullHistory = [];
 
 		// Check the current position first (handles configurationDone starting at frame 0).
 		if (await this._onLanded('breakpoint')) return;
@@ -1376,37 +1410,27 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _handleReverseContinue(msg: DapMessage): void {
 		this._respond(msg, true);
 
-		if (this._navigationHistory.length === 0) {
-			// Already at start — stay put.
+		if (this._fullHistory.length === 0) {
 			this._sendStopped('step');
 			return;
 		}
 
-		// Step backwards until we hit a breakpoint or run out of history.
-		while (this._navigationHistory.length > 0) {
-			const prev = this._navigationHistory[this._navigationHistory.length - 1];
-			const prevFrame = this._frames[prev.frameIndex];
-			const hitBp = prevFrame && this._breakpoints.some(bp => {
-				if (bp.frameName) return bp.frameName === prevFrame.name;
-				return bp.line >= prevFrame.line && bp.line <= prevFrame.endLine;
-			});
-
-			if (hitBp) {
-				const entry = this._navigationHistory.pop()!;
-				this._currentFrameIndex = entry.frameIndex;
-				this._granularity = entry.granularity;
-				this._currentClauseIndex = entry.clauseIndex;
-				this._sendStopped('breakpoint');
-				return;
-			}
-
-			const entry = this._navigationHistory.pop()!;
+		// Walk backwards through full history, stopping at a breakpoint.
+		while (this._fullHistory.length > 0) {
+			const entry = this._fullHistory.pop()!;
 			this._currentFrameIndex = entry.frameIndex;
 			this._granularity = entry.granularity;
 			this._currentClauseIndex = entry.clauseIndex;
+
+			if (this._isBreakpointAtCurrentPosition()) {
+				this._navigationHistory = [];
+				this._sendStopped('breakpoint');
+				return;
+			}
 		}
 
-		// No breakpoint found — stopped at beginning of history.
+		// No breakpoint found — landed at oldest history entry.
+		this._navigationHistory = [];
 		this._sendStopped('step');
 	}
 
@@ -1425,63 +1449,129 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	// DAP: gotoTargets
 	// ──────────────────────────────────────────────────────────────
 
-	private _handleGotoTargets(msg: DapMessage): void {
-		const source = this._sourceUri ? { path: vscode.Uri.parse(this._sourceUri).fsPath } : undefined;
-		const targets = this._frames.map((frame, i) => ({
-			id: i,
-			label: frame.name,
-			line: frame.line + 1,
-			endLine: frame.endLine + 1,
-			instructionPointerReference: undefined,
-			column: 1,
-			endColumn: undefined,
-			// Include source so VS Code can display context.
-			...(source ? { hint: frame.type } : {}),
-		}));
+	/** Snapshot mutable state, drive real _stepIn() from session start, restore.
+	 *  Returns every position visited in order, each with the nav history at that
+	 *  point so goto can reconstruct a coherent call stack. */
+	private _simulateTraversal(): Array<{
+		frameIndex: number;
+		clauseIndex: number;
+		granularity: 'statement' | 'line';
+		navHist: Array<{ frameIndex: number; clauseIndex: number; granularity: 'statement' | 'line' }>;
+	}> {
+		const savedFi = this._currentFrameIndex;
+		const savedCi = this._currentClauseIndex;
+		const savedGran = this._granularity;
+		const savedNav = this._navigationHistory;
+		const savedFull = this._fullHistory;
 
+		this._currentFrameIndex = this._frames.length - 1;
+		this._currentClauseIndex = 0;
+		this._granularity = 'statement';
+		this._navigationHistory = [];
+		this._fullHistory = [];
+
+		const positions = [{
+			frameIndex: this._currentFrameIndex,
+			clauseIndex: this._currentClauseIndex,
+			granularity: this._granularity,
+			navHist: [] as Array<{ frameIndex: number; clauseIndex: number; granularity: 'statement' | 'line' }>,
+		}];
+
+		while (this._stepIn()) {
+			positions.push({
+				frameIndex: this._currentFrameIndex,
+				clauseIndex: this._currentClauseIndex,
+				granularity: this._granularity,
+				navHist: [...this._navigationHistory],
+			});
+		}
+
+		this._currentFrameIndex = savedFi;
+		this._currentClauseIndex = savedCi;
+		this._granularity = savedGran;
+		this._navigationHistory = savedNav;
+		this._fullHistory = savedFull;
+
+		return positions;
+	}
+
+	private _handleGotoTargets(msg: DapMessage): void {
+		const args = msg.arguments ?? {};
+		const line0 = ((args.line as number) ?? 1) - 1; // DAP is 1-indexed
+
+		const targetFi = this._frames.findIndex(f => f.line <= line0 && line0 <= f.endLine);
+		if (targetFi < 0) {
+			this._send({ type: 'response', command: 'gotoTargets', request_seq: msg.seq, success: true, body: { targets: [] } });
+			return;
+		}
+		const frame = this._frames[targetFi];
+		const targetCi = this._resolveClauseIndex(frame.name, line0) ?? 0;
+
+		// Find the next occurrence of this clause in the traversal after the current step.
+		const positions = this._simulateTraversal();
+		const currentStep = this._fullHistory.length;
+		const nextIdx = positions.findIndex((p, i) =>
+			i > currentStep &&
+			p.frameIndex === targetFi &&
+			p.clauseIndex === targetCi &&
+			p.granularity === 'line',
+		);
+
+		if (nextIdx < 0) {
+			this._send({ type: 'response', command: 'gotoTargets', request_seq: msg.seq, success: true, body: { targets: [] } });
+			return;
+		}
+
+		const source = this._sourceUri ? { path: vscode.Uri.parse(this._sourceUri).fsPath } : undefined;
 		this._send({
 			type: 'response',
 			command: 'gotoTargets',
 			request_seq: msg.seq,
 			success: true,
-			body: { targets },
+			body: {
+				targets: [{
+					id: nextIdx,
+					label: frame.name,
+					line: frame.line + 1,
+					...(source ? { hint: frame.type } : {}),
+				}],
+			},
 		});
 	}
 
 	private async _handleGoto(msg: DapMessage): Promise<void> {
 		const args = msg.arguments ?? {};
-		const targetId = (args.targetId as number) ?? 0;
-		const targetIndex = Math.max(0, Math.min(targetId, this._frames.length - 1));
+		const targetStepIdx = (args.targetId as number) ?? 0;
+
+		// Simulate to recover the exact position + nav history at the target step.
+		const positions = this._simulateTraversal();
+		const target = positions[Math.min(targetStepIdx, positions.length - 1)];
 
 		this._respond(msg, true);
 
-		// Execute any uncached frames between current position and target.
-		const from = Math.min(this._currentFrameIndex, targetIndex);
-		const to = targetIndex;
+		// Reset: fresh run from the beginning.
+		this._navigationHistory = [];
+		this._fullHistory = [];
+		this._resultCache.clear();
 
-		for (let i = from; i <= to; i++) {
-			const cacheKey = `${this._frames[i].name}:frame`;
-			if (!this._resultCache.has(cacheKey)) {
-				const prevGranularity = this._granularity;
-				const prevClause = this._currentClauseIndex;
-				const prevFrame = this._currentFrameIndex;
-
-				this._currentFrameIndex = i;
+		// Execute SQL for each unique frame encountered on the way to the target.
+		const seen = new Set<number>();
+		for (const p of positions.slice(0, targetStepIdx + 1)) {
+			if (!seen.has(p.frameIndex)) {
+				seen.add(p.frameIndex);
+				this._currentFrameIndex = p.frameIndex;
 				this._granularity = 'statement';
 				this._currentClauseIndex = 0;
 				if (await this._executeCurrentStep()) return;
-
-				// Restore if we haven't reached target yet.
-				if (i < to) {
-					this._currentFrameIndex = prevFrame;
-					this._granularity = prevGranularity;
-					this._currentClauseIndex = prevClause;
-				}
 			}
 		}
 
-		this._currentFrameIndex = targetIndex;
-		this._enterClauseLevel();
+		// Land at target with reconstructed nav history.
+		this._currentFrameIndex = target.frameIndex;
+		this._granularity = target.granularity;
+		this._currentClauseIndex = target.clauseIndex;
+		this._navigationHistory = target.navHist;
+
 		void this._onLanded('goto');
 	}
 
@@ -1633,7 +1723,10 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			});
 
 			if (result.data && result.data.success) {
-				return result.data as unknown as DecomposeResult;
+				const d = result.data as unknown as DecomposeResult;
+				// Shallow-clone frames so _remapPositions mutations don't bleed into
+				// caller-owned data (avoids shared-reference bugs in tests and production).
+				return { ...d, frames: d.frames.map(f => ({ ...f })) };
 			}
 
 			if (result.data?.error) {

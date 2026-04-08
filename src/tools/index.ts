@@ -54,6 +54,11 @@ export function registerLanguageModelTools(
 		['snapshot_models', new SnapshotModelsTool(service, logger)],
 	];
 
+	if (typeof vscode.lm?.registerTool !== 'function') {
+		logger.warn('vscode.lm.registerTool is not available in this VS Code version — skipping language model tools');
+		return;
+	}
+
 	for (const [name, tool] of tools) {
 		context.subscriptions.push(vscode.lm.registerTool(name, tool));
 		logger.info(`  ✓ ${name}`);
