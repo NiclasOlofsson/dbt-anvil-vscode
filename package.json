@@ -1388,9 +1388,12 @@
 		"demo:generate": "node scripts/demo/generate-demo.mjs",
 		"demo:render:gif": "node scripts/demo/generate-demo.mjs --config scripts/demo/rendering-config-gif.json",
 		"demo:render:mp4": "node scripts/demo/generate-demo.mjs --config scripts/demo/rendering-config-mp4.json",
-		"demo:render:webp": "node scripts/demo/generate-demo.mjs --config scripts/demo/rendering-config-webp.json && npm run demo:render:mp4"
+		"demo:render:webp": "node scripts/demo/generate-demo.mjs --config scripts/demo/rendering-config-webp.json && npm run demo:render:mp4",
+		"metricserver": "tsx src/metricserver/cli.ts",
+		"metricserver:start": "tsx src/metricserver/cli.ts 443"
 	},
 	"devDependencies": {
+		"@databricks/sql": "^1.13.0",
 		"@resvg/resvg-js": "^2.6.2",
 		"@stylistic/eslint-plugin": "^5.10.0",
 		"@types/dagre": "^0.7.54",
@@ -1419,8 +1422,10 @@
 	"dependencies": {
 		"@duckdb/node-api": "^1.5.1-r.1",
 		"dagre": "^0.8.5",
+		"hive-driver": "^1.0.0",
 		"js-yaml": "^4.1.1",
 		"node-sql-parser": "^5.3.6",
+		"thrift": "^0.22.0",
 		"yaml": "^2.8.3"
 	}
 }
