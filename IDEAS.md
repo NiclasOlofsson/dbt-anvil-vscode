@@ -145,4 +145,11 @@ If we can't handle this, we have to investigate how we can make sure we "win" ov
 
 Just do it! Work together with Microsoft on this feature to surface in Fabric and replace runtime of metric flow.
 
+Implement the thrift server side of the protocol. Call from PBI and execute your models right in the editor based on the yaml at hand.
+Then turn it around and execute the thrift client to query the server. So the user interface will be in the editor too. Can then talk locally, or actually to the server.
+
+After that we investigate other client/server protocol. Everyone seem to have invented their own for this. The only fixed point is the yaml->sql part that we will need to implement.
+
+Last step, make it a service that can be deployed. As an example, to azure function or similar.
+
 
