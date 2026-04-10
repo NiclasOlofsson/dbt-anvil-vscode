@@ -4,7 +4,7 @@ import { ServiceContainer } from './types/service-container';
 import { ManifestLoader } from './dbt/manifest-loader';
 import { ManifestIndexer } from './indexing/manifest-indexer';
 import { ManifestWatcher } from './indexing/manifest-watcher';
-import { detectPythonEnvironment, detectProfilesDir } from './dbt/env-detector';
+import { detectPythonEnvironment, detectProfilesDir, validatePythonEnvironment, dbtPackagesExist } from './dbt/env-detector';
 import { BridgeRunner } from './dbt/bridge-runner';
 import { DbtExecutionService, Priority } from './dbt/execution-service';
 import { CompileCache } from './dbt/compile-cache';
@@ -97,6 +97,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const pythonEnv = detectPythonEnvironment(projectDir);
 	logger.info(`Python environment: ${pythonEnv.description} (${pythonEnv.command.join(' ')})`);
 
+	const envReady = await validatePythonEnvironment(pythonEnv);
+	if (!envReady) {
+		logger.warn(`Python environment validation failed: ${pythonEnv.description}`);
+		void vscode.window.showWarningMessage(
+			`dbt Studio: Python environment not found or not working (${pythonEnv.description}). dbt features are disabled.`,
+			'Reload Window',
+		).then((selection) => {
+			if (selection === 'Reload Window') {
+				void vscode.commands.executeCommand('workbench.action.reloadWindow');
+			}
+		});
+	}
+
 	// -------- Set up manifest loading and indexing --------
 	const manifestLoader = new ManifestLoader(projectDir, extensionTargetDir);
 	const manifestIndexer = new ManifestIndexer(manifestLoader, logger);
@@ -153,6 +166,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// Connect manifest watcher to execution service for background parse-on-save
 	manifestWatcher.setExecutionService(executionService);
 
+	// -------- dbt deps check --------
+	if (envReady && hasDbtProject && !dbtPackagesExist(projectDir)) {
+		void vscode.window.showWarningMessage(
+			'dbt packages not installed. Run dbt deps to set up your project.',
+			'Run dbt deps',
+		).then((selection) => {
+			if (selection === 'Run dbt deps') {
+				void executionService.submit({
+					type: 'deps', args: ['deps'],
+					priority: Priority.User, origin: 'user', label: 'install deps',
+				}).then((result) => {
+					if (result.success) {
+						void vscode.window.showInformationMessage('dbt deps: success');
+					} else {
+						void vscode.window.showErrorMessage(`dbt deps: failed — ${result.stderr}`);
+					}
+				});
+			}
+		});
+	}
+
 	// -------- Compile cache (shared across all tools) --------
 	const compileCache = new CompileCache(executionService, manifestLoader, logger);
 	const compileCachePersistence = new CompileCachePersistence(context, logger);
@@ -161,6 +195,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	// -------- Describe cache (shared across providers and tools) --------
 	const describeCache = new DescribeCache(executionService, manifestIndexer, logger);
+	context.subscriptions.push(describeCache.onDescribeError(() => {
+		void vscode.window.showWarningMessage(
+			'Could not describe some tables — seed data may not be loaded yet. Run dbt seed to load your seed files.',
+			'Run dbt seed',
+		).then((selection) => {
+			if (selection === 'Run dbt seed') {
+				void executionService.submit({
+					type: 'seed', args: ['seed'],
+					priority: Priority.User, origin: 'user', label: 'seed',
+				}).then((result) => {
+					if (result.success) {
+						void vscode.window.showInformationMessage('dbt seed: success');
+					} else {
+						void vscode.window.showErrorMessage(`dbt seed: failed — ${result.stderr}`);
+					}
+				});
+			}
+		});
+	}));
 
 	// -------- Database provider (direct warehouse access, bypasses dbt bridge queue) --------
 	const projectConfig = loadProjectConfig(projectDir);
@@ -423,6 +476,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		{ dispose: () => { for (const d of providerDisposables) d.dispose(); } },
 	);
 
+	const requireEnv = (): boolean => {
+		if (!envReady) {
+			void vscode.window.showWarningMessage(
+				`Python environment is not working (${pythonEnv.description}). Please fix your setup and reload the window.`,
+				'Reload Window',
+			).then((selection) => {
+				if (selection === 'Reload Window') {
+					void vscode.commands.executeCommand('workbench.action.reloadWindow');
+				}
+			});
+			return false;
+		}
+		return true;
+	};
+
 	// -------- Register commands --------
 	context.subscriptions.push(
 		vscode.commands.registerCommand('dbt-studio.suppressSqlFluffWarning', async () => {
@@ -442,6 +510,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.runModel', async () => {
+			if (!requireEnv()) return;
 			const model = getActiveModelName();
 			if (!model) return;
 			const result = await executionService.submit({
@@ -457,12 +526,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.testModel', async () => {
+			if (!requireEnv()) return;
 			const model = getActiveModelName();
 			if (!model) return;
 			await vsTestController.runTestsForModel(model);
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.buildModel', async () => {
+			if (!requireEnv()) return;
 			const model = getActiveModelName();
 			if (!model) return;
 			const result = await executionService.submit({
@@ -478,6 +549,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.compileModel', async () => {
+			if (!requireEnv()) return;
 			const model = getActiveModelName();
 			if (!model) return;
 
@@ -569,6 +641,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.runDeps', async () => {
+			if (!requireEnv()) return;
 			const result = await executionService.submit({
 				type: 'deps', args: ['deps'],
 				priority: Priority.User, origin: 'user', label: 'install deps',
@@ -581,6 +654,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.parseProject', async () => {
+			if (!requireEnv()) return;
 			const result = await executionService.submit({
 				type: 'parse', args: ['parse'],
 				priority: Priority.User, origin: 'user', label: 'parse project',
@@ -629,6 +703,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		// ---- Test running commands (for explorer + CodeLens) ----
 
 		vscode.commands.registerCommand('dbt-studio.runNamedModel', async (modelName: string) => {
+			if (!requireEnv()) return;
 			const result = await executionService.submit({
 				type: 'run', args: ['run', '-s', modelName],
 				priority: Priority.User, origin: 'user', label: `run ${modelName}`,
@@ -641,6 +716,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.testNamedModel', async (modelName: string) => {
+			if (!requireEnv()) return;
 			await vsTestController.runTestsForModel(modelName);
 		}),
 
@@ -765,6 +841,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand('dbt-studio.executeQuery', async () => {
+			if (!requireEnv()) return;
 			const editor = vscode.window.activeTextEditor;
 			if (!editor || editor.document.languageId !== 'jinja-sql') {
 				void vscode.window.showWarningMessage('Open a dbt SQL file to execute queries.');
