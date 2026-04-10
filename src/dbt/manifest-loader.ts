@@ -78,7 +78,7 @@ export class ManifestLoader {
 
 		// Skip expensive re-read if the file hasn't actually been modified
 		const stat = fs.statSync(this._manifestPath);
-		if (this._cached && this._lastMtimeMs === stat.mtimeMs) {
+		if (!force && this._cached && this._lastMtimeMs === stat.mtimeMs) {
 			return this._cached;
 		}
 
