@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.12
+
+This is primarily a stability release, with improved startup resilience and several debugger enhancements.
+
+- **Debugger: step into referenced models** — Pressing F11 on a `ref()` in a FROM or JOIN clause now opens a nested debug session for the referenced model, letting you follow the data through the full model graph without leaving the debugger.
+- **Debugger: improved step-in and step-out** — Step-in and step-out navigation through CTEs and clause-level frames has been reworked for more predictable behaviour, including correct handling of the final `SELECT` clause appearing in the call stack.
+- **Startup validation** — dbt Studio now validates the Python environment on startup. If it is broken or misconfigured, a warning notification appears with a one-click "Reload Window" option. Missing `dbt_packages/` is also detected and surfaces an offer to run `dbt deps` before any commands are attempted.
+- **Fix: SQL identifier quoting** — Identifiers are now quoted per-adapter (double-quotes for DuckDB, backticks for Databricks) in schema and table introspection queries, fixing failures on projects with hyphenated names.
+- **Fix: debugger continue** — `F5` (continue) mid-session no longer terminates the session prematurely. Navigation history is now preserved across continue calls and only reset at the start of a fresh session.
+- **Fix: DuckDB file lock** — The DuckDB connection is now opened and closed per-operation instead of being held open as a singleton, eliminating the file lock conflict when running `dbt build` or `dbt seed` alongside the extension.
+
 ## 0.1.11
 
 This release rounds out the debugger with several new DAP capabilities and fixes a handful of rough edges from the initial launch.
