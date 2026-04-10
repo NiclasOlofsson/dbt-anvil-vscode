@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -120,4 +121,32 @@ export function detectProfilesDir(projectDir: string): string {
 		return projectDir;
 	}
 	return path.join(os.homedir(), '.dbt');
+}
+
+/**
+ * Validate that the detected Python environment is actually functional by
+ * running `<env.command> --version` with a 10s timeout.
+ *
+ * Returns true if the command exits with code 0, false otherwise.
+ */
+export function validatePythonEnvironment(env: PythonEnvironment): Promise<boolean> {
+	return new Promise((resolve) => {
+		const [executable, ...args] = env.command;
+		const child = spawn(executable, [...args, '--version'], {
+			env: { ...process.env, ...env.envVars },
+			timeout: 10_000,
+			windowsHide: true,
+		});
+
+		child.on('error', () => resolve(false));
+		child.on('close', (code) => resolve(code === 0));
+	});
+}
+
+/**
+ * Returns true if the dbt_packages directory exists in the project,
+ * indicating that `dbt deps` has been run.
+ */
+export function dbtPackagesExist(projectDir: string): boolean {
+	return fs.existsSync(path.join(projectDir, 'dbt_packages'));
 }

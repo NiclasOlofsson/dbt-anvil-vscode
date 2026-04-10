@@ -1,3 +1,4 @@
+import * as vscode from 'vscode';
 import type { ILogger } from '../types/logger';
 import type { DbtExecutionService } from './execution-service';
 import { Priority } from './execution-service';
@@ -23,6 +24,11 @@ import type { DatabaseProvider } from '../providers/database/database-provider';
  */
 export class DescribeCache {
 	private readonly _inflight = new Map<string, Promise<string[] | undefined>>();
+	private _describeFailed = false;
+
+	private readonly _onDescribeError = new vscode.EventEmitter<void>();
+	/** Fired once when a describe operation fails for the first time. */
+	readonly onDescribeError = this._onDescribeError.event;
 
 	constructor(
 		private readonly service: DbtExecutionService,
@@ -137,6 +143,10 @@ export class DescribeCache {
 			}
 		} catch (err) {
 			this.logger.warn(`DescribeCache: error describing ${uniqueId}: ${err}`);
+			if (!this._describeFailed) {
+				this._describeFailed = true;
+				this._onDescribeError.fire();
+			}
 		}
 		return undefined;
 	}

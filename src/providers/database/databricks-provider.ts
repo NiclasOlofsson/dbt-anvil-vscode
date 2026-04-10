@@ -119,8 +119,9 @@ export class DatabricksProvider implements DatabaseProvider {
 		const qualifiedName = opts?.qualifiedName
 			?? (opts?.isSource && opts.sourceName ? `${opts.sourceName}.${name}` : name);
 
-		const sql = `DESCRIBE TABLE ${qualifiedName}`;
-		this.logger.trace(`DatabricksProvider: describe ${qualifiedName}`);
+		const quoted = qualifiedName.split('.').map(p => `\`${p.replace(/`/g, '``')}\``).join('.');
+		const sql = `DESCRIBE TABLE ${quoted}`;
+		this.logger.trace(`DatabricksProvider: describe ${quoted}`);
 
 		const result = await this._executeStatement(sql, undefined, undefined);
 		return result.rows.map(row => ({
@@ -132,7 +133,8 @@ export class DatabricksProvider implements DatabaseProvider {
 
 	async listSchemas(database?: string): Promise<string[]> {
 		const in_ = database ?? this._catalog;
-		const sql = in_ ? `SHOW SCHEMAS IN ${in_}` : 'SHOW SCHEMAS';
+		const quotedIn = in_ ? `\`${in_.replace(/`/g, '``')}\`` : undefined;
+		const sql = quotedIn ? `SHOW SCHEMAS IN ${quotedIn}` : 'SHOW SCHEMAS';
 		this.logger.trace(`DatabricksProvider: listSchemas (${sql})`);
 		const result = await this._executeStatement(sql, undefined, undefined);
 		return result.rows.map(r => String(r['databaseName'] ?? r['namespace'] ?? Object.values(r)[0] ?? ''));
@@ -140,7 +142,8 @@ export class DatabricksProvider implements DatabaseProvider {
 
 	async listTables(schema: string, database?: string): Promise<string[]> {
 		const db = database ?? this._catalog;
-		const in_ = db ? `${db}.${schema}` : schema;
+		const quoteId = (s: string) => `\`${s.replace(/`/g, '``')}\``;
+		const in_ = db ? `${quoteId(db)}.${quoteId(schema)}` : quoteId(schema);
 		const sql = `SHOW TABLES IN ${in_}`;
 		this.logger.trace(`DatabricksProvider: listTables (${sql})`);
 		const result = await this._executeStatement(sql, undefined, undefined);

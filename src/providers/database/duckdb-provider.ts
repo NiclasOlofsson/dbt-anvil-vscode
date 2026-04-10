@@ -12,7 +12,6 @@ export class DuckdbProvider implements DatabaseProvider {
 	readonly adapterType = 'duckdb';
 
 	private readonly _dbPath: string;
-	private _instance: DuckDBInstance | undefined;
 
 	constructor(
 		connection: DuckdbConnection,
@@ -40,8 +39,9 @@ export class DuckdbProvider implements DatabaseProvider {
 	async describe(name: string, opts?: { isSource?: boolean; sourceName?: string; qualifiedName?: string }): Promise<ColumnDefinition[]> {
 		const qualifiedName = opts?.qualifiedName
 			?? (opts?.isSource && opts.sourceName ? `${opts.sourceName}.${name}` : name);
-		this.logger.trace(`DuckdbProvider: describe ${qualifiedName}`);
-		const result = await this._runSql(`DESCRIBE ${qualifiedName}`);
+		const quoted = qualifiedName.split('.').map(p => `"${p.replace(/"/g, '""')}"`).join('.');
+		this.logger.trace(`DuckdbProvider: describe ${quoted}`);
+		const result = await this._runSql(`DESCRIBE ${quoted}`);
 		return result.rows.map(row => ({
 			name: String(row['column_name'] ?? ''),
 			type: String(row['column_type'] ?? 'unknown'),
@@ -58,48 +58,49 @@ export class DuckdbProvider implements DatabaseProvider {
 
 	async listTables(schema: string, _database?: string): Promise<string[]> {
 		this.logger.trace(`DuckdbProvider: listTables (${schema})`);
-		const instance = await this._getInstance();
-		const conn = await instance.connect();
-		try {
-			const prepared = await conn.prepare(
-				'SELECT table_name FROM information_schema.tables WHERE table_schema = $1 ORDER BY table_name',
-			);
-			prepared.bindVarchar(1, schema);
-			const reader = await prepared.runAndReadAll();
-			const rows = reader.getRowObjectsJson() as Record<string, unknown>[];
-			return rows.map(r => String(r['table_name'] ?? Object.values(r)[0] ?? ''));
-		} finally {
-			conn.closeSync();
-		}
+		return this._withInstance(async instance => {
+			const conn = await instance.connect();
+			try {
+				const prepared = await conn.prepare(
+					'SELECT table_name FROM information_schema.tables WHERE table_schema = $1 ORDER BY table_name',
+				);
+				prepared.bindVarchar(1, schema);
+				const reader = await prepared.runAndReadAll();
+				const rows = reader.getRowObjectsJson() as Record<string, unknown>[];
+				return rows.map(r => String(r['table_name'] ?? Object.values(r)[0] ?? ''));
+			} finally {
+				conn.closeSync();
+			}
+		});
+	}
+
+	private _withInstance<T>(fn: (instance: DuckDBInstance) => Promise<T>): Promise<T> {
+		return DuckDBInstance.create(this._dbPath, { access_mode: 'READ_ONLY' }).then(instance =>
+			fn(instance).finally(() => instance.closeSync()),
+		);
 	}
 
 	private async _runSql(sql: string): Promise<QueryResult> {
-		const instance = await this._getInstance();
-		const conn = await instance.connect();
-		try {
-			const reader = await conn.runAndReadAll(sql);
-			const columnNames = reader.columnNames();
-			const columnTypesArr = reader.columnTypes();
-			const rowObjects = reader.getRowObjectsJson() as Record<string, unknown>[];
-			const columnTypes: Record<string, string> = {};
-			columnNames.forEach((n, i) => { columnTypes[n] = columnTypesArr[i].toString(); });
-			return {
-				columns: columnNames,
-				columnTypes,
-				rows: rowObjects,
-				rowCount: rowObjects.length,
-				executionTimeMs: 0,
-			};
-		} finally {
-			conn.closeSync();
-		}
-	}
-
-	private async _getInstance(): Promise<DuckDBInstance> {
-		if (!this._instance) {
-			this._instance = await DuckDBInstance.create(this._dbPath, { access_mode: 'READ_ONLY' });
-		}
-		return this._instance;
+		return this._withInstance(async instance => {
+			const conn = await instance.connect();
+			try {
+				const reader = await conn.runAndReadAll(sql);
+				const columnNames = reader.columnNames();
+				const columnTypesArr = reader.columnTypes();
+				const rowObjects = reader.getRowObjectsJson() as Record<string, unknown>[];
+				const columnTypes: Record<string, string> = {};
+				columnNames.forEach((n, i) => { columnTypes[n] = columnTypesArr[i].toString(); });
+				return {
+					columns: columnNames,
+					columnTypes,
+					rows: rowObjects,
+					rowCount: rowObjects.length,
+					executionTimeMs: 0,
+				};
+			} finally {
+				conn.closeSync();
+			}
+		});
 	}
 
 	private async _maybeCompile(sql: string): Promise<string> {
