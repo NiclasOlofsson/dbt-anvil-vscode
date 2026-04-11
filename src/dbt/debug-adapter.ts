@@ -6,6 +6,7 @@ import type { DatabaseProvider, QueryResult } from '../providers/database/databa
 import type { BridgeRunner } from './bridge-runner';
 import type { CompileCache } from './compile-cache';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
+import type { ParseService } from '../services/parse-service';
 import { Priority } from './execution-service';
 import { splitStatements, findStatementAtOffset } from './statement-splitter';
 import { emitDebugSymbols, parseSourceMap } from './debug-symbols';
@@ -203,6 +204,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		private readonly _bridgeRunner: BridgeRunner,
 		private readonly _compileCache: CompileCache,
 		private readonly _manifestIndexer: ManifestIndexer,
+		private readonly _parseService: ParseService,
 	) {
 	}
 
@@ -331,6 +333,22 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			this._output('No active dbt SQL file.\n');
 			this._terminate();
 			return;
+		}
+
+		// If cursor is inside a CTE of a model file, delegate to queryCte and bail out.
+		if (this._pathResolver.classifyFile(editor.document.fileName) === 'model') {
+			const modelId = this._manifestIndexer.findModelByFilePath(editor.document.fileName);
+			if (modelId) {
+				const adapterType = this._manifestIndexer.index?.adapterType ?? 'ansi';
+				const model = await this._parseService.getDocumentModel(editor.document, adapterType, { skipEnrichment: true });
+				const cursorLine = editor.selection.active.line;
+				const cte = model?.ctes.find(c => cursorLine >= c.line && cursorLine <= c.endLine);
+				if (cte) {
+					this._terminate();
+					void vscode.commands.executeCommand('dbt-studio.queryCte', modelId, cte.name);
+					return;
+				}
+			}
 		}
 
 		this._sourceUri = editor.document.uri.toString();
