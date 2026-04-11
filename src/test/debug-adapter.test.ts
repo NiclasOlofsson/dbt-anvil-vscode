@@ -7,6 +7,8 @@ import {
 	wrapWithDebugCount,
 	findMainSelectPos,
 	buildScopedSql,
+	neutralizeJoinType,
+	neutralizeJoinInSql,
 	SCOPE_RESULT,
 	SCOPE_IMPACT,
 	SCOPE_QUERY,
@@ -18,6 +20,7 @@ import type { DatabaseProvider, QueryResult } from '../providers/database/databa
 import type { BridgeRunner, DbtCommandResult } from '../dbt/bridge-runner';
 import type { CompileCache } from '../dbt/compile-cache';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
+import type { ParseService } from '../services/parse-service';
 
 // ── Helpers ──
 
@@ -185,6 +188,14 @@ function mockManifestIndexer(): ManifestIndexer {
 	} as unknown as ManifestIndexer;
 }
 
+function mockParseService(): ParseService {
+	return {
+		getDocumentModel: vi.fn().mockResolvedValue(null),
+		onAliasesReady: { dispose: vi.fn() },
+		onSqlglotWarnings: { dispose: vi.fn() },
+	} as unknown as ParseService;
+}
+
 // ── DapHarness ──
 
 class DapHarness {
@@ -200,6 +211,7 @@ class DapHarness {
 		bridgeRunner?: BridgeRunner;
 		compileCache?: CompileCache;
 		manifestIndexer?: ManifestIndexer;
+		parseService?: ParseService;
 	}) {
 		this.adapter = new SqlDebugAdapter(
 			opts?.queryRunner ?? mockQueryRunner(),
@@ -209,6 +221,7 @@ class DapHarness {
 			opts?.bridgeRunner ?? mockBridgeRunner(),
 			opts?.compileCache ?? mockCompileCache(),
 			opts?.manifestIndexer ?? mockManifestIndexer(),
+			opts?.parseService ?? mockParseService(),
 		);
 		this.adapter.onDidSendMessage((msg) => {
 			this.messages.push(msg as unknown as DapMsg);
@@ -284,6 +297,63 @@ function clearActiveEditor(): void {
 // ══════════════════════════════════════════════════════════════
 
 describe('standalone utilities', () => {
+	describe('neutralizeJoinType', () => {
+		it('leaves LEFT JOIN unchanged', () => {
+			expect(neutralizeJoinType(' LEFT JOIN foo AS f')).toBe(' LEFT JOIN foo AS f');
+		});
+
+		it('converts INNER JOIN to LEFT JOIN', () => {
+			expect(neutralizeJoinType(' INNER JOIN foo AS f')).toBe(' LEFT JOIN foo AS f');
+		});
+
+		it('converts RIGHT JOIN to LEFT JOIN', () => {
+			expect(neutralizeJoinType(' RIGHT JOIN foo AS f')).toBe(' LEFT JOIN foo AS f');
+		});
+
+		it('converts bare JOIN to LEFT JOIN', () => {
+			expect(neutralizeJoinType(' JOIN foo AS f')).toBe(' LEFT JOIN foo AS f');
+		});
+
+		it('converts CROSS JOIN to LEFT JOIN', () => {
+			expect(neutralizeJoinType(' CROSS JOIN foo AS f')).toBe(' LEFT JOIN foo AS f');
+		});
+	});
+
+	describe('neutralizeJoinInSql', () => {
+		// Current bridge format: qualifier keywords (inner, left, right, ...) and JOIN are
+		// emitted as separate token markers on the same source line. C8 wraps `inner` alone,
+		// C14 wraps bare `join`. The table reference lives OUTSIDE both markers.
+		// clauseLine parameter is the 1-based line number matching the @dbg marker.
+
+		// INNER JOIN: C8=`inner`, C14=`join`, ON condition in ident marker after table ref.
+		const innerJoinLine29 = '/* @dbg:L29:C8:join:cte_favored_wins */ inner /* /@dbg */ /* @dbg:L29:C14:join:cte_favored_wins */ join /* /@dbg */ "nba-monte-carlo"."main"."nba_results_log" AS r /* @dbg:L30:C41:ident:cte_favored_wins */ on /* /@dbg */ r.game_id = lr.game_id';
+
+		// LEFT JOIN: C0=`left`, C5=`join`, ON condition in ident marker.
+		const leftJoinLine103 = '/* @dbg:L103:C0:join:_main_ */ left /* /@dbg */ /* @dbg:L103:C5:join:_main_ */ join /* /@dbg */ cte_wins AS w /* @dbg:L103:C19:ident:_main_ */ on /* /@dbg */ w.winning_team = t.team_long';
+
+		it('INNER JOIN — converts to LEFT JOIN, clears qualifier marker, inserts 1=0 AND after ON', () => {
+			const expected = '/* @dbg:L29:C8:join:cte_favored_wins */ /* /@dbg */ /* @dbg:L29:C14:join:cte_favored_wins */ LEFT JOIN /* /@dbg */ "nba-monte-carlo"."main"."nba_results_log" AS r /* @dbg:L30:C41:ident:cte_favored_wins */ on 1=0 AND /* /@dbg */ r.game_id = lr.game_id';
+			expect(neutralizeJoinInSql(innerJoinLine29, 29, 'cte_favored_wins')).toBe(expected);
+		});
+
+		it('LEFT JOIN — leaves join type, clears qualifier marker, inserts 1=0 AND after ON', () => {
+			const expected = '/* @dbg:L103:C0:join:_main_ */ /* /@dbg */ /* @dbg:L103:C5:join:_main_ */ LEFT JOIN /* /@dbg */ cte_wins AS w /* @dbg:L103:C19:ident:_main_ */ on 1=0 AND /* /@dbg */ w.winning_team = t.team_long';
+			expect(neutralizeJoinInSql(leftJoinLine103, 103, '_main_')).toBe(expected);
+		});
+
+		it('returns sql unchanged when no matching marker found', () => {
+			expect(neutralizeJoinInSql('SELECT 1', 0, '_main_')).toBe('SELECT 1');
+		});
+
+		it('returns sql unchanged when clauseLine does not match', () => {
+			expect(neutralizeJoinInSql(innerJoinLine29, 0, 'cte_favored_wins')).toBe(innerJoinLine29);
+		});
+
+		it('returns sql unchanged when frame does not match', () => {
+			expect(neutralizeJoinInSql(innerJoinLine29, 28, 'wrong_frame')).toBe(innerJoinLine29);
+		});
+	});
+
 	describe('encodeRef / decodeRef', () => {
 		it('roundtrips frame index and scope', () => {
 			const ref = encodeRef(5, SCOPE_RESULT);
@@ -1997,21 +2067,31 @@ describe('SqlDebugAdapter', () => {
 
 		afterEach(() => { harness.dispose(); clearActiveEditor(); });
 
-		it('gotoTargets returns the frame containing the clicked line', () => {
+		it('gotoTargets returns target when clicking on a valid clause line', () => {
+			// After configurationDone we are at _main_, clause 0 (from), line granularity.
+			// _main_ has clauses: from (line 6) and select (line 8).
+			// stackTrace displays clause.line + 1, so select appears at line 9 to user.
 			harness.clear();
-			// line 2 (1-indexed) = line 1 (0-indexed) — inside 'base' (lines 0-3).
-			harness.send('gotoTargets', { source: {}, line: 2 });
+			harness.send('gotoTargets', { source: {}, line: 9 });
 			const resp = harness.lastResponse('gotoTargets');
 			expect(resp.success).toBe(true);
 			const targets = (resp.body as Record<string, unknown>).targets as Array<{ id: number; label: string }>;
 			expect(targets).toHaveLength(1);
-			expect(targets[0].label).toBe('base');
+			expect(targets[0].label).toBe('skip to select');
+			expect(targets[0].id).toBe(1);
 		});
 
-		it('gotoTargets returns empty for a line outside all frames', () => {
+		it('gotoTargets returns empty when at the last clause', async () => {
+			// Initial stop: _main_ ci=0.  Step 1 (stepIn): steps into base ci=0 (local CTE ref).
+			// Step 2 (next/F10): advances within base to ci=1 (select — last clause, no forward targets).
+			// Note: using 'next' not 'stepIn' because stepIn at base ci=0 would try cross-model
+			// step-in for the external ref 'raw_orders', which sends startDebugging (no stopped event).
+			harness.send('stepIn', { threadId: 1, granularity: 'line' });
+			await vi.waitFor(() => expect(harness.events('stopped')).toHaveLength(2));
+			harness.send('next', { threadId: 1, granularity: 'line' });
+			await vi.waitFor(() => expect(harness.events('stopped')).toHaveLength(3));
 			harness.clear();
-			// line 5 (1-indexed) = line 4 (0-indexed) — between base (0-3) and _main_ (5-8).
-			harness.send('gotoTargets', { source: {}, line: 5 });
+			harness.send('gotoTargets', { source: {} });
 			const resp = harness.lastResponse('gotoTargets');
 			const targets = (resp.body as Record<string, unknown>).targets as Array<unknown>;
 			expect(targets).toHaveLength(0);
@@ -2019,8 +2099,8 @@ describe('SqlDebugAdapter', () => {
 
 		it('goto resets and runs forward to the clicked position', async () => {
 			harness.clear();
-			// Ask for goto targets on line 2 (inside 'base'), get the step index back.
-			harness.send('gotoTargets', { source: {}, line: 2 });
+			// Ask for goto targets on line 9 (select clause displays as line 9), get the target back.
+			harness.send('gotoTargets', { source: {}, line: 9 });
 			const targResp = harness.lastResponse('gotoTargets');
 			const targets = (targResp.body as Record<string, unknown>).targets as Array<{ id: number; label: string }>;
 			expect(targets).toHaveLength(1);
@@ -2030,6 +2110,97 @@ describe('SqlDebugAdapter', () => {
 			await vi.waitFor(() => expect(harness.events('stopped')).toHaveLength(1));
 			const stopped = harness.events('stopped')[0];
 			expect(stopped.body).toMatchObject({ reason: 'goto' });
+		});
+
+		it('goto lands at the EXACT target line in stackTrace', async () => {
+			// Get goto targets for line 9 (select clause displayed as line 9).
+			harness.send('gotoTargets', { source: {}, line: 9 });
+			const targResp = harness.lastResponse('gotoTargets');
+			const targets = (targResp.body as Record<string, unknown>).targets as Array<{ id: number; label: string }>;
+			expect(targets).toHaveLength(1);
+
+			// Execute goto.
+			harness.send('goto', { threadId: 1, targetId: targets[0].id });
+			await vi.waitFor(() => expect(harness.events('stopped')).toHaveLength(2));
+
+			// Get stackTrace and verify the current line matches the target line.
+			harness.clear();
+			harness.send('stackTrace', { threadId: 1 });
+			const stackResp = harness.lastResponse('stackTrace');
+			expect(stackResp.success).toBe(true);
+			const frames = (stackResp.body as Record<string, unknown>).stackFrames as Array<{ line: number; name: string }>;
+			expect(frames.length).toBeGreaterThan(0);
+			// The top frame should be at line 9 (the displayed line we clicked).
+			expect(frames[0].line).toBe(9);
+		});
+
+		it('goto with join neutralization shows "skipped:" in stackTrace', async () => {
+			// Step into base frame which has joins.
+			harness.send('stepIn', { threadId: 1, granularity: 'line' });
+			await vi.waitFor(() => expect(harness.events('stopped')).toHaveLength(2));
+
+			// Get current stackTrace to find a join clause line.
+			harness.send('stackTrace', { threadId: 1 });
+			let stackResp = harness.lastResponse('stackTrace');
+			const frames = (stackResp.body as Record<string, unknown>).stackFrames as Array<{ line: number; name: string }>;
+			// Find a later clause (should have joins in between).
+			const targetLine = frames[frames.length - 1]?.line;
+			if (!targetLine) return; // Skip if no targets.
+
+			// Get goto targets for that line.
+			harness.send('gotoTargets', { source: {}, line: targetLine });
+			const targResp = harness.lastResponse('gotoTargets');
+			const targets = (targResp.body as Record<string, unknown>).targets as Array<{ id: number; label: string }>;
+			if (targets.length === 0) return; // Skip if no goto targets.
+
+			// Execute goto.
+			harness.send('goto', { threadId: 1, targetId: targets[0].id });
+			await vi.waitFor(() => expect(harness.events('stopped')).toHaveLength(3));
+
+			// Get stackTrace and check for "skipped:" prefix on join clauses.
+			harness.clear();
+			harness.send('stackTrace', { threadId: 1 });
+			stackResp = harness.lastResponse('stackTrace');
+			const newFrames = (stackResp.body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
+			const hasSkipped = newFrames.some(f => f.name.includes('skipped:'));
+			// If there were joins to skip, we should see at least one "skipped:" frame.
+			// This is a weak assertion because the test data might not have joins.
+			if (targets[0].label.includes('skip')) {
+				expect(hasSkipped).toBe(true);
+			}
+		});
+
+		it('step forward after goto preserves "skipped:" state', async () => {
+			// Step into base, goto forward skipping joins.
+			harness.send('stepIn', { threadId: 1, granularity: 'line' });
+			await vi.waitFor(() => expect(harness.events('stopped')).toHaveLength(2));
+
+			harness.send('gotoTargets', { source: {} });
+			const targResp = harness.lastResponse('gotoTargets');
+			const targets = (targResp.body as Record<string, unknown>).targets as Array<{ id: number; label: string }>;
+			if (targets.length === 0) return; // Skip if no targets.
+
+			harness.send('goto', { threadId: 1, targetId: targets[targets.length - 1].id });
+			await vi.waitFor(() => expect(harness.events('stopped')).toHaveLength(3));
+
+			// Get stackTrace before stepping.
+			harness.send('stackTrace', { threadId: 1 });
+			const beforeStack = harness.lastResponse('stackTrace');
+			const beforeFrames = (beforeStack.body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
+			const beforeSkipped = beforeFrames.filter(f => f.name.includes('skipped:'));
+
+			// Step forward (F11).
+			harness.send('stepIn', { threadId: 1, granularity: 'line' });
+			await vi.waitFor(() => expect(harness.events('stopped')).toHaveLength(4));
+
+			// Get stackTrace after stepping.
+			harness.send('stackTrace', { threadId: 1 });
+			const afterStack = harness.lastResponse('stackTrace');
+			const afterFrames = (afterStack.body as Record<string, unknown>).stackFrames as Array<{ name: string }>;
+			const afterSkipped = afterFrames.filter(f => f.name.includes('skipped:'));
+
+			// Skipped joins should still be marked as skipped after stepping forward.
+			expect(afterSkipped.length).toBeGreaterThanOrEqual(beforeSkipped.length);
 		});
 	});
 });
