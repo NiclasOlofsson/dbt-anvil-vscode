@@ -49,6 +49,12 @@
 					"light": "./resources/icons/file-sql-light.svg",
 					"dark": "./resources/icons/file-sql-dark.svg"
 				}
+			},
+			{
+				"id": "dbt-symbol-sql",
+				"aliases": [
+					"dbt Symbol SQL"
+				]
 			}
 		],
 		"grammars": [
@@ -63,6 +69,11 @@
 				"injectTo": [
 					"source.yaml"
 				]
+			},
+			{
+				"language": "dbt-symbol-sql",
+				"scopeName": "source.dbt-symbol-sql",
+				"path": "./syntaxes/dbt-symbol-sql.tmLanguage.json"
 			}
 		],
 		"commands": [
@@ -288,6 +299,10 @@
 			{
 				"command": "dbt-sql.dataPipeline.goToFrame",
 				"title": "Go to Frame"
+			},
+			{
+				"command": "dbt-studio.debug.showFrameSql",
+				"title": "Show SQL"
 			}
 		],
 		"viewsContainers": {
@@ -647,6 +662,13 @@
 					"when": "view == dbt-studio.testExplorer && viewItem == testCategory",
 					"group": "inline@1"
 				}
+			],
+			"debug/callstack/context": [
+				{
+					"command": "dbt-studio.debug.showFrameSql",
+					"when": "debugType == 'dbt-sql'",
+					"group": "navigation"
+				}
 			]
 		},
 		"configuration": [
@@ -779,6 +801,11 @@
 						"type": "boolean",
 						"default": true,
 						"markdownDescription": "**⚠️ Disabling this is strongly discouraged.** dbt Studio monitors terminal shell executions and automatically suspends its own background operations when you run `dbt run`, `build`, `seed`, `snapshot`, `clone`, or `run-operation` directly in a terminal. Without this, concurrent dbt writes can corrupt the manifest and produce stale intellisense, phantom errors, and incorrect lineage. Only disable if VS Code shell integration is causing unrelated problems in your environment."
+					},
+					"dbt-studio.terminal.contributeCliShim": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "Contribute a `dbt` command to integrated terminals that delegates to the detected package manager (uv, poetry, etc.). When enabled, you can type `dbt build` in the terminal instead of `uv run dbt build`."
 					}
 				}
 			},

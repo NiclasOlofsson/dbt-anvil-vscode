@@ -10,6 +10,10 @@ export interface PythonEnvironment {
 	description: string;
 	/** Extra environment variables needed (e.g. PIPENV_IGNORE_VIRTUALENVS=1) */
 	envVars?: Record<string, string>;
+	/** Wrapper command prefix before 'dbt' for shim generation (e.g. ['uv', 'run', '--directory', dir]) */
+	wrapperPrefix: string[];
+	/** Bin directory for venv environments (e.g. '.venv/Scripts' or '.venv/bin') */
+	venvBinDir?: string;
 }
 
 /**
@@ -30,9 +34,14 @@ export function detectPythonEnvironment(projectDir: string): PythonEnvironment {
 	const venvPath = findVenv(absProjectDir);
 	if (venvPath) {
 		const pythonExe = getVenvPython(venvPath);
+		const venvBinDir = process.platform === 'win32'
+			? path.join(venvPath, 'Scripts')
+			: path.join(venvPath, 'bin');
 		return {
 			command: [pythonExe],
 			description: `venv at ${path.relative(absProjectDir, venvPath)}`,
+			wrapperPrefix: [],
+			venvBinDir,
 		};
 	}
 
@@ -41,6 +50,7 @@ export function detectPythonEnvironment(projectDir: string): PythonEnvironment {
 		return {
 			command: ['uv', 'run', '--directory', absProjectDir, 'python'],
 			description: 'uv (uv.lock)',
+			wrapperPrefix: ['uv', 'run', '--directory', absProjectDir],
 		};
 	}
 
@@ -49,6 +59,7 @@ export function detectPythonEnvironment(projectDir: string): PythonEnvironment {
 		return {
 			command: ['poetry', 'run', '--directory', absProjectDir, 'python'],
 			description: 'poetry (poetry.lock)',
+			wrapperPrefix: ['poetry', 'run', '--directory', absProjectDir],
 		};
 	}
 
@@ -58,6 +69,7 @@ export function detectPythonEnvironment(projectDir: string): PythonEnvironment {
 			command: ['pipenv', 'run', 'python'],
 			description: 'pipenv (Pipfile.lock)',
 			envVars: { PIPENV_IGNORE_VIRTUALENVS: '1' },
+			wrapperPrefix: ['pipenv', 'run'],
 		};
 	}
 
@@ -67,6 +79,7 @@ export function detectPythonEnvironment(projectDir: string): PythonEnvironment {
 		return {
 			command: ['conda', 'run', '-n', condaEnv, 'python'],
 			description: `conda (${condaEnv})`,
+			wrapperPrefix: ['conda', 'run', '-n', condaEnv],
 		};
 	}
 
@@ -75,6 +88,7 @@ export function detectPythonEnvironment(projectDir: string): PythonEnvironment {
 	return {
 		command: [systemPython],
 		description: 'system Python',
+		wrapperPrefix: [],
 	};
 }
 

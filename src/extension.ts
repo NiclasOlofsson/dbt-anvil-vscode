@@ -5,6 +5,7 @@ import { ManifestLoader } from './dbt/manifest-loader';
 import { ManifestIndexer } from './indexing/manifest-indexer';
 import { ManifestWatcher } from './indexing/manifest-watcher';
 import { detectPythonEnvironment, detectProfilesDir, validatePythonEnvironment, dbtPackagesExist } from './dbt/env-detector';
+import { writeShims } from './dbt/terminal-env';
 import { BridgeRunner } from './dbt/bridge-runner';
 import { DbtExecutionService, Priority } from './dbt/execution-service';
 import { CompileCache } from './dbt/compile-cache';
@@ -57,11 +58,12 @@ import { ProfileResultPersistence } from './dbt/profile-result-persistence';
 import { ProfilerDecorationProvider } from './providers/profiler-decoration-provider';
 import { QueryDecorationProvider } from './providers/query-decoration-provider';
 import { ProfilerResultsProvider } from './views/profiler-results-provider';
-import { QueryRunner } from './dbt/query-runner';
+import { QueryRunner, type StatementResult } from './dbt/query-runner';
 import { QueryResultPanel } from './views/query-result-panel';
 import { SqlDebugAdapter } from './dbt/debug-adapter';
 import { SqlDebugConfigProvider } from './dbt/debug-config-provider';
 import { DataPipelineProvider } from './dbt/debug-pipeline-provider';
+import { SymbolSqlProvider } from './providers/symbol-sql-provider';
 import { splitStatements } from './dbt/statement-splitter';
 import * as path from 'node:path';
 
@@ -120,6 +122,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				void vscode.commands.executeCommand('workbench.action.reloadWindow');
 			}
 		});
+	}
+
+	// -------- Terminal environment setup --------
+	const contributeCliShim = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('terminal.contributeCliShim', true);
+	if (contributeCliShim && envReady) {
+		try {
+			const shimsDir = path.join(storageDir, 'shims');
+			logger.info(`Creating terminal shims at: ${shimsDir}`);
+			const shimPath = writeShims(shimsDir, pythonEnv);
+			if (shimPath) {
+				context.environmentVariableCollection.clear();
+				context.environmentVariableCollection.prepend('PATH', shimPath + path.delimiter);
+				context.environmentVariableCollection.description = `dbt Studio: activated ${pythonEnv.description}`;
+				logger.info(`Terminal shim contributed: ${shimPath}`);
+			} else {
+				logger.info('No terminal shim needed (system Python)');
+			}
+		} catch (error) {
+			logger.error(`Failed to create terminal shims: ${error}`);
+		}
+	} else if (!contributeCliShim) {
+		// Clear any existing PATH modifications if the setting is disabled
+		context.environmentVariableCollection.clear();
 	}
 
 	// -------- Set up manifest loading and indexing --------
@@ -966,14 +991,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	);
 
 	// -------- Debug adapter (F5 → run SQL) --------
+	const symbolSqlProvider = new SymbolSqlProvider();
 	const dataPipelineProvider = new DataPipelineProvider(context.extensionUri);
 	context.subscriptions.push(
+		vscode.workspace.registerTextDocumentContentProvider(SymbolSqlProvider.scheme, symbolSqlProvider),
 		vscode.debug.registerDebugConfigurationProvider('dbt-sql', new SqlDebugConfigProvider()),
 		vscode.debug.registerDebugConfigurationProvider('dbt-sql', new SqlDebugConfigProvider(), vscode.DebugConfigurationProviderTriggerKind.Dynamic),
 		vscode.debug.registerDebugAdapterDescriptorFactory('dbt-sql', {
 			createDebugAdapterDescriptor() {
 				return new vscode.DebugAdapterInlineImplementation(
-					new SqlDebugAdapter(queryRunner, pathResolver, logger, databaseProvider, sqlglotBridgeRunner, compileCache, manifestIndexer, parseService),
+					new SqlDebugAdapter(queryRunner, pathResolver, logger, databaseProvider, sqlglotBridgeRunner, compileCache, manifestIndexer, parseService, symbolSqlProvider),
 				);
 			},
 		}),
@@ -982,13 +1009,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			showCollapseAll: true,
 		}),
 		vscode.debug.onDidReceiveDebugSessionCustomEvent(e => {
-			if (e.session.type === 'dbt-sql' && e.event === 'dbt-sql:pipeline') {
+			if (e.session.type !== 'dbt-sql') return;
+			if (e.event === 'dbt-sql:pipeline') {
 				const sourceUri = e.session.configuration.file as string | undefined;
 				dataPipelineProvider.handlePipelineEvent(e.body, sourceUri);
+			} else if (e.event === 'dbt-sql:stepResult') {
+				const body = e.body as { frameName: string; columns: string[]; columnTypes?: Record<string, string>; rows: Record<string, unknown>[]; rowCount: number; executionTimeMs: number };
+				const stepResult: StatementResult = {
+					sql: body.frameName,
+					index: 0,
+					result: {
+						columns: body.columns,
+						columnTypes: body.columnTypes,
+						rows: body.rows,
+						rowCount: body.rowCount,
+						executionTimeMs: body.executionTimeMs,
+					},
+				};
+				queryResultPanel.showResults([stepResult], undefined, true);
 			}
 		}),
 		vscode.debug.onDidTerminateDebugSession(session => {
-			if (session.type === 'dbt-sql') dataPipelineProvider.clear();
+			if (session.type === 'dbt-sql') {
+				dataPipelineProvider.clear();
+				symbolSqlProvider.clear();
+			}
 		}),
 		vscode.commands.registerCommand('dbt-sql.dataPipeline.toggleModeFull', () => dataPipelineProvider.toggleMode()),
 		vscode.commands.registerCommand('dbt-sql.dataPipeline.toggleModeStack', () => dataPipelineProvider.toggleMode()),
@@ -999,6 +1044,43 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			const pos = new vscode.Position(line, 0);
 			editor.selection = new vscode.Selection(pos, pos);
 			editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+		}),
+		vscode.commands.registerCommand('dbt-studio.debug.showFrameSql', async (...args: unknown[]) => {
+			logger.info('showFrameSql command invoked', { args: args.map(a => JSON.stringify(a)), argsLength: args.length });
+
+			const session = vscode.debug.activeDebugSession;
+			if (!session || session.type !== 'dbt-sql') {
+				logger.warn('showFrameSql: no active dbt-sql session');
+				return;
+			}
+
+			// The context menu passes different args - try to find the frame ID
+			let frameId: number | undefined;
+
+			// Check if any arg has a frameId or id property
+			for (const arg of args) {
+				if (arg && typeof arg === 'object') {
+					const obj = arg as any;
+					frameId = obj.frameId ?? obj.id ?? obj.frameID;
+					if (frameId !== undefined) {
+						logger.info('showFrameSql: found frameId in arg', { frameId, arg: JSON.stringify(arg) });
+						break;
+					}
+				}
+			}
+
+			if (frameId === undefined) {
+				logger.error('showFrameSql: could not extract frameId from args');
+				void vscode.window.showErrorMessage('Could not determine stack frame ID');
+				return;
+			}
+
+			try {
+				await session.customRequest('showFrameSql', { frameId });
+				logger.info('showFrameSql request sent successfully');
+			} catch (err) {
+				logger.error('showFrameSql request failed', err);
+			}
 		}),
 	);
 
