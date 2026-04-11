@@ -81,6 +81,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	logger.info(`dbt Studio v${version} activating...`);
 
+	// -------- Claim .sql files as jinja-sql --------
+	// Other extensions (sqlfluff, sql-formatter, etc.) may steal .sql bindings depending
+	// on load order. Since we only activate inside dbt projects, we forcibly reassign
+	// any .sql document that another extension has already claimed.
+	const claimSqlDocument = (document: vscode.TextDocument) => {
+		if (document.fileName.endsWith('.sql') && document.languageId !== 'jinja-sql') {
+			void vscode.languages.setTextDocumentLanguage(document, 'jinja-sql');
+		}
+	};
+	vscode.workspace.textDocuments.forEach(claimSqlDocument);
+	context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(claimSqlDocument));
+
 	// -------- Resolve workspace/project directory --------
 	const workspaceFolders = vscode.workspace.workspaceFolders;
 	if (!workspaceFolders || workspaceFolders.length === 0) {
@@ -956,10 +968,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// -------- Debug adapter (F5 → run SQL) --------
 	const dataPipelineProvider = new DataPipelineProvider(context.extensionUri);
 	context.subscriptions.push(
-		vscode.debug.registerDebugConfigurationProvider('dbt-sql', new SqlDebugConfigProvider()),	vscode.debug.registerDebugConfigurationProvider('dbt-sql', new SqlDebugConfigProvider(), vscode.DebugConfigurationProviderTriggerKind.Dynamic),		vscode.debug.registerDebugAdapterDescriptorFactory('dbt-sql', {
+		vscode.debug.registerDebugConfigurationProvider('dbt-sql', new SqlDebugConfigProvider()),
+		vscode.debug.registerDebugConfigurationProvider('dbt-sql', new SqlDebugConfigProvider(), vscode.DebugConfigurationProviderTriggerKind.Dynamic),
+		vscode.debug.registerDebugAdapterDescriptorFactory('dbt-sql', {
 			createDebugAdapterDescriptor() {
 				return new vscode.DebugAdapterInlineImplementation(
-					new SqlDebugAdapter(queryRunner, pathResolver, logger, databaseProvider, sqlglotBridgeRunner, compileCache, manifestIndexer),
+					new SqlDebugAdapter(queryRunner, pathResolver, logger, databaseProvider, sqlglotBridgeRunner, compileCache, manifestIndexer, parseService),
 				);
 			},
 		}),
