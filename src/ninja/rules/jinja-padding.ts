@@ -1,0 +1,100 @@
+import * as vscode from 'vscode';
+import { NinjaCategory } from '../categories';
+import type { NinjaViolation } from '../violation';
+import type { TokenRule, TokenRuleContext } from '../rule';
+import { tokenize } from '../../dbt/jinja-tokenizer';
+
+/**
+ * JJ01: Jinja tags should have single-space padding inside delimiters.
+ * e.g. `{{ref('x')}}` → `{{ ref('x') }}`
+ *
+ * Checks expression `{{ }}` and tag `{% %}` tokens. Comments `{# #}` are skipped.
+ * Whitespace-control dashes (`{{- -}}`, `{%- -%}`) are respected.
+ */
+export const jinjaPaddingRule: TokenRule = {
+	id: 'ninja.jinja.padding',
+	type: 'token',
+	category: NinjaCategory.Jinja,
+	defaultSeverity: 'warning',
+	description: 'Jinja tags should have single-space padding inside delimiters',
+
+	check(ctx: TokenRuleContext): NinjaViolation[] {
+		const violations: NinjaViolation[] = [];
+		const text = ctx.document.getText();
+		const tokens = tokenize(text);
+
+		for (const token of tokens) {
+			if (token.type !== 'expression' && token.type !== 'tag') continue;
+
+			const raw = token.raw;
+			const openLen = 2; // {{ or {%
+			const closeLen = 2; // }} or %}
+
+			// Determine the content boundaries accounting for whitespace-control dashes.
+			let contentStart = openLen;
+			if (raw[contentStart] === '-') contentStart++;
+
+			let contentEnd = raw.length - closeLen;
+			if (raw[contentEnd - 1] === '-') contentEnd--;
+
+			// Check opening padding: should be exactly one space after opener (+ optional dash)
+			const afterOpen = raw[contentStart];
+			if (afterOpen !== ' ' && afterOpen !== '\n') {
+				// Need a space after the opening delimiter
+				const pos = ctx.document.positionAt(token.start + contentStart);
+				const range = new vscode.Range(pos, pos);
+				violations.push({
+					rule: 'ninja.jinja.padding',
+					message: 'Expected single space after jinja opening delimiter',
+					range,
+					fix: [vscode.TextEdit.insert(pos, ' ')],
+				});
+			} else if (afterOpen === ' ' && raw[contentStart + 1] === ' ') {
+				// Multiple spaces — collapse to one
+				let spaceEnd = contentStart + 1;
+				while (spaceEnd < contentEnd && raw[spaceEnd] === ' ') spaceEnd++;
+				if (spaceEnd > contentStart + 1) {
+					const startPos = ctx.document.positionAt(token.start + contentStart + 1);
+					const endPos = ctx.document.positionAt(token.start + spaceEnd);
+					const range = new vscode.Range(startPos, endPos);
+					violations.push({
+						rule: 'ninja.jinja.padding',
+						message: 'Expected single space after jinja opening delimiter',
+						range,
+						fix: [vscode.TextEdit.delete(range)],
+					});
+				}
+			}
+
+			// Check closing padding: should be exactly one space before closer (+ optional dash)
+			const beforeClose = raw[contentEnd - 1];
+			if (beforeClose !== ' ' && beforeClose !== '\n') {
+				const pos = ctx.document.positionAt(token.start + contentEnd);
+				const range = new vscode.Range(pos, pos);
+				violations.push({
+					rule: 'ninja.jinja.padding',
+					message: 'Expected single space before jinja closing delimiter',
+					range,
+					fix: [vscode.TextEdit.insert(pos, ' ')],
+				});
+			} else if (beforeClose === ' ' && raw[contentEnd - 2] === ' ') {
+				// Multiple spaces — collapse to one
+				let spaceStart = contentEnd - 2;
+				while (spaceStart > contentStart && raw[spaceStart - 1] === ' ') spaceStart--;
+				if (spaceStart < contentEnd - 1) {
+					const startPos = ctx.document.positionAt(token.start + spaceStart);
+					const endPos = ctx.document.positionAt(token.start + contentEnd - 1);
+					const range = new vscode.Range(startPos, endPos);
+					violations.push({
+						rule: 'ninja.jinja.padding',
+						message: 'Expected single space before jinja closing delimiter',
+						range,
+						fix: [vscode.TextEdit.delete(range)],
+					});
+				}
+			}
+		}
+
+		return violations;
+	},
+};

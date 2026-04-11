@@ -810,6 +810,78 @@
 				}
 			},
 			{
+				"id": "dbt-studio.ninja",
+				"title": "Ninja Linter",
+				"properties": {
+					"dbt-studio.ninja.enabled": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "**Enabled**: Run the built-in Ninja linter on SQL files and show violations in the Problems panel."
+					},
+					"dbt-studio.ninja.rules": {
+						"type": "object",
+						"default": {},
+						"markdownDescription": "Per-rule severity overrides. Keys are rule IDs (e.g. `ninja.cap.keywords`), values are `error`, `warning`, `info`, or `off`."
+					},
+					"dbt-studio.ninja.capitalisation.keywords": {
+						"type": "string",
+						"default": "lower",
+						"enum": ["upper", "lower", "consistent"],
+						"markdownDescription": "Capitalisation policy for SQL keywords (SELECT, FROM, WHERE, etc.)."
+					},
+					"dbt-studio.ninja.capitalisation.functions": {
+						"type": "string",
+						"default": "lower",
+						"enum": ["upper", "lower", "consistent"],
+						"markdownDescription": "Capitalisation policy for SQL function names (count, coalesce, etc.)."
+					},
+					"dbt-studio.ninja.capitalisation.literals": {
+						"type": "string",
+						"default": "lower",
+						"enum": ["upper", "lower", "consistent"],
+						"markdownDescription": "Capitalisation policy for SQL literals (NULL, TRUE, FALSE)."
+					},
+					"dbt-studio.ninja.capitalisation.types": {
+						"type": "string",
+						"default": "lower",
+						"enum": ["upper", "lower", "consistent"],
+						"markdownDescription": "Capitalisation policy for SQL datatype keywords (INT, VARCHAR, BOOLEAN, etc.)."
+					},
+					"dbt-studio.ninja.indentation.unit": {
+						"type": "string",
+						"default": "space",
+						"enum": ["space", "tab"],
+						"markdownDescription": "Indentation character."
+					},
+					"dbt-studio.ninja.indentation.size": {
+						"type": "number",
+						"default": 4,
+						"minimum": 1,
+						"maximum": 8,
+						"markdownDescription": "Number of spaces (or tabs) per indent level."
+					},
+					"dbt-studio.ninja.maxLineLength": {
+						"type": "number",
+						"default": 120,
+						"minimum": 40,
+						"maximum": 500,
+						"markdownDescription": "Maximum line length before the long-lines rule triggers."
+					},
+					"dbt-studio.ninja.layout.commaPosition": {
+						"type": "string",
+						"default": "trailing",
+						"enum": ["trailing", "leading"],
+						"markdownDescription": "Whether commas should appear at end (trailing) or start (leading) of lines."
+					},
+					"dbt-studio.ninja.layout.operatorPosition": {
+						"type": "string",
+						"default": "trailing",
+						"enum": ["trailing", "leading"],
+						"markdownDescription": "Whether operators (AND, OR, +, etc.) should appear at end (trailing) or start (leading) of lines."
+					}
+				}
+			},
+			{
 				"id": "dbt-studio.database",
 				"title": "Database",
 				"properties": {

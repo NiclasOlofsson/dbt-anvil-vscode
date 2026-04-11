@@ -44,6 +44,7 @@ import { YamlDocumentSymbolProvider } from './providers/yaml/document-symbol-pro
 import { DbtWorkspaceSymbolProvider } from './providers/workspace-symbol-provider';
 import { DbtSignatureHelpProvider } from './providers/sql/signature-help-provider';
 import { SqlCodeActionProvider } from './providers/sql/code-action-provider';
+import { NinjaFormattingProvider } from './providers/sql/formatting-provider';
 import { ConfigCodeActionProvider } from './providers/common/config-code-action-provider';
 import { DbtCallHierarchyProvider } from './providers/sql/call-hierarchy-provider';
 import { ParseService } from './services/parse-service';
@@ -461,6 +462,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const signatureHelpProvider = new DbtSignatureHelpProvider(manifestIndexer, logger);
 	const sqlCodeActionProvider = new SqlCodeActionProvider(manifestIndexer, logger);
 	sqlCodeActionProvider.setPathResolver(pathResolver);
+	sqlCodeActionProvider.setNinjaResultProvider(uri => diagnosticsProvider.getNinjaResult(uri));
+	const ninjaFormattingProvider = new NinjaFormattingProvider(parseService, manifestIndexer);
 	const configCodeActionProvider = new ConfigCodeActionProvider();
 	const callHierarchyProvider = new DbtCallHierarchyProvider(manifestIndexer, logger, parseService);
 
@@ -494,6 +497,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				providedCodeActionKinds: ConfigCodeActionProvider.providedCodeActionKinds,
 			}),
 			vscode.languages.registerCallHierarchyProvider(sqlSelector, callHierarchyProvider),
+			vscode.languages.registerDocumentFormattingEditProvider(sqlSelector, ninjaFormattingProvider),
 		];
 
 		logger.info(`Registered language providers with ${sqlSelector.length} SQL filters, ${yamlSelector.length} YAML filters`);

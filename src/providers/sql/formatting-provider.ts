@@ -1,16 +1,38 @@
-// Intentionally not implemented.
-//
-// Formatting for jinja-sql files is fully delegated to the SQLFluff extension
-// (https://marketplace.visualstudio.com/items?itemName=dorzey.vscode-sqlfluff).
-// SQLFluff provides DocumentFormattingProvider and fix-on-save via its own
-// rules engine and dialect-aware parser, which is a better fit than anything
-// we could build here.
-//
-// If SQLFluff is not available, users can set `editor.defaultFormatter` to
-// another SQL formatter extension of their choice.
-//
-// If dbt Studio ever needs to override or supplement formatting (e.g. for
-// Jinja-specific syntax), implement DbtFormattingProvider here and register
-// it in extension.ts with:
-//
-//   vscode.languages.registerDocumentFormattingEditProvider(sqlSelector, formattingProvider)
+import * as vscode from 'vscode';
+import type { ParseService, DocumentModel } from '../../services/parse-service';
+import type { ManifestIndexer } from '../../indexing/manifest-indexer';
+import { runNinja } from '../../ninja/engine';
+import { loadConfig } from '../../ninja/config-loader';
+import { tokenize } from '../../dbt/jinja-tokenizer';
+
+/**
+ * Document formatting provider powered by Ninja.
+ * Collects all auto-fixable violations and applies their edits.
+ */
+export class NinjaFormattingProvider implements vscode.DocumentFormattingEditProvider {
+	constructor(
+		private readonly parseService: ParseService,
+		private readonly indexer: ManifestIndexer,
+	) {}
+
+	async provideDocumentFormattingEdits(
+		document: vscode.TextDocument,
+		_options: vscode.FormattingOptions,
+		_token: vscode.CancellationToken,
+	): Promise<vscode.TextEdit[]> {
+		const config = loadConfig();
+		if (!config.enabled) return [];
+
+		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const model = await this.parseService.getDocumentModel(document, dialect);
+		const jinjaTokens = tokenize(document.getText());
+		const emptyModel: DocumentModel = { ctes: [], refs: [], sources: [], tokens: [], finalColumns: [], timing: { parseMs: 0, totalMs: 0 } };
+		const result = runNinja(document, model ?? emptyModel, jinjaTokens, config);
+
+		const edits: vscode.TextEdit[] = [];
+		for (const v of result.violations) {
+			if (v.fix) edits.push(...v.fix);
+		}
+		return edits;
+	}
+}
