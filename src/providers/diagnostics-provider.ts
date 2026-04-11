@@ -1,7 +1,7 @@
-// SQL linting diagnostics (style/syntax) are delegated to SQLFluff.
-// This provider surfaces dbt-specific semantic errors:
+// SQL linting diagnostics — dbt-specific semantic errors and Ninja style linting:
 // 1. Real-time: unknown ref() / source() calls validated against the manifest index
 // 2. Post-parse: compilation errors detected by `dbt parse`
+// 3. Ninja: built-in style/layout linting (capitalisation, whitespace, jinja padding)
 
 import * as path from 'node:path';
 import * as vscode from 'vscode';
@@ -10,9 +10,13 @@ import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { StatusBarManager } from '../views/status-bar';
 import type { ILogger } from '../types/logger';
 import { ParseService } from '../services/parse-service';
-import type { SqlglotWarning } from '../services/parse-service';
+import type { SqlglotWarning, DocumentModel } from '../services/parse-service';
 import { computeCommentRanges, isOffsetInComment } from './common/comment-utils';
 import type { CommentRange } from './common/comment-utils';
+import { runNinja } from '../ninja/engine';
+import type { NinjaResult } from '../ninja/engine';
+import { loadConfig } from '../ninja/config-loader';
+import { tokenize } from '../dbt/jinja-tokenizer';
 
 interface DbtErrorLocation {
 	filePath: string;
@@ -30,6 +34,10 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 	private readonly _sqlfluffCollection: vscode.DiagnosticCollection;
 	/** Warning shown on dbt_project.yml when auto-save is enabled (triggers frequent dbt parse). */
 	private readonly _autoSaveCollection: vscode.DiagnosticCollection;
+	/** Ninja style-linting diagnostics (capitalisation, whitespace, jinja padding). */
+	private readonly _ninjaCollection: vscode.DiagnosticCollection;
+	/** Stores the last Ninja result per document URI for quick-fix code actions. */
+	private readonly _ninjaResults = new Map<string, NinjaResult>();
 	/** Visual-only dimming decoration applied from the syntax error token to end-of-file. */
 	private readonly _syntaxErrorDim: vscode.TextEditorDecorationType;
 	/** Tracks the dimmed range per document URI so it can be re-applied on tab switch. */
@@ -57,6 +65,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		this._sqlglotCollection = vscode.languages.createDiagnosticCollection('dbt-studio-sqlglot');
 		this._sqlfluffCollection = vscode.languages.createDiagnosticCollection('dbt-studio-sqlfluff');
 		this._autoSaveCollection = vscode.languages.createDiagnosticCollection('dbt-studio-autosave');
+		this._ninjaCollection = vscode.languages.createDiagnosticCollection('dbt-studio-ninja');
 		this._syntaxErrorDim = vscode.window.createTextEditorDecorationType({ opacity: '0.5' });
 		this._disposables.push(this._syntaxErrorDim);
 
@@ -112,6 +121,8 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 				this._refCollection.delete(doc.uri);
 				this._columnCollection.delete(doc.uri);
 				this._sqlglotCollection.delete(doc.uri);
+				this._ninjaCollection.delete(doc.uri);
+				this._ninjaResults.delete(doc.uri.toString());
 				this._syntaxErrorDimRanges.delete(doc.uri.toString());
 				this._updateStatusBar();
 			}),
@@ -123,6 +134,14 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 					} else {
 						for (const editor of vscode.window.visibleTextEditors) {
 							this._validateDocument(editor.document);
+						}
+					}
+				}
+				if (e.affectsConfiguration('dbt-studio.ninja')) {
+					// Re-run ninja on all open SQL documents when ninja settings change
+					for (const editor of vscode.window.visibleTextEditors) {
+						if (editor.document.languageId === 'jinja-sql') {
+							this._runNinjaDebounced(editor.document);
 						}
 					}
 				}
@@ -240,6 +259,9 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		if (this.parseService) {
 			this._validateColumnsDebounced(document);
 		}
+
+		// Ninja style linting (debounced separately — needs parse result)
+		this._runNinjaDebounced(document);
 	}
 
 	/** Re-validate only ref/source diagnostics (no column validation). Used by onIndexRebuild. */
@@ -330,6 +352,61 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 				diagnostics.push(diag);
 			}
 		}
+	}
+
+	// ---- Ninja linting ----
+
+	private readonly _ninjaDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+	private _runNinjaDebounced(document: vscode.TextDocument): void {
+		const key = document.uri.toString();
+		const existing = this._ninjaDebounceTimers.get(key);
+		if (existing) clearTimeout(existing);
+		const timer = setTimeout(() => {
+			this._ninjaDebounceTimers.delete(key);
+			this._runNinjaAsync(document).catch(err => {
+				this.logger.debug(`Ninja lint error: ${err}`);
+			});
+		}, 300);
+		this._ninjaDebounceTimers.set(key, timer);
+	}
+
+	private async _runNinjaAsync(document: vscode.TextDocument): Promise<void> {
+		const config = loadConfig();
+		if (!config.enabled) {
+			this._ninjaCollection.delete(document.uri);
+			this._ninjaResults.delete(document.uri.toString());
+			return;
+		}
+
+		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const model = this.parseService
+			? await this.parseService.getDocumentModel(document, dialect)
+			: null;
+
+		// If we can't get a parse result, run layout rules only (no token rules)
+		const jinjaTokens = tokenize(document.getText());
+		const emptyModel: DocumentModel = { ctes: [], refs: [], sources: [], tokens: [], finalColumns: [], timing: { parseMs: 0, totalMs: 0 } };
+		const result = runNinja(document, model ?? emptyModel, jinjaTokens, config);
+
+		this._ninjaResults.set(document.uri.toString(), result);
+
+		const diagnostics: vscode.Diagnostic[] = [];
+		for (const v of result.violations) {
+			const sev = result.severityMap.get(v.rule) ?? vscode.DiagnosticSeverity.Warning;
+			const diag = new vscode.Diagnostic(v.range, v.message, sev);
+			diag.source = 'ninja';
+			diag.code = v.rule;
+			diagnostics.push(diag);
+		}
+
+		this._ninjaCollection.set(document.uri, diagnostics);
+		this._updateStatusBar();
+	}
+
+	/** Get the last ninja result for a document (used by code action provider). */
+	getNinjaResult(uri: vscode.Uri): NinjaResult | undefined {
+		return this._ninjaResults.get(uri.toString());
 	}
 
 	// ---- Column validation (async) ----
@@ -472,13 +549,14 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 	}
 
 	private _updateStatusBar(): void {
-		let parseCount = 0, refCount = 0, colCount = 0, sqlglotCount = 0;
+		let parseCount = 0, refCount = 0, colCount = 0, sqlglotCount = 0, ninjaCount = 0;
 		this._parseCollection.forEach((_, diags) => { parseCount += diags.length; });
 		this._refCollection.forEach((_, diags) => { refCount += diags.length; });
 		this._columnCollection.forEach((_, diags) => { colCount += diags.length; });
 		this._sqlglotCollection.forEach((_, diags) => { sqlglotCount += diags.length; });
-		const total = parseCount + refCount + colCount + sqlglotCount;
-		this.logger.trace(`[diagnostics] counts — parse:${parseCount} refs:${refCount} columns:${colCount} sqlglot:${sqlglotCount} total:${total}`);
+		this._ninjaCollection.forEach((_, diags) => { ninjaCount += diags.length; });
+		const total = parseCount + refCount + colCount + sqlglotCount + ninjaCount;
+		this.logger.trace(`[diagnostics] counts — parse:${parseCount} refs:${refCount} columns:${colCount} sqlglot:${sqlglotCount} ninja:${ninjaCount} total:${total}`);
 		this.statusBar.setErrorCount(total);
 	}
 
@@ -489,6 +567,8 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		this._sqlglotCollection.clear();
 		this._sqlfluffCollection.clear();
 		this._autoSaveCollection.clear();
+		this._ninjaCollection.clear();
+		this._ninjaResults.clear();
 		this._syntaxErrorDimRanges.clear();
 		for (const editor of vscode.window.visibleTextEditors) {
 			editor.setDecorations(this._syntaxErrorDim, []);
@@ -499,6 +579,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 	dispose(): void {
 		if (this._debounceTimer) clearTimeout(this._debounceTimer);
 		for (const timer of this._columnDebounceTimers.values()) clearTimeout(timer);
+		for (const timer of this._ninjaDebounceTimers.values()) clearTimeout(timer);
 		for (const cts of this._columnCtsSources.values()) cts.cancel();
 		for (const d of this._disposables) d.dispose();
 		this._parseCollection.dispose();
@@ -507,6 +588,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		this._sqlglotCollection.dispose();
 		this._sqlfluffCollection.dispose();
 		this._autoSaveCollection.dispose();
+		this._ninjaCollection.dispose();
 	}
 
 	private _updateAutoSaveDiagnostic(): void {
