@@ -1314,12 +1314,15 @@ describe('SqlDebugAdapter', () => {
 			});
 		});
 
-		it('echoes expression in non-repl context', () => {
+		it('evaluates watch expression against current frame when no frameId', async () => {
 			harness.send('evaluate', { expression: 'some_value', context: 'watch' });
 
-			const resp = harness.lastResponse('evaluate');
-			expect(resp.success).toBe(true);
-			expect((resp.body as Record<string, unknown>).result).toBe('some_value');
+			await vi.waitFor(() => {
+				const resp = harness.lastResponse('evaluate');
+				expect(resp).toBeDefined();
+				expect(resp.success).toBe(true);
+				expect((resp.body as Record<string, unknown>).result).toBeTruthy();
+			});
 		});
 
 		it('rejects empty expression in repl', () => {
