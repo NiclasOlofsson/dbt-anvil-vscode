@@ -41,6 +41,7 @@ export interface PoolOptions {
 export class PyodideWorkerPool implements SqlParser {
     readonly #pyodideDir: string;
     readonly #vendorDir: string;
+    readonly #scriptsDir: string;
     readonly #workerScript: string;
     readonly #minWorkers: number;
     readonly #maxWorkers: number;
@@ -52,9 +53,10 @@ export class PyodideWorkerPool implements SqlParser {
 
     readonly #initialReady: Promise<void>;
 
-    constructor(pyodideDir: string, vendorDir: string, options?: PoolOptions) {
+    constructor(pyodideDir: string, vendorDir: string, scriptsDir: string, options?: PoolOptions) {
         this.#pyodideDir = pyodideDir;
         this.#vendorDir = vendorDir;
+        this.#scriptsDir = scriptsDir;
         // In production __dirname === dist/, in tests (tsx) __dirname === src/ftl/.
         // Fall back to dist/ relative to the workspace root when the in-place .js is absent.
         const inPlace = path.join(__dirname, 'pyodide-worker.js');
@@ -162,6 +164,7 @@ export class PyodideWorkerPool implements SqlParser {
             workerData: {
                 pyodideDir: this.#pyodideDir,
                 vendorDir: this.#vendorDir,
+                scriptsDir: this.#scriptsDir,
             },
         });
 

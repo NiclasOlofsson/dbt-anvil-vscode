@@ -15,6 +15,7 @@ import { FtlDocumentParser } from '../../ftl/ftl-document-parser';
 const SAMPLES_ROOT = path.join(__dirname, '..', '..', '..', 'samples');
 const PYODIDE_DIR  = path.join(__dirname, '..', '..', '..', 'node_modules', 'pyodide');
 const VENDOR_DIR   = path.join(__dirname, '..', '..', '..', 'resources', 'bridge', 'vendor');
+const SCRIPTS_DIR  = path.join(__dirname, '..', '..', '..', 'resources', 'ftl');
 
 function collectSqlFiles(dir: string): string[] {
     const results: string[] = [];
@@ -42,7 +43,7 @@ const RESULTS: FileResult[] = [];
 let documentParser: FtlDocumentParser;
 
 beforeAll(async () => {
-    const runtime = await initPyodide(PYODIDE_DIR, VENDOR_DIR);
+    const runtime = await initPyodide(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR);
     documentParser = new FtlDocumentParser(PyodideSqlParser.create(runtime.pyodide));
 }, 60_000);
 
@@ -95,7 +96,7 @@ describe('sample project DocumentModel — stress (50 iterations)', () => {
 
     beforeAll(async () => {
         const cores = os.cpus().length;
-        poolParser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, { minWorkers: cores, maxWorkers: cores });
+        poolParser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR, { minWorkers: cores, maxWorkers: cores });
         await poolParser.ready();
     }, 120_000);
 

@@ -7,12 +7,13 @@ import { renToRawLine } from '../../ftl/nunjucks-renderer.js';
 
 const PYODIDE_DIR = path.join(__dirname, '..', '..', '..', 'node_modules', 'pyodide');
 const VENDOR_DIR = path.join(__dirname, '..', '..', '..', 'resources', 'bridge', 'vendor');
+const SCRIPTS_DIR = path.join(__dirname, '..', '..', '..', 'resources', 'ftl');
 
 let runtime: PyodideRuntime;
 let parser: PyodideSqlParser;
 
 beforeAll(async () => {
-    runtime = await initPyodide(PYODIDE_DIR, VENDOR_DIR);
+    runtime = await initPyodide(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR);
     parser = PyodideSqlParser.create(runtime.pyodide);
 }, 60_000);
 
@@ -355,17 +356,6 @@ SELECT mkey, sourcename FROM warehouse`;
         expect(result.sqlTokens!.length).toBeGreaterThan(0);
     });
 
-    it('each sqlToken has type, start, end, line, col with correct types', async () => {
-        const result = await parser.parse('SELECT id FROM users', 'duckdb');
-        for (const tok of result.sqlTokens!) {
-            expect(typeof tok.type).toBe('string');
-            expect(typeof tok.start).toBe('number');
-            expect(typeof tok.end).toBe('number');
-            expect(typeof tok.line).toBe('number');
-            expect(typeof tok.col).toBe('number');
-        }
-    });
-
     it('first token of SELECT query has type SELECT', async () => {
         const result = await parser.parse('SELECT id FROM users', 'duckdb');
         expect(result.sqlTokens![0].type).toBe('SELECT');
@@ -384,6 +374,35 @@ SELECT mkey, sourcename FROM warehouse`;
         const fromTok = result.sqlTokens!.find(t => t.type === 'FROM');
         expect(fromTok).toBeDefined();
         expect(fromTok!.line).toBe(1);
+    });
+
+    it('sqlToken start/end/col positions match exact source offsets', async () => {
+        // "SELECT id FROM users"
+        //  0123456789...
+        // col is sqlglot's 1-based end col (= 0-based exclusive end)
+        // SELECT: start=0, end=5,  col=6  (len=6)
+        // id:     start=7, end=8,  col=9  (len=2)
+        // FROM:   start=10, end=13, col=14 (len=4)
+        // users:  start=15, end=19, col=20 (len=5)
+        const result = await parser.parse('SELECT id FROM users', 'duckdb');
+        const tokens = result.sqlTokens!;
+        const select = tokens.find(t => t.type === 'SELECT')!;
+        const id     = tokens.find(t => t.type === 'VAR' && t.start === 7)!;
+        const from   = tokens.find(t => t.type === 'FROM')!;
+        const users  = tokens.find(t => t.type === 'VAR' && t.start === 15)!;
+
+        expect(select).toMatchObject({ start: 0,  end: 5,  line: 0, col: 6  });
+        expect(id    ).toMatchObject({ start: 7,  end: 8,  line: 0, col: 9  });
+        expect(from  ).toMatchObject({ start: 10, end: 13, line: 0, col: 14 });
+        expect(users ).toMatchObject({ start: 15, end: 19, line: 0, col: 20 });
+    });
+
+    it('sqlToken col is 1-based end col on a new line', async () => {
+        // "SELECT id\nFROM users"
+        // FROM is at line=1, start=10, end=13, col=4 (1-based end col on line 1)
+        const result = await parser.parse('SELECT id\nFROM users', 'duckdb');
+        const fromTok = result.sqlTokens!.find(t => t.type === 'FROM')!;
+        expect(fromTok).toMatchObject({ start: 10, end: 13, line: 1, col: 4 });
     });
 
     it('timing.tokenizeMs is a non-negative number on successful parse', async () => {

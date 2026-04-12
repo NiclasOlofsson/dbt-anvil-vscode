@@ -18,6 +18,7 @@ import type { ParseResult } from './parse-result';
 interface WorkerData {
     pyodideDir: string;
     vendorDir: string;
+    scriptsDir: string;
 }
 
 interface ParseTask {
@@ -27,10 +28,10 @@ interface ParseTask {
     schemaJson: string;
 }
 
-const { pyodideDir, vendorDir } = workerData as WorkerData;
+const { pyodideDir, vendorDir, scriptsDir } = workerData as WorkerData;
 
 async function main(): Promise<void> {
-    const { pyodide } = await initPyodide(pyodideDir, vendorDir);
+    const { pyodide } = await initPyodide(pyodideDir, vendorDir, scriptsDir);
     const parser = PyodideSqlParser.create(pyodide);
 
     parentPort!.postMessage({ ready: true });
