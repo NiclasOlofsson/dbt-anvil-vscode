@@ -48,6 +48,7 @@ import { NinjaFormattingProvider } from './providers/sql/formatting-provider';
 import { ConfigCodeActionProvider } from './providers/common/config-code-action-provider';
 import { DbtCallHierarchyProvider } from './providers/sql/call-hierarchy-provider';
 import { ParseService } from './services/parse-service';
+import { BridgeDocumentParser } from './services/bridge-document-parser';
 import { DbtQueryService } from './services/dbt-query-service';
 import { StatusBarManager } from './views/status-bar';
 import { ExternalDbtMonitor } from './dbt/external-dbt-monitor';
@@ -300,7 +301,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	void compileCache.warmAll(projectDir, restoredCompileEntries);
 
 	// -------- Parse service (uses sqlglot bridge — runs in parallel with dbt commands) --------
-	const parseService = new ParseService(sqlglotBridgeRunner, logger, { describeCache, indexer: manifestIndexer });
+	const parseService = new ParseService(new BridgeDocumentParser(sqlglotBridgeRunner), logger, { describeCache, indexer: manifestIndexer });
 	manifestWatcher.setParseService(parseService);
 	manifestWatcher.setCompileCache(compileCache);
 
