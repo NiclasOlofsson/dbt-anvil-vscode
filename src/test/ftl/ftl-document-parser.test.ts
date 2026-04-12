@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import type { AstPayload, ParseResult } from '../../ftl/parse-result';
 import type { JinjaTagSpan } from '../../ftl/parse-result';
 import type { SqlParser } from '../../ftl/sql-parser';
-import { extractRefs, extractSources, mapWarnings, extractCtes, extractFinalColumns, extractFinalSelect, extractTokens, FtlDocumentParser } from '../../ftl/ftl-document-parser';
+import { extractRefs, extractSources, mapWarnings, extractCtes, extractFinalColumns, extractFinalSelect, extractTokens, resolveTableRefs, FtlDocumentParser } from '../../ftl/ftl-document-parser';
+import type { CteInfo, TableRefToken, ColumnRefToken } from '../../services/parse-service';
 
 describe('extractRefs', () => {
     it('maps a ref span to RefInfo', () => {
@@ -638,6 +639,98 @@ describe('extractTokens', () => {
 
     it('returns empty array for empty AST and no CTEs', () => {
         expect(extractTokens([], [])).toEqual([]);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// resolveTableRefs
+// ---------------------------------------------------------------------------
+
+describe('resolveTableRefs', () => {
+    function tableRef(name: string, alias: string, line: number): TableRefToken {
+        return { type: 'table_ref', name, alias, line, col: 0, endCol: name.length };
+    }
+
+    function columnRef(name: string, table: string, line: number): ColumnRefToken {
+        return { type: 'column_ref', name, table, line, col: 0, endCol: name.length };
+    }
+
+    it('links column_ref to table_ref by alias', () => {
+        const tr = tableRef('orders', 'o', 0);
+        const cr = columnRef('id', 'o', 2);
+        resolveTableRefs([tr, cr], []);
+        expect(cr.resolvedTableRef).toBe(tr);
+    });
+
+    it('is case-insensitive', () => {
+        const tr = tableRef('orders', 'O', 0);
+        const cr = columnRef('id', 'o', 2);
+        resolveTableRefs([tr, cr], []);
+        expect(cr.resolvedTableRef).toBe(tr);
+    });
+
+    it('does not link column_ref without a table qualifier', () => {
+        const tr = tableRef('orders', 'o', 0);
+        const cr: ColumnRefToken = { type: 'column_ref', name: 'id', line: 2, col: 0, endCol: 2 };
+        resolveTableRefs([tr, cr], []);
+        expect(cr.resolvedTableRef).toBeUndefined();
+    });
+
+    it('does not link when alias does not match', () => {
+        const tr = tableRef('orders', 'x', 0);
+        const cr = columnRef('id', 'o', 2);
+        resolveTableRefs([tr, cr], []);
+        expect(cr.resolvedTableRef).toBeUndefined();
+    });
+
+    it('table_ref without alias is not a candidate', () => {
+        const tr: TableRefToken = { type: 'table_ref', name: 'orders', line: 0, col: 0, endCol: 6 };
+        const cr = columnRef('id', 'orders', 2);
+        resolveTableRefs([tr, cr], []);
+        expect(cr.resolvedTableRef).toBeUndefined();
+    });
+
+    it('picks closest preceding alias when same alias defined multiple times', () => {
+        const tr1 = tableRef('orders', 'o', 0);
+        const tr2 = tableRef('items', 'o', 5);
+        const cr = columnRef('id', 'o', 7);
+        resolveTableRefs([tr1, tr2, cr], []);
+        expect(cr.resolvedTableRef).toBe(tr2); // line 5 is closer than line 0
+    });
+
+    it('uses fallback for alias defined after column (forward reference)', () => {
+        const tr = tableRef('orders', 'o', 10);
+        const cr = columnRef('id', 'o', 2);
+        resolveTableRefs([tr, cr], []);
+        expect(cr.resolvedTableRef).toBe(tr);
+    });
+
+    it('constrains to CTE scope — does not cross CTE boundaries', () => {
+        const ctes: CteInfo[] = [
+            { name: 'cte_a', line: 0, endLine: 5, columns: [] },
+            { name: 'cte_b', line: 7, endLine: 12, columns: [] },
+        ];
+        // table_ref in cte_a scope, column_ref in cte_b scope — should NOT link
+        const tr = tableRef('orders', 'o', 2);   // inside cte_a
+        const cr = columnRef('id', 'o', 9);      // inside cte_b
+        resolveTableRefs([tr, cr], ctes);
+        expect(cr.resolvedTableRef).toBeUndefined();
+    });
+
+    it('links within the same CTE scope', () => {
+        const ctes: CteInfo[] = [{ name: 'cte_a', line: 0, endLine: 5, columns: [] }];
+        const tr = tableRef('orders', 'o', 1);   // inside cte_a
+        const cr = columnRef('id', 'o', 3);      // inside cte_a
+        resolveTableRefs([tr, cr], ctes);
+        expect(cr.resolvedTableRef).toBe(tr);
+    });
+
+    it('links in final SELECT scope (outside all CTEs)', () => {
+        const ctes: CteInfo[] = [{ name: 'cte_a', line: 0, endLine: 5, columns: [] }];
+        const tr = tableRef('orders', 'o', 7);   // outside CTE
+        const cr = columnRef('id', 'o', 9);      // outside CTE
+        resolveTableRefs([tr, cr], ctes);
+        expect(cr.resolvedTableRef).toBe(tr);
     });
 });
 
