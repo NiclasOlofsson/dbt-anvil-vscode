@@ -40,10 +40,53 @@ export interface ParseTiming {
     totalMs: number;
 }
 
+export interface JinjaRefSpan {
+    type: 'ref';
+    /** 0-based line of the `ref(` call */
+    line: number;
+    /** 0-based col of the `r` in `ref(` */
+    col: number;
+    model: string;
+    /** 0-based col of the model name content (no quotes) */
+    modelCol: number;
+    /** 0-based exclusive end col of the model name content */
+    modelEndCol: number;
+    /** 0-based col of the opening `{{` */
+    jinjaCol: number;
+    /** 0-based exclusive end col after the closing `}}` */
+    jinjaEndCol: number;
+}
+
+export interface JinjaSourceSpan {
+    type: 'source';
+    /** 0-based line of the `source(` call */
+    line: number;
+    /** 0-based col of the `s` in `source(` */
+    col: number;
+    sourceName: string;
+    tableName: string;
+    /** 0-based col of the sourceName content (no quotes) */
+    sourceNameCol: number;
+    /** 0-based exclusive end col of the sourceName content */
+    sourceNameEndCol: number;
+    /** 0-based col of the tableName content (no quotes) */
+    tableNameCol: number;
+    /** 0-based exclusive end col of the tableName content */
+    tableNameEndCol: number;
+    /** 0-based col of the opening `{{` */
+    jinjaCol: number;
+    /** 0-based exclusive end col after the closing `}}` */
+    jinjaEndCol: number;
+}
+
+export type JinjaTagSpan = JinjaRefSpan | JinjaSourceSpan;
+
 export interface ParseResult {
     ast: AstPayload[];
     scopes: ScopeNode[];
     dialect: string;
     warnings: ParseWarning[];
     timing: ParseTiming;
+    /** Jinja ref/source spans extracted from the raw SQL, always in raw-source space. */
+    jinjaTags?: JinjaTagSpan[];
 }
