@@ -191,6 +191,7 @@ function mockManifestIndexer(): ManifestIndexer {
 function mockParseService(): ParseService {
 	return {
 		getDocumentModel: vi.fn().mockResolvedValue(null),
+		parseRawForTokens: vi.fn().mockResolvedValue(undefined),
 		onAliasesReady: { dispose: vi.fn() },
 		onSqlglotWarnings: { dispose: vi.fn() },
 	} as unknown as ParseService;
