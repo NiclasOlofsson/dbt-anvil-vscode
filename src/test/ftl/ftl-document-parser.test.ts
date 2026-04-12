@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import type { AstPayload } from '../../ftl/parse-result';
+import type { AstPayload, ParseResult } from '../../ftl/parse-result';
 import type { JinjaTagSpan } from '../../ftl/parse-result';
-import { extractRefs, extractSources, mapWarnings, extractCtes, extractFinalColumns, extractFinalSelect, extractTokens } from '../../ftl/ftl-document-parser';
+import type { SqlParser } from '../../ftl/sql-parser';
+import { extractRefs, extractSources, mapWarnings, extractCtes, extractFinalColumns, extractFinalSelect, extractTokens, FtlDocumentParser } from '../../ftl/ftl-document-parser';
 
 describe('extractRefs', () => {
     it('maps a ref span to RefInfo', () => {
@@ -637,5 +638,61 @@ describe('extractTokens', () => {
 
     it('returns empty array for empty AST and no CTEs', () => {
         expect(extractTokens([], [])).toEqual([]);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// FtlDocumentParser
+// ---------------------------------------------------------------------------
+
+describe('FtlDocumentParser', () => {
+    it('wires all extractors into a DocumentModel', async () => {
+        // SELECT id FROM t  — with one ref tag and one warning
+        const sql = 'SELECT id\nFROM {{ ref(\'orders\') }}';
+
+        const fakeResult: ParseResult = {
+            ast: [
+                { c: 'Select' },
+                { c: 'Column', i: 0, k: 'expressions', a: true },
+                { c: 'Identifier', i: 1, k: 'this', m: { line: 1, col: 9 } },
+                { i: 2, k: 'this', v: 'id' },
+            ],
+            scopes: [],
+            dialect: 'ansi',
+            warnings: [{ type: 'syntax_error', message: 'oops' }],
+            timing: { parseMs: 1, qualifyMs: 0, scopeMs: 0, totalMs: 2 },
+            jinjaTags: [{
+                type: 'ref',
+                line: 1, col: 5,
+                model: 'orders',
+                modelCol: 11, modelEndCol: 17,
+                jinjaCol: 5, jinjaEndCol: 26,
+            }],
+        };
+
+        const mockParser: SqlParser = { parse: async () => fakeResult };
+        const parser = new FtlDocumentParser(mockParser);
+        const model = await parser.parse(sql, 'ansi');
+
+        expect(model.refs).toHaveLength(1);
+        expect(model.refs[0].model).toBe('orders');
+
+        expect(model.sources).toHaveLength(0);
+
+        expect(model.ctes).toHaveLength(0);
+
+        expect(model.finalColumns).toHaveLength(1);
+        expect(model.finalColumns[0].name).toBe('id');
+
+        expect(model.finalSelect).toBeDefined();
+        expect(model.finalSelect!.columns).toHaveLength(1);
+
+        expect(model.tokens).toHaveLength(1);
+        expect(model.tokens[0].type).toBe('column_ref');
+
+        expect(model.sqlglotWarnings).toHaveLength(1);
+        expect(model.sqlglotWarnings![0].message).toBe('oops');
+
+        expect(model.timing).toEqual({ parseMs: 1, totalMs: 2 });
     });
 });

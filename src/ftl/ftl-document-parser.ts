@@ -1,5 +1,7 @@
 import type { AstPayload, JinjaTagSpan, ParseWarning } from './parse-result';
-import type { ColumnDefToken, ColumnInfo, ColumnRefToken, CteInfo, FinalSelectColumnInfo, FinalSelectInfo, RefInfo, SourceInfo, SqlglotWarning, TableRefToken, TokenInfo } from '../services/parse-service';
+import type { ColumnDefToken, ColumnInfo, ColumnRefToken, CteInfo, DocumentModel, FinalSelectColumnInfo, FinalSelectInfo, RefInfo, SourceInfo, SqlglotWarning, TableRefToken, TokenInfo } from '../services/parse-service';
+import type { DocumentParser, ParseOptions } from '../services/document-parser';
+import type { SqlParser } from './sql-parser';
 import { buildLineStarts, lineAtOffset } from './jinja-spans';
 import { findMatchingParen } from '../tools/cte-extractor';
 import {
@@ -364,4 +366,23 @@ export function extractTokens(ast: AstPayload[], ctes: CteInfo[]): TokenInfo[] {
     }
 
     return tokens;
+}
+
+export class FtlDocumentParser implements DocumentParser {
+    constructor(private readonly _sqlParser: SqlParser) {}
+
+    async parse(sql: string, dialect: string, options?: ParseOptions): Promise<DocumentModel> {
+        const result = await this._sqlParser.parse(sql, dialect, options?.schema);
+        const ctes = extractCtes(result.ast, sql);
+        return {
+            refs: extractRefs(result.jinjaTags ?? []),
+            sources: extractSources(result.jinjaTags ?? []),
+            ctes,
+            finalColumns: extractFinalColumns(result.ast),
+            finalSelect: extractFinalSelect(result.ast, sql),
+            tokens: extractTokens(result.ast, ctes),
+            sqlglotWarnings: mapWarnings(result.warnings),
+            timing: { parseMs: result.timing.parseMs, totalMs: result.timing.totalMs },
+        };
+    }
 }
