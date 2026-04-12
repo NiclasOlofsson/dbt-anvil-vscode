@@ -3,6 +3,7 @@ import { blankJinja } from '../dbt/jinja-blanker';
 import { renderForParse, renToRawLine } from './nunjucks-renderer';
 import type { LineMap } from './nunjucks-renderer';
 import type { AstPayload, ParseResult } from './parse-result';
+import { extractJinjaSpans } from './jinja-spans';
 import type { SqlParser } from './sql-parser';
 
 const PYTHON_SOURCE = `
@@ -165,11 +166,15 @@ export class PyodideSqlParser implements SqlParser {
 
     async parse(rawSql: string, dialect: string, schema?: Record<string, Record<string, string>>): Promise<ParseResult> {
         const schemaJson = schema ? JSON.stringify(schema) : '';
+        const jinjaTags = extractJinjaSpans(rawSql);
 
         // Pass 1: length-preserving blank, identifier mode — preserves exact source offsets.
         const pass1 = this.#fn(blankJinja(rawSql), dialect, schemaJson);
         const result1 = JSON.parse(pass1) as ParseResult;
-        if (!result1.warnings.some(w => w.type === 'syntax_error')) return result1;
+        if (!result1.warnings.some(w => w.type === 'syntax_error')) {
+            result1.jinjaTags = jinjaTags;
+            return result1;
+        }
 
         // Pass 1b: length-preserving blank, comment mode — replaces unknown macros with
         // /* ... */ block comments (valid in any SQL position, same byte length).
@@ -177,7 +182,10 @@ export class PyodideSqlParser implements SqlParser {
         // that produce a bare identifier in identifier mode and break the parse.
         const pass1b = this.#fn(blankJinja(rawSql, 'comment'), dialect, schemaJson);
         const result1b = JSON.parse(pass1b) as ParseResult;
-        if (!result1b.warnings.some(w => w.type === 'syntax_error')) return result1b;
+        if (!result1b.warnings.some(w => w.type === 'syntax_error')) {
+            result1b.jinjaTags = jinjaTags;
+            return result1b;
+        }
 
         // Pass 2: nunjucks stub render — valid SQL everywhere, offsets not preserved.
         // lineMap is used to remap rendered AST line numbers back to raw-source space.
@@ -188,6 +196,7 @@ export class PyodideSqlParser implements SqlParser {
         for (const w of result2.warnings) {
             if (w.line !== undefined) w.line = renToRawLine(w.line, lineMap);
         }
+        result2.jinjaTags = jinjaTags;
         return result2;
     }
 }

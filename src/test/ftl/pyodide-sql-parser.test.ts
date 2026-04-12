@@ -292,6 +292,60 @@ SELECT mkey, sourcename FROM warehouse`;
         const root = result.scopes[0];
         expect(root.columns).toContain('*');
     });
+
+    // ── jinjaTags (populated by extractJinjaSpans on raw SQL) ─────────────
+
+    it('populates jinjaTags with a ref entry for a ref() tag', async () => {
+        const sql = "SELECT * FROM {{ ref('orders') }}";
+        const result = await parser.parse(sql, 'duckdb');
+
+        expect(result.jinjaTags).toBeDefined();
+        expect(result.jinjaTags).toHaveLength(1);
+        const span = result.jinjaTags![0];
+        expect(span.type).toBe('ref');
+        if (span.type !== 'ref') return;
+        expect(span.model).toBe('orders');
+        expect(span.line).toBe(0);
+        // '{{' is at offset 14 on a single-line SQL
+        expect(span.jinjaCol).toBe(14);
+    });
+
+    it('populates jinjaTags with a source entry for a source() tag', async () => {
+        const sql = "SELECT * FROM {{ source('raw', 'orders') }}";
+        const result = await parser.parse(sql, 'duckdb');
+
+        expect(result.jinjaTags).toBeDefined();
+        expect(result.jinjaTags).toHaveLength(1);
+        const span = result.jinjaTags![0];
+        expect(span.type).toBe('source');
+        if (span.type !== 'source') return;
+        expect(span.sourceName).toBe('raw');
+        expect(span.tableName).toBe('orders');
+    });
+
+    it('jinjaTags positions are in raw-source space even when pass 2 is used', async () => {
+        // This SQL requires pass 2 (nunjucks): a statement-level macro forces
+        // the nunjucks render path.  jinjaTags must still report raw-source positions.
+        const sql = [
+            '{{ config(materialized=\'table\') }}',   // line 0 — statement macro
+            "SELECT * FROM {{ ref('orders') }}",      // line 1
+        ].join('\n');
+        const result = await parser.parse(sql, 'duckdb');
+
+        expect(result.jinjaTags).toBeDefined();
+        const refSpan = result.jinjaTags!.find(s => s.type === 'ref');
+        expect(refSpan).toBeDefined();
+        if (!refSpan || refSpan.type !== 'ref') return;
+        // ref() is on line 1 in the raw SQL regardless of which pass was used.
+        expect(refSpan.line).toBe(1);
+        expect(refSpan.model).toBe('orders');
+    });
+
+    it('jinjaTags is empty for SQL with no ref/source tags', async () => {
+        const result = await parser.parse('SELECT id FROM users', 'duckdb');
+        expect(result.jinjaTags).toBeDefined();
+        expect(result.jinjaTags).toHaveLength(0);
+    });
 });
 
 // ── renToRawLine — pure unit tests (no pyodide needed) ───────────────────────
