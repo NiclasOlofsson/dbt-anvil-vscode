@@ -269,15 +269,50 @@ export function extractFinalSelect(ast: AstPayload[], sql: string): FinalSelectI
 }
 
 /**
+ * For each column_ref token that has a table qualifier, resolve it to the
+ * matching table_ref by alias within the same CTE scope.  Mirrors the
+ * post-processing pass in bridge.py.
+ */
+export function resolveTableRefs(tokens: TokenInfo[], ctes: CteInfo[]): void {
+    const aliasedRefs = tokens.filter(
+        (t): t is TableRefToken => t.type === 'table_ref' && t.alias !== undefined,
+    );
+
+    for (const tok of tokens) {
+        if (tok.type !== 'column_ref' || !tok.table) continue;
+
+        const qualifierLc = tok.table.toLowerCase();
+        const colLine = tok.line;
+
+        const containingCte = ctes.find(c => c.line <= colLine && colLine <= c.endLine);
+
+        const scopeRefs: TableRefToken[] = containingCte
+            ? aliasedRefs.filter(tr => containingCte.line <= tr.line && tr.line <= containingCte.endLine)
+            : aliasedRefs.filter(tr => ctes.every(c => tr.line < c.line || tr.line > c.endLine));
+
+        // Prefer latest alias definition at or before the column.
+        let best: TableRefToken | undefined;
+        for (const tr of scopeRefs) {
+            if ((tr.alias ?? '').toLowerCase() !== qualifierLc) continue;
+            if (tr.line > colLine) continue;
+            if (!best || tr.line > best.line) best = tr;
+        }
+        // Fallback: any alias match in scope (handles forward references).
+        if (!best) {
+            best = scopeRefs.find(tr => (tr.alias ?? '').toLowerCase() === qualifierLc);
+        }
+
+        if (best) tok.resolvedTableRef = best;
+    }
+}
+
+/**
  * Extract all token references from the AST.
  *
  * Emits three token kinds mirroring the bridge:
  *   - column_ref  : every Column node (with optional table qualifier)
  *   - column_def  : every Alias node (the alias identifier becomes the definition site)
  *   - table_ref   : every Table node in FROM/JOIN, plus one per CTE definition site
- *
- * Note: resolvedTableRef cross-linking is not performed here — that pass
- * requires scope context that will be added later.
  */
 export function extractTokens(ast: AstPayload[], ctes: CteInfo[]): TokenInfo[] {
     const tokens: TokenInfo[] = [];
@@ -392,13 +427,15 @@ export class FtlDocumentParser implements DocumentParser {
     async parse(sql: string, dialect: string, options?: ParseOptions): Promise<DocumentModel> {
         const result = await this._sqlParser.parse(sql, dialect, options?.schema);
         const ctes = extractCtes(result.ast, sql);
+        const tokens = extractTokens(result.ast, ctes);
+        resolveTableRefs(tokens, ctes);
         return {
             refs: extractRefs(result.jinjaTags ?? []),
             sources: extractSources(result.jinjaTags ?? []),
             ctes,
             finalColumns: extractFinalColumns(result.ast),
             finalSelect: extractFinalSelect(result.ast, sql),
-            tokens: extractTokens(result.ast, ctes),
+            tokens,
             sqlglotWarnings: mapWarnings(result.warnings),
             timing: { parseMs: result.timing.parseMs, totalMs: result.timing.totalMs },
         };
