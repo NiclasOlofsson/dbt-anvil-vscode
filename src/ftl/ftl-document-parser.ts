@@ -2,6 +2,7 @@ import type { AstPayload, JinjaTagSpan, ParseWarning } from './parse-result';
 import type { ColumnDefToken, ColumnInfo, ColumnRefToken, CteInfo, DocumentModel, FinalSelectColumnInfo, FinalSelectInfo, RefInfo, SourceInfo, SqlglotWarning, TableRefToken, TokenInfo } from '../services/parse-service';
 import type { DocumentParser, ParseOptions } from '../services/document-parser';
 import type { SqlParser } from './sql-parser';
+import { PyodideWorkerPool, type PoolOptions } from './pyodide-worker-pool';
 import { buildLineStarts, lineAtOffset } from './jinja-spans';
 import { findMatchingParen } from '../tools/cte-extractor';
 import {
@@ -369,7 +370,24 @@ export function extractTokens(ast: AstPayload[], ctes: CteInfo[]): TokenInfo[] {
 }
 
 export class FtlDocumentParser implements DocumentParser {
-    constructor(private readonly _sqlParser: SqlParser) {}
+    private readonly _pool: PyodideWorkerPool | undefined;
+
+    constructor(private readonly _sqlParser: SqlParser, pool?: PyodideWorkerPool) {
+        this._pool = pool;
+    }
+
+    static create(pyodideDir: string, vendorDir: string, options?: PoolOptions): FtlDocumentParser {
+        const pool = new PyodideWorkerPool(pyodideDir, vendorDir, options);
+        return new FtlDocumentParser(pool, pool);
+    }
+
+    ready(): Promise<void> {
+        return this._pool!.ready();
+    }
+
+    dispose(): void {
+        this._pool?.dispose();
+    }
 
     async parse(sql: string, dialect: string, options?: ParseOptions): Promise<DocumentModel> {
         const result = await this._sqlParser.parse(sql, dialect, options?.schema);

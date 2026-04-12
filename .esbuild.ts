@@ -33,15 +33,27 @@ async function main(): Promise<void> {
 		minify: !isDev,
 	});
 
+	const workerContext = await esbuild.context({
+		...commonOptions,
+		entryPoints: ['src/ftl/pyodide-worker.ts'],
+		outfile: 'dist/pyodide-worker.js',
+		sourcemap: isDev,
+		minify: !isDev,
+	});
+
 	if (isWatch) {
 		await extensionContext.watch();
+		await workerContext.watch();
 		process.on('SIGINT', async () => {
 			await extensionContext.dispose();
+			await workerContext.dispose();
 			process.exit(0);
 		});
 	} else {
 		await extensionContext.rebuild();
 		await extensionContext.dispose();
+		await workerContext.rebuild();
+		await workerContext.dispose();
 	}
 }
 
