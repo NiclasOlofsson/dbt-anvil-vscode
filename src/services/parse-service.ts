@@ -1,10 +1,10 @@
 import * as vscode from 'vscode';
-import type { BridgeRunner } from '../dbt/bridge-runner';
 import type { DescribeCache } from '../dbt/describe-cache';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import { generateVariants } from '../dbt/sql-variant-generator';
 import { stripJinja } from '../providers/common/jinja-utils';
 import type { ILogger } from '../types/logger';
+import type { DocumentParser } from './document-parser';
 
 export interface ColumnInfo {
 	name: string;
@@ -341,7 +341,7 @@ export class ParseService {
 	readonly onSqlglotWarnings = this._onSqlglotWarnings.event;
 
 	constructor(
-		private readonly _bridge: BridgeRunner,
+		private readonly _parser: DocumentParser,
 		private readonly _logger: ILogger,
 		private readonly _enrichment?: EnrichmentConfig,
 	) {}
@@ -615,51 +615,31 @@ export class ParseService {
 		// Build qualify schema hint from indexer columns (synchronous, fast path).
 		// Then describe all upstream refs so the bridge receives a full schema_mapping
 		// and can resolve alias → column mappings in a single round-trip.
-		const qualifySchema: Record<string, Record<string, string>> = {};
-		const parseRequest: Record<string, unknown> = {
-			parse_document: true,
-			sql: rawText,
-			dialect: dialect || 'ansi',
-		};
+		const schema: Record<string, Record<string, string>> = {};
+		const schemaMapping: Record<string, Record<string, Record<string, Record<string, object>>>> = {};
 
 		if (this._enrichment && !skipEnrichment) {
 			const { indexer, describeCache } = this._enrichment;
 			const { refs } = stripJinja(rawText, indexer);
 
-			const schemaMapping = indexer.buildSchemaMapping();
+			const mapping = indexer.buildSchemaMapping();
 			await Promise.all([...refs].map(async ([tableName, uniqueId]) => {
 				const cols = await describeCache.columns(uniqueId);
 				if (cols && cols.length > 0) {
-					qualifySchema[tableName.toLowerCase()] = Object.fromEntries(cols.map(c => [c.toLowerCase(), 'varchar']));
-					const schDb = (schemaMapping['__described__'] ??= {});
+					schema[tableName.toLowerCase()] = Object.fromEntries(cols.map(c => [c.toLowerCase(), 'varchar']));
+					const schDb = (mapping['__described__'] ??= {});
 					const schSch = (schDb['__described__'] ??= {});
 					schSch[tableName.toLowerCase()] = Object.fromEntries(cols.map(c => [c, {}]));
 				}
 			}));
 
-			if (Object.keys(schemaMapping).length > 0) {
-				parseRequest['schema_mapping'] = schemaMapping;
-			}
+			Object.assign(schemaMapping, mapping);
 		}
 
-		if (Object.keys(qualifySchema).length > 0) {
-			parseRequest['schema'] = qualifySchema;
-		}
-
-		function buildModel(raw: unknown): DocumentModel {
-			const d = raw as unknown as (DocumentModel & { success: boolean; sqlglotWarnings?: SqlglotWarning[]; aliases?: Record<string, string[]> });
-			return {
-				ctes: d.ctes ?? [],
-				refs: d.refs ?? [],
-				sources: d.sources ?? [],
-				finalColumns: d.finalColumns ?? [],
-				finalSelect: d.finalSelect ?? undefined,
-				tokens: (d as unknown as Record<string, unknown>).tokens as TokenInfo[] ?? [],
-				timing: d.timing ?? { parseMs: 0, totalMs: 0 },
-				sqlglotWarnings: d.sqlglotWarnings ?? [],
-				aliases: d.aliases ?? {},
-			};
-		}
+		const options = {
+			schema: Object.keys(schema).length > 0 ? schema : undefined,
+			schemaMapping: Object.keys(schemaMapping).length > 0 ? schemaMapping : undefined,
+		};
 
 		// Generate one SQL string per branch-combination so every conditional code
 		// path gets parsed. generateVariants is length-preserving — all positions
@@ -668,22 +648,21 @@ export class ParseService {
 		let model: DocumentModel;
 
 		if (variants.length <= 1) {
-			// Fast path: no Jinja conditionals, single bridge call.
-			const result = await this._bridge.invokeRaw(parseRequest);
-			if (!result.success || !result.data) {
-				const errMsg = (result.data as Record<string, unknown>)?.['error'] ?? 'no response';
-				this._logger.debug('[parse-service] parse_document failed for ' + document.fileName + ': ' + String(errMsg));
+			// Fast path: no Jinja conditionals, single parser call.
+			try {
+				model = await this._parser.parse(rawText, dialect || 'ansi', options);
+			} catch (err) {
+				this._logger.debug('[parse-service] parse_document failed for ' + document.fileName + ': ' + String(err));
 				return null;
 			}
-			model = buildModel(result.data);
 		} else {
 			// Multi-variant path: parse each branch combination and merge.
 			const variantModels: DocumentModel[] = [];
 			for (const variant of variants) {
-				const variantRequest = { ...parseRequest, sql: variant.sql };
-				const result = await this._bridge.invokeRaw(variantRequest);
-				if (result.success && result.data) {
-					variantModels.push(buildModel(result.data));
+				try {
+					variantModels.push(await this._parser.parse(variant.sql, dialect || 'ansi', options));
+				} catch {
+					// silently skip failed variants
 				}
 			}
 			if (variantModels.length === 0) {
@@ -715,13 +694,11 @@ export class ParseService {
 	 * No caching, no enrichment, no variant expansion — single bridge call.
 	 */
 	async parseSqlString(sql: string, dialect: string): Promise<CteInfo[]> {
-		const result = await this._bridge.invokeRaw({
-			parse_document: true,
-			sql,
-			dialect: dialect || 'ansi',
-		});
-		if (!result.success || !result.data) return [];
-		const d = result.data as { ctes?: CteInfo[] };
-		return d.ctes ?? [];
+		try {
+			const model = await this._parser.parse(sql, dialect || 'ansi');
+			return model.ctes;
+		} catch {
+			return [];
+		}
 	}
 }

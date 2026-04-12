@@ -163,7 +163,7 @@ export class PyodideSqlParser implements SqlParser {
         return new PyodideSqlParser(pyodide);
     }
 
-    async parse(rawSql: string, dialect: string, schema?: Record<string, string[]>): Promise<ParseResult> {
+    async parse(rawSql: string, dialect: string, schema?: Record<string, Record<string, string>>): Promise<ParseResult> {
         const schemaJson = schema ? JSON.stringify(schema) : '';
 
         // Pass 1: length-preserving blank, identifier mode — preserves exact source offsets.

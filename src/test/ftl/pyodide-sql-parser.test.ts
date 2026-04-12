@@ -211,6 +211,87 @@ SELECT mkey, sourcename FROM warehouse`;
         expect(syntaxErr!.col).toBe(21);
         expect(syntaxErr!.endCol).toBe(27);
     });
+
+    it('qualify resolves bare column references when schema is provided', async () => {
+        // Without schema, qualify() can only infer — bare column refs stay unqualified.
+        // With schema, qualify() knows raw_orders has these columns and rewrites
+        // column refs to include the table qualifier (e.g. raw_orders.amount).
+        // We verify by checking the scope's output columns — qualify must succeed
+        // without errors and the root scope must see raw_orders as a source.
+        const schema = {
+            raw_orders: { order_id: 'INT', amount: 'NUMERIC', status: 'TEXT' },
+        };
+        const sql = 'SELECT order_id, amount FROM raw_orders WHERE status = \'complete\'';
+        const result = await parser.parse(sql, 'duckdb', schema);
+        expect(result.warnings.filter(w => w.type === 'syntax_error')).toHaveLength(0);
+        const root = result.scopes[0];
+        expect(root.type).toBe('root');
+        expect(Object.keys(root.sources)).toContain('raw_orders');
+        expect(root.columns).toEqual(expect.arrayContaining(['order_id', 'amount']));
+    });
+
+    it('qualify resolves columns in a CTE query with schema', async () => {
+        const schema = {
+            raw_orders: { order_id: 'INT', customer_id: 'INT', amount: 'NUMERIC' },
+        };
+        const sql = [
+            'WITH orders AS (',
+            '    SELECT order_id, customer_id, amount FROM raw_orders',
+            ')',
+            'SELECT order_id, SUM(amount) AS total FROM orders GROUP BY order_id',
+        ].join('\n');
+        const result = await parser.parse(sql, 'duckdb', schema);
+        expect(result.warnings.filter(w => w.type === 'syntax_error')).toHaveLength(0);
+        // CTE scope must list raw_orders as a source
+        const cteScope = result.scopes.find(s => s.type === 'cte');
+        expect(cteScope).toBeDefined();
+        expect(Object.keys(cteScope!.sources)).toContain('raw_orders');
+        // Root scope must list the CTE as a source
+        const root = result.scopes[0];
+        expect(Object.keys(root.sources)).toContain('orders');
+    });
+
+    it('qualify expands star selectors through a CTE using only schema input', async () => {
+        // No column names appear anywhere in SQL — only SELECT * throughout.
+        // qualify() must propagate the schema through the CTE to expand * at the root.
+        const schema = {
+            raw_orders: { order_id: 'INT', customer_id: 'INT', amount: 'NUMERIC' },
+        };
+        const sql = [
+            'WITH orders AS (',
+            '    SELECT * FROM raw_orders',
+            ')',
+            'SELECT * FROM orders',
+        ].join('\n');
+        const result = await parser.parse(sql, 'duckdb', schema);
+        expect(result.warnings.filter(w => w.type === 'syntax_error')).toHaveLength(0);
+        // CTE scope: * must have been expanded to the three columns from schema
+        const cteScope = result.scopes.find(s => s.type === 'cte');
+        expect(cteScope).toBeDefined();
+        expect(cteScope!.columns).toEqual(expect.arrayContaining(['order_id', 'customer_id', 'amount']));
+        expect(cteScope!.columns).not.toContain('*');
+        // Root scope: * also expanded via the CTE's resolved output
+        const root = result.scopes[0];
+        expect(root.columns).toEqual(expect.arrayContaining(['order_id', 'customer_id', 'amount']));
+        expect(root.columns).not.toContain('*');
+    });
+
+    it('star selectors are NOT expanded without a schema', async () => {
+        // Same query — no schema passed. qualify() has no column info so * stays unexpanded.
+        const sql = [
+            'WITH orders AS (',
+            '    SELECT * FROM raw_orders',
+            ')',
+            'SELECT * FROM orders',
+        ].join('\n');
+        const result = await parser.parse(sql, 'duckdb');
+        expect(result.warnings.filter(w => w.type === 'syntax_error')).toHaveLength(0);
+        const cteScope = result.scopes.find(s => s.type === 'cte');
+        expect(cteScope).toBeDefined();
+        expect(cteScope!.columns).toContain('*');
+        const root = result.scopes[0];
+        expect(root.columns).toContain('*');
+    });
 });
 
 // ── renToRawLine — pure unit tests (no pyodide needed) ───────────────────────
