@@ -37,7 +37,21 @@ export interface ParseTiming {
     parseMs: number;
     qualifyMs: number;
     scopeMs: number;
+    tokenizeMs?: number;
     totalMs: number;
+}
+
+export interface SqlToken {
+    /** sqlglot TokenType enum name, e.g. 'SELECT', 'FROM', 'VAR', 'NUMBER' */
+    type: string;
+    /** 0-based char offset of first character */
+    start: number;
+    /** 0-based char offset of last character (inclusive) */
+    end: number;
+    /** 0-based line number */
+    line: number;
+    /** 0-based column number */
+    col: number;
 }
 
 export interface JinjaRefSpan {
@@ -87,6 +101,7 @@ export interface ParseResult {
     dialect: string;
     warnings: ParseWarning[];
     timing: ParseTiming;
+    sqlTokens?: SqlToken[];
     /** Jinja ref/source spans extracted from the raw SQL, always in raw-source space. */
     jinjaTags?: JinjaTagSpan[];
 }
