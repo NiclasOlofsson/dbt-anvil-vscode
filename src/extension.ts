@@ -48,7 +48,10 @@ import { NinjaFormattingProvider } from './providers/sql/formatting-provider';
 import { ConfigCodeActionProvider } from './providers/common/config-code-action-provider';
 import { DbtCallHierarchyProvider } from './providers/sql/call-hierarchy-provider';
 import { ParseService } from './services/parse-service';
-import { BridgeDocumentParser } from './services/bridge-document-parser';
+// import { BridgeDocumentParser } from './services/bridge-document-parser';
+import { initPyodide } from './ftl/pyodide-loader';
+import { PyodideSqlParser } from './ftl/pyodide-sql-parser';
+import { FtlDocumentParser } from './ftl/ftl-document-parser';
 import { DbtQueryService } from './services/dbt-query-service';
 import { StatusBarManager } from './views/status-bar';
 import { ExternalDbtMonitor } from './dbt/external-dbt-monitor';
@@ -300,8 +303,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// were restored from disk (mtime validation happens on first access per entry).
 	void compileCache.warmAll(projectDir, restoredCompileEntries);
 
-	// -------- Parse service (uses sqlglot bridge — runs in parallel with dbt commands) --------
-	const parseService = new ParseService(new BridgeDocumentParser(sqlglotBridgeRunner), logger, { describeCache, indexer: manifestIndexer });
+	// -------- Parse service (FTL — Pyodide-based, runs in-process) --------
+	const { pyodide } = await initPyodide(
+		path.join(context.extensionPath, 'node_modules', 'pyodide'),
+		path.join(context.extensionPath, 'resources', 'bridge', 'vendor'),
+	);
+	logger.info('Parse service: using faster-than-light (FTL) in-process parser');
+	const parseService = new ParseService(new FtlDocumentParser(PyodideSqlParser.create(pyodide)), logger, { describeCache, indexer: manifestIndexer });
+	// const parseService = new ParseService(new BridgeDocumentParser(sqlglotBridgeRunner), logger, { describeCache, indexer: manifestIndexer });
 	manifestWatcher.setParseService(parseService);
 	manifestWatcher.setCompileCache(compileCache);
 
