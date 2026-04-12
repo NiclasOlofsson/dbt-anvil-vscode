@@ -1,3 +1,7 @@
+import { iterJinjaTags } from './jinja-blanker';
+import { buildLineStarts, lineAtOffset } from '../ftl/jinja-spans';
+import type { SqlToken, JinjaTagSpan } from '../ftl/parse-result';
+
 export interface SymbolEntry {
 	line: number;
 	col: number;
@@ -427,6 +431,166 @@ export function parseSourceMap(compiledSql: string): SourceMap {
 			return macroSpans.find(s => compiledLine >= s.compiledStartLine && compiledLine <= s.compiledEndLine);
 		},
 	};
+}
+
+// ---------------------------------------------------------------------------
+// emitDebugSymbolsFromTokens — pure-TS port of bridge emit_debug_symbols
+// ---------------------------------------------------------------------------
+
+const STATEMENT_MACROS = new Set(['config', 'docs', 'print', 'log', 'return', 'exceptions']);
+const VALUE_MACROS = new Set(['var', 'env_var']);
+
+const TOKEN_ROLE_MAP: Record<string, string> = {
+	SELECT: 'select',
+	FROM: 'from',
+	JOIN: 'join',
+	INNER: 'join',
+	LEFT: 'join',
+	RIGHT: 'join',
+	CROSS: 'join',
+	FULL: 'join',
+	WHERE: 'where',
+	GROUP_BY: 'group',
+	HAVING: 'having',
+	ORDER_BY: 'order',
+	LIMIT: 'limit',
+	WITH: 'cte',
+	STAR: 'star',
+};
+
+const MACRO_NAME_RE = /^\{\{\s*(?:[a-zA-Z_]\w*\.)*([a-zA-Z_]\w*)\s*\(/;
+const REF_TAG_RE = /\{\{[^}]*ref\(\s*['"]([^'"]+)['"]\s*\)[^}]*\}\}/;
+const SOURCE_TAG_RE = /\{\{[^}]*source\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*\)[^}]*\}\}/;
+
+function buildCteRanges(
+	tokens: SqlToken[],
+	source: string,
+): Array<{ name: string; startLine: number; endLine: number }> {
+	const ranges: Array<{ name: string; startLine: number; endLine: number }> = [];
+	const withIdx = tokens.findIndex(t => t.type === 'WITH');
+	if (withIdx === -1) return ranges;
+
+	let i = withIdx + 1;
+	while (i < tokens.length) {
+		while (i < tokens.length && tokens[i].type !== 'VAR') {
+			if (tokens[i].type === 'SELECT' || tokens[i].type === 'FROM') return ranges;
+			i++;
+		}
+		if (i >= tokens.length) break;
+
+		const nameToken = tokens[i];
+		const cteName = source.slice(nameToken.start, nameToken.end + 1);
+		const startLine = nameToken.line;
+		i++;
+
+		if (i >= tokens.length || tokens[i].type !== 'ALIAS') break;
+		i++;
+
+		if (i >= tokens.length || tokens[i].type !== 'L_PAREN') break;
+		i++;
+
+		let depth = 1;
+		let endLine = startLine;
+		while (i < tokens.length && depth > 0) {
+			if (tokens[i].type === 'L_PAREN') depth++;
+			else if (tokens[i].type === 'R_PAREN') {
+				depth--;
+				if (depth === 0) endLine = tokens[i].line;
+			}
+			i++;
+		}
+
+		ranges.push({ name: cteName, startLine, endLine });
+
+		if (i < tokens.length && tokens[i].type === 'COMMA') {
+			i++;
+		} else {
+			break;
+		}
+	}
+	return ranges;
+}
+
+export function emitDebugSymbolsFromTokens(
+	source: string,
+	tokens: SqlToken[],
+	jinjaTags: JinjaTagSpan[],
+): EmitResult | undefined {
+	if (tokens.length === 0) return undefined;
+
+	const lineStarts = buildLineStarts(source);
+	const jinjaSpans = findJinjaSpans(source);
+
+	function inJinja(offset: number): boolean {
+		return jinjaSpans.some(s => offset >= s.start && offset < s.end);
+	}
+
+	const cteRanges = buildCteRanges(tokens, source);
+
+	function frameName(line: number): string {
+		for (const r of cteRanges) {
+			if (line >= r.startLine && line <= r.endLine) return r.name;
+		}
+		return '_main_';
+	}
+
+	const symbols: SymbolEntry[] = [];
+	for (let i = 0; i < tokens.length; i++) {
+		const t = tokens[i];
+		if (inJinja(t.start)) continue;
+
+		let role: string | undefined = TOKEN_ROLE_MAP[t.type];
+		if (role === undefined) {
+			if (t.type === 'VAR') {
+				const next = tokens[i + 1];
+				role = (next && next.type === 'L_PAREN') ? 'fn' : 'ident';
+			} else if (t.type === 'NUMBER' || t.type === 'STRING') {
+				role = 'lit';
+			}
+		}
+		if (role === undefined) continue;
+
+		const line = t.line;
+		const col = t.start - lineStarts[line];
+		const endCol = t.col;
+		symbols.push({ line, col, endCol, role, frameName: frameName(line) });
+	}
+
+	if (symbols.length === 0) return undefined;
+
+	const refMarkers: BridgeRefMarker[] = [];
+	const sourceMarkers: BridgeSourceMarker[] = [];
+	const macroSpans: BridgeMacroSpan[] = [];
+
+	for (const span of jinjaTags) {
+		const tagStart = lineStarts[span.line] + span.jinjaCol;
+		const tagEnd = lineStarts[span.line] + span.jinjaEndCol;
+		if (span.type === 'ref') {
+			refMarkers.push({ name: span.model, sourceLine: span.line, startOffset: tagStart, endOffset: tagEnd });
+		} else {
+			sourceMarkers.push({ schema: span.sourceName, name: span.tableName, sourceLine: span.line, startOffset: tagStart, endOffset: tagEnd });
+		}
+	}
+
+	for (const tag of iterJinjaTags(source)) {
+		const tagText = tag[0];
+		if (!tagText.startsWith('{{')) continue;
+		if (REF_TAG_RE.test(tagText) || SOURCE_TAG_RE.test(tagText)) continue;
+		const m = MACRO_NAME_RE.exec(tagText);
+		if (!m) continue;
+		const name = m[1];
+		if (STATEMENT_MACROS.has(name) || VALUE_MACROS.has(name)) continue;
+		const tagStart = tag.index;
+		macroSpans.push({
+			name,
+			sourceLine: lineAtOffset(tagStart, lineStarts),
+			startOffset: tagStart,
+			endOffset: tagStart + tagText.length,
+		});
+	}
+
+	const annotatedSource = injectMarkers(source, symbols, jinjaSpans, { macroSpans, refMarkers, sourceMarkers });
+	return { annotatedSource, symbols, macroSpans, refMarkers, sourceMarkers };
 }
 
 export interface BridgeMacroSpan {

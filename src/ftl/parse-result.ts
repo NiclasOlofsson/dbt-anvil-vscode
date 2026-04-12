@@ -50,7 +50,7 @@ export interface SqlToken {
     end: number;
     /** 0-based line number */
     line: number;
-    /** 0-based column number */
+    /** 1-based end column (= 0-based exclusive end col), matching sqlglot's token convention */
     col: number;
 }
 

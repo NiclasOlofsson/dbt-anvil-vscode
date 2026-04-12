@@ -5,6 +5,7 @@ import { generateVariants } from '../dbt/sql-variant-generator';
 import { stripJinja } from '../providers/common/jinja-utils';
 import type { ILogger } from '../types/logger';
 import type { DocumentParser } from './document-parser';
+import type { JinjaTagSpan, SqlToken } from '../ftl/parse-result';
 
 export interface ColumnInfo {
 	name: string;
@@ -199,6 +200,10 @@ export interface DocumentModel {
 	 * (empty when schema_mapping had no entries for the upstream tables).
 	 */
 	aliases?: Record<string, string[]>;
+	/** Raw sqlglot tokens from the FTL parser. Only populated by FtlDocumentParser. */
+	sqlTokens?: SqlToken[];
+	/** Jinja ref/source spans. Only populated by FtlDocumentParser. */
+	jinjaTags?: JinjaTagSpan[];
 }
 
 /**
@@ -699,6 +704,21 @@ export class ParseService {
 			return model.ctes;
 		} catch {
 			return [];
+		}
+	}
+
+	/**
+	 * Parse a raw SQL string and return its sqlglot tokens and Jinja spans.
+	 * Returns `undefined` when the parser backend does not supply tokens (e.g. BridgeDocumentParser).
+	 * No caching, no enrichment, no variant expansion.
+	 */
+	async parseRawForTokens(sql: string, dialect: string): Promise<{ sqlTokens: SqlToken[]; jinjaTags: JinjaTagSpan[] } | undefined> {
+		try {
+			const model = await this._parser.parse(sql, dialect || 'ansi');
+			if (!model.sqlTokens) return undefined;
+			return { sqlTokens: model.sqlTokens, jinjaTags: model.jinjaTags ?? [] };
+		} catch {
+			return undefined;
 		}
 	}
 }
