@@ -826,31 +826,50 @@
 					"dbt-studio.ninja.capitalisation.keywords": {
 						"type": "string",
 						"default": "lower",
-						"enum": ["upper", "lower", "consistent"],
+						"enum": [
+							"upper",
+							"lower",
+							"consistent"
+						],
 						"markdownDescription": "Capitalisation policy for SQL keywords (SELECT, FROM, WHERE, etc.)."
 					},
 					"dbt-studio.ninja.capitalisation.functions": {
 						"type": "string",
 						"default": "lower",
-						"enum": ["upper", "lower", "consistent"],
+						"enum": [
+							"upper",
+							"lower",
+							"consistent"
+						],
 						"markdownDescription": "Capitalisation policy for SQL function names (count, coalesce, etc.)."
 					},
 					"dbt-studio.ninja.capitalisation.literals": {
 						"type": "string",
 						"default": "lower",
-						"enum": ["upper", "lower", "consistent"],
+						"enum": [
+							"upper",
+							"lower",
+							"consistent"
+						],
 						"markdownDescription": "Capitalisation policy for SQL literals (NULL, TRUE, FALSE)."
 					},
 					"dbt-studio.ninja.capitalisation.types": {
 						"type": "string",
 						"default": "lower",
-						"enum": ["upper", "lower", "consistent"],
+						"enum": [
+							"upper",
+							"lower",
+							"consistent"
+						],
 						"markdownDescription": "Capitalisation policy for SQL datatype keywords (INT, VARCHAR, BOOLEAN, etc.)."
 					},
 					"dbt-studio.ninja.indentation.unit": {
 						"type": "string",
 						"default": "space",
-						"enum": ["space", "tab"],
+						"enum": [
+							"space",
+							"tab"
+						],
 						"markdownDescription": "Indentation character."
 					},
 					"dbt-studio.ninja.indentation.size": {
@@ -870,13 +889,19 @@
 					"dbt-studio.ninja.layout.commaPosition": {
 						"type": "string",
 						"default": "trailing",
-						"enum": ["trailing", "leading"],
+						"enum": [
+							"trailing",
+							"leading"
+						],
 						"markdownDescription": "Whether commas should appear at end (trailing) or start (leading) of lines."
 					},
 					"dbt-studio.ninja.layout.operatorPosition": {
 						"type": "string",
 						"default": "trailing",
-						"enum": ["trailing", "leading"],
+						"enum": [
+							"trailing",
+							"leading"
+						],
 						"markdownDescription": "Whether operators (AND, OR, +, etc.) should appear at end (trailing) or start (leading) of lines."
 					}
 				}
@@ -1518,9 +1543,12 @@
 	},
 	"dependencies": {
 		"@duckdb/node-api": "^1.5.1-r.1",
+		"@types/nunjucks": "^3.2.6",
 		"dagre": "^0.8.5",
 		"js-yaml": "^4.1.1",
 		"node-sql-parser": "^5.3.6",
+		"nunjucks": "^3.2.4",
+		"pyodide": "^0.29.3",
 		"yaml": "^2.8.3"
 	}
 }

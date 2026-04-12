@@ -21,7 +21,7 @@ const commonOptions: esbuild.BuildOptions = {
 	format: 'cjs',
 	keepNames: true,
 	plugins: [vscodeExternalPlugin],
-	external: ['vscode', '@duckdb/*', '*.node'],
+	external: ['vscode', '@duckdb/*', '*.node', 'pyodide'],
 };
 
 async function main(): Promise<void> {

@@ -24,7 +24,7 @@ interface JinjaTagMatch {
 	0: string; // full tag text — keeps the same shape as a RegExpMatchArray
 }
 
-function* iterJinjaTags(sql: string): Generator<JinjaTagMatch> {
+export function* iterJinjaTags(sql: string): Generator<JinjaTagMatch> {
 	const n = sql.length;
 	let i = 0;
 	while (i < n) {
@@ -104,14 +104,23 @@ const VALUE_MACROS = new Set(['var', 'env_var']);
  * - `{{ source('ns', 'tbl') }}` → table name (2nd arg), space-padded
  * - `{{ config(...) }}` etc.    → all spaces (known no-SQL-output macros)
  * - `{{ var(...) }}` etc.       → `_` placeholder (name is a SQL reserved word)
- * - `{{ my_macro(...) }}`       → macro name, space-padded
- * - `{{ ns.macro(...) }}`       → last name component, space-padded
+ * - `{{ my_macro(...) }}`       → macro name, space-padded  (identifier mode)
+ *                               → `/* name... *​/` block comment  (comment mode)
+ * - `{{ ns.macro(...) }}`       → last name component (same rules as above)
  * - `{{ arbitrary_expr }}`      → `_` followed by spaces
  *
  * Block tags `{% %}` and comment tags `{# #}` always blank to spaces.
  * Newlines within tags are always preserved.
+ *
+ * `macroMode` controls unknown callable `{{ }}` tags:
+ * - `'identifier'` (default): replace with the macro name as an identifier.
+ *   Works when the macro appears in an expression position; fails when it
+ *   appears at statement level (bare identifier after a full SELECT…JOIN).
+ * - `'comment'`: replace with a `/* ... *​/` block comment of the same byte
+ *   length. Valid in every SQL position — expression or statement level.
+ *   Use as pass 1b when identifier mode produces un-parseable SQL.
  */
-export function blankJinja(sql: string): string {
+export function blankJinja(sql: string, macroMode: 'identifier' | 'comment' = 'identifier'): string {
 	const buf = sql.split('');
 
 	for (const match of iterJinjaTags(sql)) {
@@ -121,6 +130,7 @@ export function blankJinja(sql: string): string {
 
 		let identifier: string | undefined;
 		let identifierNlOffset = 0; // non-NL chars to skip before writing identifier
+		let useComment = false;
 		// Block tags {% %} and comment tags {# #} always become spaces.
 		let blankToSpaces = !tag.startsWith('{{');
 
@@ -145,6 +155,8 @@ export function blankJinja(sql: string): string {
 							// Known value-returning macros whose names clash with SQL reserved
 							// words — use `_` so they parse as a generic SQL identifier.
 							// identifier stays undefined, falls through to the `_` branch below.
+						} else if (macroMode === 'comment') {
+							useComment = true;
 						} else {
 							identifier = name;
 							// Only offset the identifier when there are newlines before
@@ -170,7 +182,22 @@ export function blankJinja(sql: string): string {
 			}
 		}
 
-		if (identifier !== undefined) {
+		if (useComment) {
+			// SQL block comment /* ... */ — valid in any syntactic position.
+			if (nonNlPositions.length >= 4) {
+				buf[nonNlPositions[0]] = '/';
+				buf[nonNlPositions[1]] = '*';
+				for (let j = 2; j < nonNlPositions.length - 2; j++) {
+					buf[nonNlPositions[j]] = ' ';
+				}
+				buf[nonNlPositions[nonNlPositions.length - 2]] = '*';
+				buf[nonNlPositions[nonNlPositions.length - 1]] = '/';
+			} else {
+				for (const pos of nonNlPositions) {
+					buf[pos] = ' ';
+				}
+			}
+		} else if (identifier !== undefined) {
 			// Write identifier chars starting at identifierNlOffset so that
 			// multi-line tags (e.g. `{{\n    elo_calc(...) }}`) place the name
 			// on the line where it actually appears, not on the `{{` line.
