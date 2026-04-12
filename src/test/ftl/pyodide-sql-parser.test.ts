@@ -346,6 +346,61 @@ SELECT mkey, sourcename FROM warehouse`;
         expect(result.jinjaTags).toBeDefined();
         expect(result.jinjaTags).toHaveLength(0);
     });
+
+    // ── sqlTokens ──────────────────────────────────────────────────────────
+
+    it('sqlTokens is a non-empty array for a successful parse', async () => {
+        const result = await parser.parse('SELECT id FROM users', 'duckdb');
+        expect(Array.isArray(result.sqlTokens)).toBe(true);
+        expect(result.sqlTokens!.length).toBeGreaterThan(0);
+    });
+
+    it('each sqlToken has type, start, end, line, col with correct types', async () => {
+        const result = await parser.parse('SELECT id FROM users', 'duckdb');
+        for (const tok of result.sqlTokens!) {
+            expect(typeof tok.type).toBe('string');
+            expect(typeof tok.start).toBe('number');
+            expect(typeof tok.end).toBe('number');
+            expect(typeof tok.line).toBe('number');
+            expect(typeof tok.col).toBe('number');
+        }
+    });
+
+    it('first token of SELECT query has type SELECT', async () => {
+        const result = await parser.parse('SELECT id FROM users', 'duckdb');
+        expect(result.sqlTokens![0].type).toBe('SELECT');
+    });
+
+    it('sqlToken positions are in source order', async () => {
+        const result = await parser.parse('SELECT id, name FROM users WHERE id = 1', 'duckdb');
+        const tokens = result.sqlTokens!;
+        for (let i = 1; i < tokens.length; i++) {
+            expect(tokens[i].start).toBeGreaterThanOrEqual(tokens[i - 1].start);
+        }
+    });
+
+    it('sqlToken line numbers are 0-based', async () => {
+        const result = await parser.parse('SELECT id\nFROM users', 'duckdb');
+        const fromTok = result.sqlTokens!.find(t => t.type === 'FROM');
+        expect(fromTok).toBeDefined();
+        expect(fromTok!.line).toBe(1);
+    });
+
+    it('timing.tokenizeMs is a non-negative number on successful parse', async () => {
+        const result = await parser.parse('SELECT id FROM users', 'duckdb');
+        expect(typeof result.timing.tokenizeMs).toBe('number');
+        expect(result.timing.tokenizeMs!).toBeGreaterThanOrEqual(0);
+    });
+
+    it('sqlTokens is populated even on parse error', async () => {
+        // Tokenizer is more lenient than parser — tokens are always available
+        // regardless of whether the AST could be built.
+        const result = await parser.parse('SELECT FROM FROM FROM', 'duckdb');
+        expect(Array.isArray(result.sqlTokens)).toBe(true);
+        // Even broken SQL tokenizes: SELECT, FROM, FROM, FROM, semicolon/EOF
+        expect(result.sqlTokens!.length).toBeGreaterThan(0);
+        expect(result.sqlTokens!.some(t => t.type === 'SELECT')).toBe(true);
+    });
 });
 
 // ── renToRawLine — pure unit tests (no pyodide needed) ───────────────────────

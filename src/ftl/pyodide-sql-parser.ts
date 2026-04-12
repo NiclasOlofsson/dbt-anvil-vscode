@@ -18,8 +18,28 @@ from sqlglot.errors import ErrorLevel as _EL
 from sqlglot.errors import ParseError as _ParseError
 from sqlglot.optimizer.qualify import qualify as _qualify
 from sqlglot.optimizer.scope import build_scope as _build_scope
+from sqlglot import Dialect as _Dialect
+from sqlglot.tokens import Tokenizer as _Tokenizer
 
 _SQL_STUB = '__jinja__'
+
+
+def _tokenize(sql, dialect):
+    try:
+        d = dialect or None
+        tok = _Dialect.get_or_raise(d).tokenizer_class() if d else _Tokenizer()
+        return [
+            {
+                'type': t.token_type.name,
+                'start': t.start,
+                'end': t.end,
+                'line': t.line - 1,
+                'col': t.col,
+            }
+            for t in tok.tokenize(sql)
+        ]
+    except Exception:
+        return []
 
 
 def _collect_parse_errors(warnings, errors):
@@ -76,6 +96,8 @@ def _parse(sql, dialect, schema_json):
     d = dialect or None
     warnings = []
     t0 = _time.time()
+    sql_tokens = _tokenize(sql, dialect)
+    t_tok = _time.time()
     ast = None
     parse_exc = None
     try:
@@ -93,7 +115,8 @@ def _parse(sql, dialect, schema_json):
             'scopes': [],
             'dialect': dialect or '',
             'warnings': warnings,
-            'timing': {'parseMs': elapsed, 'qualifyMs': 0, 'scopeMs': 0, 'totalMs': elapsed},
+            'sqlTokens': sql_tokens,
+            'timing': {'tokenizeMs': round((t_tok - t0) * 1000, 1), 'parseMs': round((t_err - t_tok) * 1000, 1), 'qualifyMs': 0, 'scopeMs': 0, 'totalMs': elapsed},
         })
     if ast is None:
         t_none = _time.time()
@@ -103,7 +126,8 @@ def _parse(sql, dialect, schema_json):
             'scopes': [],
             'dialect': dialect or '',
             'warnings': warnings,
-            'timing': {'parseMs': elapsed, 'qualifyMs': 0, 'scopeMs': 0, 'totalMs': elapsed},
+            'sqlTokens': sql_tokens,
+            'timing': {'tokenizeMs': round((t_tok - t0) * 1000, 1), 'parseMs': round((t_none - t_tok) * 1000, 1), 'qualifyMs': 0, 'scopeMs': 0, 'totalMs': elapsed},
         })
     # RAISE re-parse: catches errors that error_level=None swallowed into a partial AST.
     try:
@@ -129,8 +153,10 @@ def _parse(sql, dialect, schema_json):
         'scopes': _ser_scopes(root) if root else [],
         'dialect': dialect or '',
         'warnings': warnings,
+        'sqlTokens': sql_tokens,
         'timing': {
-            'parseMs': round((t1 - t0) * 1000, 1),
+            'tokenizeMs': round((t_tok - t0) * 1000, 1),
+            'parseMs': round((t1 - t_tok) * 1000, 1),
             'qualifyMs': round((t2 - t1) * 1000, 1),
             'scopeMs': round((t3 - t2) * 1000, 1),
             'totalMs': round((t3 - t0) * 1000, 1),
