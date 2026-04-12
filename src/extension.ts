@@ -304,7 +304,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// -------- Parse service (FTL — Pyodide worker pool, true CPU parallelism) --------
 	const pyodideDir = path.join(context.extensionPath, 'node_modules', 'pyodide');
 	const vendorDir = path.join(context.extensionPath, 'resources', 'bridge', 'vendor');
-	const ftlParser = FtlDocumentParser.create(pyodideDir, vendorDir);
+	const scriptsDir = path.join(context.extensionPath, 'resources', 'ftl');
+	const ftlParser = FtlDocumentParser.create(pyodideDir, vendorDir, scriptsDir);
 	await ftlParser.ready();
 	logger.info('Parse service: FTL worker pool ready');
 	const parseService = new ParseService(ftlParser, logger, { describeCache, indexer: manifestIndexer });

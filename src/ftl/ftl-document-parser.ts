@@ -1,4 +1,4 @@
-import type { AstPayload, JinjaTagSpan, ParseWarning } from './parse-result';
+import type { AstPayload, JinjaTagSpan, ParseWarning, SqlToken } from './parse-result';
 import type { ColumnDefToken, ColumnInfo, ColumnRefToken, CteInfo, DocumentModel, FinalSelectColumnInfo, FinalSelectInfo, RefInfo, SourceInfo, SqlglotWarning, TableRefToken, TokenInfo } from '../services/parse-service';
 import type { DocumentParser, ParseOptions } from '../services/document-parser';
 import type { SqlParser } from './sql-parser';
@@ -411,8 +411,8 @@ export class FtlDocumentParser implements DocumentParser {
         this._pool = pool;
     }
 
-    static create(pyodideDir: string, vendorDir: string, options?: PoolOptions): FtlDocumentParser {
-        const pool = new PyodideWorkerPool(pyodideDir, vendorDir, options);
+    static create(pyodideDir: string, vendorDir: string, scriptsDir: string, options?: PoolOptions): FtlDocumentParser {
+        const pool = new PyodideWorkerPool(pyodideDir, vendorDir, scriptsDir, options);
         return new FtlDocumentParser(pool, pool);
     }
 
@@ -438,6 +438,8 @@ export class FtlDocumentParser implements DocumentParser {
             tokens,
             sqlglotWarnings: mapWarnings(result.warnings),
             timing: { parseMs: result.timing.parseMs, totalMs: result.timing.totalMs },
+            sqlTokens: result.sqlTokens,
+            jinjaTags: result.jinjaTags,
         };
     }
 }

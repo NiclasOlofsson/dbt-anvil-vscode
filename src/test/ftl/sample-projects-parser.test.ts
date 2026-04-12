@@ -12,6 +12,7 @@ import { PyodideSqlParser } from '../../ftl/pyodide-sql-parser';
 const SAMPLES_ROOT = path.join(__dirname, '..', '..', '..', 'samples');
 const PYODIDE_DIR  = path.join(__dirname, '..', '..', '..', 'node_modules', 'pyodide');
 const VENDOR_DIR   = path.join(__dirname, '..', '..', '..', 'resources', 'bridge', 'vendor');
+const SCRIPTS_DIR  = path.join(__dirname, '..', '..', '..', 'resources', 'ftl');
 
 function collectSqlFiles(dir: string): string[] {
     const results: string[] = [];
@@ -39,7 +40,7 @@ const RESULTS: FileResult[] = [];
 let parser: PyodideSqlParser;
 
 beforeAll(async () => {
-    const runtime = await initPyodide(PYODIDE_DIR, VENDOR_DIR);
+    const runtime = await initPyodide(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR);
     parser = PyodideSqlParser.create(runtime.pyodide);
 }, 60_000);
 
