@@ -1,14 +1,18 @@
 {
 	"name": "dbt-studio-vscode",
 	"displayName": "dbt Studio",
-	"description": "A full-featured development environment and an AI-powered assistant — the best of both worlds for analytics engineering",
+	"description": "A VS Code extension that gives dbt the same kind of language support that most programming languages have had for years. Now it's here, for dbt Core.",
 	"version": "0.1.12",
 	"publisher": "nickeolofsson",
 	"license": "MIT",
 	"icon": "resources/icons/dbt-studio-128.png",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/NiclasOlofsson/dbt-studio-vscode"
+		"url": "https://github.com/NiclasOlofsson/dbt-studio"
+	},
+	"homepage": "https://github.com/NiclasOlofsson/dbt-studio",
+	"bugs": {
+		"url": "https://github.com/NiclasOlofsson/dbt-studio/issues"
 	},
 	"enabledApiProposals": [
 		"contribLanguageModelToolSets"
