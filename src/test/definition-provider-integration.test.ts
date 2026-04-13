@@ -30,7 +30,7 @@ import * as vscode from 'vscode';
 import { createMockLogger } from './helpers';
 
 const PYODIDE_DIR = path.join(__dirname, '..', '..', 'node_modules', 'pyodide');
-const VENDOR_DIR = path.join(__dirname, '..', '..', 'resources', 'bridge', 'vendor');
+const VENDOR_DIR = path.join(__dirname, '..', '..', 'resources', 'ftl', 'vendor');
 const SCRIPTS_DIR = path.join(__dirname, '..', '..', 'resources', 'ftl');
 
 // The SQL under test — mirrors a real warehouse enrichment model.

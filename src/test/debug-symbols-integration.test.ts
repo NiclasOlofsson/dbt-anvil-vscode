@@ -13,7 +13,7 @@ import { PyodideSqlParser } from '../ftl/pyodide-sql-parser.js';
 
 describe('emitDebugSymbolsFromTokens', () => {
 	const PYODIDE_DIR = path.join(__dirname, '..', '..', 'node_modules', 'pyodide');
-	const VENDOR_DIR = path.join(__dirname, '..', '..', 'resources', 'bridge', 'vendor');
+	const VENDOR_DIR = path.join(__dirname, '..', '..', 'resources', 'ftl', 'vendor');
 	const SCRIPTS_DIR = path.join(__dirname, '..', '..', 'resources', 'ftl');
 
 	let runtime: PyodideRuntime;
@@ -237,7 +237,7 @@ describe('emitDebugSymbolsFromTokens', () => {
 
 describe('decompose_query subquery promotion (FTL)', () => {
 	const PYODIDE_DIR = path.join(__dirname, '..', '..', 'node_modules', 'pyodide');
-	const VENDOR_DIR = path.join(__dirname, '..', '..', 'resources', 'bridge', 'vendor');
+	const VENDOR_DIR = path.join(__dirname, '..', '..', 'resources', 'ftl', 'vendor');
 	const SCRIPTS_DIR = path.join(__dirname, '..', '..', 'resources', 'ftl');
 
 	let runtime: PyodideRuntime;

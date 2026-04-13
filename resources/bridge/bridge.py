@@ -10,7 +10,8 @@ spawning the CLI as a subprocess each time.
 Protocol:
   Startup:  prints {"type": "ready"} to stdout
   Request:  reads {"command": ["run", "--select", "my_model"]} from stdin
-            or    {"get_columns": true, "compiled_sql": "...", "schema_mapping": {...}, "dialect": "duckdb"}
+                        or    {"describe_table": true, "name": "my_model"}
+                        or    {"compile_inline": "SELECT * FROM {{ ref('my_model') }}"}
   Response: prints dbt output lines, then {"success": true/false, ...} on its own line
   Shutdown: reads {"shutdown": true} from stdin → exits cleanly
 """
@@ -19,12 +20,6 @@ import json
 import os
 import sys
 from typing import Any
-
-# Prepend vendored dependencies (sqlglot) bundled with the extension.
-# This ensures bridge.py works regardless of what the user's project has installed.
-_VENDOR_DIR = os.path.join(os.path.dirname(__file__), "vendor")
-if os.path.isdir(_VENDOR_DIR) and _VENDOR_DIR not in sys.path:
-    sys.path.insert(0, _VENDOR_DIR)
 
 
 def configure_stdio() -> None:
@@ -44,10 +39,8 @@ def configure_dbt_env() -> None:
 def import_dbt_runner():  # type: ignore[return]
     """Import dbtRunner, or return None if dbt is not installed.
 
-    Returns None instead of exiting so the bridge can still serve
-    parse_document / get_column_lineage requests in environments where dbt
-    is not installed (e.g. a plain Python env used only for SQL parsing).
-    Callers that need dbt must handle the None return themselves.
+    Returns None instead of exiting so the bridge can return a structured
+    error response. Callers that need dbt must handle the None return.
     """
     try:
         from dbt.cli.main import dbtRunner  # type: ignore[import-not-found]
@@ -293,9 +286,7 @@ def main() -> None:
     )
 
     # dbt is lazy-loaded — only imported/instantiated when a request that
-    # actually needs it arrives (command, describe_table).
-    # This lets the bridge start and serve parse_document / get_column_lineage
-    # requests even in Python environments without dbt installed.
+    # actually needs it arrives (command, describe_table, compile_inline).
     dbt: Any = None
 
     _dbt_unavailable = False
