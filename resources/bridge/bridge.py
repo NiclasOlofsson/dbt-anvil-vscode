@@ -17,7 +17,6 @@ Protocol:
 
 import json
 import os
-import re
 import sys
 from typing import Any
 
