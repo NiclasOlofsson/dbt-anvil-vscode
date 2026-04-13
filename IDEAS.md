@@ -140,3 +140,7 @@ SQLFluff
 Better Yaml (or something like that). But then we need to make sure we support.
 
 If we can't handle this, we have to investigate how we can make sure we "win" over them :D
+
+## Lineage bands
+
+Color the background of lineage graph so that level-1, -2 etc have different vertical bands so we can see what models belong to which depth. Will help identify stuff...

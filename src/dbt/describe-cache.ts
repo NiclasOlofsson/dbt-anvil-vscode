@@ -58,6 +58,7 @@ export class DescribeCache {
 		const sourceName = isSource && node && 'source_name' in node ? String((node as { source_name: string }).source_name) : undefined;
 
 		let qualifiedName: string | undefined;
+		let externalLocation: string | undefined;
 		if (node) {
 			const db = 'database' in node ? (node.database as string | undefined) : undefined;
 			const schema = 'schema' in node ? (node.schema as string | undefined) : undefined;
@@ -66,9 +67,16 @@ export class DescribeCache {
 				: (('alias' in node ? String((node as { alias?: string }).alias) : undefined) ?? name);
 			const parts = [db, schema, identifier].filter(Boolean);
 			if (parts.length > 1) qualifiedName = parts.join('.');
+
+			if (isSource) {
+				const rawLocation = (node as { config?: { meta?: { external_location?: string } } }).config?.meta?.external_location;
+				if (rawLocation && identifier) {
+					externalLocation = rawLocation.replace(/\{identifier\}/g, identifier);
+				}
+			}
 		}
 
-		return this.describeTable(uniqueId, name, sourceName, qualifiedName);
+		return this.describeTable(uniqueId, name, sourceName, qualifiedName, externalLocation);
 	}
 
 	/**
@@ -83,6 +91,7 @@ export class DescribeCache {
 		name: string,
 		sourceName?: string,
 		qualifiedName?: string,
+		externalLocation?: string,
 	): Promise<string[] | undefined> {
 		const cached = this.indexer.getColumns(uniqueId);
 		if (cached && !this.indexer.isManifestOnly(uniqueId)) {
@@ -96,7 +105,7 @@ export class DescribeCache {
 			return inflight;
 		}
 
-		const promise = this._fetch(uniqueId, name, sourceName, qualifiedName);
+		const promise = this._fetch(uniqueId, name, sourceName, qualifiedName, externalLocation);
 		this._inflight.set(uniqueId, promise);
 		try {
 			return await promise;
@@ -110,12 +119,13 @@ export class DescribeCache {
 		name: string,
 		sourceName?: string,
 		qualifiedName?: string,
+		externalLocation?: string,
 	): Promise<string[] | undefined> {
 		this.logger.trace(`DescribeCache: miss for ${uniqueId}, fetching from bridge`);
 		try {
 			// Prefer the DatabaseProvider when available (may bypass the dbt bridge queue)
 			if (this._provider) {
-				const defs = await this._provider.describe(name, { isSource: !!sourceName, sourceName, qualifiedName });
+				const defs = await this._provider.describe(name, { isSource: !!sourceName, sourceName, qualifiedName, externalLocation });
 				const cols = defs.map(d => d.name).filter(Boolean);
 				if (cols.length > 0) {
 					this.indexer.setColumns(uniqueId, cols);

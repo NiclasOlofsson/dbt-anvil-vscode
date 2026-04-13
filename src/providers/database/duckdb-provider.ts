@@ -12,6 +12,7 @@ export class DuckdbProvider implements DatabaseProvider {
 	readonly adapterType = 'duckdb';
 
 	private readonly _dbPath: string;
+	private readonly _projectDir: string;
 
 	constructor(
 		connection: DuckdbConnection,
@@ -19,6 +20,7 @@ export class DuckdbProvider implements DatabaseProvider {
 		private readonly executionService: DbtExecutionService,
 		private readonly logger: ILogger,
 	) {
+		this._projectDir = projectDir;
 		const p = connection.path;
 		this._dbPath = path.isAbsolute(p) ? p : path.join(projectDir, p);
 	}
@@ -36,7 +38,19 @@ export class DuckdbProvider implements DatabaseProvider {
 		return result;
 	}
 
-	async describe(name: string, opts?: { isSource?: boolean; sourceName?: string; qualifiedName?: string }): Promise<ColumnDefinition[]> {
+	async describe(name: string, opts?: { isSource?: boolean; sourceName?: string; qualifiedName?: string; externalLocation?: string }): Promise<ColumnDefinition[]> {
+		if (opts?.externalLocation) {
+			const resolved = path.isAbsolute(opts.externalLocation)
+				? opts.externalLocation
+				: path.join(this._projectDir, opts.externalLocation);
+			const escaped = resolved.replace(/'/g, "''");
+			this.logger.trace(`DuckdbProvider: describe external ${resolved}`);
+			const result = await this._runSql(`DESCRIBE SELECT * FROM '${escaped}'`);
+			return result.rows.map(row => ({
+				name: String(row['column_name'] ?? ''),
+				type: String(row['column_type'] ?? 'unknown'),
+			})).filter(c => c.name !== '');
+		}
 		const qualifiedName = opts?.qualifiedName
 			?? (opts?.isSource && opts.sourceName ? `${opts.sourceName}.${name}` : name);
 		const quoted = qualifiedName.split('.').map(p => `"${p.replace(/"/g, '""')}"`).join('.');

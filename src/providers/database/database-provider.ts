@@ -68,8 +68,11 @@ export interface DatabaseProvider {
 	 * @param opts.qualifiedName   Pre-built fully-qualified relation name (e.g. catalog.schema.table).
 	 *                             Adapter-specific providers that bypass dbt should use this instead of
 	 *                             relying on the session catalog/schema to resolve an unqualified name.
+	 * @param opts.externalLocation Resolved external file path for adapter-defined external sources
+	 *                              (e.g. DuckDB's external_location CSV path). When set, the provider
+	 *                              should describe the file directly rather than a warehouse table.
 	 */
-	describe(name: string, opts?: { isSource?: boolean; sourceName?: string; qualifiedName?: string }): Promise<ColumnDefinition[]>;
+	describe(name: string, opts?: { isSource?: boolean; sourceName?: string; qualifiedName?: string; externalLocation?: string }): Promise<ColumnDefinition[]>;
 
 	/**
 	 * List schemas available in the connected database/catalog.

@@ -1,5 +1,5 @@
 {{ config(materialized="table") }}
-
+-- a comments
 with
     cte_wins as (
         select winning_team, count(*) as wins

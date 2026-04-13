@@ -333,12 +333,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	void vscode.commands.executeCommand('setContext', 'workspaceHasDBT', hasDbtProject);
 
 	// -------- Register Copilot language model tools --------
-	registerLanguageModelTools(context, manifestIndexer, executionService, manifestLoader, logger, compileCache, databaseProvider, describeCache, dbtQueryService);
+	registerLanguageModelTools(context, manifestIndexer, executionService, manifestLoader, logger, compileCache, databaseProvider, describeCache, dbtQueryService, ftlParser);
 
 	// -------- Register tree views --------
 	const modelExplorerProvider = new ModelExplorerProvider(manifestIndexer, logger, projectDir, context.globalState);
 	const lineageGraphProvider = new LineageGraphProvider(manifestIndexer, logger, context.globalState);
-	const columnLineageTool = new GetColumnLineageTool(manifestIndexer, executionService, logger, compileCache, describeCache);
+	const columnLineageTool = new GetColumnLineageTool(manifestIndexer, logger, compileCache, describeCache, ftlParser);
 	lineageGraphProvider.setColumnLineageTool(columnLineageTool);
 	lineageGraphProvider.setExecutionService(executionService);
 	// Initialise context keys so the correct toolbar icons show from the start
