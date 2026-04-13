@@ -8,7 +8,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as path from 'node:path';
 import { BridgeRunner, type DbtCommandResult } from '../dbt/bridge-runner';
 import { detectPythonEnvironment } from '../dbt/env-detector';
-import { findJinjaSpans, injectMarkers, parseSourceMap, type SymbolEntry } from '../dbt/debug-symbols';
+import { emitDebugSymbolsFromTokens, findJinjaSpans, injectMarkers, parseSourceMap, type SymbolEntry } from '../dbt/debug-symbols';
+import { initPyodide } from '../ftl/pyodide-loader.js';
+import type { PyodideRuntime } from '../ftl/pyodide-loader.js';
+import { PyodideSqlParser } from '../ftl/pyodide-sql-parser.js';
 import { createMockLogger } from './helpers';
 
 const JAFFLE_SHOP = path.join(__dirname, '..', '..', 'samples', 'jaffle_shop');
@@ -478,5 +481,137 @@ describe('decompose_query subquery promotion', () => {
 
 		// 'anon_sub' alias used as CTE name
 		expect(frames.find(f => f.name === 'anon_sub')).toBeDefined();
+	});
+});
+
+describe('emitDebugSymbolsFromTokens', () => {
+	const PYODIDE_DIR = path.join(__dirname, '..', '..', 'node_modules', 'pyodide');
+	const VENDOR_DIR = path.join(__dirname, '..', '..', 'resources', 'bridge', 'vendor');
+	const SCRIPTS_DIR = path.join(__dirname, '..', '..', 'resources', 'ftl');
+
+	let runtime: PyodideRuntime;
+	let parser: PyodideSqlParser;
+
+	beforeAll(async () => {
+		runtime = await initPyodide(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR);
+		parser = PyodideSqlParser.create(runtime.pyodide);
+	}, 60_000);
+
+	async function emit(sql: string, dialect = 'duckdb') {
+		const result = await parser.parse(sql, dialect);
+		return emitDebugSymbolsFromTokens(sql, result.sqlTokens ?? [], result.jinjaTags ?? []);
+	}
+
+	it('returns symbols for simple SQL', async () => {
+		const result = await emit('SELECT id, name FROM orders WHERE id > 1');
+		expect(result).toBeDefined();
+		const roles = result!.symbols.map(s => s.role);
+		expect(roles).toContain('select');
+		expect(roles).toContain('from');
+		expect(roles).toContain('where');
+		expect(roles).toContain('ident');
+	});
+
+	it('returns correct 0-based positions', async () => {
+		const result = await emit('SELECT id FROM t');
+		expect(result).toBeDefined();
+		const symbols = result!.symbols;
+		const selectSym = symbols.find(s => s.role === 'select');
+		expect(selectSym).toMatchObject({ line: 0, col: 0, endCol: 6, role: 'select' });
+		const idSym = symbols.find(s => s.role === 'ident' && s.col === 7);
+		expect(idSym).toMatchObject({ line: 0, col: 7, endCol: 9, role: 'ident' });
+		const fromSym = symbols.find(s => s.role === 'from');
+		expect(fromSym).toMatchObject({ line: 0, col: 10, endCol: 14, role: 'from' });
+	});
+
+	it('handles multiline SQL', async () => {
+		const sql = 'SELECT\n  id,\n  name\nFROM\n  orders';
+		const result = await emit(sql);
+		expect(result).toBeDefined();
+		const selectSym = result!.symbols.find(s => s.role === 'select');
+		expect(selectSym!.line).toBe(0);
+		const fromSym = result!.symbols.find(s => s.role === 'from');
+		expect(fromSym!.line).toBe(3);
+	});
+
+	it('handles complex CTE query', async () => {
+		const sql = [
+			'WITH base AS (',
+			'  SELECT id, status FROM raw_orders',
+			'),',
+			'filtered AS (',
+			"  SELECT id FROM base WHERE status = 'completed'",
+			')',
+			'SELECT * FROM filtered',
+		].join('\n');
+		const result = await emit(sql);
+		expect(result).toBeDefined();
+		const roles = result!.symbols.map(s => s.role);
+		expect(roles).toContain('cte');
+		expect(roles).toContain('select');
+		expect(roles).toContain('from');
+		expect(roles).toContain('where');
+		expect(roles).toContain('star');
+	});
+
+	it('assigns _main_ frameName for simple queries', async () => {
+		const result = await emit('SELECT id FROM t');
+		expect(result).toBeDefined();
+		for (const sym of result!.symbols) {
+			expect(sym.frameName).toBe('_main_');
+		}
+	});
+
+	it('assigns CTE names as frameName for CTE queries', async () => {
+		const sql = [
+			'WITH base AS (',
+			'  SELECT id, status FROM raw_orders',
+			'),',
+			'filtered AS (',
+			"  SELECT id FROM base WHERE status = 'completed'",
+			')',
+			'SELECT * FROM filtered',
+		].join('\n');
+		const result = await emit(sql);
+		expect(result).toBeDefined();
+		const symbols = result!.symbols;
+
+		const baseLine = symbols.filter(s => s.line === 1);
+		expect(baseLine.length).toBeGreaterThan(0);
+		for (const sym of baseLine) expect(sym.frameName).toBe('base');
+
+		const filteredLine = symbols.filter(s => s.line === 4);
+		expect(filteredLine.length).toBeGreaterThan(0);
+		for (const sym of filteredLine) expect(sym.frameName).toBe('filtered');
+
+		const mainLine = symbols.filter(s => s.line === 6);
+		expect(mainLine.length).toBeGreaterThan(0);
+		for (const sym of mainLine) expect(sym.frameName).toBe('_main_');
+	});
+
+	it('filters out blanked Jinja tokens', async () => {
+		const sql = "SELECT id FROM {{ ref('orders') }} WHERE id > 1";
+		const result = await emit(sql);
+		expect(result).toBeDefined();
+		const symbols = result!.symbols;
+		const jinjaSymbol = symbols.find(s => s.col >= 15 && s.col < 34);
+		expect(jinjaSymbol).toBeUndefined();
+		const roles = symbols.map(s => s.role);
+		expect(roles).toContain('select');
+		expect(roles).toContain('from');
+		expect(roles).toContain('where');
+	});
+
+	it('detects function calls', async () => {
+		const result = await emit('SELECT COUNT(id) FROM t');
+		expect(result).toBeDefined();
+		const fnSym = result!.symbols.find(s => s.role === 'fn');
+		expect(fnSym).toBeDefined();
+		expect(fnSym!.line).toBe(0);
+	});
+
+	it('returns undefined for empty SQL', async () => {
+		const result = await emit('');
+		expect(result).toBeUndefined();
 	});
 });

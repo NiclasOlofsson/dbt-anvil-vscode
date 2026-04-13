@@ -2,7 +2,7 @@
 	"name": "dbt-studio-vscode",
 	"displayName": "dbt Studio",
 	"description": "A full-featured development environment and an AI-powered assistant — the best of both worlds for analytics engineering",
-	"version": "0.1.11",
+	"version": "0.1.12",
 	"publisher": "nickeolofsson",
 	"license": "MIT",
 	"icon": "resources/icons/dbt-studio-128.png",
@@ -14,7 +14,7 @@
 		"contribLanguageModelToolSets"
 	],
 	"engines": {
-		"vscode": "^1.102.0"
+		"vscode": "^1.115.0"
 	},
 	"categories": [
 		"Programming Languages",
@@ -49,6 +49,12 @@
 					"light": "./resources/icons/file-sql-light.svg",
 					"dark": "./resources/icons/file-sql-dark.svg"
 				}
+			},
+			{
+				"id": "dbt-symbol-sql",
+				"aliases": [
+					"dbt Symbol SQL"
+				]
 			}
 		],
 		"grammars": [
@@ -63,6 +69,11 @@
 				"injectTo": [
 					"source.yaml"
 				]
+			},
+			{
+				"language": "dbt-symbol-sql",
+				"scopeName": "source.dbt-symbol-sql",
+				"path": "./syntaxes/dbt-symbol-sql.tmLanguage.json"
 			}
 		],
 		"commands": [
@@ -288,6 +299,10 @@
 			{
 				"command": "dbt-sql.dataPipeline.goToFrame",
 				"title": "Go to Frame"
+			},
+			{
+				"command": "dbt-studio.debug.showFrameSql",
+				"title": "Show SQL"
 			}
 		],
 		"viewsContainers": {
@@ -647,6 +662,13 @@
 					"when": "view == dbt-studio.testExplorer && viewItem == testCategory",
 					"group": "inline@1"
 				}
+			],
+			"debug/callstack/context": [
+				{
+					"command": "dbt-studio.debug.showFrameSql",
+					"when": "debugType == 'dbt-sql'",
+					"group": "navigation"
+				}
 			]
 		},
 		"configuration": [
@@ -779,6 +801,108 @@
 						"type": "boolean",
 						"default": true,
 						"markdownDescription": "**⚠️ Disabling this is strongly discouraged.** dbt Studio monitors terminal shell executions and automatically suspends its own background operations when you run `dbt run`, `build`, `seed`, `snapshot`, `clone`, or `run-operation` directly in a terminal. Without this, concurrent dbt writes can corrupt the manifest and produce stale intellisense, phantom errors, and incorrect lineage. Only disable if VS Code shell integration is causing unrelated problems in your environment."
+					},
+					"dbt-studio.terminal.contributeCliShim": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "Contribute a `dbt` command to integrated terminals that delegates to the detected package manager (uv, poetry, etc.). When enabled, you can type `dbt build` in the terminal instead of `uv run dbt build`."
+					}
+				}
+			},
+			{
+				"id": "dbt-studio.ninja",
+				"title": "Ninja Linter",
+				"properties": {
+					"dbt-studio.ninja.enabled": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "**Enabled**: Run the built-in Ninja linter on SQL files and show violations in the Problems panel."
+					},
+					"dbt-studio.ninja.rules": {
+						"type": "object",
+						"default": {},
+						"markdownDescription": "Per-rule severity overrides. Keys are rule IDs (e.g. `ninja.cap.keywords`), values are `error`, `warning`, `info`, or `off`."
+					},
+					"dbt-studio.ninja.capitalisation.keywords": {
+						"type": "string",
+						"default": "lower",
+						"enum": [
+							"upper",
+							"lower",
+							"consistent"
+						],
+						"markdownDescription": "Capitalisation policy for SQL keywords (SELECT, FROM, WHERE, etc.)."
+					},
+					"dbt-studio.ninja.capitalisation.functions": {
+						"type": "string",
+						"default": "lower",
+						"enum": [
+							"upper",
+							"lower",
+							"consistent"
+						],
+						"markdownDescription": "Capitalisation policy for SQL function names (count, coalesce, etc.)."
+					},
+					"dbt-studio.ninja.capitalisation.literals": {
+						"type": "string",
+						"default": "lower",
+						"enum": [
+							"upper",
+							"lower",
+							"consistent"
+						],
+						"markdownDescription": "Capitalisation policy for SQL literals (NULL, TRUE, FALSE)."
+					},
+					"dbt-studio.ninja.capitalisation.types": {
+						"type": "string",
+						"default": "lower",
+						"enum": [
+							"upper",
+							"lower",
+							"consistent"
+						],
+						"markdownDescription": "Capitalisation policy for SQL datatype keywords (INT, VARCHAR, BOOLEAN, etc.)."
+					},
+					"dbt-studio.ninja.indentation.unit": {
+						"type": "string",
+						"default": "space",
+						"enum": [
+							"space",
+							"tab"
+						],
+						"markdownDescription": "Indentation character."
+					},
+					"dbt-studio.ninja.indentation.size": {
+						"type": "number",
+						"default": 4,
+						"minimum": 1,
+						"maximum": 8,
+						"markdownDescription": "Number of spaces (or tabs) per indent level."
+					},
+					"dbt-studio.ninja.maxLineLength": {
+						"type": "number",
+						"default": 120,
+						"minimum": 40,
+						"maximum": 500,
+						"markdownDescription": "Maximum line length before the long-lines rule triggers."
+					},
+					"dbt-studio.ninja.layout.commaPosition": {
+						"type": "string",
+						"default": "trailing",
+						"enum": [
+							"trailing",
+							"leading"
+						],
+						"markdownDescription": "Whether commas should appear at end (trailing) or start (leading) of lines."
+					},
+					"dbt-studio.ninja.layout.operatorPosition": {
+						"type": "string",
+						"default": "trailing",
+						"enum": [
+							"trailing",
+							"leading"
+						],
+						"markdownDescription": "Whether operators (AND, OR, +, etc.) should appear at end (trailing) or start (leading) of lines."
 					}
 				}
 			},
@@ -1398,33 +1522,37 @@
 		"@stylistic/eslint-plugin": "^5.10.0",
 		"@types/dagre": "^0.7.54",
 		"@types/js-yaml": "^4.0.9",
-		"@types/node": "^25.5.0",
-		"@types/vscode": "^1.102.0",
-		"@typescript-eslint/eslint-plugin": "^8.39.0",
-		"@typescript-eslint/parser": "^8.39.0",
-		"esbuild": "^0.27.4",
-		"eslint": "^10.1.0",
+		"@types/node": "^25.6.0",
+		"@types/vscode": "^1.115.0",
+		"@typescript-eslint/eslint-plugin": "^8.58.0",
+		"@typescript-eslint/parser": "^8.58.0",
+		"@vscode/vsce": "^3.7.1",
+		"esbuild": "^0.28.0",
+		"eslint": "^10.2.0",
 		"eslint-import-resolver-typescript": "^4.4.4",
 		"eslint-plugin-import": "^2.32.0",
-		"eslint-plugin-jsdoc": "^62.8.1",
+		"eslint-plugin-jsdoc": "^62.9.0",
 		"gif-encoder-2": "^1.0.5",
 		"husky": "^9.1.7",
-		"jimp": "^1.6.0",
+		"jimp": "^1.6.1",
 		"lint-staged": "^16.4.0",
 		"nodemon": "^3.1.10",
 		"npm-run-all": "^4.1.5",
-		"playwright": "^1.58.2",
+		"playwright": "^1.59.1",
 		"rimraf": "^6.0.1",
 		"tsx": "^4.20.3",
 		"typescript": "^6.0.2",
-		"vitest": "^4.1.2"
+		"vitest": "^4.1.4"
 	},
 	"dependencies": {
 		"@duckdb/node-api": "^1.5.1-r.1",
+		"@types/nunjucks": "^3.2.6",
 		"dagre": "^0.8.5",
 		"hive-driver": "^1.0.0",
 		"js-yaml": "^4.1.1",
 		"node-sql-parser": "^5.3.6",
+		"nunjucks": "^3.2.4",
+		"pyodide": "^0.29.3",
 		"thrift": "^0.22.0",
 		"yaml": "^2.8.3"
 	}

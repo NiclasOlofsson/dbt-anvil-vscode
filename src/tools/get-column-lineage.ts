@@ -1,10 +1,11 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import type { ILogger } from '../types/logger';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import { Priority } from '../dbt/execution-service';
-import type { DbtExecutionService } from '../dbt/execution-service';
 import type { CompileCache } from '../dbt/compile-cache';
 import type { DescribeCache } from '../dbt/describe-cache';
+import type { ColumnDependency, FtlDocumentParser, LineageResult } from '../ftl/ftl-document-parser';
 import { toolResult } from './tool-helpers';
 
 interface GetColumnLineageInput {
@@ -55,47 +56,15 @@ export function mapAdapterToDialect(adapterType: string): string {
 	return map[adapterType.toLowerCase()] ?? adapterType.toLowerCase();
 }
 
-interface ColumnDependency {
-	column: string;
-	table: string;
-	schema?: string;
-	database?: string;
-	dbt_resource?: string;
-	/** Internal CTE transformations for model-type dependencies (Step 11) */
-	transformations?: Transformation[];
-	via_ctes?: string[];
-}
 
-interface TransformationBranch {
-	expression?: string;
-	sources: string[];
-}
-
-interface Transformation {
-	/** Namespaced id: "cte:name", "table:name", or "query" */
-	id: string;
-	/** Node type in the lineage graph */
-	type: 'cte' | 'table' | 'union' | 'outer_query';
-	column: string;
-	expression?: string;
-	sources: string[];
-	/** Present for union nodes */
-	branches?: TransformationBranch[];
-}
-
-interface LineageResult {
-	dependencies: ColumnDependency[];
-	via_ctes: string[];
-	transformations: Transformation[];
-}
 
 export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnLineageInput> {
 	constructor(
 		private readonly indexer: ManifestIndexer,
-		private readonly service: DbtExecutionService,
 		private readonly logger: ILogger,
 		private readonly compileCache: CompileCache,
 		private readonly describeCache: DescribeCache,
+		private readonly ftlParser: FtlDocumentParser,
 	) {}
 
 	/**
@@ -193,7 +162,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 			return { columns: ['*'], source: 'wildcard' };
 		}
 
-		// Models: SQL parsing via bridge
+		// Models: SQL parsing via Pyodide
 		const cols = await this._getOutputColumns(compiledCode, dialect, schemaMapping);
 		return { columns: cols, source: cols.length > 0 ? 'sql' : 'none' };
 	}
@@ -331,80 +300,57 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 	}
 
 	/**
-	 * Trace column lineage for a single model+column via the bridge.
+	 * Trace column lineage for a single model+column via Pyodide.
 	 */
 	private async _traceColumn(
 		modelUniqueId: string,
-		modelName: string,
+		_modelName: string,
 		columnName: string,
 		dialect: string,
 	): Promise<LineageResult | null> {
 		const raw = this.indexer.getRawNode(modelUniqueId);
-		if (!raw) return null;
+		if (!raw || raw.resource_type !== 'model') return null;
 
-		const compiledCode = await this._ensureCompiled(modelUniqueId);
-		if (!compiledCode) return null;
+		const sql = fs.readFileSync(path.join(this.indexer.projectDir, raw.original_file_path), 'utf8');
 
 		const lineage = this.indexer.getLineage(modelUniqueId, 5, 0);
 		const schemaMapping = await this._buildSchemaMapping(lineage.upstream.map(n => n.uniqueId));
 
 		try {
-			const result = await this.service.submit({
-				type: 'column_lineage',
-				raw: {
-					get_column_lineage: true,
-					compiled_sql: compiledCode,
-					column_name: columnName,
-					dialect,
-					schema_mapping: schemaMapping,
-				},
-				priority: Priority.Tool,
-				origin: 'copilot',
-				label: `column lineage for ${modelName}.${columnName}`,
-			});
-
-			const data = result.data as Record<string, unknown> | undefined;
-			if (!data || !data['success']) {
-				this.logger.warn(`Column lineage bridge call failed: ${data?.['error'] ?? 'unknown error'}`);
+			const schemaJson = JSON.stringify(schemaMapping);
+			const result = await this.ftlParser.traceLineageV2(sql, columnName, dialect, schemaJson);
+			if ('error' in result) {
+				this.logger.warn(`Column lineage error for ${_modelName}.${columnName}: ${result.error}`);
 				return null;
 			}
-
-			return {
-				dependencies: (data['dependencies'] as ColumnDependency[]) ?? [],
-				via_ctes: (data['via_ctes'] as string[]) ?? [],
-				transformations: (data['transformations'] as Transformation[]) ?? [],
-			};
+			return result;
 		} catch (err) {
-			this.logger.warn(`Column lineage bridge error: ${err}`);
+			const msg = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
+			this.logger.warn(`Column lineage error: ${msg}`);
 			return null;
 		}
 	}
 
 	/**
-	 * Resolve output columns for the model by calling get_columns on the bridge.
+	 * Resolve output columns for the model by parsing compiled SQL via Pyodide.
 	 */
 	private async _getOutputColumns(
 		compiledCode: string,
 		dialect: string,
 		schemaMapping: SchemaMapping,
 	): Promise<string[]> {
+		// Flatten 4-level schema (db→schema→table→col) to 2-level (table→col) for qualify()
+		const flatSchema: Record<string, Record<string, string>> = {};
+		for (const schemas of Object.values(schemaMapping)) {
+			for (const tables of Object.values(schemas)) {
+				for (const [table, cols] of Object.entries(tables)) {
+					flatSchema[table] = cols;
+				}
+			}
+		}
 		try {
-			const result = await this.service.submit({
-				type: 'get_columns',
-				raw: {
-					get_columns: true,
-					compiled_sql: compiledCode,
-					dialect,
-					schema_mapping: schemaMapping,
-				},
-				priority: Priority.Tool,
-				origin: 'copilot',
-				label: 'resolve output columns',
-			});
-
-			const data = result.data as Record<string, unknown> | undefined;
-			const cols = data && Array.isArray(data['columns']) ? data['columns'] as string[] : [];
-			return cols;
+			const result = await this.ftlParser.parse(compiledCode, dialect, { schema: flatSchema });
+			return result.finalColumns.map(c => c.name);
 		} catch {
 			return [];
 		}
@@ -442,7 +388,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 
 		const lineageResult = await this._traceColumn(modelUniqueId, modelName, columnName, dialect);
 		if (!lineageResult) {
-			this.logger.warn(`[lineage] _traceColumn returned null for ${modelName}.${columnName} — compiled SQL missing or bridge error`);
+			this.logger.warn(`[lineage] _traceColumn returned null for ${modelName}.${columnName} — parser returned no result`);
 			return [];
 		}
 
@@ -629,16 +575,12 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 			return { error: `Raw manifest data not found for "${uniqueId}"`, dependencies: [], columnEdges: GetColumnLineageTool._emptyColumnEdges };
 		}
 
-		// Sources, seeds, snapshots are terminal nodes — no compiled SQL needed, no upstream to trace
+		// Sources, seeds, snapshots are terminal nodes — no upstream to trace
 		if (rawNode.resource_type !== 'model') {
 			return { dependencies: [], columnEdges: GetColumnLineageTool._emptyColumnEdges };
 		}
 
-		// _ensureCompiled: free if compiled_code already in manifest, compiles if missing
-		const compiledCode = await this._ensureCompiled(uniqueId);
-		if (!compiledCode) {
-			return { error: `No compiled SQL found for "${rawNode.name}". Run "dbt compile" first.`, dependencies: [], columnEdges: GetColumnLineageTool._emptyColumnEdges };
-		}
+		const rawSql = fs.readFileSync(path.join(this.indexer.projectDir, rawNode.original_file_path), 'utf8');
 
 		const index = this.indexer.index;
 		const dialect = mapAdapterToDialect(index?.adapterType ?? 'ansi');
@@ -648,7 +590,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		const { columns: outputColumns } = await this._resolveOutputColumns(
 			rawNode.resource_type,
 			rawNode,
-			compiledCode,
+			rawSql,
 			dialect,
 			schemaMapping,
 		);

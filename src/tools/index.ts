@@ -7,6 +7,7 @@ import type { CompileCache } from '../dbt/compile-cache';
 import type { DatabaseProvider } from '../providers/database/database-provider';
 import type { DescribeCache } from '../dbt/describe-cache';
 import type { DbtQueryService } from '../services/dbt-query-service';
+import type { FtlDocumentParser } from '../ftl/ftl-document-parser';
 import { RunModelsTool } from './run-models';
 import { TestModelsTool } from './test-models';
 import { BuildModelsTool } from './build-models';
@@ -32,6 +33,7 @@ export function registerLanguageModelTools(
 	databaseProvider: DatabaseProvider,
 	describeCache: DescribeCache,
 	dbtQueryService: DbtQueryService,
+	ftlParser: FtlDocumentParser,
 ): void {
 	logger.info('Registering language model tools for Copilot Agent Mode');
 
@@ -43,7 +45,7 @@ export function registerLanguageModelTools(
 		['build_models', new BuildModelsTool(service, logger, stateDir)],
 		['compile_model', new CompileModelTool(service, loader, logger, indexer, compileCache)],
 		['get_lineage', new GetLineageTool(indexer, logger)],
-		['get_column_lineage', new GetColumnLineageTool(indexer, service, logger, compileCache, describeCache)],
+		['get_column_lineage', new GetColumnLineageTool(indexer, logger, compileCache, describeCache, ftlParser)],
 		['list_resources', new ListResourcesTool(indexer, logger)],
 		['get_resource_info', new GetResourceInfoTool(indexer, service, loader, logger, compileCache)],
 		['get_project_info', new GetProjectInfoTool(indexer, service, loader, logger)],

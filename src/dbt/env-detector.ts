@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -9,6 +10,10 @@ export interface PythonEnvironment {
 	description: string;
 	/** Extra environment variables needed (e.g. PIPENV_IGNORE_VIRTUALENVS=1) */
 	envVars?: Record<string, string>;
+	/** Wrapper command prefix before 'dbt' for shim generation (e.g. ['uv', 'run', '--directory', dir]) */
+	wrapperPrefix: string[];
+	/** Bin directory for venv environments (e.g. '.venv/Scripts' or '.venv/bin') */
+	venvBinDir?: string;
 }
 
 /**
@@ -29,9 +34,14 @@ export function detectPythonEnvironment(projectDir: string): PythonEnvironment {
 	const venvPath = findVenv(absProjectDir);
 	if (venvPath) {
 		const pythonExe = getVenvPython(venvPath);
+		const venvBinDir = process.platform === 'win32'
+			? path.join(venvPath, 'Scripts')
+			: path.join(venvPath, 'bin');
 		return {
 			command: [pythonExe],
 			description: `venv at ${path.relative(absProjectDir, venvPath)}`,
+			wrapperPrefix: [],
+			venvBinDir,
 		};
 	}
 
@@ -40,6 +50,7 @@ export function detectPythonEnvironment(projectDir: string): PythonEnvironment {
 		return {
 			command: ['uv', 'run', '--directory', absProjectDir, 'python'],
 			description: 'uv (uv.lock)',
+			wrapperPrefix: ['uv', 'run', '--directory', absProjectDir],
 		};
 	}
 
@@ -48,6 +59,7 @@ export function detectPythonEnvironment(projectDir: string): PythonEnvironment {
 		return {
 			command: ['poetry', 'run', '--directory', absProjectDir, 'python'],
 			description: 'poetry (poetry.lock)',
+			wrapperPrefix: ['poetry', 'run', '--directory', absProjectDir],
 		};
 	}
 
@@ -57,6 +69,7 @@ export function detectPythonEnvironment(projectDir: string): PythonEnvironment {
 			command: ['pipenv', 'run', 'python'],
 			description: 'pipenv (Pipfile.lock)',
 			envVars: { PIPENV_IGNORE_VIRTUALENVS: '1' },
+			wrapperPrefix: ['pipenv', 'run'],
 		};
 	}
 
@@ -66,6 +79,7 @@ export function detectPythonEnvironment(projectDir: string): PythonEnvironment {
 		return {
 			command: ['conda', 'run', '-n', condaEnv, 'python'],
 			description: `conda (${condaEnv})`,
+			wrapperPrefix: ['conda', 'run', '-n', condaEnv],
 		};
 	}
 
@@ -74,6 +88,7 @@ export function detectPythonEnvironment(projectDir: string): PythonEnvironment {
 	return {
 		command: [systemPython],
 		description: 'system Python',
+		wrapperPrefix: [],
 	};
 }
 
@@ -120,4 +135,32 @@ export function detectProfilesDir(projectDir: string): string {
 		return projectDir;
 	}
 	return path.join(os.homedir(), '.dbt');
+}
+
+/**
+ * Validate that the detected Python environment is actually functional by
+ * running `<env.command> --version` with a 10s timeout.
+ *
+ * Returns true if the command exits with code 0, false otherwise.
+ */
+export function validatePythonEnvironment(env: PythonEnvironment): Promise<boolean> {
+	return new Promise((resolve) => {
+		const [executable, ...args] = env.command;
+		const child = spawn(executable, [...args, '--version'], {
+			env: { ...process.env, ...env.envVars },
+			timeout: 10_000,
+			windowsHide: true,
+		});
+
+		child.on('error', () => resolve(false));
+		child.on('close', (code) => resolve(code === 0));
+	});
+}
+
+/**
+ * Returns true if the dbt_packages directory exists in the project,
+ * indicating that `dbt deps` has been run.
+ */
+export function dbtPackagesExist(projectDir: string): boolean {
+	return fs.existsSync(path.join(projectDir, 'dbt_packages'));
 }

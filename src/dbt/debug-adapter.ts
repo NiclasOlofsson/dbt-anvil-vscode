@@ -6,10 +6,12 @@ import type { DatabaseProvider, QueryResult } from '../providers/database/databa
 import type { BridgeRunner } from './bridge-runner';
 import type { CompileCache } from './compile-cache';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
+import type { ParseService } from '../services/parse-service';
 import { Priority } from './execution-service';
 import { splitStatements, findStatementAtOffset } from './statement-splitter';
-import { emitDebugSymbols, parseSourceMap } from './debug-symbols';
+import { emitDebugSymbols, emitDebugSymbolsFromTokens, parseSourceMap } from './debug-symbols';
 import type { SourceMap } from './debug-symbols';
+import type { SymbolSqlProvider } from '../providers/symbol-sql-provider';
 
 interface DapMessage {
 	seq: number;
@@ -32,6 +34,8 @@ interface DecomposeClause {
 	stage: string;
 	sql: string;
 	line: number;
+	/** Line number in the compiled (annotated) SQL — never overwritten by _remapPositions. */
+	compiledLine?: number;
 	order?: number;
 }
 
@@ -69,6 +73,20 @@ interface StepResult {
 	columnTypes?: Record<string, string>;
 	totalCount: number;
 	executionTimeMs: number;
+}
+
+// ── Goto / join-skip state ──
+/** Stored when a goto neutralises joins so we can restore on step-back. */
+interface ActiveSkip {
+	frameIndex: number;
+	/** Clause index where the jump originated (before skipped joins). */
+	fromClauseIndex: number;
+	/** The neutralized join's compiledLine. */
+	joinLine: number;
+	originalSql: string;
+	originalFrames: DecomposeFrame[];
+	originalClauses: Record<string, DecomposeClause[]>;
+	originalRefs: Record<string, string[]>;
 }
 
 // ── Pipeline event (custom DAP event consumed by DataPipelineProvider) ──
@@ -111,6 +129,92 @@ export function decodeRef(ref: number): { frameIndex: number; scope: number; ext
 		scope: (ref >> 8) & 0xFF,
 		extra: ref & 0xFF,
 	};
+}
+
+/** Rewrites a join clause's content so it has no data effect:
+ *  any join type → LEFT JOIN with AND / ON 1=0, preserving schema but matching zero rows. */
+export function neutralizeJoinType(content: string): string {
+	let result = content
+		.replace(/\bFULL\s+OUTER\s+JOIN\b/gi, 'LEFT JOIN')
+		.replace(/\bFULL\s+JOIN\b/gi, 'LEFT JOIN')
+		.replace(/\bRIGHT\s+OUTER\s+JOIN\b/gi, 'LEFT JOIN')
+		.replace(/\bRIGHT\s+JOIN\b/gi, 'LEFT JOIN')
+		.replace(/\bINNER\s+JOIN\b/gi, 'LEFT JOIN')
+		.replace(/\bCROSS\s+JOIN\b/gi, 'LEFT JOIN')
+		.replace(/\bLEFT\s+OUTER\s+JOIN\b/gi, 'LEFT JOIN');
+	if (!/\bLEFT\s+JOIN\b/i.test(result)) {
+		result = result.replace(/\bJOIN\b/gi, 'LEFT JOIN');
+	}
+	return result;
+}
+
+/** Neutralize a join clause SQL directly (without markers).
+ *  Converts join type to LEFT JOIN and inserts ON 1=0 AND after ON keyword. */
+export function neutralizeJoinClauseSql(sql: string): string {
+	// Convert join type to LEFT JOIN
+	let result = neutralizeJoinType(sql);
+
+	// Insert 1=0 AND after ON keyword
+	const onMatch = /\bON\b/i.exec(result);
+	if (onMatch) {
+		const onEnd = onMatch.index + onMatch[0].length;
+		result = result.slice(0, onEnd) + ' 1=0 AND' + result.slice(onEnd);
+	}
+
+	return result;
+}
+
+/**
+ * Neutralize a single join in `sql` identified by its `clauseLine` and `frameName`.
+ * The clauseLine should match the 1-based line number in the @dbg marker.
+ * Converts the join type to LEFT JOIN, then inserts `1=0 AND` after the ON keyword.
+ * Returns the mutated SQL (or the original if no marker is found).
+ */
+export function neutralizeJoinInSql(sql: string, clauseLine: number, frameName: string): string {
+	const closeStr = '/* /@dbg */';
+	const escapedFrame = frameName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const markerRe = new RegExp(
+		`\\/\\* @dbg:L${clauseLine}:C\\d+:join:${escapedFrame} \\*\\/`,
+		'g',
+	);
+
+	let result = sql;
+	let contentMarkerEnd = -1;
+	let match: RegExpExecArray | null;
+	markerRe.lastIndex = 0;
+	while ((match = markerRe.exec(result)) !== null) {
+		const contentStart = match.index + match[0].length;
+		const closeIdx = result.indexOf(closeStr, contentStart);
+		if (closeIdx < 0) continue;
+		const content = result.slice(contentStart, closeIdx);
+		if (!/\bJOIN\b/i.test(content)) continue; // skip empty stage markers
+
+		const fixedContent = neutralizeJoinType(content);
+		result = result.slice(0, contentStart) + fixedContent + result.slice(closeIdx);
+		contentMarkerEnd = contentStart + fixedContent.length + closeStr.length;
+		break;
+	}
+
+	if (contentMarkerEnd < 0) return result;
+
+	const onMatch = /\bON\b/i.exec(result.slice(contentMarkerEnd));
+	if (onMatch) {
+		const onEnd = contentMarkerEnd + onMatch.index + onMatch[0].length;
+		result = result.slice(0, onEnd) + ' 1=0 AND' + result.slice(onEnd);
+	}
+
+	// Clear split-off qualifier keywords emitted as separate token markers on the same line
+	// (e.g. the bridge emits `INNER` and `JOIN` as two distinct markers: C8=`inner`, C14=`join`).
+	// We do this AFTER the ON insertion so contentMarkerEnd offsets are unaffected.
+	const qualifierRe = new RegExp(
+		`(\\/\\* @dbg:L${clauseLine}:C\\d+:join:${escapedFrame} \\*\\/) (\\w+) (\\/\\* \\/@dbg \\*\\/)`,
+		'g',
+	);
+	result = result.replace(qualifierRe, (_full, open, word, close) =>
+		/^(inner|left|right|cross|full|outer)$/i.test(word) ? open + ' ' + close : _full,
+	);
+
+	return result;
 }
 
 /**
@@ -199,10 +303,17 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	 *  or step-back — only cleared on continue/restart. Useful for full trace. */
 	private _fullHistory: Array<{ frameIndex: number; clauseIndex: number; granularity: 'statement' | 'line' }> = [];
 	private _resultCache = new Map<string, StepResult>();
-	private _breakpoints: Array<{ line: number; id: number; frameName?: string; clauseIndex?: number }> = [];
+	private _breakpoints: Array<{ line: number; id: number; frameName?: string; clauseIndex?: number; condition?: string }> = [];
 	private _nextBpId = 1;
 	private _exceptionFilters: Set<string> = new Set();
+	private _fanOutThreshold = 1.0;
+	private _lastException: { exceptionId: string; description: string } | undefined;
 	private _compiledSql = '';
+	private _activeSkips: ActiveSkip[] = [];
+	private _runToken = 0;
+	private _gotoTargetLine: number | undefined;
+	/** Set of compiledLine values for joins neutralized during goto. */
+	private _gotoJoinsToSkip: Set<number> | undefined;
 	private _sourceUri = '';
 	private _limit = 50;
 	private _scope: 'cursor' | 'all' = 'cursor';
@@ -228,6 +339,8 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		private readonly _bridgeRunner: BridgeRunner,
 		private readonly _compileCache: CompileCache,
 		private readonly _manifestIndexer: ManifestIndexer,
+		private readonly _parseService: ParseService,
+		private readonly _symbolSqlProvider?: SymbolSqlProvider,
 	) {
 	}
 
@@ -245,9 +358,9 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			case 'stackTrace': this._handleStackTrace(msg); break;
 			case 'scopes': this._handleScopes(msg); break;
 			case 'variables': this._handleVariables(msg); break;
-			case 'next': this._handleNext(msg); break;
+			case 'next': void this._handleNext(msg); break;
 			case 'stepIn': this._handleStepIn(msg); break;
-			case 'stepOut': this._handleStepOut(msg); break;
+			case 'stepOut': void this._handleStepOut(msg); break;
 			case 'stepBack': this._handleStepBack(msg); break;
 			case 'continue': this._handleContinue(msg); break;
 			case 'restartFrame': void this._handleRestartFrame(msg); break;
@@ -257,8 +370,10 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			case 'stepInTargets': this._handleStepInTargets(msg); break;
 			case 'reverseContinue': this._handleReverseContinue(msg); break;
 			case 'setExceptionBreakpoints': this._handleSetExceptionBreakpoints(msg); break;
+			case 'exceptionInfo': this._handleExceptionInfo(msg); break;
 			case 'gotoTargets': this._handleGotoTargets(msg); break;
 			case 'goto': void this._handleGoto(msg); break;
+			case 'showFrameSql': this._handleShowFrameSql(msg); break;
 			case 'disconnect':
 			case 'terminate':
 				this._handleTerminate(msg);
@@ -285,16 +400,24 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 				supportsStepBack: true,
 				supportsStepInTargetsRequest: true,
 				supportsFunctionBreakpoints: true,
+				supportsConditionalBreakpoints: true,
 				supportsEvaluateForHovers: true,
 				supportsCompletionsRequest: true,
 				supportsRestartFrame: true,
 				supportsReverseContinue: true,
-				// TODO: re-enable once goto lands mid-CTE at a specific clause (skip join/where/etc.)
-				// supportsGotoTargetsRequest: true,
+				supportsGotoTargetsRequest: true,
 				supportsExceptionOptions: false,
+				supportsExceptionInfoRequest: true,
+				supportsExceptionFilterOptions: true,
 				exceptionBreakpointFilters: [
 					{ filter: 'emptyResult', label: 'Break on empty result', default: false },
-					{ filter: 'fanOut', label: 'Break on fan-out', default: false },
+					{
+						filter: 'fanOut',
+						label: 'Break on fan-out',
+						default: false,
+						supportsCondition: true,
+						conditionDescription: 'Multiplier threshold (e.g. 1.5 = break only when rows grow by ≥50%). Default: 1.0',
+					},
 				],
 			},
 		});
@@ -356,6 +479,22 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			this._output('No active dbt SQL file.\n');
 			this._terminate();
 			return;
+		}
+
+		// If cursor is inside a CTE of a model file, delegate to queryCte and bail out.
+		if (this._pathResolver.classifyFile(editor.document.fileName) === 'model') {
+			const modelId = this._manifestIndexer.findModelByFilePath(editor.document.fileName);
+			if (modelId) {
+				const adapterType = this._manifestIndexer.index?.adapterType ?? 'ansi';
+				const model = await this._parseService.getDocumentModel(editor.document, adapterType, { skipEnrichment: true });
+				const cursorLine = editor.selection.active.line;
+				const cte = model?.ctes.find(c => cursorLine >= c.line && cursorLine <= c.endLine);
+				if (cte) {
+					this._terminate();
+					void vscode.commands.executeCommand('dbt-studio.queryCte', modelId, cte.name);
+					return;
+				}
+			}
 		}
 
 		this._sourceUri = editor.document.uri.toString();
@@ -489,7 +628,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 
 	private _handleSetBreakpoints(msg: DapMessage): void {
 		const args = msg.arguments ?? {};
-		const sourceBreakpoints = (args.breakpoints as Array<{ line: number }>) ?? [];
+		const sourceBreakpoints = (args.breakpoints as Array<{ line: number; condition?: string }>) ?? [];
 
 		this._breakpoints = this._breakpoints.filter(bp => bp.frameName !== undefined);
 
@@ -500,7 +639,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			const id = this._nextBpId++;
 			const matchedFrame = this._frames.find(f => line >= f.line && line <= f.endLine);
 
-			this._breakpoints.push({ line, id });
+			this._breakpoints.push({ line, id, condition: sbp.condition });
 			verified.push({
 				id,
 				verified: matchedFrame !== undefined,
@@ -524,7 +663,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 
 	private _handleSetFunctionBreakpoints(msg: DapMessage): void {
 		const args = msg.arguments ?? {};
-		const fbps = (args.breakpoints as Array<{ name: string }>) ?? [];
+		const fbps = (args.breakpoints as Array<{ name: string; condition?: string }>) ?? [];
 
 		this._breakpoints = this._breakpoints.filter(bp => bp.frameName === undefined);
 
@@ -534,7 +673,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			const id = this._nextBpId++;
 			const matchedFrame = this._frames.find(f => f.name === fbp.name);
 
-			this._breakpoints.push({ line: matchedFrame?.line ?? -1, id, frameName: fbp.name });
+			this._breakpoints.push({ line: matchedFrame?.line ?? -1, id, frameName: fbp.name, condition: fbp.condition });
 			verified.push({
 				id,
 				verified: matchedFrame !== undefined,
@@ -651,11 +790,16 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			const f = this._frames[frameIndex];
 			const clauses = this._clauses[f.name] ?? [];
 			if (granularity === 'line' && clauses.length > 0) {
+				const clause = clauses[clauseIndex];
+				const clauseLabel = this._clauseLabel(f.name, clauseIndex, clauses);
+				const compLine = clause?.compiledLine ?? clause?.line;
+				const isSkipped = this._gotoJoinsToSkip && compLine !== undefined && this._gotoJoinsToSkip.has(compLine);
+				const displayName = isSkipped ? `skipped: ${f.name} \u2192 ${clauseLabel}` : `${f.name} \u2192 ${clauseLabel}`;
 				return {
 					id: encodeRef(frameIndex, SCOPE_RESULT, clauseIndex),
-					name: `${f.name} \u2192 ${this._clauseLabel(f.name, clauseIndex, clauses)}`,
+					name: displayName,
 					source,
-					line: (clauses[clauseIndex]?.line ?? f.line) + 1,
+					line: (clause?.line ?? f.line) + 1,
 					column: 1,
 					presentationHint: hint,
 				};
@@ -917,10 +1061,16 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			});
 		} else if (scope === SCOPE_QUERY) {
 			const sql = this._getStepSql(frameIndex);
+			const clauses = this._clauses[frame.name] ?? [];
+			const clauseIndex = frameIndex === this._currentFrameIndex ? this._currentClauseIndex : clauses.length - 1;
+			const clause = clauses[clauseIndex];
+
 			const variables = [
 				{ name: 'frame', value: frame.name, variablesReference: 0 },
 				{ name: 'type', value: frame.type, variablesReference: 0 },
 				{ name: 'sql', value: sql, variablesReference: 0 },
+				{ name: 'clause.sql (from decompose)', value: clause?.sql ?? 'N/A', variablesReference: 0 },
+				{ name: '_compiledSql (original)', value: this._compiledSql.split('\n').slice(0, 10).join('\n') + '\n...', variablesReference: 0 },
 			];
 
 			this._send({
@@ -960,7 +1110,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		this._fullHistory.push(entry);
 	}
 
-	private _isBreakpointAtCurrentPosition(): boolean {
+	private async _isBreakpointAtCurrentPosition(): Promise<boolean> {
 		const frame = this._frames[this._currentFrameIndex];
 		if (!frame) return false;
 		for (const bp of this._breakpoints) {
@@ -970,23 +1120,49 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			if (!inFrame) continue;
 			if (this._granularity === 'line') {
 				if (bp.frameName) {
-					if (this._currentClauseIndex === 0) return true;
+					if (this._currentClauseIndex !== 0) continue;
 				} else {
 					const ci = this._resolveClauseIndex(frame.name, bp.line);
-					if (ci === this._currentClauseIndex) return true;
+					if (ci !== this._currentClauseIndex) continue;
 				}
-			} else {
-				return true;
 			}
+			if (bp.condition) {
+				if (!await this._evaluateCondition(bp.condition)) continue;
+			}
+			return true;
 		}
 		return false;
 	}
 
+	private async _evaluateCondition(condition: string): Promise<boolean> {
+		try {
+			const stepSql = this._getStepSql(this._currentFrameIndex);
+			const sql = `${buildEvalBaseSql(stepSql)}SELECT (${condition}) AS __cond__ FROM __debug_context__ LIMIT 1`;
+			const result = await this._databaseProvider.query(sql, -1, this._abortController?.signal, Priority.User);
+			const val = result.rows[0]?.['__cond__'];
+			return val !== null && val !== undefined && val !== false && val !== 0 && val !== '0' && val !== 'false';
+		} catch {
+			return false;
+		}
+	}
+
 	private async _onLanded(reason: string): Promise<boolean> {
-		if (this._isBreakpointAtCurrentPosition()) {
+		if (await this._isBreakpointAtCurrentPosition()) {
 			this._paused = true;
 			reason = 'breakpoint';
 		}
+
+		// When fanOut detection is enabled and we're at a join clause, force-execute
+		// so we can detect row count increases even during non-paused stepping.
+		if (!this._paused && this._granularity === 'line' && this._exceptionFilters.has('fanOut')) {
+			const frame = this._frames[this._currentFrameIndex];
+			const clause = (this._clauses[frame?.name] ?? [])[this._currentClauseIndex];
+			if (clause?.stage === 'join') {
+				const halted = await this._executeCurrentStep();
+				if (halted) return true;
+			}
+		}
+
 		if (!this._paused) return false;
 
 		const halted = await this._executeCurrentStep();
@@ -995,7 +1171,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	}
 
 
-	private _handleNext(msg: DapMessage): void {
+	private async _handleNext(msg: DapMessage): Promise<void> {
 		this._respond(msg, true);
 
 		// Guard: ignore steps for non-active threads (frozen parent threads).
@@ -1015,7 +1191,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 				void this._onLanded('step');
 				return;
 			}
-			if (this._isBreakpointAtCurrentPosition()) {
+			if (await this._isBreakpointAtCurrentPosition()) {
 				this._paused = true;
 				void this._onLanded('breakpoint');
 				return;
@@ -1152,7 +1328,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		}
 	}
 
-	private _handleStepOut(msg: DapMessage): void {
+	private async _handleStepOut(msg: DapMessage): Promise<void> {
 		this._respond(msg, true);
 
 		// Guard: ignore steps for non-active threads (frozen parent threads).
@@ -1171,7 +1347,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			} else if (this._modelCallStack.length > 0) {
 				// At root entry point of a child model (clause or statement level) — pop back to parent.
 				this._popModelCallStack();
-				this._doNext();
+				void this._doNext();
 			} else {
 				this._terminate();
 			}
@@ -1185,7 +1361,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 				void this._onLanded('step');
 				return;
 			}
-			if (this._isBreakpointAtCurrentPosition()) {
+			if (await this._isBreakpointAtCurrentPosition()) {
 				this._paused = true;
 				void this._onLanded('breakpoint');
 				return;
@@ -1217,6 +1393,29 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			this._currentFrameIndex = prev.frameIndex;
 			this._granularity = prev.granularity;
 			this._currentClauseIndex = prev.clauseIndex;
+
+			// Restore SQL if we stepped back past a goto join-skip point.
+			while (this._activeSkips.length > 0) {
+				const skip = this._activeSkips[this._activeSkips.length - 1];
+				if (skip.frameIndex === this._currentFrameIndex &&
+						this._currentClauseIndex <= skip.fromClauseIndex) {
+					this._compiledSql = skip.originalSql;
+					this._frames = skip.originalFrames;
+					this._clauses = skip.originalClauses;
+					this._refs = skip.originalRefs;
+					this._resultCache.clear();
+					this._activeSkips.pop();
+					// Remove the un-neutralized join from the skip set.
+					if (this._gotoJoinsToSkip) {
+						this._gotoJoinsToSkip.delete(skip.joinLine);
+						if (this._gotoJoinsToSkip.size === 0) this._gotoJoinsToSkip = undefined;
+					}
+					this._output('goto: restored original SQL after stepping back past skip point\n');
+				} else {
+					break;
+				}
+			}
+
 			this._sendStopped('step');
 			return;
 		}
@@ -1227,7 +1426,8 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 
 	private _handleContinue(msg: DapMessage): void {
 		this._respond(msg, true);
-		void this._runToContinue();
+		// Keep _gotoJoinsToSkip persistent — neutralizations remain until step back or restart.
+		void this._runToContinue(true);
 	}
 
 	// ──────────────────────────────────────────────────────────────
@@ -1242,6 +1442,8 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		const restartIndex = Math.max(0, Math.min(frameIndex, this._frames.length - 1));
 
 		this._respond(msg, true);
+		// Clear goto state when restarting.
+		this._gotoJoinsToSkip = undefined;
 		this._output(`Restarting from frame "${this._frames[restartIndex]?.name ?? restartIndex}"…\n`);
 
 		// 1. Recompile the full model — dbt always compiles per-model, not per-CTE.
@@ -1297,6 +1499,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		this._frames = decomposed.frames;
 		this._clauses = decomposed.clauses;
 		this._refs = decomposed.refs;
+		this._activeSkips = []; // Clear goto snapshots — fresh compile resets to original SQL.
 
 		if (this._sourceMap) {
 			this._remapPositions();
@@ -1321,19 +1524,28 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		await this._onLanded('restart');
 	}
 
-	private async _runToContinue(): Promise<void> {
+	private async _runToContinue(skipCurrentPosition = false): Promise<void> {
 		this._paused = false;
+		const token = ++this._runToken;
 
-		// Check the current position first (handles configurationDone starting at frame 0).
-		if (await this._onLanded('breakpoint')) return;
+		// When called from configurationDone (initial launch), check the starting position
+		// so a breakpoint at frame 0 is caught immediately. When called from continue/F5,
+		// skip the current position — it's where we just paused, re-evaluating it would
+		// cause the debugger to stop again at the same conditional breakpoint.
+		if (!skipCurrentPosition) {
+			if (await this._onLanded('breakpoint')) return;
+			if (this._runToken !== token) return;
+		}
 
 		// Walk the DAG using F11 (step-in) semantics — follows refs into local CTEs,
 		// building _navigationHistory naturally. This gives a proper call stack.
 		while (this._stepIn()) {
 			if (await this._onLanded('breakpoint')) return;
+			if (this._runToken !== token) return;
 		}
 
 		// Walked past the last frame — run final query and terminate.
+		if (this._runToken !== token) return;
 		await this._runFinalQuery();
 		this._terminate();
 	}
@@ -1400,10 +1612,9 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		const expression = (args.expression as string) ?? '';
 		const context = (args.context as string) ?? 'repl';
 
-		// Only execute SQL when the user types into the debug console (repl).
-		// Other contexts ('variables', 'hover', 'clipboard', 'watch') are triggered
-		// by VS Code internally (e.g. Copy Value, hover tooltips) — for those we
-		// just echo the expression back as a plain string so the raw value is returned.
+		// Only execute SQL when the user types into the debug console (repl) or Watch panel.
+		// Other contexts ('variables', 'clipboard') are triggered by VS Code internally
+		// (e.g. Copy Value) — for those we just echo the expression back as a plain string.
 		if (context === 'hover') {
 			// Return the current value of the hovered column from the active frame's result.
 			const cacheKey = this._cacheKey(this._currentFrameIndex);
@@ -1428,7 +1639,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			return;
 		}
 
-		if (context !== 'repl') {
+		if (context !== 'repl' && context !== 'watch') {
 			this._send({
 				type: 'response',
 				command: 'evaluate',
@@ -1444,46 +1655,77 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			return;
 		}
 
-		const exprTrimmed = expression.trim().toUpperCase();
-		if (exprTrimmed.startsWith('SELECT') || exprTrimmed.startsWith('WITH')
-			|| exprTrimmed.startsWith('FROM') || exprTrimmed.startsWith('JOIN')
-			|| exprTrimmed.startsWith('WHERE') || exprTrimmed.startsWith('GROUP')
-			|| exprTrimmed.startsWith('ORDER') || exprTrimmed.startsWith('HAVING')) {
-			this._respond(msg, false, 'Not an expression (SQL clause selected)');
-			return;
+		if (context === 'repl') {
+			const exprTrimmed = expression.trim().toUpperCase();
+			if (exprTrimmed.startsWith('SELECT') || exprTrimmed.startsWith('WITH')
+				|| exprTrimmed.startsWith('FROM') || exprTrimmed.startsWith('JOIN')
+				|| exprTrimmed.startsWith('WHERE') || exprTrimmed.startsWith('GROUP')
+				|| exprTrimmed.startsWith('ORDER') || exprTrimmed.startsWith('HAVING')) {
+				this._respond(msg, false, 'Not an expression (SQL clause selected)');
+				return;
+			}
 		}
 
-		// Use the frameId from the request to evaluate in the correct CTE context,
+		// Use the frameId from the request to evaluate in the correct CTE/clause context,
 		// not necessarily the currently paused frame.
-		const frameIndex = typeof args.frameId === 'number'
-			? Math.max(0, Math.min(decodeRef(args.frameId).frameIndex, this._frames.length - 1))
+		const ref = typeof args.frameId === 'number' ? decodeRef(args.frameId) : undefined;
+		const frameIndex = ref
+			? Math.max(0, Math.min(ref.frameIndex, this._frames.length - 1))
 			: this._currentFrameIndex;
-		const sql = `${buildEvalBaseSql(this._getStepSql(frameIndex))}SELECT ${expression} FROM __debug_context__`;
+		const clauseIndex = ref?.extra ?? undefined;
+		const sql = `${buildEvalBaseSql(this._getStepSql(frameIndex, clauseIndex))}SELECT ${expression} FROM __debug_context__`;
 
 		try {
 			// Pass limit=-1: evalBaseSql embeds no LIMIT so DuckdbProvider would
 			// wrap it in a subquery — which breaks WITH queries on DuckDB.
 			// Use -1 and rely on the provider to return all rows (capped by its own guard).
 			const result = await this._databaseProvider.query(sql, -1, this._abortController?.signal, Priority.User);
-			const preview = result.rows.length > 0
-				? result.columns.map(c => `${c}: ${result.rows[0][c]}`).join(', ')
-				: '(empty)';
+			let display: string;
+			if (context === 'watch') {
+				// Compact format for the Watch panel.
+				// Scalar result (1 row, 1 col): show just the value.
+				// Otherwise: show row count + first row preview.
+				if (result.rowCount === 1 && result.columns.length === 1) {
+					const val = result.rows[0][result.columns[0]];
+					display = val === null ? 'NULL' : String(val);
+				} else if (result.rowCount === 0) {
+					display = '(empty)';
+				} else {
+					const preview = result.columns.map(c => String(result.rows[0][c] ?? 'NULL')).join(', ');
+					display = `${result.rowCount} rows: ${preview}`;
+				}
+			} else {
+				const preview = result.rows.length > 0
+					? result.columns.map(c => `${c}: ${result.rows[0][c]}`).join(', ')
+					: '(empty)';
+				display = `${result.rowCount} row(s): ${preview}`;
+			}
 
 			this._send({
 				type: 'response',
 				command: 'evaluate',
 				request_seq: msg.seq,
 				success: true,
-				body: { result: `${result.rowCount} row(s): ${preview}`, variablesReference: 0 },
+				body: { result: display, variablesReference: 0 },
 			});
 		} catch (err) {
-			this._send({
-				type: 'response',
-				command: 'evaluate',
-				request_seq: msg.seq,
-				success: true,
-				body: { result: `Error: ${err instanceof Error ? err.message : String(err)}`, variablesReference: 0 },
-			});
+			if (context === 'watch') {
+				this._send({
+					type: 'response',
+					command: 'evaluate',
+					request_seq: msg.seq,
+					success: true,
+					body: { result: 'not available', variablesReference: 0 },
+				});
+			} else {
+				this._send({
+					type: 'response',
+					command: 'evaluate',
+					request_seq: msg.seq,
+					success: true,
+					body: { result: `Error: ${err instanceof Error ? err.message : String(err)}`, variablesReference: 0 },
+				});
+			}
 		}
 	}
 
@@ -1532,23 +1774,46 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			return;
 		}
 
-		// Walk backwards through full history, stopping at a breakpoint.
-		while (this._fullHistory.length > 0) {
-			const entry = this._fullHistory.pop()!;
-			this._currentFrameIndex = entry.frameIndex;
-			this._granularity = entry.granularity;
-			this._currentClauseIndex = entry.clauseIndex;
+		void (async () => {
+			// Walk backwards through full history, stopping at a breakpoint.
+			while (this._fullHistory.length > 0) {
+				const entry = this._fullHistory.pop()!;
+				this._currentFrameIndex = entry.frameIndex;
+				this._granularity = entry.granularity;
+				this._currentClauseIndex = entry.clauseIndex;
 
-			if (this._isBreakpointAtCurrentPosition()) {
-				this._navigationHistory = [];
-				this._sendStopped('breakpoint');
-				return;
+				// Restore SQL if we stepped back past a goto join-skip point.
+				while (this._activeSkips.length > 0) {
+					const skip = this._activeSkips[this._activeSkips.length - 1];
+					if (skip.frameIndex === this._currentFrameIndex &&
+							this._currentClauseIndex <= skip.fromClauseIndex) {
+						this._compiledSql = skip.originalSql;
+						this._frames = skip.originalFrames;
+						this._clauses = skip.originalClauses;
+						this._refs = skip.originalRefs;
+						this._resultCache.clear();
+						this._activeSkips.pop();
+						// Remove the un-neutralized join from the skip set.
+						if (this._gotoJoinsToSkip) {
+							this._gotoJoinsToSkip.delete(skip.joinLine);
+							if (this._gotoJoinsToSkip.size === 0) this._gotoJoinsToSkip = undefined;
+						}
+					} else {
+						break;
+					}
+				}
+
+				if (await this._isBreakpointAtCurrentPosition()) {
+					this._navigationHistory = [];
+					this._sendStopped('breakpoint');
+					return;
+				}
 			}
-		}
 
-		// No breakpoint found — landed at oldest history entry.
-		this._navigationHistory = [];
-		this._sendStopped('step');
+			// No breakpoint found — landed at oldest history entry.
+			this._navigationHistory = [];
+			this._sendStopped('step');
+		})();
 	}
 
 	// ──────────────────────────────────────────────────────────────
@@ -1558,7 +1823,20 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _handleSetExceptionBreakpoints(msg: DapMessage): void {
 		const args = msg.arguments ?? {};
 		const filters = (args.filters as string[]) ?? [];
-		this._exceptionFilters = new Set(filters);
+
+		// filterOptions carries per-filter conditions (requires supportsExceptionFilterOptions).
+		// When a condition is set, VS Code sends the filter here instead of (or in addition to) filters[].
+		const filterOptions = (args.filterOptions as Array<{ filterId: string; condition?: string }> | undefined) ?? [];
+
+		this._exceptionFilters = new Set([
+			...filters,
+			...filterOptions.map(o => o.filterId),
+		]);
+
+		const fanOutOption = filterOptions.find(o => o.filterId === 'fanOut');
+		const parsed = fanOutOption?.condition ? parseFloat(fanOutOption.condition) : NaN;
+		this._fanOutThreshold = !isNaN(parsed) && parsed > 0 ? parsed : 1.0;
+
 		this._respond(msg, true);
 	}
 
@@ -1625,84 +1903,185 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	// toggle, much more useful than its C# equivalent where skipping forward leaves
 	// variables uninitialised.
 	private _handleGotoTargets(msg: DapMessage): void {
+		// Only meaningful at line granularity — we offer run-to-cursor behavior.
+		// User clicks a line, we check if there's a clause at that exact line.
+		if (this._granularity !== 'line') {
+			this._send({ type: 'response', command: 'gotoTargets', request_seq: msg.seq, success: true, body: { targets: [] } });
+			return;
+		}
+
 		const args = msg.arguments ?? {};
-		const line0 = ((args.line as number) ?? 1) - 1; // DAP is 1-indexed
+		const clickedLine = (args.line as number) ?? 0; // 1-based line from VS Code
 
-		const targetFi = this._frames.findIndex(f => f.line <= line0 && line0 <= f.endLine);
-		if (targetFi < 0) {
-			this._send({ type: 'response', command: 'gotoTargets', request_seq: msg.seq, success: true, body: { targets: [] } });
-			return;
-		}
-		const frame = this._frames[targetFi];
-		const targetCi = this._resolveClauseIndex(frame.name, line0) ?? 0;
+		const frame = this._frames[this._currentFrameIndex];
+		const clauses = this._clauses[frame.name] ?? [];
 
-		// Find the next occurrence of this clause in the traversal after the current step.
-		const positions = this._simulateTraversal();
-		const currentStep = this._fullHistory.length;
-		const nextIdx = positions.findIndex((p, i) =>
-			i > currentStep &&
-			p.frameIndex === targetFi &&
-			p.clauseIndex === targetCi &&
-			p.granularity === 'line',
-		);
+		// Find the clause that matches the clicked line.
+		// stackTrace shows `clause.line + 1`, so we need to match that displayed line.
+		const targetCi = clauses.findIndex((c, i) => i > this._currentClauseIndex && c.line + 1 === clickedLine);
 
-		if (nextIdx < 0) {
+		if (targetCi < 0) {
+			// No clause at the clicked line - return empty (no action).
 			this._send({ type: 'response', command: 'gotoTargets', request_seq: msg.seq, success: true, body: { targets: [] } });
 			return;
 		}
 
-		const source = this._sourceUri ? { path: vscode.Uri.parse(this._sourceUri).fsPath } : undefined;
-		const clauseLine = (this._clauses[frame.name]?.[targetCi]?.line ?? frame.line) + 1;
+		const clause = clauses[targetCi];
+
+		// Return single target: the clause at the clicked line.
+		const targets = [{
+			id: targetCi,
+			label: `skip to ${clause.stage}`,
+			line: clause.line,
+		}];
+
 		this._send({
 			type: 'response',
 			command: 'gotoTargets',
 			request_seq: msg.seq,
 			success: true,
-			body: {
-				targets: [{
-					id: nextIdx,
-					label: frame.name,
-					line: clauseLine,
-					...(source ? { source, hint: frame.type } : {}),
-				}],
-			},
+			body: { targets },
 		});
 	}
 
 	private async _handleGoto(msg: DapMessage): Promise<void> {
 		const args = msg.arguments ?? {};
-		const targetStepIdx = (args.targetId as number) ?? 0;
+		const targetCi = (args.targetId as number) ?? 0;
 
-		// Simulate to recover the exact position + nav history at the target step.
-		const positions = this._simulateTraversal();
-		const target = positions[Math.min(targetStepIdx, positions.length - 1)];
-
+		// Cancel any concurrently running _runToContinue before any await.
+		this._runToken++;
 		this._respond(msg, true);
 
-		// Reset: fresh run from the beginning.
-		this._navigationHistory = [];
-		this._fullHistory = [];
-		this._resultCache.clear();
+		// Save current position to history so call stack shows where we jumped from.
+		this._pushHistory();
 
-		// Execute SQL for each unique frame encountered on the way to the target.
-		const seen = new Set<number>();
-		for (const p of positions.slice(0, targetStepIdx + 1)) {
-			if (!seen.has(p.frameIndex)) {
-				seen.add(p.frameIndex);
-				this._currentFrameIndex = p.frameIndex;
-				this._granularity = 'statement';
-				this._currentClauseIndex = 0;
-				if (await this._executeCurrentStep()) return;
+		const frame = this._frames[this._currentFrameIndex];
+		const clauses = this._clauses[frame.name] ?? [];
+		const targetLine = clauses[targetCi]?.line;
+		if (targetLine === undefined) {
+			this._output('goto: target clause has no line number\n');
+			this._sendStopped('step');
+			return;
+		}
+
+		// Check if backward or forward goto.
+		if (targetCi < this._currentClauseIndex) {
+			// Backward goto: step back using normal step-back flow.
+			// _handleStepBack will automatically restore from _activeSkips and update _gotoJoinsToSkip.
+			this._paused = false;
+			const token = this._runToken;
+			this._output(`goto: backward to line ${targetLine}\n`);
+
+			while (this._fullHistory.length > 0) {
+				if (this._runToken !== token) return;
+
+				// Check if we've reached the target before stepping back.
+				const currentFrame = this._frames[this._currentFrameIndex];
+				const currentClauses = this._clauses[currentFrame.name] ?? [];
+				const currentClause = currentClauses[this._currentClauseIndex];
+				if (currentClause?.line === targetLine) {
+					this._paused = true;
+					void this._onLanded('goto');
+					return;
+				}
+
+				// Step back.
+				const prev = this._fullHistory.pop()!;
+				if (this._navigationHistory.length > 0 &&
+						this._navigationHistory[this._navigationHistory.length - 1] === prev) {
+					this._navigationHistory.pop();
+				}
+				this._currentFrameIndex = prev.frameIndex;
+				this._granularity = prev.granularity;
+				this._currentClauseIndex = prev.clauseIndex;
+
+				// Restore SQL if we stepped back past a goto join-skip point.
+				while (this._activeSkips.length > 0) {
+					const skip = this._activeSkips[this._activeSkips.length - 1];
+					if (skip.frameIndex === this._currentFrameIndex &&
+							this._currentClauseIndex <= skip.fromClauseIndex) {
+						this._compiledSql = skip.originalSql;
+						this._frames = skip.originalFrames;
+						this._clauses = skip.originalClauses;
+						this._refs = skip.originalRefs;
+						this._resultCache.clear();
+						this._activeSkips.pop();
+						// Remove the un-neutralized join from the skip set.
+						if (this._gotoJoinsToSkip) {
+							this._gotoJoinsToSkip.delete(skip.joinLine);
+							if (this._gotoJoinsToSkip.size === 0) this._gotoJoinsToSkip = undefined;
+						}
+						this._output('goto: restored original SQL after stepping back past skip point\n');
+					} else {
+						break;
+					}
+				}
+			}
+
+			// Ran out of history without reaching target.
+			this._output('goto: backward target not reached\n');
+			this._sendStopped('step');
+			return;
+		}
+
+		// Forward goto: collect join compiledLines to skip.
+		const joinLinesToSkip = new Set<number>();
+		for (let ci = this._currentClauseIndex; ci < targetCi; ci++) {
+			if (clauses[ci]?.stage === 'join') {
+				const compLine = clauses[ci].compiledLine ?? clauses[ci].line;
+				if (compLine !== undefined) {
+					joinLinesToSkip.add(compLine);
+				}
 			}
 		}
 
-		// Land at target with reconstructed nav history.
-		this._currentFrameIndex = target.frameIndex;
-		this._granularity = target.granularity;
-		this._currentClauseIndex = target.clauseIndex;
-		this._navigationHistory = target.navHist;
+		// Set goto mode state.
+		this._gotoTargetLine = targetLine;
+		this._gotoJoinsToSkip = joinLinesToSkip.size > 0 ? joinLinesToSkip : undefined;
+		this._paused = false;
+		const token = this._runToken;
 
-		void this._onLanded('goto');
+		this._output(`goto: forward to line ${targetLine}, skipping ${joinLinesToSkip.size} join(s)\n`);
+
+		// Step towards the target using normal F11 flow.
+		while (this._stepIn()) {
+			// Check if cancelled.
+			if (this._runToken !== token) {
+				this._gotoTargetLine = undefined;
+				this._gotoJoinsToSkip = undefined;
+				return;
+			}
+
+			const currentFrame = this._frames[this._currentFrameIndex];
+			const currentClauses = this._clauses[currentFrame.name] ?? [];
+			const currentClause = currentClauses[this._currentClauseIndex];
+
+			// Check if we need to neutralize this join.
+			const compLine = currentClause?.compiledLine ?? currentClause?.line;
+			if (this._gotoJoinsToSkip && compLine !== undefined && this._gotoJoinsToSkip.has(compLine)) {
+				await this._neutralizeCurrentJoinAndRedecompose(currentFrame.name, currentClause.line, compLine);
+				// After re-decompose, indices may shift. Re-find our position by compiledLine.
+				const newClauses = this._clauses[currentFrame.name] ?? [];
+				const newIndex = newClauses.findIndex(c => (c.compiledLine ?? c.line) === compLine);
+				if (newIndex >= 0) {
+					this._currentClauseIndex = newIndex;
+				}
+			}
+
+			// Check if we've reached the target.
+			if (currentClause?.line === this._gotoTargetLine) {
+				this._gotoTargetLine = undefined;
+				this._paused = true;
+				void this._onLanded('goto');
+				return;
+			}
+		}
+
+		// Stepped past the end without finding target.
+		this._gotoTargetLine = undefined;
+		this._gotoJoinsToSkip = undefined;
+		this._output('goto: target not reached, stepped to end\n');
+		this._terminate();
 	}
 
 	// ──────────────────────────────────────────────────────────────
@@ -1714,6 +2093,35 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		this._queryRunner.cancel();
 		this._respond(msg, true);
 		this._terminate();
+	}
+
+	// ──────────────────────────────────────────────────────────────
+	// Custom request: showFrameSql
+	// ──────────────────────────────────────────────────────────────
+
+	private _handleShowFrameSql(msg: DapMessage): void {
+		const frameId = msg.arguments?.frameId as number | undefined;
+		this._logger.info(`showFrameSql: received frameId=${frameId}`);
+
+		if (frameId === undefined) {
+			this._logger.warn('showFrameSql: no frameId in arguments');
+			this._respond(msg, false, 'frameId required');
+			return;
+		}
+
+		const { frameIndex, extra: clauseIndex } = decodeRef(frameId);
+		this._logger.info(`showFrameSql: decoded to frameIndex=${frameIndex}, clauseIndex=${clauseIndex}`);
+
+		try {
+			const sql = this._getStepSql(frameIndex, clauseIndex);
+			const debugSql = this._wrapWithDebugCount(sql);
+			void this._symbolSqlProvider?.update(debugSql);
+			this._logger.info('showFrameSql: SQL updated successfully');
+			this._respond(msg, true);
+		} catch (err) {
+			this._logger.error('showFrameSql: failed', err);
+			this._respond(msg, false, err instanceof Error ? err.message : String(err));
+		}
 	}
 
 	// ──────────────────────────────────────────────────────────────
@@ -1729,21 +2137,118 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		return `${id}:frame`;
 	}
 
-	private _getStepSql(frameIndex: number): string {
+	private _getStepSql(frameIndex: number, clauseIndex?: number): string {
 		const frame = this._frames[frameIndex];
-
-		if (this._granularity === 'line' && frameIndex === this._currentFrameIndex) {
-			const clauses = this._clauses[frame.name] ?? [];
-			const clause = clauses[this._currentClauseIndex];
-			if (clause) return clause.sql;
-		}
-
 		const clauses = this._clauses[frame.name] ?? [];
-		if (clauses.length > 0) {
-			return clauses[clauses.length - 1].sql;
+
+		if (clauses.length === 0) {
+			throw new Error(`No clauses found for frame '${frame.name}' — bridge decomposition failed for this frame`);
 		}
 
-		return this._compiledSql;
+		if (this._granularity === 'line') {
+			const idx = clauseIndex ?? (frameIndex === this._currentFrameIndex ? this._currentClauseIndex : clauses.length - 1);
+			const clause = clauses[idx];
+			if (clause) return this._evalClauseSql(clauses, idx);
+		}
+
+		return this._evalClauseSql(clauses, clauses.length - 1);
+	}
+
+	/** Slices the original _compiledSql text for the current frame,
+	 *  preserving all @dbg markers and original line breaks. */
+	private _getCurrentFrameSymbolSql(): string {
+		const frame = this._frames[this._currentFrameIndex];
+		if (!frame) return this._compiledSql;
+		const lines = this._compiledSql.split('\n');
+		return lines.slice(frame.line, frame.endLine + 1).join('\n');
+	}
+
+	/** Returns the best SQL for expression evaluation at the given clause index.
+	 *  Projection-only stages (select, order, limit, window, qualify) don't add rows —
+	 *  walk back to the nearest data-producing clause so the wrapped query stays valid. */
+	private _evalClauseSql(clauses: Array<{ stage: string; sql: string }>, idx: number): string {
+		const projectionStages = new Set(['select', 'order', 'limit', 'window', 'qualify']);
+		let i = idx;
+		while (i > 0 && projectionStages.has(clauses[i].stage)) i--;
+		return clauses[i].sql;
+	}
+
+	/** Mutates this._compiledSql to neutralize specific join clauses (by clause index).
+	 *  Each targeted join becomes LEFT JOIN ... ON 1=0 AND <original condition>: preserves schema, contributes no rows.
+	 *  Returns the mutated SQL string. */
+	private _neutralizeJoins(sql: string, frameName: string, joinClauseIndices: number[]): string {
+		const clauses = this._clauses[frameName] ?? [];
+		let result = sql;
+
+		// Process in reverse so later-in-SQL edits don't shift earlier offsets.
+		for (let j = joinClauseIndices.length - 1; j >= 0; j--) {
+			const clause = clauses[joinClauseIndices[j]];
+			if (!clause || clause.stage !== 'join') continue;
+
+			// Use compiledLine to match the @dbg markers in the annotated SQL.
+			const markerLine = clause.compiledLine ?? clause.line;
+			const before = result;
+			result = neutralizeJoinInSql(result, markerLine, frameName);
+
+			if (result === before) {
+				this._output(`  ⚠ join neutralization FAILED: clause[${joinClauseIndices[j]}] line ${markerLine} in ${frameName}\n`);
+			} else {
+				this._output(`  ✓ neutralized clause[${joinClauseIndices[j]}] (line ${markerLine})\n`);
+			}
+		}
+		return result;
+	}
+
+	/** Neutralize a single join during goto stepping, re-decompose, and update state. */
+	private async _neutralizeCurrentJoinAndRedecompose(frameName: string, joinLine: number, joinCompiledLine: number): Promise<void> {
+		// Snapshot current state for step-back.
+		this._activeSkips.push({
+			frameIndex: this._currentFrameIndex,
+			fromClauseIndex: this._currentClauseIndex,
+			joinLine: joinCompiledLine,
+			originalSql: this._compiledSql,
+			originalFrames: this._frames,
+			originalClauses: structuredClone(this._clauses),
+			originalRefs: this._refs,
+		});
+
+		// Find the clause by line to get compiledLine for marker matching.
+		const clauses = this._clauses[frameName] ?? [];
+		const clause = clauses.find(c => c.line === joinLine);
+		if (!clause) {
+			this._output(`goto: couldn't find join at line ${joinLine} to neutralize\n`);
+			return;
+		}
+
+		const markerLine = clause.compiledLine ?? clause.line;
+		const before = this._compiledSql;
+		const mutatedSql = neutralizeJoinInSql(this._compiledSql, markerLine, frameName);
+
+		if (mutatedSql === before) {
+			this._output(`goto: FAILED to neutralize join at line ${joinLine}\n`);
+			this._activeSkips.pop();
+			return;
+		}
+
+		// Re-decompose with the neutralized join.
+		const adapterType = this._manifestIndexer.index?.adapterType ?? 'duckdb';
+		const decomposed = await this._decompose(mutatedSql, adapterType);
+		if (!decomposed) {
+			this._output(`goto: re-decompose FAILED after neutralizing line ${joinLine}\n`);
+			this._activeSkips.pop();
+			return;
+		}
+
+		// Update all state atomically.
+		this._compiledSql = mutatedSql;
+		this._frames = decomposed.frames;
+		this._clauses = decomposed.clauses;
+		this._refs = decomposed.refs;
+		this._sourceMap = parseSourceMap(mutatedSql);
+		this._remapPositions();
+		this._resultCache.clear();
+
+		this._output(`goto: neutralized join at line ${joinLine}\n`);
 	}
 
 	/** Execute the current step. Returns `true` if an exception stop was sent (caller must not send another stopped event). */
@@ -1787,19 +2292,48 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 
 			// Exception filter checks.
 			if (this._exceptionFilters.has('emptyResult') && totalCount === 0) {
-				this._output(`  ⚠ Exception: "${frame.name}" returned 0 rows.\n`);
-				this._sendStoppedException(`"${frame.name}" returned 0 rows`);
+				let emptyMsg: string;
+				if (this._granularity === 'line') {
+					const clauses = this._clauses[frame.name] ?? [];
+					const label = this._clauseLabel(frame.name, this._currentClauseIndex, clauses);
+					emptyMsg = label
+						? `"${frame.name}" → ${label}: returned 0 rows`
+						: `"${frame.name}" returned 0 rows`;
+				} else {
+					emptyMsg = `"${frame.name}" returned 0 rows`;
+				}
+				this._output(`  ⚠ Exception: ${emptyMsg}.\n`);
+				this._sendStoppedException(emptyMsg);
 				return true;
 			}
-			if (this._granularity === 'statement' && this._exceptionFilters.has('fanOut')) {
-				const prevFrameKey = this._currentFrameIndex > 0
-					? `${this._frames[this._currentFrameIndex - 1].name}:frame`
-					: undefined;
-				const prev = prevFrameKey ? this._resultCache.get(prevFrameKey) : undefined;
-				if (prev && totalCount > prev.totalCount) {
-					this._output(`  ⚠ Exception: fan-out in "${frame.name}" (${prev.totalCount} → ${totalCount} rows).\n`);
-					this._sendStoppedException(`Fan-out in "${frame.name}": ${prev.totalCount} → ${totalCount} rows`);
-					return true;
+			if (this._exceptionFilters.has('fanOut')) {
+				if (this._granularity === 'statement') {
+					const prevFrameKey = this._currentFrameIndex > 0
+						? `${this._frames[this._currentFrameIndex - 1].name}:frame`
+						: undefined;
+					const prev = prevFrameKey ? this._resultCache.get(prevFrameKey) : undefined;
+					if (prev && totalCount > prev.totalCount * this._fanOutThreshold) {
+						const msg2 = `Fan-out in "${frame.name}": ${prev.totalCount} → ${totalCount} rows`;
+						this._output(`  ⚠ Exception: ${msg2}.\n`);
+						this._sendStoppedException(msg2);
+						return true;
+					}
+				} else {
+					// Clause granularity: check fan-out on join clauses against the previous clause result.
+					const clauses = this._clauses[frame.name] ?? [];
+					const clause = clauses[this._currentClauseIndex];
+					if (clause?.stage === 'join' && this._currentClauseIndex > 0) {
+						const prevKey = `${frame.name}:clause:${this._currentClauseIndex - 1}`;
+						const prev = this._resultCache.get(prevKey);
+						if (prev && totalCount > prev.totalCount * this._fanOutThreshold) {
+							const label = this._clauseLabel(frame.name, this._currentClauseIndex, clauses);
+							const fanOutMsg = `Fan-out on ${label}: ${prev.totalCount} → ${totalCount} rows`;
+							this._output(`  ⚠ Exception: ${fanOutMsg}.\n`);
+							this._paused = true;
+							this._sendStoppedException(fanOutMsg);
+							return true;
+						}
+					}
 				}
 			}
 		} catch (err) {
@@ -1878,11 +2412,11 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		dialect: string,
 	): Promise<{ compiledSql: string; sourceMap: SourceMap | undefined } | undefined> {
 		try {
-			const emitResult = await emitDebugSymbols(
-				sourceText,
-				dialect,
-				(req) => this._bridgeRunner.invokeRaw(req),
-			);
+			const tokenResult = await this._parseService.parseRawForTokens(sourceText, dialect);
+
+			const emitResult = tokenResult
+				? emitDebugSymbolsFromTokens(sourceText, tokenResult.sqlTokens, tokenResult.jinjaTags)
+				: await emitDebugSymbols(sourceText, dialect, (req) => this._bridgeRunner.invokeRaw(req));
 
 			if (!emitResult) {
 				this._logger.info('Debug adapter: no debug symbols emitted — falling back to plain compile');
@@ -1917,6 +2451,9 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		// If a clause line falls inside a macro span, use the macro's sourceLine.
 		for (const clauses of Object.values(this._clauses)) {
 			for (const clause of clauses) {
+				// Save the compiled-SQL line before remapping — neutralizeJoinInSql needs
+				// the compiled line to match the @dbg markers in the annotated SQL.
+				clause.compiledLine ??= clause.line;
 				const macroSpan = sm.isInsideMacro(clause.line);
 				if (macroSpan) {
 					clause.line = macroSpan.sourceLine;
@@ -2088,7 +2625,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	}
 
 	// Step-over: advance past the FROM clause that was stepped into.
-	private _doNext(): void {
+	private async _doNext(): Promise<void> {
 		const startFrame = this._currentFrameIndex;
 		const startDepth = this._navigationHistory.length;
 
@@ -2097,7 +2634,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 				void this._onLanded('step');
 				return;
 			}
-			if (this._isBreakpointAtCurrentPosition()) {
+			if (await this._isBreakpointAtCurrentPosition()) {
 				this._paused = true;
 				void this._onLanded('breakpoint');
 				return;
@@ -2106,7 +2643,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		// Popped all the way to the top—check for outer model call stack.
 		if (this._modelCallStack.length > 0) {
 			this._popModelCallStack();
-			this._doNext();
+			void this._doNext();
 		} else {
 			this._terminate();
 		}
@@ -2195,21 +2732,18 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _sendResultToPanel(frameName: string, result: QueryResult): void {
 		this._send({
 			type: 'event',
-			event: 'output',
+			event: 'dbt-sql:stepResult',
 			body: {
-				category: 'telemetry',
-				output: 'debugStepResult',
-				data: {
-					frameName,
-					columns: result.columns.filter(c => c !== '__debug_count__'),
-					rows: result.rows.map(r => {
-						const cleaned = { ...r };
-						delete cleaned.__debug_count__;
-						return cleaned;
-					}),
-					rowCount: result.rowCount,
-					executionTimeMs: result.executionTimeMs,
-				},
+				frameName,
+				columns: result.columns.filter(c => c !== '__debug_count__'),
+				columnTypes: result.columnTypes,
+				rows: result.rows.map(r => {
+					const cleaned = { ...r };
+					delete cleaned.__debug_count__;
+					return cleaned;
+				}),
+				rowCount: result.rowCount,
+				executionTimeMs: result.executionTimeMs,
 			},
 		});
 	}
@@ -2238,12 +2772,35 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 
 	private _sendStoppedException(description: string): void {
 		const threadId = this._currentThreadId;
+		const isFanOut = description.startsWith('Fan-out');
+		this._lastException = {
+			exceptionId: isFanOut ? 'Fan-out detected' : 'Empty result',
+			description,
+		};
 		this._send({
 			type: 'event',
 			event: 'stopped',
 			body: { reason: 'exception', description, threadId, allThreadsStopped: threadId === 1 },
 		});
 		this._sendPipelineEvent();
+	}
+
+	private _handleExceptionInfo(msg: DapMessage): void {
+		if (this._lastException) {
+			this._send({
+				type: 'response',
+				command: 'exceptionInfo',
+				request_seq: msg.seq,
+				success: true,
+				body: {
+					exceptionId: this._lastException.exceptionId,
+					description: this._lastException.description,
+					breakMode: 'always',
+				},
+			});
+		} else {
+			this._respond(msg, false, 'No exception info available');
+		}
 	}
 
 	private _sendPipelineEvent(): void {

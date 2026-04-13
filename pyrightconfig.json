@@ -1,0 +1,6 @@
+{
+    "include": ["resources/ftl"],
+    "extraPaths": ["resources/bridge/vendor"],
+    "pythonVersion": "3.11",
+    "typeCheckingMode": "basic"
+}

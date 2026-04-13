@@ -1,9 +1,20 @@
 {{ config(materialized="table") }}
-
+-- a comments
 with
     cte_wins as (
         select winning_team, count(*) as wins
         from {{ ref("nba_latest_results") }}
+        group by all
+        union all
+        select winning_team, count(*) as wins
+        from {{ ref("nba_latest_results") }}
+        group by all
+    ),
+
+    cte_empty as (
+        select losing_team, count(*) as losses
+        from {{ ref("nba_latest_results") }}
+        where 1 = 0
         group by all
     ),
 

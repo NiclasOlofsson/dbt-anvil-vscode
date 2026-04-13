@@ -104,6 +104,25 @@ export class Location {
 	}
 }
 
+export class TextEdit {
+	constructor(
+		public readonly range: Range,
+		public readonly newText: string,
+	) {}
+
+	static replace(range: Range, newText: string): TextEdit {
+		return new TextEdit(range, newText);
+	}
+
+	static insert(position: Position, newText: string): TextEdit {
+		return new TextEdit(new Range(position, position), newText);
+	}
+
+	static delete(range: Range): TextEdit {
+		return new TextEdit(range, '');
+	}
+}
+
 export class LanguageModelTextPart {
 	constructor(public readonly value: string) {}
 }
@@ -506,15 +525,22 @@ export class CodeLens {
 	}
 }
 
-export enum CodeActionKind {
-	Empty = '',
-	QuickFix = 'quickfix',
-	Refactor = 'refactor',
-	RefactorExtract = 'refactor.extract',
-	RefactorInline = 'refactor.inline',
-	RefactorRewrite = 'refactor.rewrite',
-	Source = 'source',
-	SourceOrganizeImports = 'source.organizeImports',
+export class CodeActionKind {
+	static readonly Empty = new CodeActionKind('');
+	static readonly QuickFix = new CodeActionKind('quickfix');
+	static readonly Refactor = new CodeActionKind('refactor');
+	static readonly RefactorExtract = new CodeActionKind('refactor.extract');
+	static readonly RefactorInline = new CodeActionKind('refactor.inline');
+	static readonly RefactorRewrite = new CodeActionKind('refactor.rewrite');
+	static readonly Source = new CodeActionKind('source');
+	static readonly SourceOrganizeImports = new CodeActionKind('source.organizeImports');
+	static readonly SourceFixAll = new CodeActionKind('source.fixAll');
+
+	constructor(public readonly value: string) {}
+
+	append(part: string): CodeActionKind {
+		return new CodeActionKind(this.value ? `${this.value}.${part}` : part);
+	}
 }
 
 export class CodeAction {

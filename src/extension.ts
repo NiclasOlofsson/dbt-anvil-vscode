@@ -4,7 +4,8 @@ import { ServiceContainer } from './types/service-container';
 import { ManifestLoader } from './dbt/manifest-loader';
 import { ManifestIndexer } from './indexing/manifest-indexer';
 import { ManifestWatcher } from './indexing/manifest-watcher';
-import { detectPythonEnvironment, detectProfilesDir } from './dbt/env-detector';
+import { detectPythonEnvironment, detectProfilesDir, validatePythonEnvironment, dbtPackagesExist } from './dbt/env-detector';
+import { writeShims } from './dbt/terminal-env';
 import { BridgeRunner } from './dbt/bridge-runner';
 import { DbtExecutionService, Priority } from './dbt/execution-service';
 import { CompileCache } from './dbt/compile-cache';
@@ -43,9 +44,12 @@ import { YamlDocumentSymbolProvider } from './providers/yaml/document-symbol-pro
 import { DbtWorkspaceSymbolProvider } from './providers/workspace-symbol-provider';
 import { DbtSignatureHelpProvider } from './providers/sql/signature-help-provider';
 import { SqlCodeActionProvider } from './providers/sql/code-action-provider';
+import { NinjaFormattingProvider } from './providers/sql/formatting-provider';
 import { ConfigCodeActionProvider } from './providers/common/config-code-action-provider';
 import { DbtCallHierarchyProvider } from './providers/sql/call-hierarchy-provider';
 import { ParseService } from './services/parse-service';
+// import { BridgeDocumentParser } from './services/bridge-document-parser';
+import { FtlDocumentParser } from './ftl/ftl-document-parser';
 import { DbtQueryService } from './services/dbt-query-service';
 import { StatusBarManager } from './views/status-bar';
 import { ExternalDbtMonitor } from './dbt/external-dbt-monitor';
@@ -57,11 +61,12 @@ import { ProfileResultPersistence } from './dbt/profile-result-persistence';
 import { ProfilerDecorationProvider } from './providers/profiler-decoration-provider';
 import { QueryDecorationProvider } from './providers/query-decoration-provider';
 import { ProfilerResultsProvider } from './views/profiler-results-provider';
-import { QueryRunner } from './dbt/query-runner';
+import { QueryRunner, type StatementResult } from './dbt/query-runner';
 import { QueryResultPanel } from './views/query-result-panel';
 import { SqlDebugAdapter } from './dbt/debug-adapter';
 import { SqlDebugConfigProvider } from './dbt/debug-config-provider';
 import { DataPipelineProvider } from './dbt/debug-pipeline-provider';
+import { SymbolSqlProvider } from './providers/symbol-sql-provider';
 import { splitStatements } from './dbt/statement-splitter';
 import * as path from 'node:path';
 
@@ -81,6 +86,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	logger.info(`dbt Studio v${version} activating...`);
 
+	// -------- Claim .sql files as jinja-sql --------
+	// Other extensions (sqlfluff, sql-formatter, etc.) may steal .sql bindings depending
+	// on load order. Since we only activate inside dbt projects, we forcibly reassign
+	// any .sql document that another extension has already claimed.
+	const claimSqlDocument = (document: vscode.TextDocument) => {
+		if (document.fileName.endsWith('.sql') && document.languageId !== 'jinja-sql') {
+			void vscode.languages.setTextDocumentLanguage(document, 'jinja-sql');
+		}
+	};
+	vscode.workspace.textDocuments.forEach(claimSqlDocument);
+	context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(claimSqlDocument));
+
 	// -------- Resolve workspace/project directory --------
 	const workspaceFolders = vscode.workspace.workspaceFolders;
 	if (!workspaceFolders || workspaceFolders.length === 0) {
@@ -96,6 +113,42 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// -------- Detect Python environment --------
 	const pythonEnv = detectPythonEnvironment(projectDir);
 	logger.info(`Python environment: ${pythonEnv.description} (${pythonEnv.command.join(' ')})`);
+
+	const envReady = await validatePythonEnvironment(pythonEnv);
+	if (!envReady) {
+		logger.warn(`Python environment validation failed: ${pythonEnv.description}`);
+		void vscode.window.showWarningMessage(
+			`dbt Studio: Python environment not found or not working (${pythonEnv.description}). dbt features are disabled.`,
+			'Reload Window',
+		).then((selection) => {
+			if (selection === 'Reload Window') {
+				void vscode.commands.executeCommand('workbench.action.reloadWindow');
+			}
+		});
+	}
+
+	// -------- Terminal environment setup --------
+	const contributeCliShim = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('terminal.contributeCliShim', true);
+	if (contributeCliShim && envReady) {
+		try {
+			const shimsDir = path.join(storageDir, 'shims');
+			logger.info(`Creating terminal shims at: ${shimsDir}`);
+			const shimPath = writeShims(shimsDir, pythonEnv);
+			if (shimPath) {
+				context.environmentVariableCollection.clear();
+				context.environmentVariableCollection.prepend('PATH', shimPath + path.delimiter);
+				context.environmentVariableCollection.description = `dbt Studio: activated ${pythonEnv.description}`;
+				logger.info(`Terminal shim contributed: ${shimPath}`);
+			} else {
+				logger.info('No terminal shim needed (system Python)');
+			}
+		} catch (error) {
+			logger.error(`Failed to create terminal shims: ${error}`);
+		}
+	} else if (!contributeCliShim) {
+		// Clear any existing PATH modifications if the setting is disabled
+		context.environmentVariableCollection.clear();
+	}
 
 	// -------- Set up manifest loading and indexing --------
 	const manifestLoader = new ManifestLoader(projectDir, extensionTargetDir);
@@ -153,6 +206,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// Connect manifest watcher to execution service for background parse-on-save
 	manifestWatcher.setExecutionService(executionService);
 
+	// -------- dbt deps check --------
+	if (envReady && hasDbtProject && !dbtPackagesExist(projectDir)) {
+		void vscode.window.showWarningMessage(
+			'dbt packages not installed. Run dbt deps to set up your project.',
+			'Run dbt deps',
+		).then((selection) => {
+			if (selection === 'Run dbt deps') {
+				void executionService.submit({
+					type: 'deps', args: ['deps'],
+					priority: Priority.User, origin: 'user', label: 'install deps',
+				}).then((result) => {
+					if (result.success) {
+						void vscode.window.showInformationMessage('dbt deps: success');
+					} else {
+						void vscode.window.showErrorMessage(`dbt deps: failed — ${result.stderr}`);
+					}
+				});
+			}
+		});
+	}
+
 	// -------- Compile cache (shared across all tools) --------
 	const compileCache = new CompileCache(executionService, manifestLoader, logger);
 	const compileCachePersistence = new CompileCachePersistence(context, logger);
@@ -161,6 +235,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	// -------- Describe cache (shared across providers and tools) --------
 	const describeCache = new DescribeCache(executionService, manifestIndexer, logger);
+	context.subscriptions.push(describeCache.onDescribeError(() => {
+		void vscode.window.showWarningMessage(
+			'Could not describe some tables — seed data may not be loaded yet. Run dbt seed to load your seed files.',
+			'Run dbt seed',
+		).then((selection) => {
+			if (selection === 'Run dbt seed') {
+				void executionService.submit({
+					type: 'seed', args: ['seed'],
+					priority: Priority.User, origin: 'user', label: 'seed',
+				}).then((result) => {
+					if (result.success) {
+						void vscode.window.showInformationMessage('dbt seed: success');
+					} else {
+						void vscode.window.showErrorMessage(`dbt seed: failed — ${result.stderr}`);
+					}
+				});
+			}
+		});
+	}));
 
 	// -------- Database provider (direct warehouse access, bypasses dbt bridge queue) --------
 	const projectConfig = loadProjectConfig(projectDir);
@@ -208,8 +301,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// were restored from disk (mtime validation happens on first access per entry).
 	void compileCache.warmAll(projectDir, restoredCompileEntries);
 
-	// -------- Parse service (uses sqlglot bridge — runs in parallel with dbt commands) --------
-	const parseService = new ParseService(sqlglotBridgeRunner, logger, { describeCache, indexer: manifestIndexer });
+	// -------- Parse service (FTL — Pyodide worker pool, true CPU parallelism) --------
+	const pyodideDir = path.join(context.extensionPath, 'node_modules', 'pyodide');
+	const vendorDir = path.join(context.extensionPath, 'resources', 'bridge', 'vendor');
+	const scriptsDir = path.join(context.extensionPath, 'resources', 'ftl');
+	const ftlParser = FtlDocumentParser.create(pyodideDir, vendorDir, scriptsDir);
+	await ftlParser.ready();
+	logger.info('Parse service: FTL worker pool ready');
+	const parseService = new ParseService(ftlParser, logger, { describeCache, indexer: manifestIndexer });
+	// const parseService = new ParseService(new BridgeDocumentParser(sqlglotBridgeRunner), logger, { describeCache, indexer: manifestIndexer });
+	context.subscriptions.push(ftlParser);
 	manifestWatcher.setParseService(parseService);
 	manifestWatcher.setCompileCache(compileCache);
 
@@ -232,12 +333,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	void vscode.commands.executeCommand('setContext', 'workspaceHasDBT', hasDbtProject);
 
 	// -------- Register Copilot language model tools --------
-	registerLanguageModelTools(context, manifestIndexer, executionService, manifestLoader, logger, compileCache, databaseProvider, describeCache, dbtQueryService);
+	registerLanguageModelTools(context, manifestIndexer, executionService, manifestLoader, logger, compileCache, databaseProvider, describeCache, dbtQueryService, ftlParser);
 
 	// -------- Register tree views --------
 	const modelExplorerProvider = new ModelExplorerProvider(manifestIndexer, logger, projectDir, context.globalState);
 	const lineageGraphProvider = new LineageGraphProvider(manifestIndexer, logger, context.globalState);
-	const columnLineageTool = new GetColumnLineageTool(manifestIndexer, executionService, logger, compileCache, describeCache);
+	const columnLineageTool = new GetColumnLineageTool(manifestIndexer, logger, compileCache, describeCache, ftlParser);
 	lineageGraphProvider.setColumnLineageTool(columnLineageTool);
 	lineageGraphProvider.setExecutionService(executionService);
 	// Initialise context keys so the correct toolbar icons show from the start
@@ -371,6 +472,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const signatureHelpProvider = new DbtSignatureHelpProvider(manifestIndexer, logger);
 	const sqlCodeActionProvider = new SqlCodeActionProvider(manifestIndexer, logger);
 	sqlCodeActionProvider.setPathResolver(pathResolver);
+	sqlCodeActionProvider.setNinjaResultProvider(uri => diagnosticsProvider.getNinjaResult(uri));
+	const ninjaFormattingProvider = new NinjaFormattingProvider(parseService, manifestIndexer);
 	const configCodeActionProvider = new ConfigCodeActionProvider();
 	const callHierarchyProvider = new DbtCallHierarchyProvider(manifestIndexer, logger, parseService);
 
@@ -404,6 +507,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				providedCodeActionKinds: ConfigCodeActionProvider.providedCodeActionKinds,
 			}),
 			vscode.languages.registerCallHierarchyProvider(sqlSelector, callHierarchyProvider),
+			vscode.languages.registerDocumentFormattingEditProvider(sqlSelector, ninjaFormattingProvider),
 		];
 
 		logger.info(`Registered language providers with ${sqlSelector.length} SQL filters, ${yamlSelector.length} YAML filters`);
@@ -422,6 +526,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 		{ dispose: () => { for (const d of providerDisposables) d.dispose(); } },
 	);
+
+	const requireEnv = (): boolean => {
+		if (!envReady) {
+			void vscode.window.showWarningMessage(
+				`Python environment is not working (${pythonEnv.description}). Please fix your setup and reload the window.`,
+				'Reload Window',
+			).then((selection) => {
+				if (selection === 'Reload Window') {
+					void vscode.commands.executeCommand('workbench.action.reloadWindow');
+				}
+			});
+			return false;
+		}
+		return true;
+	};
 
 	// -------- Register commands --------
 	context.subscriptions.push(
@@ -442,6 +561,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.runModel', async () => {
+			if (!requireEnv()) return;
 			const model = getActiveModelName();
 			if (!model) return;
 			const result = await executionService.submit({
@@ -457,12 +577,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.testModel', async () => {
+			if (!requireEnv()) return;
 			const model = getActiveModelName();
 			if (!model) return;
 			await vsTestController.runTestsForModel(model);
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.buildModel', async () => {
+			if (!requireEnv()) return;
 			const model = getActiveModelName();
 			if (!model) return;
 			const result = await executionService.submit({
@@ -478,6 +600,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.compileModel', async () => {
+			if (!requireEnv()) return;
 			const model = getActiveModelName();
 			if (!model) return;
 
@@ -569,6 +692,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.runDeps', async () => {
+			if (!requireEnv()) return;
 			const result = await executionService.submit({
 				type: 'deps', args: ['deps'],
 				priority: Priority.User, origin: 'user', label: 'install deps',
@@ -581,6 +705,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.parseProject', async () => {
+			if (!requireEnv()) return;
 			const result = await executionService.submit({
 				type: 'parse', args: ['parse'],
 				priority: Priority.User, origin: 'user', label: 'parse project',
@@ -629,6 +754,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		// ---- Test running commands (for explorer + CodeLens) ----
 
 		vscode.commands.registerCommand('dbt-studio.runNamedModel', async (modelName: string) => {
+			if (!requireEnv()) return;
 			const result = await executionService.submit({
 				type: 'run', args: ['run', '-s', modelName],
 				priority: Priority.User, origin: 'user', label: `run ${modelName}`,
@@ -641,6 +767,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.testNamedModel', async (modelName: string) => {
+			if (!requireEnv()) return;
 			await vsTestController.runTestsForModel(modelName);
 		}),
 
@@ -765,6 +892,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand('dbt-studio.executeQuery', async () => {
+			if (!requireEnv()) return;
 			const editor = vscode.window.activeTextEditor;
 			if (!editor || editor.document.languageId !== 'jinja-sql') {
 				void vscode.window.showWarningMessage('Open a dbt SQL file to execute queries.');
@@ -877,12 +1005,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	);
 
 	// -------- Debug adapter (F5 → run SQL) --------
+	const symbolSqlProvider = new SymbolSqlProvider();
 	const dataPipelineProvider = new DataPipelineProvider(context.extensionUri);
 	context.subscriptions.push(
-		vscode.debug.registerDebugConfigurationProvider('dbt-sql', new SqlDebugConfigProvider()),	vscode.debug.registerDebugConfigurationProvider('dbt-sql', new SqlDebugConfigProvider(), vscode.DebugConfigurationProviderTriggerKind.Dynamic),		vscode.debug.registerDebugAdapterDescriptorFactory('dbt-sql', {
+		vscode.workspace.registerTextDocumentContentProvider(SymbolSqlProvider.scheme, symbolSqlProvider),
+		vscode.debug.registerDebugConfigurationProvider('dbt-sql', new SqlDebugConfigProvider()),
+		vscode.debug.registerDebugConfigurationProvider('dbt-sql', new SqlDebugConfigProvider(), vscode.DebugConfigurationProviderTriggerKind.Dynamic),
+		vscode.debug.registerDebugAdapterDescriptorFactory('dbt-sql', {
 			createDebugAdapterDescriptor() {
 				return new vscode.DebugAdapterInlineImplementation(
-					new SqlDebugAdapter(queryRunner, pathResolver, logger, databaseProvider, sqlglotBridgeRunner, compileCache, manifestIndexer),
+					new SqlDebugAdapter(queryRunner, pathResolver, logger, databaseProvider, sqlglotBridgeRunner, compileCache, manifestIndexer, parseService, symbolSqlProvider),
 				);
 			},
 		}),
@@ -891,13 +1023,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			showCollapseAll: true,
 		}),
 		vscode.debug.onDidReceiveDebugSessionCustomEvent(e => {
-			if (e.session.type === 'dbt-sql' && e.event === 'dbt-sql:pipeline') {
+			if (e.session.type !== 'dbt-sql') return;
+			if (e.event === 'dbt-sql:pipeline') {
 				const sourceUri = e.session.configuration.file as string | undefined;
 				dataPipelineProvider.handlePipelineEvent(e.body, sourceUri);
+			} else if (e.event === 'dbt-sql:stepResult') {
+				const body = e.body as { frameName: string; columns: string[]; columnTypes?: Record<string, string>; rows: Record<string, unknown>[]; rowCount: number; executionTimeMs: number };
+				const stepResult: StatementResult = {
+					sql: body.frameName,
+					index: 0,
+					result: {
+						columns: body.columns,
+						columnTypes: body.columnTypes,
+						rows: body.rows,
+						rowCount: body.rowCount,
+						executionTimeMs: body.executionTimeMs,
+					},
+				};
+				queryResultPanel.showResults([stepResult], undefined, true);
 			}
 		}),
 		vscode.debug.onDidTerminateDebugSession(session => {
-			if (session.type === 'dbt-sql') dataPipelineProvider.clear();
+			if (session.type === 'dbt-sql') {
+				dataPipelineProvider.clear();
+				symbolSqlProvider.clear();
+			}
 		}),
 		vscode.commands.registerCommand('dbt-sql.dataPipeline.toggleModeFull', () => dataPipelineProvider.toggleMode()),
 		vscode.commands.registerCommand('dbt-sql.dataPipeline.toggleModeStack', () => dataPipelineProvider.toggleMode()),
@@ -908,6 +1058,43 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			const pos = new vscode.Position(line, 0);
 			editor.selection = new vscode.Selection(pos, pos);
 			editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+		}),
+		vscode.commands.registerCommand('dbt-studio.debug.showFrameSql', async (...args: unknown[]) => {
+			logger.info('showFrameSql command invoked', { args: args.map(a => JSON.stringify(a)), argsLength: args.length });
+
+			const session = vscode.debug.activeDebugSession;
+			if (!session || session.type !== 'dbt-sql') {
+				logger.warn('showFrameSql: no active dbt-sql session');
+				return;
+			}
+
+			// The context menu passes different args - try to find the frame ID
+			let frameId: number | undefined;
+
+			// Check if any arg has a frameId or id property
+			for (const arg of args) {
+				if (arg && typeof arg === 'object') {
+					const obj = arg as any;
+					frameId = obj.frameId ?? obj.id ?? obj.frameID;
+					if (frameId !== undefined) {
+						logger.info('showFrameSql: found frameId in arg', { frameId, arg: JSON.stringify(arg) });
+						break;
+					}
+				}
+			}
+
+			if (frameId === undefined) {
+				logger.error('showFrameSql: could not extract frameId from args');
+				void vscode.window.showErrorMessage('Could not determine stack frame ID');
+				return;
+			}
+
+			try {
+				await session.customRequest('showFrameSql', { frameId });
+				logger.info('showFrameSql request sent successfully');
+			} catch (err) {
+				logger.error('showFrameSql request failed', err);
+			}
 		}),
 	);
 

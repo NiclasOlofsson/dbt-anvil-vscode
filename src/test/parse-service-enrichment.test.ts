@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CancellationTokenSource, Uri } from 'vscode';
 import { ParseService } from '../services/parse-service';
 import type { EnrichmentConfig } from '../services/parse-service';
+import { BridgeDocumentParser } from '../services/bridge-document-parser';
 import type { BridgeRunner } from '../dbt/bridge-runner';
 import type { DescribeCache } from '../dbt/describe-cache';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
@@ -108,7 +109,7 @@ describe('ParseService — enrichment tier', () => {
 	describe('getDocumentModel', () => {
 		it('returns parsed model with empty aliases when enrichment not configured', async () => {
 			const bridge = createMockBridge();
-			const service = new ParseService(bridge, mockLogger);
+			const service = new ParseService(new BridgeDocumentParser(bridge), mockLogger);
 
 			const model = await service.getDocumentModel(createMockDocument('SELECT 1'), 'duckdb');
 
@@ -118,7 +119,7 @@ describe('ParseService — enrichment tier', () => {
 
 		it('returns parsed model with aliases from bridge when enrichment configured', async () => {
 			const bridge = createMockBridge({ aliases: { orders: ['id', 'amount'] } });
-			const service = new ParseService(bridge, mockLogger, createEnrichment());
+			const service = new ParseService(new BridgeDocumentParser(bridge), mockLogger, createEnrichment());
 
 			const model = await service.getDocumentModel(createMockDocument('SELECT 1'), 'duckdb');
 
@@ -128,7 +129,7 @@ describe('ParseService — enrichment tier', () => {
 
 		it('caches result and does not re-parse on same version', async () => {
 			const bridge = createMockBridge();
-			const service = new ParseService(bridge, mockLogger);
+			const service = new ParseService(new BridgeDocumentParser(bridge), mockLogger);
 			const doc = createMockDocument('SELECT 1');
 
 			await service.getDocumentModel(doc, 'duckdb');
@@ -139,7 +140,7 @@ describe('ParseService — enrichment tier', () => {
 
 		it('re-parses when document version changes', async () => {
 			const bridge = createMockBridge();
-			const service = new ParseService(bridge, mockLogger);
+			const service = new ParseService(new BridgeDocumentParser(bridge), mockLogger);
 
 			const doc1 = createMockDocument('SELECT 1', 1, 'file:///a.sql');
 			const doc2 = createMockDocument('SELECT 2', 2, 'file:///a.sql');
@@ -159,7 +160,7 @@ describe('ParseService — enrichment tier', () => {
 				getRawNode: vi.fn().mockReturnValue({ name: 'orders', alias: 'orders', schema: 'main' }),
 			});
 
-			const service = new ParseService(bridge, mockLogger, { describeCache, indexer });
+			const service = new ParseService(new BridgeDocumentParser(bridge), mockLogger, { describeCache, indexer });
 			await service.getDocumentModel(
 				createMockDocument('SELECT id FROM {{ ref("orders") }}'),
 				'duckdb',
