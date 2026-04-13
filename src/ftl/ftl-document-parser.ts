@@ -127,7 +127,7 @@ function _finalSelectNode(ast: AstPayload[]): AstNode | undefined {
 // Alias.alias in serde.dump is normally an Identifier class node.
 // As a fallback, plain-string leaf values (rare) are also handled.
 function _colExprName(ast: AstPayload[], exprIdx: number): string | undefined {
-	if (ast[exprIdx]?.c === 'Star') return '*';
+	if (ast[exprIdx]?.c === 'Star') return undefined;
 	if (ast[exprIdx]?.c === 'Alias') {
 		// Case 1: alias stored as a plain string leaf (rare)
 		const leaf = leafValue(ast, exprIdx, 'alias');
