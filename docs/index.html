@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>dbt Studio</title>
+	<style>
+		:root {
+			color-scheme: dark;
+			--bg: #0b1220;
+			--card: #121a2b;
+			--text: #e5e7eb;
+			--muted: #9ca3af;
+			--accent: #60a5fa;
+			--accent-2: #22d3ee;
+			--border: #23304a;
+		}
+
+		* { box-sizing: border-box; }
+
+		body {
+			margin: 0;
+			font-family: Inter, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+			background: radial-gradient(circle at 20% 0%, #17233a 0%, var(--bg) 45%);
+			color: var(--text);
+			line-height: 1.6;
+		}
+
+		.wrapper {
+			max-width: 980px;
+			margin: 0 auto;
+			padding: 56px 20px 80px;
+		}
+
+		.card {
+			background: linear-gradient(180deg, #141f33 0%, var(--card) 100%);
+			border: 1px solid var(--border);
+			border-radius: 16px;
+			padding: 28px;
+			box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+		}
+
+		h1 {
+			font-size: clamp(2rem, 5vw, 3rem);
+			line-height: 1.1;
+			margin: 0 0 14px;
+		}
+
+		p {
+			margin: 0 0 16px;
+			color: var(--muted);
+		}
+
+		.actions {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 10px;
+			margin: 18px 0 26px;
+		}
+
+		a.btn {
+			display: inline-block;
+			text-decoration: none;
+			color: #0b1220;
+			background: linear-gradient(90deg, var(--accent), var(--accent-2));
+			padding: 10px 14px;
+			border-radius: 10px;
+			font-weight: 600;
+		}
+
+		a.btn.secondary {
+			background: transparent;
+			color: var(--text);
+			border: 1px solid var(--border);
+		}
+
+		img {
+			width: 100%;
+			height: auto;
+			border-radius: 12px;
+			border: 1px solid var(--border);
+			margin: 10px 0 20px;
+		}
+
+		ul {
+			padding-left: 18px;
+			margin: 0;
+		}
+
+		li { margin: 6px 0; }
+	</style>
+</head>
+<body>
+	<main class="wrapper">
+		<section class="card">
+			<h1>dbt Studio</h1>
+			<p>
+				A VS Code extension that gives dbt the same kind of language support that most programming
+				languages have had for years. Now it's here, for dbt Core.
+			</p>
+
+			<div class="actions">
+				<a class="btn" href="https://marketplace.visualstudio.com/items?itemName=nickeolofsson.dbt-studio-vscode">Install from Marketplace</a>
+				<a class="btn secondary" href="https://github.com/NiclasOlofsson/dbt-studio">View public repo</a>
+			</div>
+
+			<img alt="dbt Studio demo" src="https://raw.githubusercontent.com/NiclasOlofsson/dbt-studio/main/demo.webp" />
+
+			<ul>
+				<li>Column intelligence</li>
+				<li>Interactive lineage</li>
+				<li>SQL debugger and profiler</li>
+				<li>Test explorer</li>
+				<li>Copilot tools for dbt workflows</li>
+			</ul>
+		</section>
+	</main>
+</body>
+</html>
