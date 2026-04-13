@@ -185,17 +185,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	context.subscriptions.push({ dispose: () => { const { hashes, nonWsHashes } = manifestWatcher.getHashes(); contentHashPersistence.save(hashes, nonWsHashes); } });
 	context.subscriptions.push({ dispose: () => columnStorePersistence.save(manifestIndexer) });
 
-	// -------- Python bridges --------
-	// Two separate processes: one for dbt commands (slow, blocks on dbt parse/run),
-	// one for fast sqlglot operations (parse_document, describe_table).
-	// This lets hover/completion run in parallel with a dbt parse on save.
+	// -------- Python bridge --------
+	// Single persistent bridge process for dbt commands and inline compilation.
 	const bridgePyPath = vscode.Uri.joinPath(context.extensionUri, 'resources', 'bridge', 'bridge.py').fsPath;
 	const stateDir = storageDir;
 	const dbtBridgeRunner = new BridgeRunner(bridgePyPath, projectDir, pythonEnv, logger, stateDir, extensionTargetDir);
-	const sqlglotBridgeRunner = new BridgeRunner(bridgePyPath, projectDir, pythonEnv, logger, stateDir, extensionTargetDir);
 	container.setBridgeRunner(dbtBridgeRunner);
 	context.subscriptions.push({ dispose: () => void dbtBridgeRunner.shutdown() });
-	context.subscriptions.push({ dispose: () => void sqlglotBridgeRunner.shutdown() });
 
 	// -------- Execution service (priority queue around dbt bridge) --------
 	const executionService = new DbtExecutionService(dbtBridgeRunner, manifestLoader, manifestWatcher, logger);
@@ -302,7 +298,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	// -------- Parse service (FTL — Pyodide worker pool, true CPU parallelism) --------
 	const pyodideDir = path.join(context.extensionPath, 'node_modules', 'pyodide');
-	const vendorDir = path.join(context.extensionPath, 'resources', 'bridge', 'vendor');
+	const vendorDir = path.join(context.extensionPath, 'resources', 'ftl', 'vendor');
 	const scriptsDir = path.join(context.extensionPath, 'resources', 'ftl');
 	const ftlParser = FtlDocumentParser.create(pyodideDir, vendorDir, scriptsDir);
 	await ftlParser.ready();
@@ -1012,7 +1008,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.debug.registerDebugAdapterDescriptorFactory('dbt-sql', {
 			createDebugAdapterDescriptor() {
 				return new vscode.DebugAdapterInlineImplementation(
-					new SqlDebugAdapter(queryRunner, pathResolver, logger, databaseProvider, sqlglotBridgeRunner, compileCache, manifestIndexer, parseService, symbolSqlProvider),
+					new SqlDebugAdapter(queryRunner, pathResolver, logger, databaseProvider, dbtBridgeRunner, compileCache, manifestIndexer, parseService, symbolSqlProvider),
 				);
 			},
 		}),

@@ -4,7 +4,7 @@
 # This file runs inside Pyodide (WebAssembly). You MUST NOT import anything
 # other than:
 #   - Python standard library modules
-#   - sqlglot (vendored in resources/bridge/vendor/sqlglot/)
+#   - sqlglot (vendored in resources/ftl/vendor/sqlglot/)
 #
 # No pip packages. No third-party wheels. No dbt. No system libraries.
 # Violating this will silently break column lineage for all users.

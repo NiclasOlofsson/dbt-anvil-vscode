@@ -8,7 +8,7 @@ import { walkLineageTree } from '../../ftl/ftl-document-parser.js';
 import type { LineageTreeNode, LineageResult } from '../../ftl/ftl-document-parser.js';
 
 const PYODIDE_DIR = path.join(__dirname, '..', '..', '..', 'node_modules', 'pyodide');
-const VENDOR_DIR = path.join(__dirname, '..', '..', '..', 'resources', 'bridge', 'vendor');
+const VENDOR_DIR = path.join(__dirname, '..', '..', '..', 'resources', 'ftl', 'vendor');
 const SCRIPTS_DIR = path.join(__dirname, '..', '..', '..', 'resources', 'ftl');
 
 let runtime: PyodideRuntime;
