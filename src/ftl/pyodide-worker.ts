@@ -18,72 +18,86 @@ import { PyodideSqlParser } from './pyodide-sql-parser';
 import type { ParseResult } from './parse-result';
 
 interface WorkerData {
-    pyodideDir: string;
-    vendorDir: string;
-    scriptsDir: string;
+	pyodideDir: string;
+	vendorDir: string;
+	scriptsDir: string;
 }
 
 interface ParseTask {
-    id: number;
-    sql: string;
-    dialect: string;
-    schemaJson: string;
+	id: number;
+	sql: string;
+	dialect: string;
+	schemaJson: string;
 }
 
 interface LineageTask {
-    id: number;
-    type: 'lineage';
-    compiledSql: string;
-    columnName: string;
-    dialect: string;
-    schemaJson: string;
+	id: number;
+	type: 'lineage';
+	compiledSql: string;
+	columnName: string;
+	dialect: string;
+	schemaJson: string;
 }
 
 interface LineageV2Task {
-    id: number;
-    type: 'lineage_v2';
-    sql: string;
-    columnName: string;
-    dialect: string;
-    schemaJson: string;
+	id: number;
+	type: 'lineage_v2';
+	sql: string;
+	columnName: string;
+	dialect: string;
+	schemaJson: string;
 }
 
-type Task = ParseTask | LineageTask | LineageV2Task;
+interface DecomposeTask {
+	id: number;
+	type: 'decompose';
+	compiledSql: string;
+	dialect: string;
+}
+
+type Task = ParseTask | LineageTask | LineageV2Task | DecomposeTask;
 
 const { pyodideDir, vendorDir, scriptsDir } = workerData as WorkerData;
 
 async function main(): Promise<void> {
-    const { pyodide } = await initPyodide(pyodideDir, vendorDir, scriptsDir);
-    const parser = PyodideSqlParser.create(pyodide);
+	const { pyodide } = await initPyodide(pyodideDir, vendorDir, scriptsDir);
+	const parser = PyodideSqlParser.create(pyodide);
 
-    parentPort!.postMessage({ ready: true });
+	parentPort!.postMessage({ ready: true });
 
-    parentPort!.on('message', async (task: Task) => {
-        if ('type' in task && task.type === 'lineage') {
-            try {
-                const raw = parser.traceLineage(task.compiledSql, task.columnName, task.dialect, task.schemaJson);
-                parentPort!.postMessage({ id: task.id, lineageResult: raw });
-            } catch (err) {
-                parentPort!.postMessage({ id: task.id, error: String(err) });
-            }
-        } else if ('type' in task && task.type === 'lineage_v2') {
-            try {
-                const raw = parser.traceLineageV2(task.sql, task.columnName, task.dialect, task.schemaJson);
-                parentPort!.postMessage({ id: task.id, lineageResult: raw });
-            } catch (err) {
-                parentPort!.postMessage({ id: task.id, error: String(err) });
-            }
-        } else {
-            const parseTask = task as ParseTask;
-            try {
-                const schema = parseTask.schemaJson ? JSON.parse(parseTask.schemaJson) as Record<string, Record<string, string>> : undefined;
-                const result: ParseResult = await parser.parse(parseTask.sql, parseTask.dialect, schema);
-                parentPort!.postMessage({ id: parseTask.id, result });
-            } catch (err) {
-                parentPort!.postMessage({ id: parseTask.id, error: String(err) });
-            }
-        }
-    });
+	parentPort!.on('message', async (task: Task) => {
+		if ('type' in task && task.type === 'lineage') {
+			try {
+				const raw = parser.traceLineage(task.compiledSql, task.columnName, task.dialect, task.schemaJson);
+				parentPort!.postMessage({ id: task.id, lineageResult: raw });
+			} catch (err) {
+				parentPort!.postMessage({ id: task.id, error: String(err) });
+			}
+		} else if ('type' in task && task.type === 'lineage_v2') {
+			try {
+				const raw = parser.traceLineageV2(task.sql, task.columnName, task.dialect, task.schemaJson);
+				parentPort!.postMessage({ id: task.id, lineageResult: raw });
+			} catch (err) {
+				parentPort!.postMessage({ id: task.id, error: String(err) });
+			}
+		} else if ('type' in task && task.type === 'decompose') {
+			try {
+				const raw = parser.decomposeQuery(task.compiledSql, task.dialect);
+				parentPort!.postMessage({ id: task.id, decomposeResult: raw });
+			} catch (err) {
+				parentPort!.postMessage({ id: task.id, error: String(err) });
+			}
+		} else {
+			const parseTask = task as ParseTask;
+			try {
+				const schema = parseTask.schemaJson ? JSON.parse(parseTask.schemaJson) as Record<string, Record<string, string>> : undefined;
+				const result: ParseResult = await parser.parse(parseTask.sql, parseTask.dialect, schema);
+				parentPort!.postMessage({ id: parseTask.id, result });
+			} catch (err) {
+				parentPort!.postMessage({ id: parseTask.id, error: String(err) });
+			}
+		}
+	});
 }
 
 void main();

@@ -30,6 +30,5 @@
 		"dist/**": true
 	},
 	// --- ESLint ---
-	"eslint.useFlatConfig": true,
-	"python.terminal.shellIntegration.enabled": false
+	"eslint.useFlatConfig": true
 }

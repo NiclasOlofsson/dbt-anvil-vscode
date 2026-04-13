@@ -9,17 +9,17 @@
 # No pip packages. No third-party wheels. No dbt. No system libraries.
 # Violating this will silently break column lineage for all users.
 # ==============================================================================
+import bisect as _bisect
 import json as _json
 import re as _re
-import sys as _sys
 import time as _time
 import traceback as _traceback
 from typing import Any as _Any
 
+from sqlglot import Dialect as _Dialect
 from sqlglot import exp as _exp
 from sqlglot import parse_one as _parse_one
 from sqlglot import serde as _serde
-from sqlglot import Dialect as _Dialect
 from sqlglot.errors import ErrorLevel as _EL
 from sqlglot.errors import ParseError as _ParseError
 from sqlglot.errors import SqlglotError as _SqlglotError
@@ -34,7 +34,7 @@ _SQL_STUB = '__jinja__'
 
 def _tokenize(sql, dialect):
     try:
-        d = dialect or None
+        d = dialect if dialect not in ('ansi', '', None) else None
         tok = _Dialect.get_or_raise(d).tokenizer_class() if d else _Tokenizer()
         return [
             {
@@ -101,7 +101,7 @@ def _ser_scopes(root):
 
 def _parse(sql, dialect, schema_json):
     schema = _json.loads(schema_json) if schema_json else {}
-    d = dialect or None
+    d = dialect if dialect not in ('ansi', '', None) else None
     warnings = []
     t0 = _time.time()
     sql_tokens = _tokenize(sql, dialect)
@@ -145,6 +145,17 @@ def _parse(sql, dialect, schema_json):
     except Exception:
         pass
     t1 = _time.time()
+    # Before qualify() expands SELECT *, record which CTEs are wildcard selects and their star line.
+    wildcard_ctes = []
+    for cte in ast.find_all(_exp.CTE):
+        body = cte.this
+        if (isinstance(body, _exp.Select)
+                and len(body.expressions) == 1
+                and isinstance(body.expressions[0], _exp.Star)):
+            star = body.expressions[0]
+            m = getattr(star, 'meta', None) or {}
+            line_1 = m.get('line', 1)
+            wildcard_ctes.append({'name': cte.alias, 'line': line_1 - 1})
     try:
         ast = _qualify(ast, schema=schema, infer_schema=True, qualify_columns=True, validate_qualify_columns=False)
     except Exception:
@@ -162,6 +173,7 @@ def _parse(sql, dialect, schema_json):
         'dialect': dialect or '',
         'warnings': warnings,
         'sqlTokens': sql_tokens,
+        'wildcardCtes': wildcard_ctes,
         'timing': {
             'tokenizeMs': round((t_tok - t0) * 1000, 1),
             'parseMs': round((t1 - t_tok) * 1000, 1),
@@ -763,3 +775,437 @@ def _trace_lineage_v2(sql: str, column_name: str, schema_json: str, dialect: str
 
     except Exception as exc:
         return _json.dumps({'success': False, 'error': f'{type(exc).__name__}: {exc}', 'traceback': _traceback.format_exc()})
+
+
+# ==============================================================================
+# DECOMPOSE QUERY
+# Decompose compiled SQL into debug frames (CTEs + _main_) and per-frame clauses.
+# ==============================================================================
+
+
+def _decompose_query(compiled_sql: str, dialect: str) -> str:
+    """Decompose compiled SQL into debug frames (CTEs + _main_) and per-frame clauses.
+
+    Returns JSON: {"success": true, "frames": [...], "clauses": {...}, "refs": {...}}
+    """
+    from sqlglot.tokens import TokenType as _TT  # noqa: PLC0415
+
+    sqlglot_dialect: str | None = dialect if dialect not in ("ansi", "", None) else None
+
+    if not compiled_sql:
+        return _json.dumps({"success": False, "error": "compiled_sql is required"})
+
+    try:
+        ast = _parse_one(compiled_sql, dialect=sqlglot_dialect, error_level=None)
+    except Exception as exc:
+        return _json.dumps({"success": False, "error": f"Parse error: {exc}"})
+
+    # Build line_starts for offset→line conversion (0-based lines).
+    line_starts: list[int] = [0]
+    for i, ch in enumerate(compiled_sql):
+        if ch == "\n":
+            line_starts.append(i + 1)
+
+    def offset_to_line(offset: int) -> int:
+        return max(0, _bisect.bisect_right(line_starts, offset) - 1)
+
+    def node_line(node: _Any) -> int:
+        """Best-effort 0-based line for an AST node via its leftmost Identifier."""
+        for ident in node.find_all(_exp.Identifier):
+            raw_line = ident.meta.get("line")
+            if raw_line is not None:
+                return max(0, raw_line - 1)
+        return 0
+
+    try:
+        _tok = (
+            _Dialect.get_or_raise(sqlglot_dialect).tokenizer_class()
+            if sqlglot_dialect
+            else _Tokenizer()
+        )
+        _token_list = _tok.tokenize(compiled_sql)
+    except Exception:
+        _token_list = []
+
+    _token_positions: list[tuple[_TT, int, int]] = [
+        (t.token_type, t.line - 1, t.start) for t in _token_list
+    ]
+
+    _CLAUSE_TOKEN_TYPES: dict[str, _TT] = {
+        "select": _TT.SELECT,
+        "from_": _TT.FROM,
+        "where": _TT.WHERE,
+        "group": _TT.GROUP_BY,
+        "having": _TT.HAVING,
+        "order": _TT.ORDER_BY,
+    }
+
+    def token_clause_line(clause_key: str, after_offset: int) -> int | None:
+        token_type = _CLAUSE_TOKEN_TYPES.get(clause_key)
+        if token_type is None:
+            return None
+        for tt, tline, tstart in _token_positions:
+            if tt == token_type and tstart >= after_offset:
+                return tline
+        return None
+
+    def node_end_line(node: _Any) -> int:
+        first_start: int | None = None
+        for child in node.walk():
+            s = child.meta.get("start")
+            if s is not None and (first_start is None or s < first_start):
+                first_start = s
+        if first_start is None:
+            return 0
+        open_idx = compiled_sql.find("(", first_start)
+        if open_idx < 0:
+            return offset_to_line(first_start)
+        depth = 0
+        for idx in range(open_idx, len(compiled_sql)):
+            if compiled_sql[idx] == "(":
+                depth += 1
+            elif compiled_sql[idx] == ")":
+                depth -= 1
+                if depth == 0:
+                    return offset_to_line(idx)
+        return offset_to_line(open_idx)
+
+    def _select_start_offset(select_node: _Any) -> int:
+        line = node_line(select_node)
+        return line_starts[line] if line < len(line_starts) else 0
+
+    def find_clause_line(select_node: _Any, clause_key: str) -> int:
+        after = _select_start_offset(select_node)
+        return token_clause_line(clause_key, after) or node_line(select_node)
+
+    def extract_clauses(
+        name: str, select_node: _Any, _cte_prefix: str
+    ) -> list[dict[str, _Any]]:
+        clauses: list[dict[str, _Any]] = []
+
+        with_node = ast.args.get("with_")
+        prefix_ctes: list[_Any] = []
+        if with_node:
+            for cte_node in with_node.expressions:
+                cte_alias = cte_node.alias or ""
+                if cte_alias == name and name != "_main_":
+                    break
+                prefix_ctes.append(cte_node)
+
+        def with_prefix(sql: str) -> str:
+            if not prefix_ctes:
+                return sql
+            cte_parts = [c.sql(dialect=sqlglot_dialect) for c in prefix_ctes]
+            return f"WITH {', '.join(cte_parts)}\n{sql}"
+
+        from_node = select_node.args.get("from_")
+        if from_node:
+            from_sql = f"SELECT * {from_node.sql(dialect=sqlglot_dialect)}"
+            clauses.append(
+                {
+                    "stage": "from",
+                    "sql": with_prefix(from_sql),
+                    "line": find_clause_line(select_node, "from_"),
+                }
+            )
+
+        joins = select_node.args.get("joins") or []
+        if from_node and joins:
+            from_part = from_node.sql(dialect=sqlglot_dialect)
+            for i, join in enumerate(joins):
+                join_parts = " ".join(
+                    j.sql(dialect=sqlglot_dialect) for j in joins[: i + 1]
+                )
+                join_sql = f"SELECT * {from_part} {join_parts}"
+                clauses.append(
+                    {
+                        "stage": "join",
+                        "sql": with_prefix(join_sql),
+                        "line": node_line(join),
+                    }
+                )
+
+        where_node = select_node.args.get("where")
+        if where_node and from_node:
+            base = from_node.sql(dialect=sqlglot_dialect)
+            join_parts = (
+                " ".join(j.sql(dialect=sqlglot_dialect) for j in joins) if joins else ""
+            )
+            where_sql = f"SELECT * {base} {join_parts} {where_node.sql(dialect=sqlglot_dialect)}"
+            clauses.append(
+                {
+                    "stage": "where",
+                    "sql": with_prefix(where_sql.strip()),
+                    "line": find_clause_line(select_node, "where"),
+                }
+            )
+
+        group_node = select_node.args.get("group")
+        if group_node and from_node:
+            base = from_node.sql(dialect=sqlglot_dialect)
+            join_parts = (
+                " ".join(j.sql(dialect=sqlglot_dialect) for j in joins) if joins else ""
+            )
+            where_part = where_node.sql(dialect=sqlglot_dialect) if where_node else ""
+            projections = ", ".join(
+                e.sql(dialect=sqlglot_dialect) for e in select_node.expressions
+            )
+            group_sql = f"SELECT {projections} {base} {join_parts} {where_part} {group_node.sql(dialect=sqlglot_dialect)}"
+            clauses.append(
+                {
+                    "stage": "group",
+                    "sql": with_prefix(group_sql.strip()),
+                    "line": find_clause_line(select_node, "group"),
+                }
+            )
+
+        having_node = select_node.args.get("having")
+        if having_node and group_node and from_node:
+            base = from_node.sql(dialect=sqlglot_dialect)
+            join_parts = (
+                " ".join(j.sql(dialect=sqlglot_dialect) for j in joins) if joins else ""
+            )
+            where_part = where_node.sql(dialect=sqlglot_dialect) if where_node else ""
+            projections = ", ".join(
+                e.sql(dialect=sqlglot_dialect) for e in select_node.expressions
+            )
+            having_sql = f"SELECT {projections} {base} {join_parts} {where_part} {group_node.sql(dialect=sqlglot_dialect)} {having_node.sql(dialect=sqlglot_dialect)}"
+            clauses.append(
+                {
+                    "stage": "having",
+                    "sql": with_prefix(having_sql.strip()),
+                    "line": find_clause_line(select_node, "having"),
+                }
+            )
+
+        windows = select_node.args.get("windows")
+        if windows:
+            clauses.append(
+                {
+                    "stage": "window",
+                    "sql": "",
+                    "line": node_line(windows[0])
+                    if isinstance(windows, list) and windows
+                    else find_clause_line(select_node, "windows"),
+                }
+            )
+
+        qualify_node = select_node.args.get("qualify")
+        if qualify_node:
+            clauses.append(
+                {
+                    "stage": "qualify",
+                    "sql": "",
+                    "line": find_clause_line(select_node, "qualify"),
+                }
+            )
+
+        select_sql = select_node.sql(dialect=sqlglot_dialect)
+        if select_sql.lstrip().upper().startswith("WITH"):
+            final_select_sql = select_sql
+        else:
+            final_select_sql = with_prefix(select_sql)
+        clauses.append(
+            {
+                "stage": "select",
+                "sql": final_select_sql,
+                "line": find_clause_line(select_node, "select"),
+            }
+        )
+
+        order_node = select_node.args.get("order")
+        if order_node and from_node:
+            clauses.append(
+                {
+                    "stage": "order",
+                    "sql": with_prefix(select_node.sql(dialect=sqlglot_dialect))
+                    if not select_sql.lstrip().upper().startswith("WITH")
+                    else select_sql,
+                    "line": find_clause_line(select_node, "order"),
+                }
+            )
+
+        limit_node = select_node.args.get("limit")
+        if limit_node:
+            clauses.append(
+                {
+                    "stage": "limit",
+                    "sql": with_prefix(select_node.sql(dialect=sqlglot_dialect))
+                    if not select_sql.lstrip().upper().startswith("WITH")
+                    else select_sql,
+                    "line": find_clause_line(select_node, "limit"),
+                }
+            )
+
+        for idx, clause in enumerate(clauses):
+            clause["order"] = idx
+
+        return clauses
+
+    def extract_table_refs(select_node: _Any) -> list[str]:
+        refs: list[str] = []
+        for tbl in select_node.find_all(_exp.Table):
+            name = tbl.name
+            if name:
+                refs.append(name)
+        return refs
+
+    def promote_subqueries(the_ast: _Any) -> None:
+        the_with_node: _Any = the_ast.args.get("with_")
+
+        existing_names: set[str] = set()
+        if the_with_node:
+            for _c in the_with_node.expressions:
+                if _c.alias:
+                    existing_names.add(_c.alias)
+
+        counter: list[int] = [0]
+
+        def make_name(preferred: str) -> str:
+            if preferred and preferred not in existing_names:
+                existing_names.add(preferred)
+                return preferred
+            counter[0] += 1
+            name = f"__subq_{counter[0]}__"
+            existing_names.add(name)
+            return name
+
+        def insert_before(new_cte: _Any, before_alias: str) -> None:
+            nonlocal the_with_node
+            if the_with_node is None:
+                the_with_node = _exp.With(expressions=[new_cte])
+                the_ast.set("with_", the_with_node)
+            else:
+                exprs = list(the_with_node.expressions)
+                idx = next(
+                    (i for i, c in enumerate(exprs) if (c.alias or "") == before_alias),
+                    len(exprs),
+                )
+                exprs.insert(idx, new_cte)
+                the_with_node.set("expressions", exprs)
+
+        def promote_in_select(select_node: _Any, before_alias: str) -> None:
+            from_node = select_node.args.get("from_")
+            if from_node and isinstance(from_node.this, _exp.Subquery):
+                _promote(from_node, from_node.this, before_alias)
+            for join in list(select_node.args.get("joins") or []):
+                if isinstance(join.this, _exp.Subquery):
+                    _promote(join, join.this, before_alias)
+
+        def _promote(parent: _Any, subq: _Any, before_alias: str) -> None:
+            alias_str: str = subq.alias or ""
+            cte_name = make_name(alias_str)
+
+            inner_select = subq.find(_exp.Select)
+            if not inner_select:
+                return
+
+            promote_in_select(inner_select, cte_name)
+
+            inner_select = subq.find(_exp.Select)
+            if not inner_select:
+                return
+
+            new_cte = _exp.CTE(
+                this=inner_select.copy(),
+                alias=_exp.TableAlias(this=_exp.Identifier(this=cte_name)),
+            )
+
+            new_table = _exp.Table(this=_exp.Identifier(this=cte_name))
+            if alias_str and alias_str != cte_name:
+                new_table.set(
+                    "alias",
+                    _exp.TableAlias(this=_exp.Identifier(this=alias_str)),
+                )
+            parent.set("this", new_table)
+
+            insert_before(new_cte, before_alias)
+
+        if the_with_node:
+            original_ctes = list(the_with_node.expressions)
+            for cte_node in original_ctes:
+                cte_alias = cte_node.alias or ""
+                inner = cte_node.find(_exp.Select)
+                if inner:
+                    promote_in_select(inner, cte_alias)
+
+        if isinstance(the_ast, _exp.Select):
+            main_sel: _Any = the_ast
+        elif hasattr(the_ast, "this") and isinstance(the_ast.this, _exp.Select):
+            main_sel = the_ast.this
+        else:
+            main_sel = the_ast.find(_exp.Select)
+        if main_sel:
+            promote_in_select(main_sel, "_main_")
+
+    try:
+        frames: list[dict[str, _Any]] = []
+        clauses_map: dict[str, list[dict[str, _Any]]] = {}
+        refs_map: dict[str, list[str]] = {}
+
+        promote_subqueries(ast)
+
+        with_node = ast.args.get("with_")
+        if with_node:
+            for cte_node in with_node.expressions:
+                cte_name: str = cte_node.alias or ""
+                if not cte_name:
+                    continue
+
+                select_node = cte_node.find(_exp.Select)
+                start_line = node_line(cte_node)
+                end_line = node_end_line(cte_node)
+
+                frames.append(
+                    {
+                        "name": cte_name,
+                        "type": "cte",
+                        "line": start_line,
+                        "endLine": end_line,
+                    }
+                )
+
+                if select_node:
+                    clauses_map[cte_name] = extract_clauses(cte_name, select_node, "")
+                    refs_map[cte_name] = extract_table_refs(select_node)
+
+        if isinstance(ast, _exp.Select):
+            main_select = ast
+        elif hasattr(ast, "this") and isinstance(ast.this, _exp.Select):
+            main_select = ast.this
+        else:
+            main_select = ast.find(_exp.Select)
+
+        main_line = node_line(main_select) if main_select else 0
+        main_end_line = compiled_sql.count("\n")
+
+        frames.append(
+            {
+                "name": "_main_",
+                "type": "select",
+                "line": main_line,
+                "endLine": main_end_line,
+            }
+        )
+
+        if main_select and isinstance(main_select, _exp.Select):
+            clauses_map["_main_"] = extract_clauses("_main_", main_select, "")
+            refs_map["_main_"] = extract_table_refs(main_select)
+
+        return _json.dumps(
+            {
+                "success": True,
+                "frames": frames,
+                "clauses": clauses_map,
+                "refs": refs_map,
+            }
+        )
+
+    except Exception as exc:
+        return _json.dumps(
+            {
+                "success": False,
+                "error": f"Decompose error: {exc}",
+                "traceback": _traceback.format_exc(),
+            }
+        )

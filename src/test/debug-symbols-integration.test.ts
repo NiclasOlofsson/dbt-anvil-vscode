@@ -320,168 +320,6 @@ describe('emit_debug_symbols bridge integration', () => {
 		expect(fromMapping, 'from mapping on compiled line 1').toBeDefined();
 		expect(fromMapping!.sourceLine).toBe(1);
 	});
-
-	it('roundtrip: decompose frame lines survive inject→compile→parse→remap cycle', async () => {
-		// Full end-to-end for a 2-CTE query without Jinja:
-		// emit symbols → inject → "compile" (identity, no Jinja) → parse source map →
-		// decompose compiled → check that frame.line matches source CTE line.
-		const source = [
-			'with',
-			'cte_a as (',
-			'  select id from raw_a',
-			'),',
-			'cte_b as (',
-			'  select id from raw_b',
-			')',
-			'select * from cte_b',
-		].join('\n');
-
-		const emitResult = await bridge.invokeRaw({ emit_debug_symbols: true, sql: source, dialect: 'duckdb' });
-		const symbols = getSymbols(emitResult);
-		const annotated = injectMarkers(source, symbols, findJinjaSpans(source));
-
-		// No Jinja → compiled == annotated
-		const compiled = annotated;
-		const sourceMap = parseSourceMap(compiled);
-
-		const decomposeResult = await bridge.invokeRaw({ decompose_query: true, compiled_sql: compiled, dialect: 'duckdb' });
-		expect(decomposeResult.success).toBe(true);
-		const frames = (decomposeResult.data as Record<string, unknown>).frames as Array<{ name: string; line: number; endLine: number }>;
-
-		const cteA = frames.find(f => f.name === 'cte_a');
-		const cteB = frames.find(f => f.name === 'cte_b');
-		expect(cteA, 'cte_a frame').toBeDefined();
-		expect(cteB, 'cte_b frame').toBeDefined();
-
-		// Remap: compiledToSource for each frame start line
-		const cteASourceMappings = sourceMap.compiledToSource(cteA!.line);
-		const cteBSourceMappings = sourceMap.compiledToSource(cteB!.line);
-
-		// cte_a starts on source line 1, cte_b on source line 4
-		expect(cteASourceMappings.length).toBeGreaterThan(0);
-		expect(cteBSourceMappings.length).toBeGreaterThan(0);
-		expect(cteASourceMappings[0].sourceLine).toBe(1);
-		expect(cteBSourceMappings[0].sourceLine).toBe(4);
-	});
-
-	it('roundtrip: decompose frame lines survive inject→compile(with Jinja)→parse→remap cycle', async () => {
-		// Same as above but with {{ ref() }} on the FROM lines.
-		// After "compilation" the Jinja is replaced with a table name on the same line.
-		// Line count must be preserved and the source map must still remap correctly.
-		const source = [
-			'with',
-			'cte_a as (',
-			'  select id from {{ ref(\'raw_a\') }}',
-			'),',
-			'cte_b as (',
-			'  select id from {{ ref(\'raw_b\') }}',
-			')',
-			'select * from cte_b',
-		].join('\n');
-
-		const emitResult = await bridge.invokeRaw({ emit_debug_symbols: true, sql: source, dialect: 'duckdb' });
-		const symbols = getSymbols(emitResult);
-		const annotated = injectMarkers(source, symbols, findJinjaSpans(source));
-
-		// Simulate dbt compile: replace Jinja with table names (same line count)
-		const compiled = annotated
-			.replace('{{ ref(\'raw_a\') }}', 'main.raw_a')
-			.replace('{{ ref(\'raw_b\') }}', 'main.raw_b');
-
-		const sourceMap = parseSourceMap(compiled);
-
-		const decomposeResult = await bridge.invokeRaw({ decompose_query: true, compiled_sql: compiled, dialect: 'duckdb' });
-		expect(decomposeResult.success).toBe(true);
-		const frames = (decomposeResult.data as Record<string, unknown>).frames as Array<{ name: string; line: number; endLine: number }>;
-
-		const cteA = frames.find(f => f.name === 'cte_a');
-		const cteB = frames.find(f => f.name === 'cte_b');
-		expect(cteA, 'cte_a frame').toBeDefined();
-		expect(cteB, 'cte_b frame').toBeDefined();
-
-		// Remap compiled frame lines → source lines
-		const cteAMappings = sourceMap.compiledToSource(cteA!.line);
-		const cteBMappings = sourceMap.compiledToSource(cteB!.line);
-
-		expect(cteAMappings.length, 'cte_a must have a source mapping').toBeGreaterThan(0);
-		expect(cteBMappings.length, 'cte_b must have a source mapping').toBeGreaterThan(0);
-		expect(cteAMappings[0].sourceLine).toBe(1);
-		expect(cteBMappings[0].sourceLine).toBe(4);
-	});
-});
-
-describe('decompose_query subquery promotion', () => {
-	let bridge: BridgeRunner;
-
-	beforeAll(async () => {
-		const env = detectPythonEnvironment(JAFFLE_SHOP);
-		bridge = new BridgeRunner(BRIDGE_PY, JAFFLE_SHOP, env, createMockLogger());
-		await bridge.invokeRaw({ decompose_query: true, compiled_sql: 'SELECT 1', dialect: 'duckdb' });
-	}, 60_000);
-
-	afterAll(async () => {
-		await bridge.shutdown();
-	});
-
-	it('promotes a FROM subquery to a synthetic CTE frame', async () => {
-		const sql = [
-			'SELECT t.id, t.name',
-			'FROM (SELECT id, name FROM raw_customers WHERE active = 1) t',
-		].join('\n');
-
-		const result = await bridge.invokeRaw({ decompose_query: true, compiled_sql: sql, dialect: 'duckdb' });
-		expect(result.success).toBe(true);
-		const data = result.data as Record<string, unknown>;
-		const frames = data.frames as Array<{ name: string; type: string }>;
-		const refs = data.refs as Record<string, string[]>;
-
-		// Synthetic frame promoted from the FROM subquery (alias 't' used as CTE name)
-		const syntheticFrame = frames.find(f => f.name === 't');
-		expect(syntheticFrame, 'synthetic frame for FROM subquery').toBeDefined();
-		expect(syntheticFrame!.type).toBe('cte');
-
-		// _main_ refs should now point to the synthetic CTE 't'
-		expect(refs['_main_']).toContain('t');
-	});
-
-	it('promotes a JOIN subquery to a synthetic CTE frame', async () => {
-		const sql = [
-			'WITH base AS (SELECT id FROM raw_orders)',
-			'SELECT b.id, w.total',
-			'FROM base b',
-			'INNER JOIN (SELECT order_id, sum(amount) AS total FROM raw_items GROUP BY ALL) w',
-			'  ON b.id = w.order_id',
-		].join('\n');
-
-		const result = await bridge.invokeRaw({ decompose_query: true, compiled_sql: sql, dialect: 'duckdb' });
-		expect(result.success).toBe(true);
-		const data = result.data as Record<string, unknown>;
-		const frames = data.frames as Array<{ name: string; type: string }>;
-		const refs = data.refs as Record<string, string[]>;
-
-		// 'w' is the JOIN subquery alias → becomes a synthetic CTE named 'w'
-		const syntheticFrame = frames.find(f => f.name === 'w');
-		expect(syntheticFrame, 'synthetic frame for JOIN subquery').toBeDefined();
-		expect(syntheticFrame!.type).toBe('cte');
-
-		// _main_ (which sees base and w) should ref both
-		expect(refs['_main_']).toContain('w');
-
-		// base CTE should still exist
-		expect(frames.find(f => f.name === 'base')).toBeDefined();
-	});
-
-	it('handles a subquery with no alias using a generated name', async () => {
-		const sql = 'SELECT * FROM (SELECT id FROM raw_customers) AS anon_sub';
-
-		const result = await bridge.invokeRaw({ decompose_query: true, compiled_sql: sql, dialect: 'duckdb' });
-		expect(result.success).toBe(true);
-		const data = result.data as Record<string, unknown>;
-		const frames = data.frames as Array<{ name: string; type: string }>;
-
-		// 'anon_sub' alias used as CTE name
-		expect(frames.find(f => f.name === 'anon_sub')).toBeDefined();
-	});
 });
 
 describe('emitDebugSymbolsFromTokens', () => {
@@ -540,7 +378,7 @@ describe('emitDebugSymbolsFromTokens', () => {
 			'  SELECT id, status FROM raw_orders',
 			'),',
 			'filtered AS (',
-			"  SELECT id FROM base WHERE status = 'completed'",
+			'  SELECT id FROM base WHERE status = \'completed\'',
 			')',
 			'SELECT * FROM filtered',
 		].join('\n');
@@ -568,7 +406,7 @@ describe('emitDebugSymbolsFromTokens', () => {
 			'  SELECT id, status FROM raw_orders',
 			'),',
 			'filtered AS (',
-			"  SELECT id FROM base WHERE status = 'completed'",
+			'  SELECT id FROM base WHERE status = \'completed\'',
 			')',
 			'SELECT * FROM filtered',
 		].join('\n');
@@ -590,7 +428,7 @@ describe('emitDebugSymbolsFromTokens', () => {
 	});
 
 	it('filters out blanked Jinja tokens', async () => {
-		const sql = "SELECT id FROM {{ ref('orders') }} WHERE id > 1";
+		const sql = 'SELECT id FROM {{ ref(\'orders\') }} WHERE id > 1';
 		const result = await emit(sql);
 		expect(result).toBeDefined();
 		const symbols = result!.symbols;
@@ -613,5 +451,171 @@ describe('emitDebugSymbolsFromTokens', () => {
 	it('returns undefined for empty SQL', async () => {
 		const result = await emit('');
 		expect(result).toBeUndefined();
+	});
+
+	it('roundtrip: decompose frame lines survive inject→compile→parse→remap cycle', async () => {
+		// Full end-to-end for a 2-CTE query without Jinja (FTL path):
+		// emit symbols → inject → "compile" (identity, no Jinja) → parse source map →
+		// decompose compiled → check that frame.line matches source CTE line.
+		const source = [
+			'with',
+			'cte_a as (',
+			'  select id from raw_a',
+			'),',
+			'cte_b as (',
+			'  select id from raw_b',
+			')',
+			'select * from cte_b',
+		].join('\n');
+
+		const emitResult = await emit(source);
+		const symbols = emitResult!.symbols;
+		const annotated = injectMarkers(source, symbols, findJinjaSpans(source));
+
+		// No Jinja → compiled == annotated
+		const compiled = annotated;
+		const sourceMap = parseSourceMap(compiled);
+
+		const decomposed = JSON.parse(parser.decomposeQuery(compiled, 'duckdb')) as {
+			success: boolean;
+			frames: Array<{ name: string; line: number; endLine: number }>;
+		};
+		expect(decomposed.success).toBe(true);
+
+		const cteA = decomposed.frames.find(f => f.name === 'cte_a');
+		const cteB = decomposed.frames.find(f => f.name === 'cte_b');
+		expect(cteA, 'cte_a frame').toBeDefined();
+		expect(cteB, 'cte_b frame').toBeDefined();
+
+		// Remap: compiledToSource for each frame start line
+		const cteASourceMappings = sourceMap.compiledToSource(cteA!.line);
+		const cteBSourceMappings = sourceMap.compiledToSource(cteB!.line);
+
+		// cte_a starts on source line 1, cte_b on source line 4
+		expect(cteASourceMappings.length).toBeGreaterThan(0);
+		expect(cteBSourceMappings.length).toBeGreaterThan(0);
+		expect(cteASourceMappings[0].sourceLine).toBe(1);
+		expect(cteBSourceMappings[0].sourceLine).toBe(4);
+	});
+
+	it('roundtrip: decompose frame lines survive inject→compile(with Jinja)→parse→remap cycle', async () => {
+		// Same as above but with {{ ref() }} on the FROM lines.
+		// After "compilation" the Jinja is replaced with a table name on the same line.
+		// Line count must be preserved and the source map must still remap correctly.
+		const source = [
+			'with',
+			'cte_a as (',
+			'  select id from {{ ref(\'raw_a\') }}',
+			'),',
+			'cte_b as (',
+			'  select id from {{ ref(\'raw_b\') }}',
+			')',
+			'select * from cte_b',
+		].join('\n');
+
+		const emitResult = await emit(source);
+		const symbols = emitResult!.symbols;
+		const annotated = injectMarkers(source, symbols, findJinjaSpans(source));
+
+		// Simulate dbt compile: replace Jinja with table names (same line count)
+		const compiled = annotated
+			.replace('{{ ref(\'raw_a\') }}', 'main.raw_a')
+			.replace('{{ ref(\'raw_b\') }}', 'main.raw_b');
+
+		const sourceMap = parseSourceMap(compiled);
+
+		const decomposed = JSON.parse(parser.decomposeQuery(compiled, 'duckdb')) as {
+			success: boolean;
+			frames: Array<{ name: string; line: number; endLine: number }>;
+		};
+		expect(decomposed.success).toBe(true);
+
+		const cteA = decomposed.frames.find(f => f.name === 'cte_a');
+		const cteB = decomposed.frames.find(f => f.name === 'cte_b');
+		expect(cteA, 'cte_a frame').toBeDefined();
+		expect(cteB, 'cte_b frame').toBeDefined();
+
+		// Remap compiled frame lines → source lines
+		const cteAMappings = sourceMap.compiledToSource(cteA!.line);
+		const cteBMappings = sourceMap.compiledToSource(cteB!.line);
+
+		expect(cteAMappings.length, 'cte_a must have a source mapping').toBeGreaterThan(0);
+		expect(cteBMappings.length, 'cte_b must have a source mapping').toBeGreaterThan(0);
+		expect(cteAMappings[0].sourceLine).toBe(1);
+		expect(cteBMappings[0].sourceLine).toBe(4);
+	});
+});
+
+describe('decompose_query subquery promotion (FTL)', () => {
+	const PYODIDE_DIR = path.join(__dirname, '..', '..', 'node_modules', 'pyodide');
+	const VENDOR_DIR = path.join(__dirname, '..', '..', 'resources', 'bridge', 'vendor');
+	const SCRIPTS_DIR = path.join(__dirname, '..', '..', 'resources', 'ftl');
+
+	let runtime: PyodideRuntime;
+	let parser: PyodideSqlParser;
+
+	beforeAll(async () => {
+		runtime = await initPyodide(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR);
+		parser = PyodideSqlParser.create(runtime.pyodide);
+	}, 60_000);
+
+	function decompose(sql: string, dialect = 'duckdb') {
+		return JSON.parse(parser.decomposeQuery(sql, dialect)) as {
+			success: boolean;
+			frames: Array<{ name: string; type: string; line: number; endLine: number }>;
+			refs: Record<string, string[]>;
+		};
+	}
+
+	it('promotes a FROM subquery to a synthetic CTE frame', async () => {
+		const sql = [
+			'SELECT t.id, t.name',
+			'FROM (SELECT id, name FROM raw_customers WHERE active = 1) t',
+		].join('\n');
+
+		const result = decompose(sql);
+		expect(result.success).toBe(true);
+
+		// Synthetic frame promoted from the FROM subquery (alias 't' used as CTE name)
+		const syntheticFrame = result.frames.find(f => f.name === 't');
+		expect(syntheticFrame, 'synthetic frame for FROM subquery').toBeDefined();
+		expect(syntheticFrame!.type).toBe('cte');
+
+		// _main_ refs should now point to the synthetic CTE 't'
+		expect(result.refs['_main_']).toContain('t');
+	});
+
+	it('promotes a JOIN subquery to a synthetic CTE frame', async () => {
+		const sql = [
+			'WITH base AS (SELECT id FROM raw_orders)',
+			'SELECT b.id, w.total',
+			'FROM base b',
+			'INNER JOIN (SELECT order_id, sum(amount) AS total FROM raw_items GROUP BY ALL) w',
+			'  ON b.id = w.order_id',
+		].join('\n');
+
+		const result = decompose(sql);
+		expect(result.success).toBe(true);
+
+		// 'w' is the JOIN subquery alias → becomes a synthetic CTE named 'w'
+		const syntheticFrame = result.frames.find(f => f.name === 'w');
+		expect(syntheticFrame, 'synthetic frame for JOIN subquery').toBeDefined();
+		expect(syntheticFrame!.type).toBe('cte');
+
+		// _main_ (which sees base and w) should ref both
+		expect(result.refs['_main_']).toContain('w');
+
+		// base CTE should still exist
+		expect(result.frames.find(f => f.name === 'base')).toBeDefined();
+	});
+
+	it('handles a subquery with no alias using a generated name', async () => {
+		const sql = 'SELECT * FROM (SELECT id FROM raw_customers) AS anon_sub';
+
+		const result = decompose(sql);
+		expect(result.success).toBe(true);
+
+		// 'anon_sub' alias used as CTE name
+		expect(result.frames.find(f => f.name === 'anon_sub')).toBeDefined();
 	});
 });
