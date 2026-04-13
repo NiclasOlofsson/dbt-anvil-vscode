@@ -709,7 +709,7 @@ export class ParseService {
 
 	/**
 	 * Parse a raw SQL string and return its sqlglot tokens and Jinja spans.
-	 * Returns `undefined` when the parser backend does not supply tokens (e.g. BridgeDocumentParser).
+	 * Returns `undefined` when the parser backend does not supply tokens.
 	 * No caching, no enrichment, no variant expansion.
 	 */
 	async parseRawForTokens(sql: string, dialect: string): Promise<{ sqlTokens: SqlToken[]; jinjaTags: JinjaTagSpan[] } | undefined> {
@@ -720,5 +720,14 @@ export class ParseService {
 		} catch {
 			return undefined;
 		}
+	}
+
+	/**
+	 * Decompose compiled SQL into debug frames (CTEs + _main_) and per-frame clauses.
+	 * Returns raw JSON string from the Pyodide backend.
+	 * Returns `undefined` when the parser backend does not support decompose.
+	 */
+	async decomposeQuery(compiledSql: string, dialect: string): Promise<string | undefined> {
+		return this._parser.decomposeQuery?.(compiledSql, dialect);
 	}
 }

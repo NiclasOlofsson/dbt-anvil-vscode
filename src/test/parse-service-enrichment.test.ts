@@ -2,8 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CancellationTokenSource, Uri } from 'vscode';
 import { ParseService } from '../services/parse-service';
 import type { EnrichmentConfig } from '../services/parse-service';
-import { BridgeDocumentParser } from '../services/bridge-document-parser';
-import type { BridgeRunner } from '../dbt/bridge-runner';
+import type { DocumentParser } from '../services/document-parser';
 import type { DescribeCache } from '../dbt/describe-cache';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import { createMockLogger } from './helpers';
@@ -32,28 +31,25 @@ function createMockDocument(
 	} as unknown as import('vscode').TextDocument;
 }
 
-/** Build a bridge mock that returns a minimal DocumentModel response with optional aliases. */
-function createMockBridge(opts?: {
+/** Build a DocumentParser mock that returns a minimal DocumentModel. */
+function createMockParser(opts?: {
 	ctes?: unknown[];
 	refs?: unknown[];
 	sources?: unknown[];
 	finalColumns?: import('../services/parse-service').ColumnInfo[];
 	aliases?: Record<string, string[]>;
-}): BridgeRunner {
+}): DocumentParser {
 	return {
-		invokeRaw: vi.fn().mockResolvedValue({
-			success: true,
-			data: {
-				success: true,
-				ctes: opts?.ctes ?? [],
-				refs: opts?.refs ?? [],
-				sources: opts?.sources ?? [],
-				finalColumns: opts?.finalColumns ?? [],
-				aliases: opts?.aliases ?? {},
-				timing: { parseMs: 1, totalMs: 2 },
-			},
+		parse: vi.fn().mockResolvedValue({
+			ctes: opts?.ctes ?? [],
+			refs: opts?.refs ?? [],
+			sources: opts?.sources ?? [],
+			finalColumns: opts?.finalColumns ?? [],
+			aliases: opts?.aliases ?? {},
+			tokens: [],
+			timing: { parseMs: 1, totalMs: 2 },
 		}),
-	} as unknown as BridgeRunner;
+	} as unknown as DocumentParser;
 }
 
 function createMockIndexer(overrides?: Partial<ManifestIndexer>): ManifestIndexer {
@@ -91,7 +87,7 @@ function createEnrichment(
 	};
 }
 
-function createToken(): import('vscode').CancellationToken {
+function _createToken(): import('vscode').CancellationToken {
 	return new CancellationTokenSource().token;
 }
 
@@ -108,8 +104,8 @@ describe('ParseService — enrichment tier', () => {
 
 	describe('getDocumentModel', () => {
 		it('returns parsed model with empty aliases when enrichment not configured', async () => {
-			const bridge = createMockBridge();
-			const service = new ParseService(new BridgeDocumentParser(bridge), mockLogger);
+			const parser = createMockParser();
+			const service = new ParseService(parser, mockLogger);
 
 			const model = await service.getDocumentModel(createMockDocument('SELECT 1'), 'duckdb');
 
@@ -117,9 +113,9 @@ describe('ParseService — enrichment tier', () => {
 			expect(model!.aliases).toEqual({});
 		});
 
-		it('returns parsed model with aliases from bridge when enrichment configured', async () => {
-			const bridge = createMockBridge({ aliases: { orders: ['id', 'amount'] } });
-			const service = new ParseService(new BridgeDocumentParser(bridge), mockLogger, createEnrichment());
+		it('returns parsed model with aliases from parser when enrichment configured', async () => {
+			const parser = createMockParser({ aliases: { orders: ['id', 'amount'] } });
+			const service = new ParseService(parser, mockLogger, createEnrichment());
 
 			const model = await service.getDocumentModel(createMockDocument('SELECT 1'), 'duckdb');
 
@@ -128,19 +124,19 @@ describe('ParseService — enrichment tier', () => {
 		});
 
 		it('caches result and does not re-parse on same version', async () => {
-			const bridge = createMockBridge();
-			const service = new ParseService(new BridgeDocumentParser(bridge), mockLogger);
+			const parser = createMockParser();
+			const service = new ParseService(parser, mockLogger);
 			const doc = createMockDocument('SELECT 1');
 
 			await service.getDocumentModel(doc, 'duckdb');
 			await service.getDocumentModel(doc, 'duckdb');
 
-			expect(bridge.invokeRaw).toHaveBeenCalledTimes(1);
+			expect(parser.parse).toHaveBeenCalledTimes(1);
 		});
 
 		it('re-parses when document version changes', async () => {
-			const bridge = createMockBridge();
-			const service = new ParseService(new BridgeDocumentParser(bridge), mockLogger);
+			const parser = createMockParser();
+			const service = new ParseService(parser, mockLogger);
 
 			const doc1 = createMockDocument('SELECT 1', 1, 'file:///a.sql');
 			const doc2 = createMockDocument('SELECT 2', 2, 'file:///a.sql');
@@ -148,11 +144,11 @@ describe('ParseService — enrichment tier', () => {
 			await service.getDocumentModel(doc1, 'duckdb');
 			await service.getDocumentModel(doc2, 'duckdb');
 
-			expect(bridge.invokeRaw).toHaveBeenCalledTimes(2);
+			expect(parser.parse).toHaveBeenCalledTimes(2);
 		});
 
-		it('includes describe results in schema_mapping passed to bridge', async () => {
-			const bridge = createMockBridge({ refs: [{ model: 'orders', line: 0 }] });
+		it('calls describeCache before parsing when enrichment configured', async () => {
+			const parser = createMockParser({ refs: [{ model: 'orders', line: 0 }] });
 			const describeCache = createMockDescribeCache(['id', 'amount']);
 			const MODEL_UNIQUE_ID = 'model.project.orders';
 			const indexer = createMockIndexer({
@@ -160,18 +156,13 @@ describe('ParseService — enrichment tier', () => {
 				getRawNode: vi.fn().mockReturnValue({ name: 'orders', alias: 'orders', schema: 'main' }),
 			});
 
-			const service = new ParseService(new BridgeDocumentParser(bridge), mockLogger, { describeCache, indexer });
+			const service = new ParseService(parser, mockLogger, { describeCache, indexer });
 			await service.getDocumentModel(
 				createMockDocument('SELECT id FROM {{ ref("orders") }}'),
 				'duckdb',
 			);
 
-			// columns() should have been called with the orders uniqueId
 			expect(describeCache.columns).toHaveBeenCalled();
-
-			// bridge request should include schema_mapping (from buildSchemaMapping)
-			// Note: with empty mock buildSchemaMapping returning {} and empty describe columns,
-			// schema_mapping may be omitted. The key check is describe was attempted.
 		});
 	});
 

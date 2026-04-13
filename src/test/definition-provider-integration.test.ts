@@ -17,22 +17,21 @@
  *   - Bare column navigation when the column is NOT schema-resolved (cold describe cache)
  *   - Multi-package ref() returning multiple locations (picker scenario)
  *   - source() alias resolution (no source() calls in the SQL fixture)
- *   - resolveAtPosition returning null for a position that has no token
  *
- * Requires a Python environment with sqlglot installed (same as bridge-integration tests).
+ * Does not require a Python environment with dbt — only Pyodide/sqlglot via FTL.
  */
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import * as path from 'node:path';
-import { BridgeRunner } from '../dbt/bridge-runner';
-import { detectPythonEnvironment } from '../dbt/env-detector';
+import { FtlDocumentParser } from '../ftl/ftl-document-parser';
 import { ParseService } from '../services/parse-service';
 import type { ColumnDefToken, ColumnRefToken, DocumentModel, TableRefToken } from '../services/parse-service';
 import { DbtDefinitionProvider } from '../providers/sql/definition-provider';
 import * as vscode from 'vscode';
 import { createMockLogger } from './helpers';
 
-const JAFFLE_SHOP = path.join(__dirname, '..', '..', 'samples', 'jaffle_shop');
-const BRIDGE_PY = path.join(__dirname, '..', '..', 'resources', 'bridge', 'bridge.py');
+const PYODIDE_DIR = path.join(__dirname, '..', '..', 'node_modules', 'pyodide');
+const VENDOR_DIR = path.join(__dirname, '..', '..', 'resources', 'bridge', 'vendor');
+const SCRIPTS_DIR = path.join(__dirname, '..', '..', 'resources', 'ftl');
 
 // The SQL under test — mirrors a real warehouse enrichment model.
 // Line numbers are 0-based; use SQL.split('\n') to derive positions.
@@ -85,31 +84,15 @@ const SQL_SCHEMA: Record<string, Record<string, string>> = {
 	},
 };
 
-describe('definition-provider integration (real bridge)', () => {
-	let bridge: BridgeRunner;
+describe('definition-provider integration (FTL)', () => {
 	let model: DocumentModel;
 
 	beforeAll(async () => {
-		const env = detectPythonEnvironment(JAFFLE_SHOP);
-		bridge = new BridgeRunner(BRIDGE_PY, JAFFLE_SHOP, env, createMockLogger());
-
-		const result = await bridge.invokeRaw({ parse_document: true, sql: SQL, dialect: 'ansi', schema: SQL_SCHEMA });
-		expect(result.success, 'bridge parse failed').toBe(true);
-
-		const data = result.data as Record<string, unknown>;
-		model = {
-			ctes: (data['ctes'] ?? []) as DocumentModel['ctes'],
-			refs: (data['refs'] ?? []) as DocumentModel['refs'],
-			sources: (data['sources'] ?? []) as DocumentModel['sources'],
-			finalColumns: (data['finalColumns'] ?? []) as DocumentModel['finalColumns'],
-			tokens: (data['tokens'] ?? []) as DocumentModel['tokens'],
-			timing: (data['timing'] ?? { parseMs: 0, totalMs: 0 }) as DocumentModel['timing'],
-		};
-	}, 30_000);
-
-	afterAll(async () => {
-		await bridge.shutdown();
-	});
+		const ftlParser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR);
+		await ftlParser.ready();
+		model = await ftlParser.parse(SQL, 'ansi', { schema: SQL_SCHEMA });
+		ftlParser.dispose();
+	}, 60_000);
 
 	// ---- DocumentModel structure ----
 	//
@@ -316,10 +299,11 @@ describe('definition-provider integration (real bridge)', () => {
 	//   ✅ column_ref qualifier span → 'table_qualifier' (ON clause)
 	//   ✅ column_ref column span → 'column' (ON clause, both sides)
 	//   ✅ bare column name span (city on line 8) → 'column' with table resolved
+	//   ✅ column_def span → 'column_def'
+	//   ✅ position outside all tokens → null
 	//
 	// Not covered:
-	//   ❌ column_def span → 'column_def'
-	//   ❌ position outside all tokens → null
+	//   (none)
 
 	describe('ParseService.resolveAtPosition', () => {
 		it('resolves address_with_country table name (JOIN, line 13) → table_ref', () => {
@@ -421,6 +405,24 @@ describe('definition-provider integration (real bridge)', () => {
 			const resolved = ParseService.resolveAtPosition(model, tok!.line, tok!.col + 1);
 			expect(resolved?.kind).toBe('column');
 			expect((resolved?.token as ColumnRefToken).table).toBe('addr');
+		});
+
+		it('resolves warehouse_address_street column_def (line 7) → column_def', () => {
+			const tok = model.tokens
+				.filter((t): t is ColumnDefToken => t.type === 'column_def')
+				.find(t => t.name === 'warehouse_address_street' && t.line === 7);
+			expect(tok).toBeDefined();
+
+			const resolved = ParseService.resolveAtPosition(model, tok!.line, tok!.col + 1);
+			expect(resolved?.kind).toBe('column_def');
+		});
+
+		it('returns null for a position outside all tokens', () => {
+			// Line 3 is "\tfrom {{ ref('gold__address') }}" — the ref() jinja tag
+			// is replaced by a space-padded identifier, but column 0 (the tab indent)
+			// has no token.
+			const resolved = ParseService.resolveAtPosition(model, 3, 0);
+			expect(resolved).toBeNull();
 		});
 	});
 
@@ -733,22 +735,10 @@ describe('definition-provider integration (real bridge)', () => {
 		let model2: DocumentModel;
 
 		beforeAll(async () => {
-			const result = await bridge.invokeRaw({
-				parse_document: true,
-				sql: SQL2,
-				dialect: 'ansi',
-				schema: { model_a: { col_a: 'TEXT' }, model_b: { col_b: 'TEXT' } },
-			});
-			expect(result.success, 'bridge parse failed for SQL2').toBe(true);
-			const data = result.data as Record<string, unknown>;
-			model2 = {
-				ctes: (data['ctes'] ?? []) as DocumentModel['ctes'],
-				refs: (data['refs'] ?? []) as DocumentModel['refs'],
-				sources: (data['sources'] ?? []) as DocumentModel['sources'],
-				finalColumns: (data['finalColumns'] ?? []) as DocumentModel['finalColumns'],
-				tokens: (data['tokens'] ?? []) as DocumentModel['tokens'],
-				timing: (data['timing'] ?? { parseMs: 0, totalMs: 0 }) as DocumentModel['timing'],
-			};
+			const ftlParser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR);
+			await ftlParser.ready();
+			model2 = await ftlParser.parse(SQL2, 'ansi', { schema: { model_a: { col_a: 'TEXT' }, model_b: { col_b: 'TEXT' } } });
+			ftlParser.dispose();
 		}, 30_000);
 
 		it('bridge emits two table_ref tokens with alias addr at different lines', () => {
@@ -860,22 +850,10 @@ describe('definition-provider integration (real bridge)', () => {
 		let model3: DocumentModel;
 
 		beforeAll(async () => {
-			const result = await bridge.invokeRaw({
-				parse_document: true,
-				sql: SQL3,
-				dialect: 'ansi',
-				schema: { gold__address: { street: 'TEXT' } },
-			});
-			expect(result.success, 'bridge parse failed for SQL3').toBe(true);
-			const data = result.data as Record<string, unknown>;
-			model3 = {
-				ctes: (data['ctes'] ?? []) as DocumentModel['ctes'],
-				refs: (data['refs'] ?? []) as DocumentModel['refs'],
-				sources: (data['sources'] ?? []) as DocumentModel['sources'],
-				finalColumns: (data['finalColumns'] ?? []) as DocumentModel['finalColumns'],
-				tokens: (data['tokens'] ?? []) as DocumentModel['tokens'],
-				timing: (data['timing'] ?? { parseMs: 0, totalMs: 0 }) as DocumentModel['timing'],
-			};
+			const ftlParser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR);
+			await ftlParser.ready();
+			model3 = await ftlParser.parse(SQL3, 'ansi', { schema: { gold__address: { street: 'TEXT' } } });
+			ftlParser.dispose();
 		}, 30_000);
 
 		it('addr.street in `enriched` resolves to the address_with_country table_ref (line 6), not gold__address (line 2)', () => {

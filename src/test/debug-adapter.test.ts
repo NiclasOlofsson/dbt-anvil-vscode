@@ -17,7 +17,7 @@ import type { QueryRunner } from '../dbt/query-runner';
 import type { DbtPathResolver } from '../dbt/dbt-path-resolver';
 import type { ILogger } from '../types/logger';
 import type { DatabaseProvider, QueryResult } from '../providers/database/database-provider';
-import type { BridgeRunner, DbtCommandResult } from '../dbt/bridge-runner';
+import type { BridgeRunner } from '../dbt/bridge-runner';
 import type { CompileCache } from '../dbt/compile-cache';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ParseService } from '../services/parse-service';
@@ -64,75 +64,62 @@ function mockPathResolver(category = 'other'): DbtPathResolver {
 	} as unknown as DbtPathResolver;
 }
 
-const DECOMPOSE_SIMPLE: DbtCommandResult = {
+const DECOMPOSE_SIMPLE = {
 	success: true,
-	stdout: '',
-	stderr: '',
-	data: {
-		success: true,
-		frames: [
-			{ name: 'base', type: 'cte', line: 0, endLine: 3 },
-			{ name: '_main_', type: 'select', line: 5, endLine: 8 },
+	frames: [
+		{ name: 'base', type: 'cte', line: 0, endLine: 3 },
+		{ name: '_main_', type: 'select', line: 5, endLine: 8 },
+	],
+	clauses: {
+		base: [
+			{ stage: 'from', sql: 'SELECT * FROM raw_orders', line: 1 },
+			{ stage: 'select', sql: 'WITH base AS (SELECT id, status FROM raw_orders) SELECT * FROM base', line: 3 },
 		],
-		clauses: {
-			base: [
-				{ stage: 'from', sql: 'SELECT * FROM raw_orders', line: 1 },
-				{ stage: 'select', sql: 'WITH base AS (SELECT id, status FROM raw_orders) SELECT * FROM base', line: 3 },
-			],
-			_main_: [
-				{ stage: 'from', sql: 'SELECT * FROM base', line: 6 },
-				{ stage: 'select', sql: 'WITH base AS (...) SELECT * FROM base', line: 8 },
-			],
-		},
-		refs: {
-			base: ['raw_orders'],
-			_main_: ['base'],
-		},
+		_main_: [
+			{ stage: 'from', sql: 'SELECT * FROM base', line: 6 },
+			{ stage: 'select', sql: 'WITH base AS (...) SELECT * FROM base', line: 8 },
+		],
+	},
+	refs: {
+		base: ['raw_orders'],
+		_main_: ['base'],
 	},
 };
 
 // 3-frame fixture where _main_ directly references stg_orders (skipping the middle `orders` CTE).
 // Used to test that F10 at the last clause of a stepped-into CTE returns to the caller,
 // not to the next sequential frame (which would be `orders`, not `_main_`).
-const DECOMPOSE_THREE_FRAMES: DbtCommandResult = {
+const DECOMPOSE_THREE_FRAMES = {
 	success: true,
-	stdout: '',
-	stderr: '',
-	data: {
-		success: true,
-		frames: [
-			{ name: 'stg_orders', type: 'cte', line: 0, endLine: 3 },
-			{ name: 'orders', type: 'cte', line: 4, endLine: 7 },
-			{ name: '_main_', type: 'select', line: 8, endLine: 11 },
+	frames: [
+		{ name: 'stg_orders', type: 'cte', line: 0, endLine: 3 },
+		{ name: 'orders', type: 'cte', line: 4, endLine: 7 },
+		{ name: '_main_', type: 'select', line: 8, endLine: 11 },
+	],
+	clauses: {
+		stg_orders: [
+			{ stage: 'from', sql: 'SELECT * FROM raw', line: 1 },
+			{ stage: 'select', sql: 'SELECT id, status FROM raw', line: 3 },
 		],
-		clauses: {
-			stg_orders: [
-				{ stage: 'from', sql: 'SELECT * FROM raw', line: 1 },
-				{ stage: 'select', sql: 'SELECT id, status FROM raw', line: 3 },
-			],
-			orders: [
-				{ stage: 'from', sql: 'SELECT * FROM stg_orders', line: 5 },
-				{ stage: 'select', sql: 'SELECT * FROM stg_orders', line: 7 },
-			],
-			_main_: [
-				{ stage: 'from', sql: 'SELECT * FROM stg_orders', line: 9 },
-				{ stage: 'select', sql: 'SELECT * FROM stg_orders', line: 11 },
-			],
-		},
-		refs: {
-			stg_orders: ['raw'],
-			orders: ['stg_orders'],
-			_main_: ['stg_orders'],
-		},
+		orders: [
+			{ stage: 'from', sql: 'SELECT * FROM stg_orders', line: 5 },
+			{ stage: 'select', sql: 'SELECT * FROM stg_orders', line: 7 },
+		],
+		_main_: [
+			{ stage: 'from', sql: 'SELECT * FROM stg_orders', line: 9 },
+			{ stage: 'select', sql: 'SELECT * FROM stg_orders', line: 11 },
+		],
+	},
+	refs: {
+		stg_orders: ['raw'],
+		orders: ['stg_orders'],
+		_main_: ['stg_orders'],
 	},
 };
 
-function mockBridgeRunner(decomposeResult?: DbtCommandResult): BridgeRunner {
+function mockBridgeRunner(): BridgeRunner {
 	return {
 		invokeRaw: vi.fn().mockImplementation((req: Record<string, unknown>) => {
-			if (req.decompose_query) {
-				return Promise.resolve(decomposeResult ?? DECOMPOSE_SIMPLE);
-			}
 			if (req.emit_debug_symbols) {
 				return Promise.resolve({
 					success: true,
@@ -188,10 +175,11 @@ function mockManifestIndexer(): ManifestIndexer {
 	} as unknown as ManifestIndexer;
 }
 
-function mockParseService(): ParseService {
+function mockParseService(decomposeResult?: object): ParseService {
 	return {
 		getDocumentModel: vi.fn().mockResolvedValue(null),
 		parseRawForTokens: vi.fn().mockResolvedValue(undefined),
+		decomposeQuery: vi.fn().mockResolvedValue(JSON.stringify(decomposeResult ?? DECOMPOSE_SIMPLE)),
 		onAliasesReady: { dispose: vi.fn() },
 		onSqlglotWarnings: { dispose: vi.fn() },
 	} as unknown as ParseService;
@@ -1116,7 +1104,7 @@ describe('SqlDebugAdapter', () => {
 			// to the call site (_main_ → from stg_orders) and then advances one step forward to the
 			// next clause (_main_ → select). It must NOT fall through to `orders` (frame 1).
 			harness.dispose();
-			harness = new DapHarness({ bridgeRunner: mockBridgeRunner(DECOMPOSE_THREE_FRAMES) });
+			harness = new DapHarness({ parseService: mockParseService(DECOMPOSE_THREE_FRAMES) });
 			harness.send('initialize');
 			harness.send('launch', { noDebug: false, sql: 'WITH stg_orders AS (...) SELECT * FROM stg_orders' });
 
@@ -1305,35 +1293,26 @@ describe('SqlDebugAdapter', () => {
 
 		it('clears entire cache when CTE structure changes', async () => {
 			// Second decompose returns different frame names
-			const newDecompose: DbtCommandResult = {
-				success: true, stdout: '', stderr: '',
-				data: {
-					success: true,
-					frames: [
-						{ name: 'renamed_base', type: 'cte', line: 0, endLine: 3 },
-						{ name: '_main_', type: 'select', line: 5, endLine: 8 },
-					],
-					clauses: {
-						renamed_base: [{ stage: 'select', sql: 'SELECT id FROM raw', line: 1 }],
-						_main_: [{ stage: 'select', sql: 'SELECT * FROM renamed_base', line: 6 }],
-					},
-					refs: {},
+			const newDecompose = {
+				success: true,
+				frames: [
+					{ name: 'renamed_base', type: 'cte', line: 0, endLine: 3 },
+					{ name: '_main_', type: 'select', line: 5, endLine: 8 },
+				],
+				clauses: {
+					renamed_base: [{ stage: 'select', sql: 'SELECT id FROM raw', line: 1 }],
+					_main_: [{ stage: 'select', sql: 'SELECT * FROM renamed_base', line: 6 }],
 				},
+				refs: {},
 			};
 
-			// Replace the bridge runner so the second decompose call returns renamed frames
+			// Replace the parseService so the second decompose call returns renamed frames
 			let callCount = 0;
-			const bridge = harness.adapter['_bridgeRunner'] as unknown as { invokeRaw: ReturnType<typeof vi.fn> };
-			bridge.invokeRaw.mockImplementation((req: Record<string, unknown>) => {
-				if (req.decompose_query) {
-					callCount++;
-					if (callCount >= 1) return Promise.resolve(newDecompose);
-					return Promise.resolve(DECOMPOSE_SIMPLE);
-				}
-				if (req.emit_debug_symbols) {
-					return Promise.resolve({ success: true, stdout: '', stderr: '', data: { success: true, symbols: [] } });
-				}
-				return Promise.resolve({ success: true, stdout: '', stderr: '', data: {} });
+			const ps = harness.adapter['_parseService'] as unknown as { decomposeQuery: ReturnType<typeof vi.fn> };
+			ps.decomposeQuery.mockImplementation(() => {
+				callCount++;
+				if (callCount >= 1) return Promise.resolve(JSON.stringify(newDecompose));
+				return Promise.resolve(JSON.stringify(DECOMPOSE_SIMPLE));
 			});
 
 			harness.clear();
@@ -1468,43 +1447,38 @@ describe('SqlDebugAdapter', () => {
 
 		it('stepIn on external ref loads child model inline (no separate session)', async () => {
 			// Parent model: _main_ with a FROM clause referencing external 'orders'.
-			const DECOMPOSE_PARENT: DbtCommandResult = {
-				success: true, stdout: '', stderr: '',
-				data: {
-					success: true,
-					frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
-					clauses: {
-						_main_: [
-							{ stage: 'from', sql: 'SELECT * FROM orders', line: 1 },
-							{ stage: 'select', sql: 'SELECT id FROM orders', line: 0 },
-						],
-					},
-					refs: { _main_: ['orders'] },
+			const DECOMPOSE_PARENT = {
+				success: true,
+				frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
+				clauses: {
+					_main_: [
+						{ stage: 'from', sql: 'SELECT * FROM orders', line: 1 },
+						{ stage: 'select', sql: 'SELECT id FROM orders', line: 0 },
+					],
 				},
+				refs: { _main_: ['orders'] },
 			};
 			// Child model (orders): a simple single-frame query.
-			const DECOMPOSE_CHILD: DbtCommandResult = {
-				success: true, stdout: '', stderr: '',
-				data: {
-					success: true,
-					frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
-					clauses: {
-						_main_: [
-							{ stage: 'select', sql: 'SELECT id FROM raw_orders', line: 0 },
-						],
-					},
-					refs: { _main_: [] },
+			const DECOMPOSE_CHILD = {
+				success: true,
+				frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
+				clauses: {
+					_main_: [
+						{ stage: 'select', sql: 'SELECT id FROM raw_orders', line: 0 },
+					],
 				},
+				refs: { _main_: [] },
 			};
 
-			// Bridge returns parent decompose first, then child decompose on subsequent calls.
+			// ParseService returns parent decompose first, then child decompose on subsequent calls.
 			let decomposeCallCount = 0;
+			const ps = mockParseService();
+			(ps.decomposeQuery as ReturnType<typeof vi.fn>).mockImplementation(() => {
+				decomposeCallCount++;
+				return Promise.resolve(JSON.stringify(decomposeCallCount === 1 ? DECOMPOSE_PARENT : DECOMPOSE_CHILD));
+			});
 			const bridge: BridgeRunner = {
 				invokeRaw: vi.fn().mockImplementation((req: Record<string, unknown>) => {
-					if (req.decompose_query) {
-						decomposeCallCount++;
-						return Promise.resolve(decomposeCallCount === 1 ? DECOMPOSE_PARENT : DECOMPOSE_CHILD);
-					}
 					if (req.emit_debug_symbols) {
 						return Promise.resolve({
 							success: true, stdout: '', stderr: '',
@@ -1522,7 +1496,7 @@ describe('SqlDebugAdapter', () => {
 			);
 
 			setActiveEditor('SELECT id FROM orders');
-			harness = new DapHarness({ bridgeRunner: bridge });
+			harness = new DapHarness({ bridgeRunner: bridge, parseService: ps });
 			harness.send('initialize');
 			harness.send('launch', { noDebug: false, sql: 'SELECT id FROM orders' });
 
@@ -1550,19 +1524,16 @@ describe('SqlDebugAdapter', () => {
 		});
 
 		it('stepIn on external ref with unknown model stays stopped with error', async () => {
-			const DECOMPOSE_EXTERNAL: DbtCommandResult = {
-				success: true, stdout: '', stderr: '',
-				data: {
-					success: true,
-					frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
-					clauses: {
-						_main_: [
-							{ stage: 'from', sql: 'SELECT * FROM unknown_model', line: 1 },
-							{ stage: 'select', sql: 'SELECT * FROM unknown_model', line: 0 },
-						],
-					},
-					refs: { _main_: ['unknown_model'] },
+			const DECOMPOSE_EXTERNAL = {
+				success: true,
+				frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
+				clauses: {
+					_main_: [
+						{ stage: 'from', sql: 'SELECT * FROM unknown_model', line: 1 },
+						{ stage: 'select', sql: 'SELECT * FROM unknown_model', line: 0 },
+					],
 				},
+				refs: { _main_: ['unknown_model'] },
 			};
 
 			const indexer = mockManifestIndexer();
@@ -1570,7 +1541,7 @@ describe('SqlDebugAdapter', () => {
 
 			setActiveEditor('SELECT * FROM unknown_model');
 			harness = new DapHarness({
-				bridgeRunner: mockBridgeRunner(DECOMPOSE_EXTERNAL),
+				parseService: mockParseService(DECOMPOSE_EXTERNAL),
 				manifestIndexer: indexer,
 			});
 			harness.send('initialize');
@@ -1598,41 +1569,36 @@ describe('SqlDebugAdapter', () => {
 		});
 
 		it('Shift+F11 from child top frame pops back to parent and advances', async () => {
-			const DECOMPOSE_PARENT: DbtCommandResult = {
-				success: true, stdout: '', stderr: '',
-				data: {
-					success: true,
-					frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
-					clauses: {
-						_main_: [
-							{ stage: 'from', sql: 'SELECT * FROM orders', line: 1 },
-							{ stage: 'select', sql: 'SELECT id FROM orders', line: 0 },
-						],
-					},
-					refs: { _main_: ['orders'] },
+			const DECOMPOSE_PARENT = {
+				success: true,
+				frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
+				clauses: {
+					_main_: [
+						{ stage: 'from', sql: 'SELECT * FROM orders', line: 1 },
+						{ stage: 'select', sql: 'SELECT id FROM orders', line: 0 },
+					],
 				},
+				refs: { _main_: ['orders'] },
 			};
-			const DECOMPOSE_CHILD: DbtCommandResult = {
-				success: true, stdout: '', stderr: '',
-				data: {
-					success: true,
-					frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
-					clauses: {
-						_main_: [
-							{ stage: 'select', sql: 'SELECT id FROM raw_orders', line: 0 },
-						],
-					},
-					refs: { _main_: [] },
+			const DECOMPOSE_CHILD = {
+				success: true,
+				frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
+				clauses: {
+					_main_: [
+						{ stage: 'select', sql: 'SELECT id FROM raw_orders', line: 0 },
+					],
 				},
+				refs: { _main_: [] },
 			};
 
 			let decomposeCallCount = 0;
+			const ps = mockParseService();
+			(ps.decomposeQuery as ReturnType<typeof vi.fn>).mockImplementation(() => {
+				decomposeCallCount++;
+				return Promise.resolve(JSON.stringify(decomposeCallCount === 1 ? DECOMPOSE_PARENT : DECOMPOSE_CHILD));
+			});
 			const bridge: BridgeRunner = {
 				invokeRaw: vi.fn().mockImplementation((req: Record<string, unknown>) => {
-					if (req.decompose_query) {
-						decomposeCallCount++;
-						return Promise.resolve(decomposeCallCount === 1 ? DECOMPOSE_PARENT : DECOMPOSE_CHILD);
-					}
 					if (req.emit_debug_symbols) {
 						return Promise.resolve({
 							success: true, stdout: '', stderr: '',
@@ -1649,7 +1615,7 @@ describe('SqlDebugAdapter', () => {
 			);
 
 			setActiveEditor('SELECT id FROM orders');
-			harness = new DapHarness({ bridgeRunner: bridge });
+			harness = new DapHarness({ bridgeRunner: bridge, parseService: ps });
 			harness.send('initialize');
 			harness.send('launch', { noDebug: false, sql: 'SELECT id FROM orders' });
 
@@ -1683,37 +1649,32 @@ describe('SqlDebugAdapter', () => {
 
 		it('multi-thread: emits thread events and serves per-thread stack traces', async () => {
 			// Same parent/child setup used by the cross-model tests above.
-			const DECOMPOSE_PARENT: DbtCommandResult = {
-				success: true, stdout: '', stderr: '',
-				data: {
-					success: true,
-					frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
-					clauses: {
-						_main_: [
-							{ stage: 'from', sql: 'SELECT * FROM orders', line: 1 },
-							{ stage: 'select', sql: 'SELECT id FROM orders', line: 0 },
-						],
-					},
-					refs: { _main_: ['orders'] },
+			const DECOMPOSE_PARENT = {
+				success: true,
+				frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
+				clauses: {
+					_main_: [
+						{ stage: 'from', sql: 'SELECT * FROM orders', line: 1 },
+						{ stage: 'select', sql: 'SELECT id FROM orders', line: 0 },
+					],
 				},
+				refs: { _main_: ['orders'] },
 			};
-			const DECOMPOSE_CHILD: DbtCommandResult = {
-				success: true, stdout: '', stderr: '',
-				data: {
-					success: true,
-					frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
-					clauses: { _main_: [{ stage: 'select', sql: 'SELECT id FROM raw_orders', line: 0 }] },
-					refs: { _main_: [] },
-				},
+			const DECOMPOSE_CHILD = {
+				success: true,
+				frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
+				clauses: { _main_: [{ stage: 'select', sql: 'SELECT id FROM raw_orders', line: 0 }] },
+				refs: { _main_: [] },
 			};
 
 			let decomposeCallCount = 0;
+			const ps = mockParseService();
+			(ps.decomposeQuery as ReturnType<typeof vi.fn>).mockImplementation(() => {
+				decomposeCallCount++;
+				return Promise.resolve(JSON.stringify(decomposeCallCount === 1 ? DECOMPOSE_PARENT : DECOMPOSE_CHILD));
+			});
 			const bridge: BridgeRunner = {
 				invokeRaw: vi.fn().mockImplementation((req: Record<string, unknown>) => {
-					if (req.decompose_query) {
-						decomposeCallCount++;
-						return Promise.resolve(decomposeCallCount === 1 ? DECOMPOSE_PARENT : DECOMPOSE_CHILD);
-					}
 					if (req.emit_debug_symbols) {
 						return Promise.resolve({ success: true, stdout: '', stderr: '', data: { success: true, symbols: [] } });
 					}
@@ -1727,7 +1688,7 @@ describe('SqlDebugAdapter', () => {
 			);
 
 			setActiveEditor('SELECT id FROM orders');
-			harness = new DapHarness({ bridgeRunner: bridge });
+			harness = new DapHarness({ bridgeRunner: bridge, parseService: ps });
 			harness.send('initialize');
 			harness.send('launch', { noDebug: false, sql: 'SELECT id FROM orders' });
 			await vi.waitFor(() => expect(harness.events('thread')).toHaveLength(1));
@@ -1784,37 +1745,32 @@ describe('SqlDebugAdapter', () => {
 		});
 
 		it('guards stepping requests for non-active (frozen) threads', async () => {
-			const DECOMPOSE_PARENT: DbtCommandResult = {
-				success: true, stdout: '', stderr: '',
-				data: {
-					success: true,
-					frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
-					clauses: {
-						_main_: [
-							{ stage: 'from', sql: 'SELECT * FROM orders', line: 1 },
-							{ stage: 'select', sql: 'SELECT id FROM orders', line: 0 },
-						],
-					},
-					refs: { _main_: ['orders'] },
+			const DECOMPOSE_PARENT = {
+				success: true,
+				frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
+				clauses: {
+					_main_: [
+						{ stage: 'from', sql: 'SELECT * FROM orders', line: 1 },
+						{ stage: 'select', sql: 'SELECT id FROM orders', line: 0 },
+					],
 				},
+				refs: { _main_: ['orders'] },
 			};
-			const DECOMPOSE_CHILD: DbtCommandResult = {
-				success: true, stdout: '', stderr: '',
-				data: {
-					success: true,
-					frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
-					clauses: { _main_: [{ stage: 'select', sql: 'SELECT id FROM raw_orders', line: 0 }] },
-					refs: { _main_: [] },
-				},
+			const DECOMPOSE_CHILD = {
+				success: true,
+				frames: [{ name: '_main_', type: 'select', line: 0, endLine: 1 }],
+				clauses: { _main_: [{ stage: 'select', sql: 'SELECT id FROM raw_orders', line: 0 }] },
+				refs: { _main_: [] },
 			};
 
 			let decomposeCallCount = 0;
+			const ps = mockParseService();
+			(ps.decomposeQuery as ReturnType<typeof vi.fn>).mockImplementation(() => {
+				decomposeCallCount++;
+				return Promise.resolve(JSON.stringify(decomposeCallCount === 1 ? DECOMPOSE_PARENT : DECOMPOSE_CHILD));
+			});
 			const bridge: BridgeRunner = {
 				invokeRaw: vi.fn().mockImplementation((req: Record<string, unknown>) => {
-					if (req.decompose_query) {
-						decomposeCallCount++;
-						return Promise.resolve(decomposeCallCount === 1 ? DECOMPOSE_PARENT : DECOMPOSE_CHILD);
-					}
 					if (req.emit_debug_symbols) {
 						return Promise.resolve({ success: true, stdout: '', stderr: '', data: { success: true, symbols: [] } });
 					}
@@ -1828,7 +1784,7 @@ describe('SqlDebugAdapter', () => {
 			);
 
 			setActiveEditor('SELECT id FROM orders');
-			harness = new DapHarness({ bridgeRunner: bridge });
+			harness = new DapHarness({ bridgeRunner: bridge, parseService: ps });
 			harness.send('initialize');
 			harness.send('launch', { noDebug: false, sql: 'SELECT id FROM orders' });
 			await vi.waitFor(() => expect(harness.events('thread')).toHaveLength(1));
@@ -1860,37 +1816,32 @@ describe('SqlDebugAdapter', () => {
 		afterEach(() => { harness?.dispose(); clearActiveEditor(); });
 
 		it('stepIn on JOIN clause resolves to same CTE when refs are duplicated', async () => {
-			const DECOMPOSE_SELF_JOIN: DbtCommandResult = {
+			const DECOMPOSE_SELF_JOIN = {
 				success: true,
-				stdout: '',
-				stderr: '',
-				data: {
-					success: true,
-					frames: [
-						{ name: 'base', type: 'cte', line: 0, endLine: 3 },
-						{ name: '_main_', type: 'select', line: 4, endLine: 8 },
+				frames: [
+					{ name: 'base', type: 'cte', line: 0, endLine: 3 },
+					{ name: '_main_', type: 'select', line: 4, endLine: 8 },
+				],
+				clauses: {
+					base: [
+						{ stage: 'from', sql: 'SELECT * FROM raw', line: 1 },
+						{ stage: 'select', sql: 'SELECT id FROM raw', line: 0 },
 					],
-					clauses: {
-						base: [
-							{ stage: 'from', sql: 'SELECT * FROM raw', line: 1 },
-							{ stage: 'select', sql: 'SELECT id FROM raw', line: 0 },
-						],
-						_main_: [
-							{ stage: 'from', sql: 'FROM base b1', line: 5 },
-							{ stage: 'join', sql: 'JOIN base b2 ON b1.id = b2.id', line: 6 },
-							{ stage: 'select', sql: 'SELECT b1.id, b2.id', line: 4 },
-						],
-					},
-					refs: {
-						base: ['raw'],
-						_main_: ['base', 'base'],
-					},
+					_main_: [
+						{ stage: 'from', sql: 'FROM base b1', line: 5 },
+						{ stage: 'join', sql: 'JOIN base b2 ON b1.id = b2.id', line: 6 },
+						{ stage: 'select', sql: 'SELECT b1.id, b2.id', line: 4 },
+					],
+				},
+				refs: {
+					base: ['raw'],
+					_main_: ['base', 'base'],
 				},
 			};
 
 			setActiveEditor('WITH base AS (SELECT id FROM raw) SELECT b1.id, b2.id FROM base b1 JOIN base b2 ON b1.id = b2.id');
 			harness = new DapHarness({
-				bridgeRunner: mockBridgeRunner(DECOMPOSE_SELF_JOIN),
+				parseService: mockParseService(DECOMPOSE_SELF_JOIN),
 			});
 			harness.send('initialize');
 			harness.send('launch', {
@@ -1991,6 +1942,27 @@ describe('SqlDebugAdapter', () => {
 				'/* @dbg:L76:C0:select */ select /* /@dbg */ * from cte_home_losses',
 			].join('\n');
 
+			const decomposeData = {
+				success: true,
+				frames: [
+					// Boundary lines intentionally have no exact debug markers.
+					{ name: 'cte_home_losses', type: 'cte', line: 1, endLine: 6 },
+					{ name: '_main_', type: 'select', line: 7, endLine: 7 },
+				],
+				clauses: {
+					cte_home_losses: [
+						{ stage: 'select', sql: 'select lr.home_team, count(*) as losses', line: 2 },
+						{ stage: 'from', sql: 'from nba_latest_results lr', line: 3 },
+						{ stage: 'where', sql: 'where lr.home_team = lr.losing_team', line: 4 },
+					],
+					_main_: [{ stage: 'select', sql: 'select * from cte_home_losses', line: 7 }],
+				},
+				refs: {
+					cte_home_losses: ['nba_latest_results'],
+					_main_: ['cte_home_losses'],
+				},
+			};
+
 			const bridge = {
 				invokeRaw: vi.fn().mockImplementation((req: Record<string, unknown>) => {
 					if (req.emit_debug_symbols) {
@@ -2009,34 +1981,6 @@ describe('SqlDebugAdapter', () => {
 						});
 					}
 
-					if (req.decompose_query) {
-						return Promise.resolve({
-							success: true,
-							stdout: '',
-							stderr: '',
-							data: {
-								success: true,
-								frames: [
-									// Boundary lines intentionally have no exact debug markers.
-									{ name: 'cte_home_losses', type: 'cte', line: 1, endLine: 6 },
-									{ name: '_main_', type: 'select', line: 7, endLine: 7 },
-								],
-								clauses: {
-									cte_home_losses: [
-										{ stage: 'select', sql: 'select lr.home_team, count(*) as losses', line: 2 },
-										{ stage: 'from', sql: 'from nba_latest_results lr', line: 3 },
-										{ stage: 'where', sql: 'where lr.home_team = lr.losing_team', line: 4 },
-									],
-									_main_: [{ stage: 'select', sql: 'select * from cte_home_losses', line: 7 }],
-								},
-								refs: {
-									cte_home_losses: ['nba_latest_results'],
-									_main_: ['cte_home_losses'],
-								},
-							},
-						});
-					}
-
 					return Promise.resolve({ success: true, stdout: '', stderr: '', data: {} });
 				}),
 				compileInlineSql: vi.fn().mockResolvedValue(compiledSql),
@@ -2044,6 +1988,7 @@ describe('SqlDebugAdapter', () => {
 
 			harness = new DapHarness({
 				bridgeRunner: bridge,
+				parseService: mockParseService(decomposeData),
 				pathResolver: mockPathResolver('model'),
 			});
 			harness.send('initialize');
@@ -2082,6 +2027,23 @@ describe('SqlDebugAdapter', () => {
 				'select * from cte_sparse',
 			].join('\n');
 
+			const decomposeData = {
+				success: true,
+				frames: [
+					{ name: 'cte_sparse', type: 'cte', line: 1, endLine: 4 },
+					{ name: '_main_', type: 'select', line: 5, endLine: 5 },
+				],
+				clauses: {
+					// Intentionally empty for cte_sparse to force frame-range overlap path.
+					cte_sparse: [],
+					_main_: [{ stage: 'select', sql: 'select * from cte_sparse', line: 5 }],
+				},
+				refs: {
+					cte_sparse: ['some_table'],
+					_main_: ['cte_sparse'],
+				},
+			};
+
 			const bridge = {
 				invokeRaw: vi.fn().mockImplementation((req: Record<string, unknown>) => {
 					if (req.emit_debug_symbols) {
@@ -2099,30 +2061,6 @@ describe('SqlDebugAdapter', () => {
 						});
 					}
 
-					if (req.decompose_query) {
-						return Promise.resolve({
-							success: true,
-							stdout: '',
-							stderr: '',
-							data: {
-								success: true,
-								frames: [
-									{ name: 'cte_sparse', type: 'cte', line: 1, endLine: 4 },
-									{ name: '_main_', type: 'select', line: 5, endLine: 5 },
-								],
-								clauses: {
-									// Intentionally empty for cte_sparse to force frame-range overlap path.
-									cte_sparse: [],
-									_main_: [{ stage: 'select', sql: 'select * from cte_sparse', line: 5 }],
-								},
-								refs: {
-									cte_sparse: ['some_table'],
-									_main_: ['cte_sparse'],
-								},
-							},
-						});
-					}
-
 					return Promise.resolve({ success: true, stdout: '', stderr: '', data: {} });
 				}),
 				compileInlineSql: vi.fn().mockResolvedValue(compiledSql),
@@ -2130,6 +2068,7 @@ describe('SqlDebugAdapter', () => {
 
 			harness = new DapHarness({
 				bridgeRunner: bridge,
+				parseService: mockParseService(decomposeData),
 				pathResolver: mockPathResolver('model'),
 			});
 			harness.send('initialize');
@@ -2182,57 +2121,52 @@ describe('SqlDebugAdapter', () => {
 		// 8 CTEs then a final SELECT.  Breakpoint on line 72 (1-based)
 		// should hit cte_home_losses, NOT _main_.
 
-		const DECOMPOSE_NBA: DbtCommandResult = {
+		const DECOMPOSE_NBA = {
 			success: true,
-			stdout: '',
-			stderr: '',
-			data: {
-				success: true,
-				frames: [
-					{ name: 'cte_wins', type: 'cte', line: 3, endLine: 7 },
-					{ name: 'cte_losses', type: 'cte', line: 9, endLine: 13 },
-					{ name: 'cte_favored_wins', type: 'cte', line: 15, endLine: 23 },
-					{ name: 'cte_favored_losses', type: 'cte', line: 25, endLine: 33 },
-					{ name: 'cte_avg_opponent_wins', type: 'cte', line: 35, endLine: 47 },
-					{ name: 'cte_avg_opponent_losses', type: 'cte', line: 49, endLine: 61 },
-					{ name: 'cte_home_wins', type: 'cte', line: 63, endLine: 67 },
-					{ name: 'cte_home_losses', type: 'cte', line: 69, endLine: 73 },
-					{ name: '_main_', type: 'select', line: 75, endLine: 103 },
+			frames: [
+				{ name: 'cte_wins', type: 'cte', line: 3, endLine: 7 },
+				{ name: 'cte_losses', type: 'cte', line: 9, endLine: 13 },
+				{ name: 'cte_favored_wins', type: 'cte', line: 15, endLine: 23 },
+				{ name: 'cte_favored_losses', type: 'cte', line: 25, endLine: 33 },
+				{ name: 'cte_avg_opponent_wins', type: 'cte', line: 35, endLine: 47 },
+				{ name: 'cte_avg_opponent_losses', type: 'cte', line: 49, endLine: 61 },
+				{ name: 'cte_home_wins', type: 'cte', line: 63, endLine: 67 },
+				{ name: 'cte_home_losses', type: 'cte', line: 69, endLine: 73 },
+				{ name: '_main_', type: 'select', line: 75, endLine: 103 },
+			],
+			clauses: {
+				cte_wins: [
+					{ stage: 'from', sql: 'SELECT * FROM nba_latest_results', line: 5 },
+					{ stage: 'select', sql: 'SELECT winning_team, count(*) as wins FROM nba_latest_results GROUP BY ALL', line: 4 },
 				],
-				clauses: {
-					cte_wins: [
-						{ stage: 'from', sql: 'SELECT * FROM nba_latest_results', line: 5 },
-						{ stage: 'select', sql: 'SELECT winning_team, count(*) as wins FROM nba_latest_results GROUP BY ALL', line: 4 },
-					],
-					cte_home_losses: [
-						{ stage: 'from', sql: 'SELECT * FROM nba_latest_results', line: 71 },
-						{ stage: 'select', sql: 'SELECT lr.home_team, count(*) as losses FROM nba_latest_results lr WHERE lr.home_team = lr.losing_team GROUP BY ALL', line: 70 },
-					],
-					_main_: [
-						{ stage: 'from', sql: 'SELECT * FROM nba_teams', line: 92 },
-						{ stage: 'join', sql: 'LEFT JOIN cte_wins USING(team)', line: 93 },
-						{ stage: 'join', sql: 'LEFT JOIN cte_losses USING(team)', line: 94 },
-						{ stage: 'join', sql: 'LEFT JOIN cte_favored_wins USING(team)', line: 95 },
-						{ stage: 'join', sql: 'LEFT JOIN cte_favored_losses USING(team)', line: 96 },
-						{ stage: 'join', sql: 'LEFT JOIN cte_avg_opponent_wins USING(team)', line: 97 },
-						{ stage: 'join', sql: 'LEFT JOIN cte_avg_opponent_losses USING(team)', line: 98 },
-						{ stage: 'join', sql: 'LEFT JOIN cte_home_wins USING(team)', line: 99 },
-						{ stage: 'join', sql: 'LEFT JOIN cte_home_losses USING(team)', line: 100 },
-						{ stage: 'select', sql: 'SELECT t.team, ... FROM nba_teams t LEFT JOIN ...', line: 76 },
-					],
-				},
-				refs: {
-					cte_wins: ['nba_latest_results'],
-					cte_home_losses: ['nba_latest_results'],
-					_main_: ['nba_teams', 'cte_wins', 'cte_losses', 'cte_favored_wins', 'cte_favored_losses', 'cte_avg_opponent_wins', 'cte_avg_opponent_losses', 'cte_home_wins', 'cte_home_losses'],
-				},
+				cte_home_losses: [
+					{ stage: 'from', sql: 'SELECT * FROM nba_latest_results', line: 71 },
+					{ stage: 'select', sql: 'SELECT lr.home_team, count(*) as losses FROM nba_latest_results lr WHERE lr.home_team = lr.losing_team GROUP BY ALL', line: 70 },
+				],
+				_main_: [
+					{ stage: 'from', sql: 'SELECT * FROM nba_teams', line: 92 },
+					{ stage: 'join', sql: 'LEFT JOIN cte_wins USING(team)', line: 93 },
+					{ stage: 'join', sql: 'LEFT JOIN cte_losses USING(team)', line: 94 },
+					{ stage: 'join', sql: 'LEFT JOIN cte_favored_wins USING(team)', line: 95 },
+					{ stage: 'join', sql: 'LEFT JOIN cte_favored_losses USING(team)', line: 96 },
+					{ stage: 'join', sql: 'LEFT JOIN cte_avg_opponent_wins USING(team)', line: 97 },
+					{ stage: 'join', sql: 'LEFT JOIN cte_avg_opponent_losses USING(team)', line: 98 },
+					{ stage: 'join', sql: 'LEFT JOIN cte_home_wins USING(team)', line: 99 },
+					{ stage: 'join', sql: 'LEFT JOIN cte_home_losses USING(team)', line: 100 },
+					{ stage: 'select', sql: 'SELECT t.team, ... FROM nba_teams t LEFT JOIN ...', line: 76 },
+				],
+			},
+			refs: {
+				cte_wins: ['nba_latest_results'],
+				cte_home_losses: ['nba_latest_results'],
+				_main_: ['nba_teams', 'cte_wins', 'cte_losses', 'cte_favored_wins', 'cte_favored_losses', 'cte_avg_opponent_wins', 'cte_avg_opponent_losses', 'cte_home_wins', 'cte_home_losses'],
 			},
 		};
 
 		it('breakpoint in FIRST CTE (frame[0]) is not skipped', async () => {
 			setActiveEditor('-- multi-CTE model\n'.repeat(104), '/models/reg_season.sql');
 			harness = new DapHarness({
-				bridgeRunner: mockBridgeRunner(DECOMPOSE_NBA),
+				parseService: mockParseService(DECOMPOSE_NBA),
 			});
 			harness.send('initialize');
 			harness.send('launch', {
@@ -2276,7 +2210,7 @@ describe('SqlDebugAdapter', () => {
 		it('setBreakpoints after launch resolves with verified frames', async () => {
 			setActiveEditor('-- multi-CTE model\n'.repeat(104), '/models/reg_season.sql');
 			harness = new DapHarness({
-				bridgeRunner: mockBridgeRunner(DECOMPOSE_NBA),
+				parseService: mockParseService(DECOMPOSE_NBA),
 			});
 			harness.send('initialize');
 			harness.send('launch', {
@@ -2318,7 +2252,7 @@ describe('SqlDebugAdapter', () => {
 		it('breakpoint on cte_home_losses (line 72) stops on that CTE, not _main_', async () => {
 			setActiveEditor('-- multi-CTE model\n'.repeat(104), '/models/reg_season.sql');
 			harness = new DapHarness({
-				bridgeRunner: mockBridgeRunner(DECOMPOSE_NBA),
+				parseService: mockParseService(DECOMPOSE_NBA),
 			});
 			harness.send('initialize');
 			harness.send('launch', {

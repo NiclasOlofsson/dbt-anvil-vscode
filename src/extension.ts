@@ -48,7 +48,6 @@ import { NinjaFormattingProvider } from './providers/sql/formatting-provider';
 import { ConfigCodeActionProvider } from './providers/common/config-code-action-provider';
 import { DbtCallHierarchyProvider } from './providers/sql/call-hierarchy-provider';
 import { ParseService } from './services/parse-service';
-// import { BridgeDocumentParser } from './services/bridge-document-parser';
 import { FtlDocumentParser } from './ftl/ftl-document-parser';
 import { DbtQueryService } from './services/dbt-query-service';
 import { StatusBarManager } from './views/status-bar';
@@ -309,7 +308,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	await ftlParser.ready();
 	logger.info('Parse service: FTL worker pool ready');
 	const parseService = new ParseService(ftlParser, logger, { describeCache, indexer: manifestIndexer });
-	// const parseService = new ParseService(new BridgeDocumentParser(sqlglotBridgeRunner), logger, { describeCache, indexer: manifestIndexer });
 	context.subscriptions.push(ftlParser);
 	manifestWatcher.setParseService(parseService);
 	manifestWatcher.setCompileCache(compileCache);

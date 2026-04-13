@@ -2380,25 +2380,19 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 
 	private async _decompose(sql: string, dialect: string): Promise<DecomposeResult | undefined> {
 		try {
-			const result = await this._bridgeRunner.invokeRaw({
-				decompose_query: true,
-				compiled_sql: sql,
-				dialect,
-			});
+			const raw = await this._parseService.decomposeQuery(sql, dialect);
+			if (!raw) return undefined;
 
-			if (result.data && result.data.success) {
-				const d = result.data as unknown as DecomposeResult;
-				// Shallow-clone frames so _remapPositions mutations don't bleed into
-				// caller-owned data (avoids shared-reference bugs in tests and production).
-				return { ...d, frames: d.frames.map(f => ({ ...f })) };
+			const data = JSON.parse(raw) as DecomposeResult & { success: boolean; error?: string };
+			if (!data.success) {
+				if (data.error) this._output(`Decompose error: ${data.error}\n`);
+				return undefined;
 			}
-
-			if (result.data?.error) {
-				this._output(`Decompose error: ${result.data.error}\n`);
-			}
-			return undefined;
+			// Shallow-clone frames so _remapPositions mutations don't bleed into
+			// caller-owned data (avoids shared-reference bugs in tests and production).
+			return { ...data, frames: data.frames.map(f => ({ ...f })) };
 		} catch (err) {
-			this._logger.error(`Bridge decompose_query failed: ${err}`);
+			this._logger.error(`FTL decompose_query failed: ${err}`);
 			return undefined;
 		}
 	}

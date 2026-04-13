@@ -9,17 +9,18 @@ export interface ParseOptions {
 	/** Schema passed to sqlglot qualify() — enables star-selector expansion and column typing. */
 	schema?: Record<string, Record<string, string>>;
 	/**
-	 * Bridge-specific schema mapping for alias resolution.
-	 * `BridgeDocumentParser` forwards this to bridge.py; other implementations ignore it.
+	 * Schema mapping for alias resolution. Implementations may use or ignore it.
 	 */
 	schemaMapping?: Record<string, Record<string, Record<string, Record<string, object>>>>;
 }
 
 /**
  * Seam interface for parsing a single SQL string into a DocumentModel.
- * Implementations: BridgeDocumentParser (bridge.py backend), FtlDocumentParser (Pyodide/sqlglot).
+ * Current implementation: FtlDocumentParser (Pyodide/sqlglot).
  * ParseService injects this and owns caching, variant expansion, and enrichment.
  */
 export interface DocumentParser {
 	parse(sql: string, dialect: string, options?: ParseOptions): Promise<DocumentModel>;
+	/** Decompose compiled SQL into debug frames. Only implemented by FtlDocumentParser. */
+	decomposeQuery?(compiledSql: string, dialect: string): Promise<string>;
 }

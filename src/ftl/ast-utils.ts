@@ -74,12 +74,13 @@ export function identifierName(ast: AstPayload[], identifierIdx: number): string
 
 /**
  * Compute 0-based position for an Identifier node given its resolved name.
- * `m.col` is 1-based exclusive end; start = endCol - name.length.
+ * `m.col` is the 0-based exclusive end (sqlglot _col = chars consumed on current line).
+ * start = endCol - name.length.
  * Returns `undefined` when the node has no position info.
  */
 export function identifierPosition(identNode: AstPayload, name: string): NodePosition | undefined {
     if (identNode.m?.line === undefined || identNode.m.col === undefined) return undefined;
-    const endCol = identNode.m.col - 1;   // convert to 0-based exclusive end
+    const endCol = identNode.m.col;   // already 0-based exclusive end
     return {
         line: identNode.m.line - 1,
         col: endCol - name.length,
