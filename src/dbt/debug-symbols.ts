@@ -623,30 +623,3 @@ export interface EmitResult {
 	sourceMarkers: BridgeSourceMarker[];
 }
 
-export async function emitDebugSymbols(
-	source: string,
-	dialect: string,
-	bridgeInvokeRaw: (request: Record<string, unknown>) => Promise<{ data?: Record<string, unknown> }>,
-): Promise<EmitResult | undefined> {
-	const result = await bridgeInvokeRaw({
-		emit_debug_symbols: true,
-		sql: source,
-		dialect,
-	});
-
-	const symbols = result.data?.['symbols'] as SymbolEntry[] | undefined;
-	if (!symbols || symbols.length === 0) return undefined;
-
-	const macroSpans = (result.data?.['macroSpans'] as BridgeMacroSpan[] | undefined) ?? [];
-	const refMarkers = (result.data?.['refMarkers'] as BridgeRefMarker[] | undefined) ?? [];
-	const sourceMarkers = (result.data?.['sourceMarkers'] as BridgeSourceMarker[] | undefined) ?? [];
-
-	const jinjaSpans = findJinjaSpans(source);
-	const annotatedSource = injectMarkers(source, symbols, jinjaSpans, {
-		macroSpans,
-		refMarkers,
-		sourceMarkers,
-	});
-
-	return { annotatedSource, symbols, macroSpans, refMarkers, sourceMarkers };
-}
