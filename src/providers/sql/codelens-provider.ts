@@ -66,7 +66,7 @@ export class SqlCodeLensProvider implements vscode.CodeLensProvider {
 				title: 'Query CTE...',
 				command: 'dbt-studio.queryCte',
 				arguments: [modelId, cte.name],
-				tooltip: `Query CTE: ${cte.name}`,
+				tooltip: `Query CTE: ${cte.name}\n\nTip: place cursor inside this CTE and press Ctrl+F5 to run it without clicking.`,
 			}),
 		);
 	}

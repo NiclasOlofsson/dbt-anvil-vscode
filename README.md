@@ -133,7 +133,7 @@ For AI features, install GitHub Copilot.
 
 ## Requirements
 
-- VS Code 1.102.0 or later
+- VS Code 1.115.0 or later
 - Python environment with `dbt-core` installed
 - GitHub Copilot (optional — needed for AI tools)
 

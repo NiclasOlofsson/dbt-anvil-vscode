@@ -8,6 +8,7 @@ temp_auto/
 samples/
 node_modules/
 !node_modules/@duckdb/**
+!node_modules/pyodide/**
 .esbuild.ts
 .eslintcache
 tsconfig.json

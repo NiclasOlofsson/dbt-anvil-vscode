@@ -2,20 +2,24 @@ import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../../indexing/manifest-indexer';
 import type { DbtPathResolver } from '../../dbt/dbt-path-resolver';
 import type { ILogger } from '../../types/logger';
+import type { NinjaResult } from '../../ninja/engine';
 
 /**
  * Quick-fix code actions for dbt SQL files.
  * - Unknown ref('model') → create model file
  * - Inline refs: replace {{ ref('x') }} / {{ source('s','t') }} with relation name (ad-hoc only)
  * - Restore refs: replace relation names back to {{ ref() }} / {{ source() }} (ad-hoc only)
+ * - Ninja quick-fixes: auto-fix capitalisation, whitespace, jinja padding violations
  */
 export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 	static readonly providedCodeActionKinds = [
 		vscode.CodeActionKind.QuickFix,
 		vscode.CodeActionKind.Refactor,
+		vscode.CodeActionKind.SourceFixAll.append('ninja'),
 	];
 
 	private _pathResolver?: DbtPathResolver;
+	private _getNinjaResult?: (uri: vscode.Uri) => NinjaResult | undefined;
 
 	constructor(
 		private readonly indexer: ManifestIndexer,
@@ -24,6 +28,10 @@ export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 
 	setPathResolver(resolver: DbtPathResolver): void {
 		this._pathResolver = resolver;
+	}
+
+	setNinjaResultProvider(fn: (uri: vscode.Uri) => NinjaResult | undefined): void {
+		this._getNinjaResult = fn;
 	}
 
 	provideCodeActions(
@@ -146,6 +154,56 @@ export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 					arguments: [document.uri],
 				};
 				actions.push(restoreAction);
+			}
+		}
+
+		// Ninja quick-fixes
+		const ninjaResult = this._getNinjaResult?.(document.uri);
+		if (ninjaResult) {
+			for (const v of ninjaResult.violations) {
+				if (!v.fix || v.fix.length === 0) continue;
+				if (!v.range.intersection(range)) continue;
+				const action = new vscode.CodeAction(
+					`Fix: ${v.message}`,
+					vscode.CodeActionKind.QuickFix,
+				);
+				action.edit = new vscode.WorkspaceEdit();
+				for (const edit of v.fix) {
+					action.edit.replace(document.uri, edit.range, edit.newText);
+				}
+				action.diagnostics = [new vscode.Diagnostic(v.range, v.message)];
+				actions.push(action);
+			}
+
+			// "Fix all ninja violations" action when there are fixable violations
+			const fixable = ninjaResult.violations.filter(v => v.fix && v.fix.length > 0);
+			if (fixable.length > 1) {
+				const fixAll = new vscode.CodeAction(
+					`Fix all ${fixable.length} ninja violations`,
+					vscode.CodeActionKind.QuickFix,
+				);
+				fixAll.edit = new vscode.WorkspaceEdit();
+				for (const v of fixable) {
+					for (const edit of v.fix!) {
+						fixAll.edit.replace(document.uri, edit.range, edit.newText);
+					}
+				}
+				actions.push(fixAll);
+			}
+
+			// source.fixAll.ninja — used by VS Code's "Fix All" command and on-save
+			if (fixable.length > 0) {
+				const sourceFixAll = new vscode.CodeAction(
+					'Fix all ninja violations',
+					vscode.CodeActionKind.SourceFixAll.append('ninja'),
+				);
+				sourceFixAll.edit = new vscode.WorkspaceEdit();
+				for (const v of fixable) {
+					for (const edit of v.fix!) {
+						sourceFixAll.edit.replace(document.uri, edit.range, edit.newText);
+					}
+				}
+				actions.push(sourceFixAll);
 			}
 		}
 

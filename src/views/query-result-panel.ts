@@ -17,6 +17,7 @@ export class QueryResultPanel implements vscode.WebviewViewProvider, vscode.Webv
 	private _view: vscode.WebviewView | undefined;
 
 	private _results: StatementResult[] = [];
+	private _isDebugStep = false;
 	private _inPanel = false;
 	/** Prevents dispose side-effects when we programmatically dispose during a move. */
 	private _moving = false;
@@ -59,7 +60,7 @@ export class QueryResultPanel implements vscode.WebviewViewProvider, vscode.Webv
 		webviewView.webview.onDidReceiveMessage((msg) => this._handleMessage(msg));
 		webviewView.onDidDispose(() => { this._view = undefined; });
 		webviewView.webview.html = (this._inPanel && this._results.length > 0)
-			? this._getHtml(this._results)
+			? this._getHtml(this._results, this._isDebugStep)
 			: this._emptyHtml();
 	}
 
@@ -74,8 +75,9 @@ export class QueryResultPanel implements vscode.WebviewViewProvider, vscode.Webv
 
 	// ---- Public API ---------------------------------------------------------
 
-	showResults(results: StatementResult[], resultLocationOverride?: string): void {
+	showResults(results: StatementResult[], resultLocationOverride?: string, isDebugStep = false): void {
 		this._results = results;
+		this._isDebugStep = isDebugStep;
 
 		const loc = resultLocationOverride
 			?? vscode.workspace.getConfiguration('dbt-studio').get<string>('queryEditor.resultLocation', 'preserve');
@@ -86,7 +88,7 @@ export class QueryResultPanel implements vscode.WebviewViewProvider, vscode.Webv
 
 		if (this._inPanel) {
 			if (this._view) {
-				this._view.webview.html = this._getHtml(results);
+				this._view.webview.html = this._getHtml(results, isDebugStep);
 				this._view.show(true);
 			} else {
 				void vscode.commands.executeCommand(`${QueryResultPanel.viewId}.focus`);
@@ -102,7 +104,7 @@ export class QueryResultPanel implements vscode.WebviewViewProvider, vscode.Webv
 				this._adoptEditorPanel(panel);
 				void vscode.commands.executeCommand('workbench.action.moveEditorToBelowGroup');
 			}
-			this._editorPanel!.webview.html = this._getHtml(results);
+			this._editorPanel!.webview.html = this._getHtml(results, isDebugStep);
 			this._editorPanel!.reveal(undefined, true);
 		}
 	}
@@ -117,7 +119,7 @@ export class QueryResultPanel implements vscode.WebviewViewProvider, vscode.Webv
 		void vscode.commands.executeCommand('setContext', QueryResultPanel._ctxInPanel, true);
 		void vscode.commands.executeCommand(`${QueryResultPanel.viewId}.focus`);
 		if (this._view && this._results.length > 0) {
-			this._view.webview.html = this._getHtml(this._results);
+			this._view.webview.html = this._getHtml(this._results, this._isDebugStep);
 		}
 	}
 
@@ -147,7 +149,7 @@ export class QueryResultPanel implements vscode.WebviewViewProvider, vscode.Webv
 		);
 		this._adoptEditorPanel(panel);
 		panel.webview.html = this._results.length > 0
-			? this._getHtml(this._results)
+			? this._getHtml(this._results, this._isDebugStep)
 			: this._emptyHtml();
 		void vscode.commands.executeCommand('workbench.action.moveEditorToBelowGroup');
 	}
@@ -259,7 +261,7 @@ export class QueryResultPanel implements vscode.WebviewViewProvider, vscode.Webv
 		return '<!DOCTYPE html><html><body style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:var(--vscode-font-family);color:var(--vscode-descriptionForeground)"><p>Run a query (F5) to see results.</p></body></html>';
 	}
 
-	private _getHtml(results: StatementResult[]): string {
+	private _getHtml(results: StatementResult[], isDebugStep = false): string {
 		const nonce = getNonce();
 		const tabsHtml = results.map((r, i) => {
 			const label = r.error
@@ -347,6 +349,7 @@ body {
 	display: flex; gap: 0; border-bottom: 1px solid var(--vscode-panel-border);
 	background: var(--vscode-sideBar-background); flex-shrink: 0; overflow-x: auto;
 }
+.debug-stripe { display: none; }
 .tab {
 	padding: 6px 14px; border: none; background: transparent;
 	color: var(--vscode-foreground); cursor: pointer; font-size: inherit;
@@ -534,6 +537,7 @@ td.flash { animation: cell-flash 0.3s ease-out; }
 </style>
 </head>
 <body>
+${isDebugStep ? '<div style="height:3px;background:var(--vscode-statusBar-debuggingBackground,#007acc);flex-shrink:0"></div>' : ''}
 ${results.length > 1 ? `<div class="tab-bar">${tabsHtml}</div>` : ''}
 ${panelsHtml}
 <div class="float-toolbar" id="floatToolbar">

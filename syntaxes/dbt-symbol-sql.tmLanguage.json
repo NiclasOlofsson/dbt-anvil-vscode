@@ -1,0 +1,153 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "dbt Symbol SQL",
+	"scopeName": "source.dbt-symbol-sql",
+	"patterns": [
+		{ "include": "#dbg-marker-open" },
+		{ "include": "#dbg-marker-close" },
+		{ "include": "#ref-marker-open" },
+		{ "include": "#ref-marker-close" },
+		{ "include": "#source-marker-open" },
+		{ "include": "#source-marker-close" },
+		{ "include": "#macro-marker-start" },
+		{ "include": "#macro-marker-end" },
+		{ "include": "#sql" }
+	],
+	"repository": {
+		"dbg-marker-open": {
+			"match": "(/\\*)\\s+(@dbg):(L)(\\d+):(C)(\\d+):(\\w+)(?::(\\S+?))?\\s+(\\*/)",
+			"captures": {
+				"1": { "name": "punctuation.definition.marker.begin.dbt-symbol-sql" },
+				"2": { "name": "keyword.control.marker.dbt-symbol-sql" },
+				"3": { "name": "keyword.control.marker.dbt-symbol-sql" },
+				"4": { "name": "constant.numeric.position.dbt-symbol-sql" },
+				"5": { "name": "keyword.control.marker.dbt-symbol-sql" },
+				"6": { "name": "constant.numeric.position.dbt-symbol-sql" },
+				"7": { "name": "entity.name.tag.role.dbt-symbol-sql" },
+				"8": { "name": "variable.other.frame.dbt-symbol-sql" },
+				"9": { "name": "punctuation.definition.marker.end.dbt-symbol-sql" }
+			},
+			"name": "meta.marker.dbg.open.dbt-symbol-sql"
+		},
+		"dbg-marker-close": {
+			"match": "(/\\*)\\s+(/@dbg)\\s+(\\*/)",
+			"captures": {
+				"1": { "name": "punctuation.definition.marker.begin.dbt-symbol-sql" },
+				"2": { "name": "keyword.control.marker.dbt-symbol-sql" },
+				"3": { "name": "punctuation.definition.marker.end.dbt-symbol-sql" }
+			},
+			"name": "meta.marker.dbg.close.dbt-symbol-sql"
+		},
+		"ref-marker-open": {
+			"match": "(/\\*)\\s+(@ref):(name)(=)(\"[^\"]*\")\\s+(source_line)(=)(\\d+)\\s+(\\*/)",
+			"captures": {
+				"1": { "name": "punctuation.definition.marker.begin.dbt-symbol-sql" },
+				"2": { "name": "keyword.control.marker.dbt-symbol-sql" },
+				"3": { "name": "entity.other.attribute-name.dbt-symbol-sql" },
+				"4": { "name": "punctuation.separator.key-value.dbt-symbol-sql" },
+				"5": { "name": "string.quoted.double.dbt-symbol-sql" },
+				"6": { "name": "entity.other.attribute-name.dbt-symbol-sql" },
+				"7": { "name": "punctuation.separator.key-value.dbt-symbol-sql" },
+				"8": { "name": "constant.numeric.source-line.dbt-symbol-sql" },
+				"9": { "name": "punctuation.definition.marker.end.dbt-symbol-sql" }
+			},
+			"name": "meta.marker.ref.open.dbt-symbol-sql"
+		},
+		"ref-marker-close": {
+			"match": "(/\\*)\\s+(/@ref)\\s+(\\*/)",
+			"captures": {
+				"1": { "name": "punctuation.definition.marker.begin.dbt-symbol-sql" },
+				"2": { "name": "keyword.control.marker.dbt-symbol-sql" },
+				"3": { "name": "punctuation.definition.marker.end.dbt-symbol-sql" }
+			},
+			"name": "meta.marker.ref.close.dbt-symbol-sql"
+		},
+		"source-marker-open": {
+			"match": "(/\\*)\\s+(@source):(schema)(=)(\"[^\"]*\")\\s+(name)(=)(\"[^\"]*\")\\s+(source_line)(=)(\\d+)\\s+(\\*/)",
+			"captures": {
+				"1": { "name": "punctuation.definition.marker.begin.dbt-symbol-sql" },
+				"2": { "name": "keyword.control.marker.dbt-symbol-sql" },
+				"3": { "name": "entity.other.attribute-name.dbt-symbol-sql" },
+				"4": { "name": "punctuation.separator.key-value.dbt-symbol-sql" },
+				"5": { "name": "string.quoted.double.dbt-symbol-sql" },
+				"6": { "name": "entity.other.attribute-name.dbt-symbol-sql" },
+				"7": { "name": "punctuation.separator.key-value.dbt-symbol-sql" },
+				"8": { "name": "string.quoted.double.dbt-symbol-sql" },
+				"9": { "name": "entity.other.attribute-name.dbt-symbol-sql" },
+				"10": { "name": "punctuation.separator.key-value.dbt-symbol-sql" },
+				"11": { "name": "constant.numeric.source-line.dbt-symbol-sql" },
+				"12": { "name": "punctuation.definition.marker.end.dbt-symbol-sql" }
+			},
+			"name": "meta.marker.source.open.dbt-symbol-sql"
+		},
+		"source-marker-close": {
+			"match": "(/\\*)\\s+(/@source)\\s+(\\*/)",
+			"captures": {
+				"1": { "name": "punctuation.definition.marker.begin.dbt-symbol-sql" },
+				"2": { "name": "keyword.control.marker.dbt-symbol-sql" },
+				"3": { "name": "punctuation.definition.marker.end.dbt-symbol-sql" }
+			},
+			"name": "meta.marker.source.close.dbt-symbol-sql"
+		},
+		"macro-marker-start": {
+			"match": "(/\\*)\\s+(@macro:start)\\s+(name)(=)(\"[^\"]*\")\\s+(source_line)(=)(\\d+)\\s+(\\*/)",
+			"captures": {
+				"1": { "name": "punctuation.definition.marker.begin.dbt-symbol-sql" },
+				"2": { "name": "keyword.control.marker.dbt-symbol-sql" },
+				"3": { "name": "entity.other.attribute-name.dbt-symbol-sql" },
+				"4": { "name": "punctuation.separator.key-value.dbt-symbol-sql" },
+				"5": { "name": "string.quoted.double.dbt-symbol-sql" },
+				"6": { "name": "entity.other.attribute-name.dbt-symbol-sql" },
+				"7": { "name": "punctuation.separator.key-value.dbt-symbol-sql" },
+				"8": { "name": "constant.numeric.source-line.dbt-symbol-sql" },
+				"9": { "name": "punctuation.definition.marker.end.dbt-symbol-sql" }
+			},
+			"name": "meta.marker.macro.start.dbt-symbol-sql"
+		},
+		"macro-marker-end": {
+			"match": "(/\\*)\\s+(@macro:end)\\s+(\\*/)",
+			"captures": {
+				"1": { "name": "punctuation.definition.marker.begin.dbt-symbol-sql" },
+				"2": { "name": "keyword.control.marker.dbt-symbol-sql" },
+				"3": { "name": "punctuation.definition.marker.end.dbt-symbol-sql" }
+			},
+			"name": "meta.marker.macro.end.dbt-symbol-sql"
+		},
+		"sql": {
+			"patterns": [
+				{ "include": "#sql-comment-line" },
+				{ "include": "#sql-comment-block" },
+				{ "include": "#sql-string" },
+				{ "include": "#sql-keywords" },
+				{ "include": "#sql-functions" },
+				{ "include": "#sql-number" }
+			]
+		},
+		"sql-comment-line": {
+			"match": "--.*$",
+			"name": "comment.line.double-dash.sql"
+		},
+		"sql-comment-block": {
+			"begin": "/\\*",
+			"end": "\\*/",
+			"name": "comment.block.sql"
+		},
+		"sql-string": {
+			"begin": "'",
+			"end": "'",
+			"name": "string.quoted.single.sql"
+		},
+		"sql-keywords": {
+			"match": "(?i)\\b(SELECT|FROM|WHERE|JOIN|INNER|LEFT|RIGHT|OUTER|FULL|CROSS|ON|AND|OR|NOT|IN|EXISTS|BETWEEN|LIKE|IS|NULL|AS|CASE|WHEN|THEN|ELSE|END|GROUP|BY|ORDER|HAVING|LIMIT|OFFSET|UNION|ALL|DISTINCT|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|ALTER|DROP|TABLE|VIEW|INDEX|WITH|RECURSIVE|OVER|PARTITION|ROWS|RANGE|UNBOUNDED|PRECEDING|FOLLOWING|CURRENT|ROW|EXCEPT|INTERSECT|QUALIFY|WINDOW|LATERAL|PIVOT|UNPIVOT|TABLESAMPLE|MERGE|USING|MATCHED)\\b",
+			"name": "keyword.other.sql"
+		},
+		"sql-functions": {
+			"match": "(?i)\\b(COUNT|SUM|AVG|MIN|MAX|COALESCE|NULLIF|CAST|CONVERT|IFNULL|NVL|CASE|TRIM|UPPER|LOWER|LENGTH|SUBSTRING|REPLACE|CONCAT|DATE|YEAR|MONTH|DAY|HOUR|MINUTE|SECOND|NOW|CURRENT_TIMESTAMP|CURRENT_DATE|ROW_NUMBER|RANK|DENSE_RANK|NTILE|LAG|LEAD|FIRST_VALUE|LAST_VALUE|LISTAGG|STRING_AGG|ARRAY_AGG|APPROX_COUNT_DISTINCT|DATEDIFF|DATEADD|DATE_TRUNC|EXTRACT|TO_DATE|TO_TIMESTAMP|TO_CHAR|TRY_CAST|IFF|DECODE|GREATEST|LEAST|ABS|ROUND|CEIL|FLOOR|MOD|POWER|SQRT|LN|LOG|EXP|SIGN|RANDOM|HASH|MD5|SHA2|BASE64_ENCODE|BASE64_DECODE|PARSE_JSON|TO_JSON|OBJECT_CONSTRUCT|ARRAY_CONSTRUCT|FLATTEN)\\b\\s*(?=\\()",
+			"name": "support.function.sql"
+		},
+		"sql-number": {
+			"match": "\\b\\d+(\\.\\d+)?\\b",
+			"name": "constant.numeric.sql"
+		}
+	}
+}
