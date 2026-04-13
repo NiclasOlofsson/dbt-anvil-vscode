@@ -49,6 +49,16 @@ function logThriftBinary(logger: MetricLogger, observer: SchemaObserver, label: 
 	}
 }
 
+function logThriftBinaryDeferred(logger: MetricLogger, observer: SchemaObserver, label: string, buffer: Buffer): void {
+	setImmediate(() => {
+		try {
+			logThriftBinary(logger, observer, label, buffer);
+		} catch (error) {
+			logger.debug(`${label} [JSON] deferred log failed: ${(error as Error).message}`);
+		}
+	});
+}
+
 export function createMetricServer(options: MetricServerOptions): AnyServer {
 	const { port } = options;
 	const logger = options.logger;
@@ -96,8 +106,6 @@ export function createMetricServer(options: MetricServerOptions): AnyServer {
 				return;
 			}
 
-			logThriftBinary(logger, observer, `<< WIRE upstream ${req.method} ${req.url}`, upstream.body);
-
 			const respOutbound = upstream.body;
 
 			res.writeHead(upstream.status, {
@@ -111,6 +119,8 @@ export function createMetricServer(options: MetricServerOptions): AnyServer {
 			const rawHeader: string = (res as unknown as Record<string, unknown>)['_header'] as string ?? '';
 			logger.debug(`<< RESPONSE ${upstream.status} ${req.method} ${req.url}\n${rawHeader.trimEnd()}`);
 			res.end(respOutbound);
+
+			logThriftBinaryDeferred(logger, observer, `<< WIRE upstream ${req.method} ${req.url}`, upstream.body);
 		});
 	});
 

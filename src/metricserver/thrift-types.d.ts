@@ -9,7 +9,7 @@ import Q = thrift.Q;
 import Int64 = require('node-int64');
 
 
-declare enum TProtocolVersion {
+export enum TProtocolVersion {
   __HIVE_JDBC_WORKAROUND = -7,
   __TEST_PROTOCOL_VERSION = 65281,
   HIVE_CLI_SERVICE_PROTOCOL_V1 = 0,
@@ -33,7 +33,7 @@ declare enum TProtocolVersion {
   SPARK_CLI_SERVICE_PROTOCOL_V9 = 42249,
 }
 
-declare enum TTypeId {
+export enum TTypeId {
   BOOLEAN_TYPE = 0,
   TINYINT_TYPE = 1,
   SMALLINT_TYPE = 2,
@@ -58,25 +58,25 @@ declare enum TTypeId {
   INTERVAL_DAY_TIME_TYPE = 21,
 }
 
-declare enum TSparkRowSetType {
+export enum TSparkRowSetType {
   ARROW_BASED_SET = 0,
   COLUMN_BASED_SET = 1,
   ROW_BASED_SET = 2,
   URL_BASED_SET = 3,
 }
 
-declare enum TDBSqlCompressionCodec {
+export enum TDBSqlCompressionCodec {
   NONE = 0,
   LZ4_FRAME = 1,
   LZ4_BLOCK = 2,
 }
 
-declare enum TDBSqlArrowLayout {
+export enum TDBSqlArrowLayout {
   ARROW_BATCH = 0,
   ARROW_STREAMING = 1,
 }
 
-declare enum TStatusCode {
+export enum TStatusCode {
   SUCCESS_STATUS = 0,
   SUCCESS_WITH_INFO_STATUS = 1,
   STILL_EXECUTING_STATUS = 2,
@@ -84,7 +84,7 @@ declare enum TStatusCode {
   INVALID_HANDLE_STATUS = 4,
 }
 
-declare enum TOperationState {
+export enum TOperationState {
   INITIALIZED_STATE = 0,
   RUNNING_STATE = 1,
   FINISHED_STATE = 2,
@@ -96,7 +96,7 @@ declare enum TOperationState {
   TIMEDOUT_STATE = 8,
 }
 
-declare enum TOperationType {
+export enum TOperationType {
   EXECUTE_STATEMENT = 0,
   GET_TYPE_INFO = 1,
   GET_CATALOGS = 2,
@@ -108,7 +108,7 @@ declare enum TOperationType {
   UNKNOWN = 8,
 }
 
-declare enum TGetInfoType {
+export enum TGetInfoType {
   CLI_MAX_DRIVER_CONNECTIONS = 0,
   CLI_MAX_CONCURRENT_ACTIVITIES = 1,
   CLI_DATA_SOURCE_NAME = 2,
@@ -158,14 +158,14 @@ declare enum TGetInfoType {
   CLI_MAX_IDENTIFIER_LEN = 10005,
 }
 
-declare enum TCacheLookupResult {
+export enum TCacheLookupResult {
   CACHE_INELIGIBLE = 0,
   LOCAL_CACHE_HIT = 1,
   REMOTE_CACHE_HIT = 2,
   CACHE_MISS = 3,
 }
 
-declare enum TFetchOrientation {
+export enum TFetchOrientation {
   FETCH_NEXT = 0,
   FETCH_PRIOR = 1,
   FETCH_RELATIVE = 2,
@@ -174,64 +174,80 @@ declare enum TFetchOrientation {
   FETCH_LAST = 5,
 }
 
-declare enum TJobExecutionStatus {
+export enum TJobExecutionStatus {
   IN_PROGRESS = 0,
   COMPLETE = 1,
   NOT_AVAILABLE = 2,
 }
 
-declare class TTypeQualifierValue {
+export class TTypeQualifierValue {
   public i32Value?: number;
   public stringValue?: string;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { i32Value?: number; stringValue?: string; });
 }
 
-declare class TTypeQualifiers {
+export class TTypeQualifiers {
   public qualifiers: { [k: string]: TTypeQualifierValue; };
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { qualifiers: { [k: string]: TTypeQualifierValue; }; });
 }
 
-declare class TPrimitiveTypeEntry {
+export class TPrimitiveTypeEntry {
   public type: TTypeId;
   public typeQualifiers?: TTypeQualifiers;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { type: TTypeId; typeQualifiers?: TTypeQualifiers; });
 }
 
-declare class TArrayTypeEntry {
+export class TArrayTypeEntry {
   public objectTypePtr: number;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { objectTypePtr: number; });
 }
 
-declare class TMapTypeEntry {
+export class TMapTypeEntry {
   public keyTypePtr: number;
   public valueTypePtr: number;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { keyTypePtr: number; valueTypePtr: number; });
 }
 
-declare class TStructTypeEntry {
+export class TStructTypeEntry {
   public nameToTypePtr: { [k: string]: number; };
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { nameToTypePtr: { [k: string]: number; }; });
 }
 
-declare class TUnionTypeEntry {
+export class TUnionTypeEntry {
   public nameToTypePtr: { [k: string]: number; };
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { nameToTypePtr: { [k: string]: number; }; });
 }
 
-declare class TUserDefinedTypeEntry {
+export class TUserDefinedTypeEntry {
   public typeClassName: string;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { typeClassName: string; });
 }
 
-declare class TTypeEntry {
+export class TTypeEntry {
   public primitiveEntry?: TPrimitiveTypeEntry;
   public arrayEntry?: TArrayTypeEntry;
   public mapEntry?: TMapTypeEntry;
@@ -239,73 +255,95 @@ declare class TTypeEntry {
   public unionEntry?: TUnionTypeEntry;
   public userDefinedTypeEntry?: TUserDefinedTypeEntry;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { primitiveEntry?: TPrimitiveTypeEntry; arrayEntry?: TArrayTypeEntry; mapEntry?: TMapTypeEntry; structEntry?: TStructTypeEntry; unionEntry?: TUnionTypeEntry; userDefinedTypeEntry?: TUserDefinedTypeEntry; });
 }
 
-declare class TTypeDesc {
+export class TTypeDesc {
   public types: TTypeEntry[];
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { types: TTypeEntry[]; });
 }
 
-declare class TColumnDesc {
+export class TColumnDesc {
   public columnName: string;
   public typeDesc: TTypeDesc;
   public position: number;
   public comment?: string;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { columnName: string; typeDesc: TTypeDesc; position: number; comment?: string; });
 }
 
-declare class TTableSchema {
+export class TTableSchema {
   public columns: TColumnDesc[];
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { columns: TColumnDesc[]; });
 }
 
-declare class TBoolValue {
+export class TBoolValue {
   public value?: boolean;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { value?: boolean; });
 }
 
-declare class TByteValue {
+export class TByteValue {
   public value?: any;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { value?: any; });
 }
 
-declare class TI16Value {
+export class TI16Value {
   public value?: number;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { value?: number; });
 }
 
-declare class TI32Value {
+export class TI32Value {
   public value?: number;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { value?: number; });
 }
 
-declare class TI64Value {
+export class TI64Value {
   public value?: Int64;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { value?: Int64; });
 }
 
-declare class TDoubleValue {
+export class TDoubleValue {
   public value?: number;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { value?: number; });
 }
 
-declare class TStringValue {
+export class TStringValue {
   public value?: string;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { value?: string; });
 }
 
-declare class TColumnValue {
+export class TColumnValue {
   public boolVal?: TBoolValue;
   public byteVal?: TByteValue;
   public i16Val?: TI16Value;
@@ -314,72 +352,92 @@ declare class TColumnValue {
   public doubleVal?: TDoubleValue;
   public stringVal?: TStringValue;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { boolVal?: TBoolValue; byteVal?: TByteValue; i16Val?: TI16Value; i32Val?: TI32Value; i64Val?: TI64Value; doubleVal?: TDoubleValue; stringVal?: TStringValue; });
 }
 
-declare class TRow {
+export class TRow {
   public colVals: TColumnValue[];
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { colVals: TColumnValue[]; });
 }
 
-declare class TBoolColumn {
+export class TBoolColumn {
   public values: boolean[];
   public nulls: Buffer;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { values: boolean[]; nulls: Buffer; });
 }
 
-declare class TByteColumn {
+export class TByteColumn {
   public values: any[];
   public nulls: Buffer;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { values: any[]; nulls: Buffer; });
 }
 
-declare class TI16Column {
+export class TI16Column {
   public values: number[];
   public nulls: Buffer;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { values: number[]; nulls: Buffer; });
 }
 
-declare class TI32Column {
+export class TI32Column {
   public values: number[];
   public nulls: Buffer;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { values: number[]; nulls: Buffer; });
 }
 
-declare class TI64Column {
+export class TI64Column {
   public values: Int64[];
   public nulls: Buffer;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { values: Int64[]; nulls: Buffer; });
 }
 
-declare class TDoubleColumn {
+export class TDoubleColumn {
   public values: number[];
   public nulls: Buffer;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { values: number[]; nulls: Buffer; });
 }
 
-declare class TStringColumn {
+export class TStringColumn {
   public values: string[];
   public nulls: Buffer;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { values: string[]; nulls: Buffer; });
 }
 
-declare class TBinaryColumn {
+export class TBinaryColumn {
   public values: Buffer[];
   public nulls: Buffer;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { values: Buffer[]; nulls: Buffer; });
 }
 
-declare class TColumn {
+export class TColumn {
   public boolVal?: TBoolColumn;
   public byteVal?: TByteColumn;
   public i16Val?: TI16Column;
@@ -389,44 +447,56 @@ declare class TColumn {
   public stringVal?: TStringColumn;
   public binaryVal?: TBinaryColumn;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { boolVal?: TBoolColumn; byteVal?: TByteColumn; i16Val?: TI16Column; i32Val?: TI32Column; i64Val?: TI64Column; doubleVal?: TDoubleColumn; stringVal?: TStringColumn; binaryVal?: TBinaryColumn; });
 }
 
-declare class TDBSqlJsonArrayFormat {
+export class TDBSqlJsonArrayFormat {
   public compressionCodec?: TDBSqlCompressionCodec;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { compressionCodec?: TDBSqlCompressionCodec; });
 }
 
-declare class TDBSqlCsvFormat {
+export class TDBSqlCsvFormat {
   public compressionCodec?: TDBSqlCompressionCodec;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { compressionCodec?: TDBSqlCompressionCodec; });
 }
 
-declare class TDBSqlArrowFormat {
+export class TDBSqlArrowFormat {
   public arrowLayout?: TDBSqlArrowLayout;
   public compressionCodec?: TDBSqlCompressionCodec;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { arrowLayout?: TDBSqlArrowLayout; compressionCodec?: TDBSqlCompressionCodec; });
 }
 
-declare class TDBSqlResultFormat {
+export class TDBSqlResultFormat {
   public arrowFormat?: TDBSqlArrowFormat;
   public csvFormat?: TDBSqlCsvFormat;
   public jsonArrayFormat?: TDBSqlJsonArrayFormat;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { arrowFormat?: TDBSqlArrowFormat; csvFormat?: TDBSqlCsvFormat; jsonArrayFormat?: TDBSqlJsonArrayFormat; });
 }
 
-declare class TSparkArrowBatch {
+export class TSparkArrowBatch {
   public batch: Buffer;
   public rowCount: Int64;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { batch: Buffer; rowCount: Int64; });
 }
 
-declare class TSparkArrowResultLink {
+export class TSparkArrowResultLink {
   public fileLink: string;
   public expiryTime: Int64;
   public startRowOffset: Int64;
@@ -434,10 +504,12 @@ declare class TSparkArrowResultLink {
   public bytesNum: Int64;
   public httpHeaders?: { [k: string]: string; };
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { fileLink: string; expiryTime: Int64; startRowOffset: Int64; rowCount: Int64; bytesNum: Int64; httpHeaders?: { [k: string]: string; }; });
 }
 
-declare class TRowSet {
+export class TRowSet {
   public startRowOffset: Int64;
   public rows: TRow[];
   public columns?: TColumn[];
@@ -446,10 +518,12 @@ declare class TRowSet {
   public arrowBatches?: TSparkArrowBatch[];
   public resultLinks?: TSparkArrowResultLink[];
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { startRowOffset: Int64; rows: TRow[]; columns?: TColumn[]; binaryColumns?: Buffer; columnCount?: number; arrowBatches?: TSparkArrowBatch[]; resultLinks?: TSparkArrowResultLink[]; });
 }
 
-declare class TStatus {
+export class TStatus {
   public statusCode: TStatusCode;
   public infoMessages?: string[];
   public sqlState?: string;
@@ -458,40 +532,50 @@ declare class TStatus {
   public displayMessage?: string;
   public errorDetailsJson?: string;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { statusCode: TStatusCode; infoMessages?: string[]; sqlState?: string; errorCode?: number; errorMessage?: string; displayMessage?: string; errorDetailsJson?: string; });
 }
 
-declare class TNamespace {
+export class TNamespace {
   public catalogName?: string;
   public schemaName?: string;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { catalogName?: string; schemaName?: string; });
 }
 
-declare class THandleIdentifier {
+export class THandleIdentifier {
   public guid: Buffer;
   public secret: Buffer;
   public _databricksExt3329?: number;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { guid: Buffer; secret: Buffer; _databricksExt3329?: number; });
 }
 
-declare class TSessionHandle {
+export class TSessionHandle {
   public sessionId: THandleIdentifier;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { sessionId: THandleIdentifier; });
 }
 
-declare class TOperationHandle {
+export class TOperationHandle {
   public operationId: THandleIdentifier;
   public operationType: TOperationType;
   public hasResultSet: boolean;
   public modifiedRowCount?: number;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { operationId: THandleIdentifier; operationType: TOperationType; hasResultSet: boolean; modifiedRowCount?: number; });
 }
 
-declare class TOpenSessionReq {
+export class TOpenSessionReq {
   public client_protocol?: TProtocolVersion;
   public username?: string;
   public password?: string;
@@ -502,10 +586,12 @@ declare class TOpenSessionReq {
   public initialNamespace?: TNamespace;
   public canUseMultipleCatalogs?: boolean;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { client_protocol?: TProtocolVersion; username?: string; password?: string; configuration?: { [k: string]: string; }; getInfos?: TGetInfoType[]; client_protocol_i64?: Int64; connectionProperties?: { [k: string]: string; }; initialNamespace?: TNamespace; canUseMultipleCatalogs?: boolean; });
 }
 
-declare class TOpenSessionResp {
+export class TOpenSessionResp {
   public status: TStatus;
   public serverProtocolVersion: TProtocolVersion;
   public sessionHandle?: TSessionHandle;
@@ -514,22 +600,28 @@ declare class TOpenSessionResp {
   public canUseMultipleCatalogs?: boolean;
   public getInfos?: TGetInfoValue[];
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { status: TStatus; serverProtocolVersion: TProtocolVersion; sessionHandle?: TSessionHandle; configuration?: { [k: string]: string; }; initialNamespace?: TNamespace; canUseMultipleCatalogs?: boolean; getInfos?: TGetInfoValue[]; });
 }
 
-declare class TCloseSessionReq {
+export class TCloseSessionReq {
   public sessionHandle: TSessionHandle;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { sessionHandle: TSessionHandle; });
 }
 
-declare class TCloseSessionResp {
+export class TCloseSessionResp {
   public status: TStatus;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { status: TStatus; });
 }
 
-declare class TGetInfoValue {
+export class TGetInfoValue {
   public stringValue?: string;
   public smallIntValue?: number;
   public integerBitmask?: number;
@@ -537,50 +629,62 @@ declare class TGetInfoValue {
   public binaryValue?: number;
   public lenValue?: Int64;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { stringValue?: string; smallIntValue?: number; integerBitmask?: number; integerFlag?: number; binaryValue?: number; lenValue?: Int64; });
 }
 
-declare class TGetInfoReq {
+export class TGetInfoReq {
   public sessionHandle: TSessionHandle;
   public infoType: TGetInfoType;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { sessionHandle: TSessionHandle; infoType: TGetInfoType; });
 }
 
-declare class TGetInfoResp {
+export class TGetInfoResp {
   public status: TStatus;
   public infoValue: TGetInfoValue;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { status: TStatus; infoValue: TGetInfoValue; });
 }
 
-declare class TSparkGetDirectResults {
+export class TSparkGetDirectResults {
   public maxRows: Int64;
   public maxBytes?: Int64;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { maxRows: Int64; maxBytes?: Int64; });
 }
 
-declare class TSparkDirectResults {
+export class TSparkDirectResults {
   public operationStatus?: TGetOperationStatusResp;
   public resultSetMetadata?: TGetResultSetMetadataResp;
   public resultSet?: TFetchResultsResp;
   public closeOperation?: TCloseOperationResp;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { operationStatus?: TGetOperationStatusResp; resultSetMetadata?: TGetResultSetMetadataResp; resultSet?: TFetchResultsResp; closeOperation?: TCloseOperationResp; });
 }
 
-declare class TSparkArrowTypes {
+export class TSparkArrowTypes {
   public timestampAsArrow?: boolean;
   public decimalAsArrow?: boolean;
   public complexTypesAsArrow?: boolean;
   public intervalTypesAsArrow?: boolean;
   public nullTypeAsArrow?: boolean;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { timestampAsArrow?: boolean; decimalAsArrow?: boolean; complexTypesAsArrow?: boolean; intervalTypesAsArrow?: boolean; nullTypeAsArrow?: boolean; });
 }
 
-declare class TExecuteStatementReq {
+export class TExecuteStatementReq {
   public sessionHandle: TSessionHandle;
   public statement: string;
   public confOverlay?: { [k: string]: string; };
@@ -597,103 +701,127 @@ declare class TExecuteStatementReq {
   public maxBytesPerBatch?: Int64;
   public statementConf?: TStatementConf;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { sessionHandle: TSessionHandle; statement: string; confOverlay?: { [k: string]: string; }; runAsync?: boolean; getDirectResults?: TSparkGetDirectResults; queryTimeout?: Int64; canReadArrowResult?: boolean; canDownloadResult?: boolean; canDecompressLZ4Result?: boolean; maxBytesPerFile?: Int64; useArrowNativeTypes?: TSparkArrowTypes; resultRowLimit?: Int64; parameters?: TSparkParameter[]; maxBytesPerBatch?: Int64; statementConf?: TStatementConf; });
 }
 
-declare class TSparkParameterValue {
+export class TSparkParameterValue {
   public stringValue?: string;
   public doubleValue?: number;
   public booleanValue?: boolean;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { stringValue?: string; doubleValue?: number; booleanValue?: boolean; });
 }
 
-declare class TSparkParameterValueArg {
+export class TSparkParameterValueArg {
   public type?: string;
   public value?: string;
   public arguments?: TSparkParameterValueArg[];
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { type?: string; value?: string; arguments?: TSparkParameterValueArg[]; });
 }
 
-declare class TSparkParameter {
+export class TSparkParameter {
   public ordinal?: number;
   public name?: string;
   public type?: string;
   public value?: TSparkParameterValue;
   public arguments?: TSparkParameterValueArg[];
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { ordinal?: number; name?: string; type?: string; value?: TSparkParameterValue; arguments?: TSparkParameterValueArg[]; });
 }
 
-declare class TStatementConf {
+export class TStatementConf {
   public sessionless?: boolean;
   public initialNamespace?: TNamespace;
   public client_protocol?: TProtocolVersion;
   public client_protocol_i64?: Int64;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { sessionless?: boolean; initialNamespace?: TNamespace; client_protocol?: TProtocolVersion; client_protocol_i64?: Int64; });
 }
 
-declare class TExecuteStatementResp {
+export class TExecuteStatementResp {
   public status: TStatus;
   public operationHandle?: TOperationHandle;
   public directResults?: TSparkDirectResults;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { status: TStatus; operationHandle?: TOperationHandle; directResults?: TSparkDirectResults; });
 }
 
-declare class TGetTypeInfoReq {
+export class TGetTypeInfoReq {
   public sessionHandle: TSessionHandle;
   public getDirectResults?: TSparkGetDirectResults;
   public runAsync?: boolean;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { sessionHandle: TSessionHandle; getDirectResults?: TSparkGetDirectResults; runAsync?: boolean; });
 }
 
-declare class TGetTypeInfoResp {
+export class TGetTypeInfoResp {
   public status: TStatus;
   public operationHandle?: TOperationHandle;
   public directResults?: TSparkDirectResults;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { status: TStatus; operationHandle?: TOperationHandle; directResults?: TSparkDirectResults; });
 }
 
-declare class TGetCatalogsReq {
+export class TGetCatalogsReq {
   public sessionHandle: TSessionHandle;
   public getDirectResults?: TSparkGetDirectResults;
   public runAsync?: boolean;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { sessionHandle: TSessionHandle; getDirectResults?: TSparkGetDirectResults; runAsync?: boolean; });
 }
 
-declare class TGetCatalogsResp {
+export class TGetCatalogsResp {
   public status: TStatus;
   public operationHandle?: TOperationHandle;
   public directResults?: TSparkDirectResults;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { status: TStatus; operationHandle?: TOperationHandle; directResults?: TSparkDirectResults; });
 }
 
-declare class TGetSchemasReq {
+export class TGetSchemasReq {
   public sessionHandle: TSessionHandle;
   public catalogName?: string;
   public schemaName?: string;
   public getDirectResults?: TSparkGetDirectResults;
   public runAsync?: boolean;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { sessionHandle: TSessionHandle; catalogName?: string; schemaName?: string; getDirectResults?: TSparkGetDirectResults; runAsync?: boolean; });
 }
 
-declare class TGetSchemasResp {
+export class TGetSchemasResp {
   public status: TStatus;
   public operationHandle?: TOperationHandle;
   public directResults?: TSparkDirectResults;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { status: TStatus; operationHandle?: TOperationHandle; directResults?: TSparkDirectResults; });
 }
 
-declare class TGetTablesReq {
+export class TGetTablesReq {
   public sessionHandle: TSessionHandle;
   public catalogName?: string;
   public schemaName?: string;
@@ -702,34 +830,42 @@ declare class TGetTablesReq {
   public getDirectResults?: TSparkGetDirectResults;
   public runAsync?: boolean;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { sessionHandle: TSessionHandle; catalogName?: string; schemaName?: string; tableName?: string; tableTypes?: string[]; getDirectResults?: TSparkGetDirectResults; runAsync?: boolean; });
 }
 
-declare class TGetTablesResp {
+export class TGetTablesResp {
   public status: TStatus;
   public operationHandle?: TOperationHandle;
   public directResults?: TSparkDirectResults;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { status: TStatus; operationHandle?: TOperationHandle; directResults?: TSparkDirectResults; });
 }
 
-declare class TGetTableTypesReq {
+export class TGetTableTypesReq {
   public sessionHandle: TSessionHandle;
   public getDirectResults?: TSparkGetDirectResults;
   public runAsync?: boolean;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { sessionHandle: TSessionHandle; getDirectResults?: TSparkGetDirectResults; runAsync?: boolean; });
 }
 
-declare class TGetTableTypesResp {
+export class TGetTableTypesResp {
   public status: TStatus;
   public operationHandle?: TOperationHandle;
   public directResults?: TSparkDirectResults;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { status: TStatus; operationHandle?: TOperationHandle; directResults?: TSparkDirectResults; });
 }
 
-declare class TGetColumnsReq {
+export class TGetColumnsReq {
   public sessionHandle: TSessionHandle;
   public catalogName?: string;
   public schemaName?: string;
@@ -738,18 +874,22 @@ declare class TGetColumnsReq {
   public getDirectResults?: TSparkGetDirectResults;
   public runAsync?: boolean;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { sessionHandle: TSessionHandle; catalogName?: string; schemaName?: string; tableName?: string; columnName?: string; getDirectResults?: TSparkGetDirectResults; runAsync?: boolean; });
 }
 
-declare class TGetColumnsResp {
+export class TGetColumnsResp {
   public status: TStatus;
   public operationHandle?: TOperationHandle;
   public directResults?: TSparkDirectResults;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { status: TStatus; operationHandle?: TOperationHandle; directResults?: TSparkDirectResults; });
 }
 
-declare class TGetFunctionsReq {
+export class TGetFunctionsReq {
   public sessionHandle: TSessionHandle;
   public catalogName?: string;
   public schemaName?: string;
@@ -757,18 +897,22 @@ declare class TGetFunctionsReq {
   public getDirectResults?: TSparkGetDirectResults;
   public runAsync?: boolean;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { sessionHandle: TSessionHandle; catalogName?: string; schemaName?: string; functionName: string; getDirectResults?: TSparkGetDirectResults; runAsync?: boolean; });
 }
 
-declare class TGetFunctionsResp {
+export class TGetFunctionsResp {
   public status: TStatus;
   public operationHandle?: TOperationHandle;
   public directResults?: TSparkDirectResults;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { status: TStatus; operationHandle?: TOperationHandle; directResults?: TSparkDirectResults; });
 }
 
-declare class TGetPrimaryKeysReq {
+export class TGetPrimaryKeysReq {
   public sessionHandle: TSessionHandle;
   public catalogName?: string;
   public schemaName?: string;
@@ -776,18 +920,22 @@ declare class TGetPrimaryKeysReq {
   public getDirectResults?: TSparkGetDirectResults;
   public runAsync?: boolean;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { sessionHandle: TSessionHandle; catalogName?: string; schemaName?: string; tableName?: string; getDirectResults?: TSparkGetDirectResults; runAsync?: boolean; });
 }
 
-declare class TGetPrimaryKeysResp {
+export class TGetPrimaryKeysResp {
   public status: TStatus;
   public operationHandle?: TOperationHandle;
   public directResults?: TSparkDirectResults;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { status: TStatus; operationHandle?: TOperationHandle; directResults?: TSparkDirectResults; });
 }
 
-declare class TGetCrossReferenceReq {
+export class TGetCrossReferenceReq {
   public sessionHandle: TSessionHandle;
   public parentCatalogName?: string;
   public parentSchemaName?: string;
@@ -798,25 +946,31 @@ declare class TGetCrossReferenceReq {
   public getDirectResults?: TSparkGetDirectResults;
   public runAsync?: boolean;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { sessionHandle: TSessionHandle; parentCatalogName?: string; parentSchemaName?: string; parentTableName?: string; foreignCatalogName?: string; foreignSchemaName?: string; foreignTableName?: string; getDirectResults?: TSparkGetDirectResults; runAsync?: boolean; });
 }
 
-declare class TGetCrossReferenceResp {
+export class TGetCrossReferenceResp {
   public status: TStatus;
   public operationHandle?: TOperationHandle;
   public directResults?: TSparkDirectResults;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { status: TStatus; operationHandle?: TOperationHandle; directResults?: TSparkDirectResults; });
 }
 
-declare class TGetOperationStatusReq {
+export class TGetOperationStatusReq {
   public operationHandle: TOperationHandle;
   public getProgressUpdate?: boolean;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { operationHandle: TOperationHandle; getProgressUpdate?: boolean; });
 }
 
-declare class TGetOperationStatusResp {
+export class TGetOperationStatusResp {
   public status: TStatus;
   public operationState?: TOperationState;
   public sqlState?: string;
@@ -833,40 +987,52 @@ declare class TGetOperationStatusResp {
   public errorDetailsJson?: string;
   public _databricksExt3330?: number;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { status: TStatus; operationState?: TOperationState; sqlState?: string; errorCode?: number; errorMessage?: string; taskStatus?: string; operationStarted?: Int64; operationCompleted?: Int64; hasResultSet?: boolean; progressUpdateResponse?: TProgressUpdateResp; numModifiedRows?: Int64; displayMessage?: string; diagnosticInfo?: string; errorDetailsJson?: string; _databricksExt3330?: number; });
 }
 
-declare class TCancelOperationReq {
+export class TCancelOperationReq {
   public operationHandle: TOperationHandle;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { operationHandle: TOperationHandle; });
 }
 
-declare class TCancelOperationResp {
+export class TCancelOperationResp {
   public status: TStatus;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { status: TStatus; });
 }
 
-declare class TCloseOperationReq {
+export class TCloseOperationReq {
   public operationHandle: TOperationHandle;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { operationHandle: TOperationHandle; });
 }
 
-declare class TCloseOperationResp {
+export class TCloseOperationResp {
   public status: TStatus;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { status: TStatus; });
 }
 
-declare class TGetResultSetMetadataReq {
+export class TGetResultSetMetadataReq {
   public operationHandle: TOperationHandle;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { operationHandle: TOperationHandle; });
 }
 
-declare class TGetResultSetMetadataResp {
+export class TGetResultSetMetadataResp {
   public status: TStatus;
   public schema?: TTableSchema;
   public resultFormat?: TSparkRowSetType;
@@ -880,10 +1046,12 @@ declare class TGetResultSetMetadataResp {
   public _databricksExt3336?: boolean;
   public _databricksExt3337?: boolean;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { status: TStatus; schema?: TTableSchema; resultFormat?: TSparkRowSetType; lz4Compressed?: boolean; arrowSchema?: Buffer; cacheLookupResult?: TCacheLookupResult; uncompressedBytes?: Int64; compressedBytes?: Int64; isStagingOperation?: boolean; _databricksExt3329?: number; _databricksExt3336?: boolean; _databricksExt3337?: boolean; });
 }
 
-declare class TFetchResultsReq {
+export class TFetchResultsReq {
   public operationHandle: TOperationHandle;
   public orientation?: TFetchOrientation;
   public maxRows: Int64;
@@ -892,60 +1060,76 @@ declare class TFetchResultsReq {
   public startRowOffset?: Int64;
   public includeResultSetMetadata?: boolean;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { operationHandle: TOperationHandle; orientation?: TFetchOrientation; maxRows: Int64; fetchType?: number; maxBytes?: Int64; startRowOffset?: Int64; includeResultSetMetadata?: boolean; });
 }
 
-declare class TFetchResultsResp {
+export class TFetchResultsResp {
   public status: TStatus;
   public hasMoreRows?: boolean;
   public results?: TRowSet;
   public resultSetMetadata?: TGetResultSetMetadataResp;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { status: TStatus; hasMoreRows?: boolean; results?: TRowSet; resultSetMetadata?: TGetResultSetMetadataResp; });
 }
 
-declare class TGetDelegationTokenReq {
+export class TGetDelegationTokenReq {
   public sessionHandle: TSessionHandle;
   public owner: string;
   public renewer: string;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { sessionHandle: TSessionHandle; owner: string; renewer: string; });
 }
 
-declare class TGetDelegationTokenResp {
+export class TGetDelegationTokenResp {
   public status: TStatus;
   public delegationToken?: string;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { status: TStatus; delegationToken?: string; });
 }
 
-declare class TCancelDelegationTokenReq {
+export class TCancelDelegationTokenReq {
   public sessionHandle: TSessionHandle;
   public delegationToken: string;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { sessionHandle: TSessionHandle; delegationToken: string; });
 }
 
-declare class TCancelDelegationTokenResp {
+export class TCancelDelegationTokenResp {
   public status: TStatus;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { status: TStatus; });
 }
 
-declare class TRenewDelegationTokenReq {
+export class TRenewDelegationTokenReq {
   public sessionHandle: TSessionHandle;
   public delegationToken: string;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { sessionHandle: TSessionHandle; delegationToken: string; });
 }
 
-declare class TRenewDelegationTokenResp {
+export class TRenewDelegationTokenResp {
   public status: TStatus;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { status: TStatus; });
 }
 
-declare class TProgressUpdateResp {
+export class TProgressUpdateResp {
   public headerNames: string[];
   public rows: string[][];
   public progressedPercentage: number;
@@ -953,19 +1137,21 @@ declare class TProgressUpdateResp {
   public footerSummary: string;
   public startTime: Int64;
 
+    read(p: unknown): void;
+    write(p: unknown): void;
     constructor(args?: { headerNames: string[]; rows: string[][]; progressedPercentage: number; status: TJobExecutionStatus; footerSummary: string; startTime: Int64; });
 }
 
-declare var PRIMITIVE_TYPES: TTypeId[];
+export var PRIMITIVE_TYPES: TTypeId[];
 
-declare var COMPLEX_TYPES: TTypeId[];
+export var COMPLEX_TYPES: TTypeId[];
 
-declare var COLLECTION_TYPES: TTypeId[];
+export var COLLECTION_TYPES: TTypeId[];
 
-declare var TYPE_NAMES: { [k: number /*TTypeId*/]: string; };
+export var TYPE_NAMES: { [k: number /*TTypeId*/]: string; };
 
-declare var CHARACTER_MAXIMUM_LENGTH: string;
+export var CHARACTER_MAXIMUM_LENGTH: string;
 
-declare var PRECISION: string;
+export var PRECISION: string;
 
-declare var SCALE: string;
+export var SCALE: string;

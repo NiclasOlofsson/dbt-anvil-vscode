@@ -1,5 +1,6 @@
 import https from 'https';
-import type { MetricBackendProvider, MetricBackendRequest, MetricBackendResponse } from '../backend-provider';
+import { MetricBackendResponse } from '../backend-provider';
+import type { MetricBackendProvider, MetricBackendRequest } from '../backend-provider';
 
 export interface DatabricksBackendConfig {
 	host: string;
@@ -35,11 +36,7 @@ export class DatabricksBackendProvider implements MetricBackendProvider {
 				const chunks: Buffer[] = [];
 				res.on('data', (chunk: Buffer) => chunks.push(chunk));
 				res.on('end', () => {
-					resolve({
-						status: res.statusCode ?? 200,
-						headers: res.headers as Record<string, string>,
-						body: Buffer.concat(chunks),
-					});
+					resolve(new MetricBackendResponse(res.statusCode ?? 200, res.headers as Record<string, string>, Buffer.concat(chunks)));
 				});
 			});
 

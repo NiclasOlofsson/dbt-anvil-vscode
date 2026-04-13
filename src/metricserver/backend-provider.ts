@@ -5,10 +5,12 @@ export interface MetricBackendRequest {
 	body: Buffer;
 }
 
-export interface MetricBackendResponse {
-	status: number;
-	headers: Record<string, string>;
-	body: Buffer;
+export class MetricBackendResponse {
+	constructor(
+		public status: number,
+		public headers: Record<string, string>,
+		public body: Buffer,
+	) {}
 }
 
 export interface MetricBackendProvider {
