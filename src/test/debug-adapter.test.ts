@@ -21,6 +21,7 @@ import type { BridgeRunner } from '../dbt/bridge-runner';
 import type { CompileCache } from '../dbt/compile-cache';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ParseService } from '../services/parse-service';
+import type { SqlToken } from '../ftl/parse-result';
 
 // ── Helpers ──
 
@@ -119,23 +120,7 @@ const DECOMPOSE_THREE_FRAMES = {
 
 function mockBridgeRunner(): BridgeRunner {
 	return {
-		invokeRaw: vi.fn().mockImplementation((req: Record<string, unknown>) => {
-			if (req.emit_debug_symbols) {
-				return Promise.resolve({
-					success: true,
-					stdout: '',
-					stderr: '',
-					data: {
-						success: true,
-						symbols: [
-							{ line: 0, col: 0, endCol: 6, role: 'select' },
-							{ line: 0, col: 7, endCol: 9, role: 'ident' },
-						],
-					},
-				});
-			}
-			return Promise.resolve({ success: true, stdout: '', stderr: '', data: {} });
-		}),
+		invokeRaw: vi.fn().mockResolvedValue({ success: true, stdout: '', stderr: '', data: {} }),
 		compileInlineSql: vi.fn().mockResolvedValue('SELECT id FROM orders'),
 	} as unknown as BridgeRunner;
 }
@@ -175,10 +160,13 @@ function mockManifestIndexer(): ManifestIndexer {
 	} as unknown as ManifestIndexer;
 }
 
-function mockParseService(decomposeResult?: object): ParseService {
+function mockParseService(
+	decomposeResult?: object,
+	tokenResult?: { sqlTokens: SqlToken[]; jinjaTags: [] },
+): ParseService {
 	return {
 		getDocumentModel: vi.fn().mockResolvedValue(null),
-		parseRawForTokens: vi.fn().mockResolvedValue(undefined),
+		parseRawForTokens: vi.fn().mockResolvedValue(tokenResult ?? undefined),
 		decomposeQuery: vi.fn().mockResolvedValue(JSON.stringify(decomposeResult ?? DECOMPOSE_SIMPLE)),
 		onAliasesReady: { dispose: vi.fn() },
 		onSqlglotWarnings: { dispose: vi.fn() },
@@ -1906,8 +1894,10 @@ describe('SqlDebugAdapter', () => {
 		it('uses compileWithSymbols for model files', async () => {
 			setActiveEditor('SELECT {{ ref(\'orders\') }}');
 			const bridge = mockBridgeRunner();
+			const ps = mockParseService();
 			harness = new DapHarness({
 				bridgeRunner: bridge,
+				parseService: ps,
 				pathResolver: mockPathResolver('model'),
 			});
 			harness.send('initialize');
@@ -1919,11 +1909,9 @@ describe('SqlDebugAdapter', () => {
 				expect(threadOrTerm.length).toBeGreaterThan(0);
 			});
 
-			// Bridge should have been called with emit_debug_symbols
-			expect(bridge.invokeRaw).toHaveBeenCalledWith(
-				expect.objectContaining({ emit_debug_symbols: true }),
-			);
-			// And compileInlineSql should have been called with annotated source
+			// FTL path: parseRawForTokens should have been called (not bridge invokeRaw with emit_debug_symbols)
+			expect(ps.parseRawForTokens).toHaveBeenCalled();
+			// And compileInlineSql should have been called for compilation
 			expect(bridge.compileInlineSql).toHaveBeenCalled();
 		});
 
@@ -1964,31 +1952,17 @@ describe('SqlDebugAdapter', () => {
 			};
 
 			const bridge = {
-				invokeRaw: vi.fn().mockImplementation((req: Record<string, unknown>) => {
-					if (req.emit_debug_symbols) {
-						return Promise.resolve({
-							success: true,
-							stdout: '',
-							stderr: '',
-							data: {
-								success: true,
-								symbols: [
-									{ line: 70, col: 2, endCol: 8, role: 'select' },
-									{ line: 71, col: 2, endCol: 6, role: 'from' },
-									{ line: 72, col: 2, endCol: 7, role: 'where' },
-								],
-							},
-						});
-					}
-
-					return Promise.resolve({ success: true, stdout: '', stderr: '', data: {} });
-				}),
+				invokeRaw: vi.fn().mockResolvedValue({ success: true, stdout: '', stderr: '', data: {} }),
 				compileInlineSql: vi.fn().mockResolvedValue(compiledSql),
 			} as unknown as BridgeRunner;
 
+			// Provide a minimal SELECT token so emitDebugSymbolsFromTokens returns non-undefined,
+			// causing _compileWithSymbols to use the annotated path and build a source map.
+			const tokenResult = { sqlTokens: [{ type: 'SELECT', start: 0, end: 5, line: 0, col: 6 }], jinjaTags: [] as [] };
+
 			harness = new DapHarness({
 				bridgeRunner: bridge,
-				parseService: mockParseService(decomposeData),
+				parseService: mockParseService(decomposeData, tokenResult),
 				pathResolver: mockPathResolver('model'),
 			});
 			harness.send('initialize');
@@ -2045,30 +2019,16 @@ describe('SqlDebugAdapter', () => {
 			};
 
 			const bridge = {
-				invokeRaw: vi.fn().mockImplementation((req: Record<string, unknown>) => {
-					if (req.emit_debug_symbols) {
-						return Promise.resolve({
-							success: true,
-							stdout: '',
-							stderr: '',
-							data: {
-								success: true,
-								symbols: [
-									{ line: 40, col: 2, endCol: 8, role: 'select' },
-									{ line: 41, col: 2, endCol: 6, role: 'from' },
-								],
-							},
-						});
-					}
-
-					return Promise.resolve({ success: true, stdout: '', stderr: '', data: {} });
-				}),
+				invokeRaw: vi.fn().mockResolvedValue({ success: true, stdout: '', stderr: '', data: {} }),
 				compileInlineSql: vi.fn().mockResolvedValue(compiledSql),
 			} as unknown as BridgeRunner;
 
+			// Provide a minimal SELECT token so _compileWithSymbols builds a source map.
+			const tokenResult = { sqlTokens: [{ type: 'SELECT', start: 0, end: 5, line: 0, col: 6 }], jinjaTags: [] as [] };
+
 			harness = new DapHarness({
 				bridgeRunner: bridge,
-				parseService: mockParseService(decomposeData),
+				parseService: mockParseService(decomposeData, tokenResult),
 				pathResolver: mockPathResolver('model'),
 			});
 			harness.send('initialize');
