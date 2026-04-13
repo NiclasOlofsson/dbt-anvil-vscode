@@ -1,12 +1,14 @@
 /**
  * Worker thread entry point. Each worker loads its own Pyodide instance and
- * processes parse tasks serially.  Communication with the pool is via
+ * processes parse and lineage tasks serially.  Communication with the pool is via
  * message passing (structured clone).
  *
  * workerData: { pyodideDir: string; vendorDir: string }
  *
- * Inbound messages:  { id: number; sql: string; dialect: string; schemaJson: string }
+ * Inbound messages (parse):   { id: number; sql: string; dialect: string; schemaJson: string }
+ * Inbound messages (lineage): { id: number; type: 'lineage'; compiledSql: string; columnName: string; dialect: string; schemaJson: string }
  * Outbound messages: { id: number; result: ParseResult }
+ *               or: { id: number; lineageResult: string }
  *               or: { id: number; error: string }
  * Startup message:   { ready: true }
  */
@@ -28,6 +30,26 @@ interface ParseTask {
     schemaJson: string;
 }
 
+interface LineageTask {
+    id: number;
+    type: 'lineage';
+    compiledSql: string;
+    columnName: string;
+    dialect: string;
+    schemaJson: string;
+}
+
+interface LineageV2Task {
+    id: number;
+    type: 'lineage_v2';
+    sql: string;
+    columnName: string;
+    dialect: string;
+    schemaJson: string;
+}
+
+type Task = ParseTask | LineageTask | LineageV2Task;
+
 const { pyodideDir, vendorDir, scriptsDir } = workerData as WorkerData;
 
 async function main(): Promise<void> {
@@ -36,13 +58,30 @@ async function main(): Promise<void> {
 
     parentPort!.postMessage({ ready: true });
 
-    parentPort!.on('message', async (task: ParseTask) => {
-        try {
-            const schema = task.schemaJson ? JSON.parse(task.schemaJson) as Record<string, Record<string, string>> : undefined;
-            const result: ParseResult = await parser.parse(task.sql, task.dialect, schema);
-            parentPort!.postMessage({ id: task.id, result });
-        } catch (err) {
-            parentPort!.postMessage({ id: task.id, error: String(err) });
+    parentPort!.on('message', async (task: Task) => {
+        if ('type' in task && task.type === 'lineage') {
+            try {
+                const raw = parser.traceLineage(task.compiledSql, task.columnName, task.dialect, task.schemaJson);
+                parentPort!.postMessage({ id: task.id, lineageResult: raw });
+            } catch (err) {
+                parentPort!.postMessage({ id: task.id, error: String(err) });
+            }
+        } else if ('type' in task && task.type === 'lineage_v2') {
+            try {
+                const raw = parser.traceLineageV2(task.sql, task.columnName, task.dialect, task.schemaJson);
+                parentPort!.postMessage({ id: task.id, lineageResult: raw });
+            } catch (err) {
+                parentPort!.postMessage({ id: task.id, error: String(err) });
+            }
+        } else {
+            const parseTask = task as ParseTask;
+            try {
+                const schema = parseTask.schemaJson ? JSON.parse(parseTask.schemaJson) as Record<string, Record<string, string>> : undefined;
+                const result: ParseResult = await parser.parse(parseTask.sql, parseTask.dialect, schema);
+                parentPort!.postMessage({ id: parseTask.id, result });
+            } catch (err) {
+                parentPort!.postMessage({ id: parseTask.id, error: String(err) });
+            }
         }
     });
 }

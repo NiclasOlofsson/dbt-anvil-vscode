@@ -8,7 +8,13 @@ import { GetColumnLineageTool } from '../../tools/get-column-lineage';
 import { QueryDatabaseTool } from '../../tools/query-database';
 import type { ManifestLoader } from '../../dbt/manifest-loader';
 import type { DbtExecutionService } from '../../dbt/execution-service';
+import type { FtlDocumentParser } from '../../ftl/ftl-document-parser';
 import { createMockLogger, createMockCompileCache } from '../helpers';
+
+vi.mock('fs', () => ({
+	default: { readFileSync: vi.fn().mockReturnValue('SELECT customer_id, first_name FROM orders') },
+	readFileSync: vi.fn().mockReturnValue('SELECT customer_id, first_name FROM orders'),
+}));
 
 const mockLogger = createMockLogger();
 const mockCompileCache = createMockCompileCache();
@@ -73,6 +79,7 @@ function createMockIndexer(index: ManifestIndex | null): ManifestIndexer {
 			if (!index) return [];
 			return [...index.models.values()].filter(m => m.name === name);
 		}),
+		projectDir: '/project',
 		getLineage: vi.fn((uniqueId: string, _depth: number) => {
 			if (!index) return { upstream: [], downstream: [], stats: { upstream_count: 0, downstream_count: 0, total_dependencies: 0 } };
 			const upIds = index.parentMap.get(uniqueId) ?? [];
@@ -161,38 +168,30 @@ describe('GetColumnLineageTool', () => {
 			resource_type: 'model',
 			schema: 'main',
 			database: 'dev',
+			original_file_path: 'models/customers.sql',
+			raw_code: 'SELECT customer_id, first_name FROM {{ ref(\'orders\') }}',
 			compiled_code: 'SELECT customer_id, first_name FROM orders',
 			columns: {},
 		});
 
 		let callCount = 0;
-		const mockService = {
-			submit: vi.fn().mockImplementation((req: { type: string }) => {
+		const mockFtlParser = {
+			parse: vi.fn().mockImplementation(() => {
 				callCount++;
-				if (req.type === 'get_columns') {
-					return Promise.resolve({
-						success: true,
-						data: { success: true, columns: ['customer_id', 'first_name'] },
-						stdout: '',
-						stderr: '',
-					});
-				}
-				// column_lineage request
 				return Promise.resolve({
-					success: true,
-					data: {
-						success: true,
-						dependencies: [{ column: 'customer_id', table: 'orders' }],
-						via_ctes: [],
-						transformations: [],
-					},
-					stdout: '',
-					stderr: '',
+					finalColumns: [{ name: 'customer_id', line: 0 }, { name: 'first_name', line: 0 }],
+					ctes: [], refs: [], sources: [], finalSelect: undefined, tokens: [],
+					timing: { parseMs: 0, totalMs: 0 },
 				});
 			}),
-		} as unknown as DbtExecutionService;
+			traceLineageV2: vi.fn().mockResolvedValue({
+				dependencies: [{ column: 'customer_id', table: 'orders' }],
+				via_ctes: [],
+				transformations: [],
+			}),
+		} as unknown as FtlDocumentParser;
 
-		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger, mockCompileCache, mockDescribeCache);
+		const tool = new GetColumnLineageTool(indexer, mockLogger, mockCompileCache, mockDescribeCache, mockFtlParser);
 		const result = await tool.invoke(
 			{ input: { model: 'customers', column: 'customer_id' }, toolInvocationToken: undefined } as never,
 			token as never,
@@ -216,20 +215,21 @@ describe('GetColumnLineageTool', () => {
 			resource_type: 'model',
 			schema: 'main',
 			database: 'dev',
+			original_file_path: 'models/customers.sql',
 			compiled_code: 'SELECT customer_id FROM orders',
 			columns: {},
 		});
 
-		const mockService = {
-			submit: vi.fn().mockResolvedValue({
-				success: true,
-				data: { success: true, columns: ['customer_id'] },
-				stdout: '',
-				stderr: '',
+		const mockFtlParser = {
+			parse: vi.fn().mockResolvedValue({
+				finalColumns: [{ name: 'customer_id', line: 0 }],
+				ctes: [], refs: [], sources: [], finalSelect: undefined, tokens: [],
+				timing: { parseMs: 0, totalMs: 0 },
 			}),
-		} as unknown as DbtExecutionService;
+			traceLineageV2: vi.fn().mockResolvedValue({ dependencies: [], via_ctes: [], transformations: [] }),
+		} as unknown as FtlDocumentParser;
 
-		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger, mockCompileCache, mockDescribeCache);
+		const tool = new GetColumnLineageTool(indexer, mockLogger, mockCompileCache, mockDescribeCache, mockFtlParser);
 		const result = await tool.invoke(
 			{ input: { model: 'customers', column: 'nonexistent' }, toolInvocationToken: undefined } as never,
 			token as never,
@@ -243,8 +243,11 @@ describe('GetColumnLineageTool', () => {
 	it('returns error when model not found', async () => {
 		const index = createTestIndex();
 		const indexer = createMockIndexer(index);
-		const mockService = { submit: vi.fn() } as unknown as DbtExecutionService;
-		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger, mockCompileCache, mockDescribeCache);
+		const mockFtlParser = {
+			parse: vi.fn(),
+			traceLineage: vi.fn(),
+		} as unknown as FtlDocumentParser;
+		const tool = new GetColumnLineageTool(indexer, mockLogger, mockCompileCache, mockDescribeCache, mockFtlParser);
 
 		const result = await tool.invoke(
 			{ input: { model: 'nonexistent', column: 'id' }, toolInvocationToken: undefined } as never,
@@ -256,18 +259,16 @@ describe('GetColumnLineageTool', () => {
 		expect(parsed.error).toContain('not found');
 	});
 
-	it('returns error when no compiled SQL available', async () => {
+	it('returns error when raw manifest data not found', async () => {
 		const index = createTestIndex();
 		const indexer = createMockIndexer(index);
-		(indexer.getRawNode as ReturnType<typeof vi.fn>).mockReturnValue({
-			unique_id: 'model.p.customers',
-			name: 'customers',
-			resource_type: 'model',
-			columns: {},
-		});
+		(indexer.getRawNode as ReturnType<typeof vi.fn>).mockReturnValue(null);
 
-		const mockService = { submit: vi.fn() } as unknown as DbtExecutionService;
-		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger, mockCompileCache, mockDescribeCache);
+		const mockFtlParser = {
+			parse: vi.fn(),
+			traceLineageV2: vi.fn(),
+		} as unknown as FtlDocumentParser;
+		const tool = new GetColumnLineageTool(indexer, mockLogger, mockCompileCache, mockDescribeCache, mockFtlParser);
 
 		const result = await tool.invoke(
 			{ input: { model: 'customers', column: 'id' }, toolInvocationToken: undefined } as never,
@@ -276,7 +277,7 @@ describe('GetColumnLineageTool', () => {
 
 		const text = result.content[0];
 		const parsed = JSON.parse((text as { value: string }).value);
-		expect(parsed.error).toContain('compiled SQL');
+		expect(parsed.error).toContain('not found');
 	});
 
 	it('handles bridge failure gracefully', async () => {
@@ -288,33 +289,21 @@ describe('GetColumnLineageTool', () => {
 			resource_type: 'model',
 			schema: 'main',
 			database: 'dev',
+			original_file_path: 'models/customers.sql',
 			compiled_code: 'SELECT customer_id FROM orders',
 			columns: {},
 		});
 
-		let callCount = 0;
-		const mockService = {
-			submit: vi.fn().mockImplementation((req: { type: string }) => {
-				callCount++;
-				if (req.type === 'get_columns') {
-					return Promise.resolve({
-						success: true,
-						data: { success: true, columns: ['customer_id'] },
-						stdout: '',
-						stderr: '',
-					});
-				}
-				// column_lineage fails
-				return Promise.resolve({
-					success: true,
-					data: { success: false, error: 'parse error' },
-					stdout: '',
-					stderr: '',
-				});
+		const mockFtlParser = {
+			parse: vi.fn().mockResolvedValue({
+				finalColumns: [{ name: 'customer_id', line: 0 }],
+				ctes: [], refs: [], sources: [], finalSelect: undefined, tokens: [],
+				timing: { parseMs: 0, totalMs: 0 },
 			}),
-		} as unknown as DbtExecutionService;
+			traceLineageV2: vi.fn().mockResolvedValue({ error: 'parse error' }),
+		} as unknown as FtlDocumentParser;
 
-		const tool = new GetColumnLineageTool(indexer, mockService, mockLogger, mockCompileCache, mockDescribeCache);
+		const tool = new GetColumnLineageTool(indexer, mockLogger, mockCompileCache, mockDescribeCache, mockFtlParser);
 		const result = await tool.invoke(
 			{ input: { model: 'customers', column: 'customer_id' }, toolInvocationToken: undefined } as never,
 			token as never,

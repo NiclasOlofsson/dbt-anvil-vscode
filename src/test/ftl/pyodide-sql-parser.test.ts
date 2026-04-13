@@ -4,6 +4,8 @@ import { initPyodide } from '../../ftl/pyodide-loader.js';
 import type { PyodideRuntime } from '../../ftl/pyodide-loader.js';
 import { PyodideSqlParser } from '../../ftl/pyodide-sql-parser.js';
 import { renToRawLine } from '../../ftl/nunjucks-renderer.js';
+import { walkLineageTree } from '../../ftl/ftl-document-parser.js';
+import type { LineageTreeNode, LineageResult } from '../../ftl/ftl-document-parser.js';
 
 const PYODIDE_DIR = path.join(__dirname, '..', '..', '..', 'node_modules', 'pyodide');
 const VENDOR_DIR = path.join(__dirname, '..', '..', '..', 'resources', 'bridge', 'vendor');
@@ -464,3 +466,150 @@ describe('renToRawLine', () => {
     });
 });
 
+// ── traceLineageV2 — end-to-end: Python _trace_lineage_v2 + walkLineageTree ─
+
+/** Runs parser.traceLineageV2 and applies walkLineageTree, mirroring FtlDocumentParser. */
+function traceV2(sql: string, column: string, dialect = 'duckdb', schemaJson = ''): LineageResult | null {
+    const raw = parser.traceLineageV2(sql, column, dialect, schemaJson);
+    const result = JSON.parse(raw) as { success: boolean; tree?: LineageTreeNode };
+    if (!result.success) return null;
+    return walkLineageTree(result.tree!);
+}
+
+describe('traceLineageV2', () => {
+    it('returns a dependency on the source table for a simple SELECT', () => {
+        const result = traceV2('SELECT customer_id FROM orders', 'customer_id');
+        expect(result).not.toBeNull();
+        expect(result!.dependencies).toContainEqual(
+            expect.objectContaining({ column: 'customer_id', table: 'orders' }),
+        );
+        expect(result!.via_ctes).toHaveLength(0);
+    });
+
+    it('populates transformations with a table entry for the source table', () => {
+        const result = traceV2('SELECT customer_id FROM orders', 'customer_id');
+        expect(result).not.toBeNull();
+        const tableTrans = result!.transformations.find(t => t.type === 'table' && t.id === 'table:orders');
+        expect(tableTrans).toBeDefined();
+        expect(tableTrans!.column).toBe('customer_id');
+    });
+
+    it('traces through a single CTE and populates via_ctes', () => {
+        const sql = [
+            'WITH base AS (',
+            '    SELECT customer_id FROM raw_orders',
+            ')',
+            'SELECT customer_id FROM base',
+        ].join('\n');
+        const result = traceV2(sql, 'customer_id');
+        expect(result).not.toBeNull();
+        expect(result!.dependencies).toContainEqual(
+            expect.objectContaining({ column: 'customer_id', table: 'raw_orders' }),
+        );
+        expect(result!.via_ctes).toContain('base');
+        expect(result!.transformations.some(t => t.type === 'cte' && t.id === 'cte:base')).toBe(true);
+    });
+
+    it('collects all intermediate CTE names in via_ctes for a chained CTE query', () => {
+        const sql = [
+            'WITH base AS (',
+            '    SELECT customer_id FROM raw_orders',
+            '),',
+            'final AS (',
+            '    SELECT customer_id FROM base',
+            ')',
+            'SELECT customer_id FROM final',
+        ].join('\n');
+        const result = traceV2(sql, 'customer_id');
+        expect(result).not.toBeNull();
+        expect(result!.via_ctes).toContain('base');
+        expect(result!.via_ctes).toContain('final');
+        expect(result!.dependencies).toContainEqual(
+            expect.objectContaining({ column: 'customer_id', table: 'raw_orders' }),
+        );
+    });
+
+    it('succeeds for SQL containing a Jinja statement-level macro (pass 1b path)', () => {
+        // {{ config(...) }} is a statement-level macro — identifier-blank mode produces
+        // a bare identifier before SELECT which is invalid SQL (syntax error).
+        // Pass 1b (comment-mode blank) replaces it with /* ... */ and parses cleanly.
+        const sql = [
+            "{{ config(materialized='table') }}",
+            'SELECT customer_id FROM orders',
+        ].join('\n');
+        const result = traceV2(sql, 'customer_id');
+        expect(result).not.toBeNull();
+        expect(result!.dependencies).toContainEqual(
+            expect.objectContaining({ column: 'customer_id', table: 'orders' }),
+        );
+    });
+
+    it('includes schema and database on the dependency when the table is schema-qualified', () => {
+        // DuckDB allows schema-qualified references: schema.table
+        const result = traceV2('SELECT customer_id FROM staging.raw_orders', 'customer_id');
+        expect(result).not.toBeNull();
+        const dep = result!.dependencies.find(d => d.column === 'customer_id');
+        expect(dep).toBeDefined();
+        expect(dep!.table).toBe('raw_orders');
+        expect(dep!.schema).toBe('staging');
+    });
+
+    it('returns empty dependencies for a column that does not appear in the SELECT list', () => {
+        // nonexistent_col is not projected — Python still returns success:true with an empty tree
+        const result = traceV2('SELECT customer_id FROM orders', 'nonexistent_col');
+        expect(result).not.toBeNull();
+        expect(result!.dependencies).toHaveLength(0);
+        expect(result!.transformations).toHaveLength(0);
+    });
+
+    // ── static union stripping (_deep_strip_static_unions) ─────────────────
+
+    it('strips a static-value UNION branch and traces only the real table', () => {
+        // The right branch is all literals — should be stripped, leaving only orders.
+        const sql = [
+            'SELECT customer_id FROM orders',
+            'UNION ALL',
+            "SELECT 'placeholder' AS customer_id FROM (SELECT 1) AS dummy",
+        ].join('\n');
+        const result = traceV2(sql, 'customer_id');
+        expect(result).not.toBeNull();
+        expect(result!.dependencies).toContainEqual(
+            expect.objectContaining({ column: 'customer_id', table: 'orders' }),
+        );
+        // The static branch (dummy) must not appear as a dependency
+        expect(result!.dependencies.some(d => d.table === 'dummy')).toBe(false);
+    });
+
+    it('retains both tables when both UNION branches are real', () => {
+        // Neither side is all-static — both should appear in dependencies.
+        const sql = [
+            'SELECT customer_id FROM orders',
+            'UNION ALL',
+            'SELECT customer_id FROM archive_orders',
+        ].join('\n');
+        const result = traceV2(sql, 'customer_id');
+        expect(result).not.toBeNull();
+        const tables = result!.dependencies.map(d => d.table);
+        expect(tables).toContain('orders');
+        expect(tables).toContain('archive_orders');
+    });
+
+    it('strips a static UNION inside a CTE and traces to the real upstream table', () => {
+        // The CTE body has a static-branch union; after stripping only raw_orders remains.
+        const sql = [
+            'WITH base AS (',
+            '    SELECT customer_id FROM raw_orders',
+            '    UNION ALL',
+            "    SELECT NULL AS customer_id FROM (SELECT 1) AS dummy",
+            ')',
+            'SELECT customer_id FROM base',
+        ].join('\n');
+        const result = traceV2(sql, 'customer_id');
+        expect(result).not.toBeNull();
+        expect(result!.dependencies).toContainEqual(
+            expect.objectContaining({ column: 'customer_id', table: 'raw_orders' }),
+        );
+        expect(result!.dependencies.some(d => d.table === 'dummy')).toBe(false);
+        expect(result!.via_ctes).toContain('base');
+    });
+});

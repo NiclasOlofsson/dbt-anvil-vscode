@@ -5,14 +5,39 @@ import { Worker } from 'node:worker_threads';
 import type { ParseResult } from './parse-result';
 import type { SqlParser } from './sql-parser';
 
-interface PendingTask {
+interface PendingParseTask {
     id: number;
+    kind: 'parse';
     sql: string;
     dialect: string;
     schemaJson: string;
     resolve: (result: ParseResult) => void;
     reject: (err: Error) => void;
 }
+
+interface PendingLineageTask {
+    id: number;
+    kind: 'lineage';
+    compiledSql: string;
+    columnName: string;
+    dialect: string;
+    schemaJson: string;
+    resolve: (result: string) => void;
+    reject: (err: Error) => void;
+}
+
+interface PendingLineageV2Task {
+    id: number;
+    kind: 'lineage_v2';
+    sql: string;
+    columnName: string;
+    dialect: string;
+    schemaJson: string;
+    resolve: (result: string) => void;
+    reject: (err: Error) => void;
+}
+
+type PendingTask = PendingParseTask | PendingLineageTask | PendingLineageV2Task;
 
 interface WorkerState {
     worker: Worker;
@@ -66,9 +91,10 @@ export class PyodideWorkerPool implements SqlParser {
         this.#minWorkers = options?.minWorkers ?? 4;
         this.#maxWorkers = options?.maxWorkers ?? os.cpus().length;
 
-        // Spawn initial workers in parallel.
+        // Spawn initial workers in parallel. allSettled so one crashed worker
+        // doesn't prevent ready() from resolving — surviving workers still serve requests.
         const initialWorkers = Array.from({ length: this.#minWorkers }, () => this.#spawnWorker());
-        this.#initialReady = Promise.all(initialWorkers.map(w => w.ready)).then(() => undefined);
+        this.#initialReady = Promise.allSettled(initialWorkers.map(w => w.ready)).then(() => undefined);
     }
 
     /** Resolves when all initial workers are loaded and ready to accept tasks. */
@@ -81,11 +107,52 @@ export class PyodideWorkerPool implements SqlParser {
             throw new Error('PyodideWorkerPool has been disposed');
         }
         return new Promise<ParseResult>((resolve, reject) => {
-            const task: PendingTask = {
+            const task: PendingParseTask = {
                 id: this.#nextId++,
+                kind: 'parse',
                 sql,
                 dialect,
                 schemaJson: schema ? JSON.stringify(schema) : '',
+                resolve,
+                reject,
+            };
+            this.#queue.push(task);
+            this.#drain();
+        });
+    }
+
+    traceLineage(compiledSql: string, columnName: string, dialect: string, schemaJson: string): Promise<string> {
+        if (this.#disposed) {
+            throw new Error('PyodideWorkerPool has been disposed');
+        }
+        return new Promise<string>((resolve, reject) => {
+            const task: PendingLineageTask = {
+                id: this.#nextId++,
+                kind: 'lineage',
+                compiledSql,
+                columnName,
+                dialect,
+                schemaJson,
+                resolve,
+                reject,
+            };
+            this.#queue.push(task);
+            this.#drain();
+        });
+    }
+
+    traceLineageV2(sql: string, columnName: string, dialect: string, schemaJson: string): Promise<string> {
+        if (this.#disposed) {
+            throw new Error('PyodideWorkerPool has been disposed');
+        }
+        return new Promise<string>((resolve, reject) => {
+            const task: PendingLineageV2Task = {
+                id: this.#nextId++,
+                kind: 'lineage_v2',
+                sql,
+                columnName,
+                dialect,
+                schemaJson,
                 resolve,
                 reject,
             };
@@ -132,27 +199,62 @@ export class PyodideWorkerPool implements SqlParser {
 
     #dispatch(state: WorkerState, task: PendingTask): void {
         state.idle = false;
-        state.worker.postMessage({
-            id: task.id,
-            sql: task.sql,
-            dialect: task.dialect,
-            schemaJson: task.schemaJson,
-        });
 
-        const onMessage = (msg: { id: number; result?: ParseResult; error?: string }) => {
-            if (msg.id !== task.id) return;
-            state.worker.off('message', onMessage);
-            state.idle = true;
+        if (task.kind === 'lineage') {
+            state.worker.postMessage({
+                id: task.id,
+                type: 'lineage',
+                compiledSql: task.compiledSql,
+                columnName: task.columnName,
+                dialect: task.dialect,
+                schemaJson: task.schemaJson,
+            });
+        } else if (task.kind === 'lineage_v2') {
+            state.worker.postMessage({
+                id: task.id,
+                type: 'lineage_v2',
+                sql: task.sql,
+                columnName: task.columnName,
+                dialect: task.dialect,
+                schemaJson: task.schemaJson,
+            });
+        } else {
+            state.worker.postMessage({
+                id: task.id,
+                sql: task.sql,
+                dialect: task.dialect,
+                schemaJson: task.schemaJson,
+            });
+        }
 
-            if (msg.error !== undefined) {
-                task.reject(new Error(msg.error));
-            } else {
-                task.resolve(msg.result!);
-            }
+        const onMessage = (msg: { id: number; result?: ParseResult; lineageResult?: string; error?: string }) => {
+            try {
+                if (msg.id !== task.id) return;
+                state.worker.off('message', onMessage);
+                state.idle = true;
 
-            // Pick up next queued task, if any.
-            if (this.#queue.length > 0) {
-                this.#dispatch(state, this.#queue.shift()!);
+                if (msg.error !== undefined) {
+                    task.reject(new Error(msg.error));
+                } else if (task.kind === 'lineage' || task.kind === 'lineage_v2') {
+                    if (msg.lineageResult === undefined) {
+                        task.reject(new Error(`[PyodideWorkerPool] lineage worker returned no lineageResult (msg keys: ${Object.keys(msg).join(',')})`));
+                    } else {
+                        (task as PendingLineageTask).resolve(msg.lineageResult);
+                    }
+                } else {
+                    if (msg.result === undefined) {
+                        task.reject(new Error(`[PyodideWorkerPool] parse worker returned no result (msg keys: ${Object.keys(msg).join(',')})`));
+                    } else {
+                        (task as PendingParseTask).resolve(msg.result);
+                    }
+                }
+
+                if (this.#queue.length > 0) {
+                    this.#dispatch(state, this.#queue.shift()!);
+                }
+            } catch (err) {
+                const detail = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
+                task.reject(new Error(`[PyodideWorkerPool] onMessage crash (task.kind=${task.kind}, msg keys=${Object.keys(msg).join(',')}): ${detail}`));
             }
         };
 
@@ -169,7 +271,8 @@ export class PyodideWorkerPool implements SqlParser {
         });
 
         let resolveReady!: () => void;
-        const ready = new Promise<void>((res) => { resolveReady = res; });
+        let rejectReady!: (err: Error) => void;
+        const ready = new Promise<void>((res, rej) => { resolveReady = res; rejectReady = rej; });
 
         const state: WorkerState = { worker, idle: false, ready };
 
@@ -183,8 +286,9 @@ export class PyodideWorkerPool implements SqlParser {
         });
 
         worker.on('error', (err: Error) => {
-            // Remove faulted worker from pool.
+            // Remove faulted worker from pool and unblock ready() so startup doesn't hang.
             this.#workers = this.#workers.filter(w => w !== state);
+            rejectReady(err);
             void worker.terminate();
             console.error(`[PyodideWorkerPool] worker error: ${(err as Error).message}`);
         });
