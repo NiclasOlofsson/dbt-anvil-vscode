@@ -221,23 +221,24 @@ describe('identifierName', () => {
 describe('identifierPosition', () => {
     it('converts 1-based line and exclusive-end col to 0-based', () => {
         // node [4]: m = { line: 1, col: 9 }, name = 'orders' (len 6)
-        // line_0 = 0, endCol_0 = 8, col_0 = 8 - 6 = 2
+        // sqlglot col is 1-based inclusive end = 0-based exclusive end
+        // line_0 = 0, endCol_0 = 9, col_0 = 9 - 6 = 3
         const pos = identifierPosition(withAst[4], 'orders');
-        expect(pos).toEqual({ line: 0, col: 2, endCol: 8 });
+        expect(pos).toEqual({ line: 0, col: 3, endCol: 9 });
     });
 
     it('handles a two-char name', () => {
         // node [2] in selectAst: m = { line: 1, col: 3 }, name = 'id' (len 2)
-        // endCol_0 = 2, col_0 = 0
+        // endCol_0 = 3, col_0 = 3 - 2 = 1
         const pos = identifierPosition(selectAst[2], 'id');
-        expect(pos).toEqual({ line: 0, col: 0, endCol: 2 });
+        expect(pos).toEqual({ line: 0, col: 1, endCol: 3 });
     });
 
     it('handles a 4-char name on col 11', () => {
         // node [5] in selectAst: m = { line: 1, col: 11 }, name = 'name' (len 4)
-        // endCol_0 = 10, col_0 = 6
+        // endCol_0 = 11, col_0 = 11 - 4 = 7
         const pos = identifierPosition(selectAst[5], 'name');
-        expect(pos).toEqual({ line: 0, col: 6, endCol: 10 });
+        expect(pos).toEqual({ line: 0, col: 7, endCol: 11 });
     });
 
     it('returns undefined when m is absent', () => {
