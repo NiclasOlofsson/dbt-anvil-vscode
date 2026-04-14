@@ -130,3 +130,50 @@ describe('sample project DocumentModel — stress (50 iterations)', () => {
 		expect(iterationMs.length).toBe(STRESS_ITERATIONS);
 	}, 120_000);
 });
+
+// ---------------------------------------------------------------------------
+// qualify() regression — GROUP BY ALL (DuckDB) must not silently break SELECT *
+// expansion.  When qualify() receives the correct dialect it expands `SELECT *`
+// in cte_final and emits column_ref tokens for every cte_interim_calcs column,
+// meaning none of them are flagged as unused.
+// ---------------------------------------------------------------------------
+describe('qualify() dialect regression', () => {
+	let singleParser: FtlDocumentParser;
+
+	beforeAll(async () => {
+		const runtime = await initPyodide(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR);
+		singleParser = new FtlDocumentParser(PyodideSqlParser.create(runtime.pyodide));
+	}, 60_000);
+
+	it('reg_season_predictions — SELECT * in cte_final expands to column_refs for cte_interim_calcs columns', async () => {
+		const filePath = path.join(
+			SAMPLES_ROOT, 'nba-monte-carlo', 'models', 'nba', 'analysis', 'reg_season_predictions.sql',
+		);
+		const raw = fs.readFileSync(filePath, 'utf8');
+
+		// Provide a schema so qualify() can resolve cte_interim_calcs columns through SELECT *.
+		// The schema for external refs doesn't matter for CTE expansion — only the CTE columns
+		// parsed from the SQL body are needed. qualify() resolves those internally.
+		const schema: Record<string, Record<string, string>> = {
+			reg_season_simulator: { game_id: 'varchar', home_team: 'varchar', visiting_team: 'varchar' },
+			nba_teams: { team: 'varchar' },
+			nba_results_by_team: { team: 'varchar', score: 'varchar' },
+		};
+
+		const model = await singleParser.parse(raw, 'duckdb', { schema });
+
+		// cte_final does SELECT * FROM cte_interim_calcs.
+		// qualify() must expand SELECT * to explicit column refs, so home_team (and all other
+		// cte_interim_calcs columns) appear as column_ref tokens resolved to cte_interim_calcs.
+		const columnRefs = (model.tokens ?? []).filter(t => t.type === 'column_ref');
+		const interimColRefs = columnRefs.filter(
+			t => (t as import('../../services/parse-service').ColumnRefToken).resolvedTableRef?.name.toLowerCase() === 'cte_interim_calcs',
+		);
+
+		// home_team must be referenced — it's consumed via SELECT * in cte_final
+		const homeTeamRefs = interimColRefs.filter(
+			t => (t as import('../../services/parse-service').ColumnRefToken).name.toLowerCase() === 'home_team',
+		);
+		expect(homeTeamRefs.length).toBeGreaterThan(0);
+	}, 30_000);
+});

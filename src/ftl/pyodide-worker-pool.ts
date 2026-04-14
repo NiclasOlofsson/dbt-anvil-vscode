@@ -103,7 +103,18 @@ export class PyodideWorkerPool implements SqlParser {
 		// Spawn initial workers in parallel. allSettled so one crashed worker
 		// doesn't prevent ready() from resolving — surviving workers still serve requests.
 		const initialWorkers = Array.from({ length: this.#minWorkers }, () => this.#spawnWorker());
-		this.#initialReady = Promise.allSettled(initialWorkers.map(w => w.ready)).then(() => undefined);
+		// Race each worker's ready promise against a 60s timeout so a worker that is
+		// stuck loading Pyodide (no error, no exit, just frozen) can't hang activation.
+		const workerReadyTimeout = 30_000;
+		const timedReady = initialWorkers.map(w =>
+			Promise.race([
+				w.ready,
+				new Promise<void>((_, rej) =>
+					setTimeout(() => rej(new Error('worker ready timeout')), workerReadyTimeout),
+				),
+			]),
+		);
+		this.#initialReady = Promise.allSettled(timedReady).then(() => undefined);
 	}
 
 	/** Resolves when all initial workers are loaded and ready to accept tasks. */
@@ -331,6 +342,13 @@ export class PyodideWorkerPool implements SqlParser {
 			rejectReady(err);
 			void worker.terminate();
 			console.error(`[PyodideWorkerPool] worker error: ${(err as Error).message}`);
+		});
+
+		worker.once('exit', (code: number) => {
+			// Worker exited without sending { ready: true } — reject so allSettled can proceed.
+			// If ready was already resolved this is a no-op (rejectReady is idempotent via Promise).
+			this.#workers = this.#workers.filter(w => w !== state);
+			rejectReady(new Error(`worker exited unexpectedly with code ${code}`));
 		});
 
 		this.#workers.push(state);
