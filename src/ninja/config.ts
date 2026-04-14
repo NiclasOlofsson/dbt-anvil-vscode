@@ -23,6 +23,9 @@ export interface NinjaConfig {
 		commaPosition: CommaPosition;
 		operatorPosition: OperatorPosition;
 	};
+	structure: {
+		allowStarInCte: boolean;
+	};
 }
 
 export const DEFAULT_CONFIG: NinjaConfig = {
@@ -42,5 +45,8 @@ export const DEFAULT_CONFIG: NinjaConfig = {
 	layout: {
 		commaPosition: 'trailing',
 		operatorPosition: 'trailing',
+	},
+	structure: {
+		allowStarInCte: false,
 	},
 };
