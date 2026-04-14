@@ -7,13 +7,14 @@
 	<style>
 		:root {
 			color-scheme: dark;
-			--bg: #0b1220;
-			--card: #121a2b;
-			--text: #e5e7eb;
-			--muted: #9ca3af;
-			--accent: #60a5fa;
-			--accent-2: #22d3ee;
-			--border: #23304a;
+			--bg: #1e1e1e;
+			--card: #252526;
+			--text: #d4d4d4;
+			--muted: #9da5b4;
+			--accent: #0e639c;
+			--accent-hover: #1177bb;
+			--border: #3c3c3c;
+			--code: #1b1b1b;
 		}
 
 		* { box-sizing: border-box; }
@@ -21,29 +22,74 @@
 		body {
 			margin: 0;
 			font-family: Inter, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-			background: radial-gradient(circle at 20% 0%, #17233a 0%, var(--bg) 45%);
+			background-color: #252526;
+			background-image:
+				linear-gradient(to bottom, rgba(37,37,38,0) 0px, rgba(37,37,38,0) 500px, #252526 900px, #252526 calc(100% - 200px), rgba(37,37,38,0) 100%),
+				url('hero-bg.svg'),
+				url('hero-bg.svg');
+			background-position: top left, top left, bottom left;
+			background-repeat: no-repeat, repeat-x, repeat-x;
+			background-size: 100% 100%, 2560px 900px, 2560px 900px;
 			color: var(--text);
 			line-height: 1.6;
 		}
 
 		.wrapper {
-			max-width: 980px;
+			max-width: 1080px;
 			margin: 0 auto;
-			padding: 56px 20px 80px;
+			padding: 76px 20px 8px;
 		}
 
 		.card {
-			background: linear-gradient(180deg, #141f33 0%, var(--card) 100%);
-			border: 1px solid var(--border);
-			border-radius: 16px;
+			border-radius: 6px;
 			padding: 28px;
-			box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+			-webkit-mask-image: linear-gradient(to bottom, transparent, black 24px, black calc(100% - 24px), transparent);
+			mask-image: linear-gradient(to bottom, transparent, black 24px, black calc(100% - 24px), transparent);
+		}
+
+		.brand {
+			position: fixed;
+			top: 20px;
+			right: 24px;
+			z-index: 100;
+			display: inline-flex;
+			align-items: center;
+			background: rgba(37, 37, 38, 0.45);
+			border: 1px solid rgba(60, 60, 60, 0.4);
+			border-radius: 8px;
+			padding: 8px;
+			backdrop-filter: blur(8px);
+			-webkit-backdrop-filter: blur(8px);
+		}
+
+		.brand img {
+			width: 40px;
+			height: 40px;
+			border: 0;
+			margin: 0;
+			border-radius: 6px;
+			opacity: 0.85;
+		}
+
+		.brand span {
+			display: none;
 		}
 
 		h1 {
 			font-size: clamp(2rem, 5vw, 3rem);
 			line-height: 1.1;
-			margin: 0 0 14px;
+			margin: 0 0 22px;
+			text-align: center;
+		}
+
+		h2 {
+			margin: 30px 0 12px;
+			font-size: 1.35rem;
+		}
+
+		h3 {
+			margin: 0 0 8px;
+			font-size: 1rem;
 		}
 
 		p {
@@ -51,21 +97,57 @@
 			color: var(--muted);
 		}
 
+		p.lead {
+			font-size: 1.06rem;
+			color: #cfd6e3;
+			max-width: 44ch;
+			text-align: center;
+			margin-left: auto;
+			margin-right: auto;
+			margin-bottom: 0;
+		}
+
 		.actions {
 			display: flex;
 			flex-wrap: wrap;
 			gap: 10px;
-			margin: 18px 0 26px;
+			margin: 24px 0 0;
+			justify-content: center;
+		}
+
+		.hero {
+			display: grid;
+			grid-template-columns: 1fr;
+			gap: 36px;
+			align-items: start;
+			margin: 0 0 26px;
+		}
+
+		.hero-media {
+			background: #1f1f1f;
+			border: 1px solid var(--border);
+			border-radius: 6px;
+			padding: 12px;
+		}
+
+		.hero-media .label {
+			font-size: 0.8rem;
+			color: var(--muted);
+			margin: 0 0 8px;
 		}
 
 		a.btn {
 			display: inline-block;
 			text-decoration: none;
-			color: #0b1220;
-			background: linear-gradient(90deg, var(--accent), var(--accent-2));
+			color: #ffffff;
+			background: var(--accent);
 			padding: 10px 14px;
-			border-radius: 10px;
+			border-radius: 4px;
 			font-weight: 600;
+		}
+
+		a.btn:hover {
+			background: var(--accent-hover);
 		}
 
 		a.btn.secondary {
@@ -74,12 +156,252 @@
 			border: 1px solid var(--border);
 		}
 
+		.feature-rail-wrap {
+			position: relative;
+		}
+
+		.feature-rail {
+			display: flex;
+			overflow-x: auto;
+			scroll-snap-type: x mandatory;
+			scrollbar-width: none;
+			-ms-overflow-style: none;
+			border-radius: 6px;
+		}
+
+		.feature-rail::-webkit-scrollbar { display: none; }
+
+		.feature {
+			flex: 0 0 100%;
+			scroll-snap-align: center;
+			position: relative;
+			overflow: hidden;
+			padding: 36px 36px 36px 48px;
+			background: #18191c;
+			border-radius: 6px;
+			border: 1px solid var(--border);
+			border-left-width: 4px;
+			min-height: 180px;
+			box-sizing: border-box;
+		}
+
+		.feature[data-accent='cyan']   { border-left-color: #22d3ee; }
+		.feature[data-accent='violet'] { border-left-color: #a78bfa; }
+		.feature[data-accent='amber']  { border-left-color: #fbbf24; }
+		.feature[data-accent='green']  { border-left-color: #4ade80; }
+		.feature[data-accent='rose']   { border-left-color: #fb7185; }
+		.feature[data-accent='sky']    { border-left-color: #38bdf8; }
+		.feature[data-accent='lime']   { border-left-color: #a3e635; }
+
+		.feature-num {
+			display: none;
+		}
+
+		.feature h3 {
+			margin: 0 0 10px;
+			font-size: 1.25rem;
+			font-weight: 600;
+			color: var(--text);
+		}
+
+		.feature-media {
+			margin: 0 0 14px;
+			border-radius: 4px;
+			overflow: hidden;
+			background: #111214;
+		}
+
+		.feature-media img {
+			display: block;
+			width: 100%;
+			height: 360px;
+			object-fit: cover;
+			object-position: center center;
+			border: 0;
+			margin: 0;
+			border-radius: 0;
+		}
+
+		.feature-media > img {
+			margin: 8px;
+			width: calc(100% - 16px);
+			border-radius: 4px;
+		}
+
+		.debugger-slices {
+			display: grid;
+			grid-template-columns: 1fr 1fr;
+			gap: 8px;
+			padding: 8px;
+		}
+
+		.debugger-slices img {
+			display: block;
+			width: 100%;
+			height: 100%;
+			margin: 0;
+			object-fit: cover;
+			object-position: top left;
+			border: 1px solid var(--border);
+			border-radius: 4px;
+		}
+
+		.debugger-slices .slice-variables    { grid-column: 1; grid-row: 1; height: 240px; }
+		.debugger-slices .slice-context      { display: none; }
+		.debugger-slices .slice-lower-panels { grid-column: 2; grid-row: 1; height: 240px; }
+		.debugger-slices .slice-results      { grid-column: 1 / span 2; grid-row: 2; height: 140px; }
+
+		.profiler-slices {
+			display: grid;
+			grid-template-columns: 2.8fr 4fr 1fr;
+			grid-template-rows: 280px;
+			gap: 8px;
+			padding: 8px;
+		}
+
+		.profiler-slices img {
+			display: block;
+			width: 100%;
+			height: 100%;
+			margin: 0;
+			object-fit: contain;
+			object-position: top center;
+			border: 1px solid var(--border);
+			border-radius: 4px;
+			background-color: #111214;
+		}
+
+		.profiler-slices .slice-sidebar { grid-column: 1; }
+		.profiler-slices .slice-editor  { grid-column: 2; }
+		.profiler-slices .slice-minimap { grid-column: 3; }
+
+		.copilot-logo-media {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			background: #d4d4d4;
+			padding: 48px;
+		}
+
+		.copilot-logo-media img {
+			width: 192px;
+			height: 192px;
+			border: none;
+			border-radius: 0;
+			margin: 0;
+			color: #000;
+		}
+
+		.feature[data-accent='cyan']   h3 { color: #67e8f9; }
+		.feature[data-accent='violet'] h3 { color: #c4b5fd; }
+		.feature[data-accent='amber']  h3 { color: #fcd34d; }
+		.feature[data-accent='green']  h3 { color: #86efac; }
+		.feature[data-accent='rose']   h3 { color: #fda4af; }
+		.feature[data-accent='sky']    h3 { color: #7dd3fc; }
+		.feature[data-accent='lime']   h3 { color: #bef264; }
+
+		.feature p {
+			margin: 0;
+			font-size: 0.95rem;
+			line-height: 1.65;
+			color: var(--muted);
+			max-width: 68ch;
+		}
+
+		.feature-nav {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			gap: 10px;
+			margin-top: 14px;
+		}
+
+		.rail-control {
+			width: 30px;
+			height: 30px;
+			border-radius: 999px;
+			border: 1px solid var(--border);
+			background: transparent;
+			color: var(--muted);
+			font-size: 1rem;
+			line-height: 1;
+			cursor: pointer;
+			padding: 0;
+			transition: color 0.15s, border-color 0.15s;
+		}
+
+		.rail-control:hover {
+			color: var(--text);
+			border-color: #555;
+		}
+
+		.rail-dots {
+			display: flex;
+			gap: 6px;
+			align-items: center;
+		}
+
+		.rail-dot {
+			width: 6px;
+			height: 6px;
+			border-radius: 999px;
+			background: #444;
+			transition: background 0.2s, width 0.2s;
+			cursor: pointer;
+			border: none;
+			padding: 0;
+		}
+
+		.rail-dot.active {
+			width: 20px;
+			background: var(--accent);
+		}
+
+		pre {
+			margin: 12px 0 0;
+			background: var(--code);
+			border: 1px solid var(--border);
+			padding: 12px;
+			border-radius: 4px;
+			overflow-x: auto;
+			font-size: 0.9rem;
+			line-height: 1.45;
+		}
+
+		code {
+			font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+		}
+
+		footer {
+			margin-top: 22px;
+			padding-top: 16px;
+			font-size: 0.9rem;
+			color: var(--muted);
+			text-align: center;
+		}
+
+		.page-footer {
+			text-align: center;
+			padding: 20px;
+			font-size: 0.9rem;
+			color: var(--muted);
+		}
+
+
+
 		img {
 			width: 100%;
 			height: auto;
-			border-radius: 12px;
+			border-radius: 6px;
 			border: 1px solid var(--border);
 			margin: 10px 0 20px;
+		}
+
+		.hero-media img {
+			display: block;
+			margin: 0;
+			width: 100%;
+			max-width: none;
 		}
 
 		ul {
@@ -88,32 +410,463 @@
 		}
 
 		li { margin: 6px 0; }
+
+		.prose-section {
+			margin: 48px 0 0;
+			max-width: 72ch;
+		}
+
+		.prose-section h2 {
+			margin: 0 0 14px;
+		}
+
+		.prose-section p + p {
+			margin-top: 12px;
+		}
+
+		.prose-section ul {
+			margin-top: 10px;
+			color: var(--muted);
+			line-height: 1.7;
+		}
+
+		.prose-section.getting-started {
+			max-width: 100%;
+			background: var(--bg);
+			border: 1px solid var(--border);
+			border-radius: 8px;
+			padding: 28px 32px 24px;
+		}
+
+		.steps {
+			list-style: none;
+			padding: 0;
+			margin: 14px 0 0;
+			display: flex;
+			flex-direction: column;
+			gap: 10px;
+		}
+
+		.steps li {
+			display: flex;
+			align-items: center;
+			gap: 12px;
+			color: var(--text);
+			margin: 0;
+		}
+
+		.steps li .step-num {
+			flex-shrink: 0;
+			width: 22px;
+			height: 22px;
+			border-radius: 999px;
+			background: var(--accent);
+			color: #fff;
+			font-size: 0.75rem;
+			font-weight: 700;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+		}
+
+		.split-section {
+			margin: 56px 0 0;
+			display: grid;
+			grid-template-columns: 1fr 1fr;
+			gap: 32px 48px;
+			align-items: start;
+		}
+
+		.split-section h2 {
+			margin: 0 0 14px;
+		}
+
+		.split-section p {
+			margin: 0 0 12px;
+		}
+
+		.split-section p:last-child {
+			margin-bottom: 0;
+		}
+
+		.img-frame {
+			background: #0e0e10;
+			border: 1px solid #2a2a2e;
+			border-radius: 6px;
+			overflow: hidden;
+			box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+		}
+
+		.split-section .split-img {
+			width: 100%;
+			height: auto;
+			display: block;
+			margin: 0;
+		}
+
+		.split-section .split-img-placeholder {
+			border-radius: 6px;
+			border: 1px dashed var(--border);
+			width: 100%;
+			aspect-ratio: 16/10;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			color: #555;
+			font-size: 0.82rem;
+			background: #1a1a1a;
+			margin: 0;
+		}
+
+		@media (max-width: 700px) {
+			.split-section {
+				grid-template-columns: 1fr;
+			}
+		}
+
+		.feature-grid {
+			margin: 48px 0 0;
+		}
+
+		.feature-grid h2 {
+			margin: 0 0 20px;
+		}
+
+		.feature-grid-cols {
+			display: grid;
+			grid-template-columns: repeat(3, 1fr);
+			gap: 0 32px;
+		}
+
+		.feature-grid-cols ul {
+			color: var(--muted);
+			line-height: 1.6;
+			margin-bottom: 8px;
+			font-size: 0.82rem;
+		}
+
+		.feature-grid-cols ul li code {
+			font-size: 0.82em;
+			color: #9cdcfe;
+		}
+
+		.prose-section p > strong:first-child {
+			color: #9cdcfe;
+		}
+
+		.feature-grid h3 {
+			margin: 0 0 6px;
+			color: #9cdcfe;
+			text-transform: uppercase;
+			letter-spacing: 0.06em;
+			font-size: 0.72rem;
+			font-weight: 700;
+		}
 	</style>
 </head>
 <body>
 	<main class="wrapper">
 		<section class="card">
-			<h1>dbt Studio</h1>
-			<p>
-				A VS Code extension that gives dbt the same kind of language support that most programming
-				languages have had for years. Now it's here, for dbt Core.
-			</p>
-
-			<div class="actions">
-				<a class="btn" href="https://marketplace.visualstudio.com/items?itemName=nickeolofsson.dbt-studio-vscode">Install from Marketplace</a>
-				<a class="btn secondary" href="https://github.com/NiclasOlofsson/dbt-studio">View public repo</a>
+			<div class="brand">
+				<img alt="dbt Studio logo" src="../resources/icons/dbt-studio-128.png" />
+				<span>dbt Studio</span>
 			</div>
 
-			<img alt="dbt Studio demo" src="https://raw.githubusercontent.com/NiclasOlofsson/dbt-studio/main/demo.webp" />
+			<section class="hero" aria-label="Hero">
+				<div>
+					<h1>dbt Studio for Visual Studio Code</h1>
+					<p class="lead">
+						A VS Code extension that gives dbt the language support most developers assume already
+						exists.<br>It didn't. Now it does.
+					</p>
 
-			<ul>
-				<li>Column intelligence</li>
-				<li>Interactive lineage</li>
-				<li>SQL debugger and profiler</li>
-				<li>Test explorer</li>
-				<li>Copilot tools for dbt workflows</li>
-			</ul>
+					<div class="actions">
+						<a class="btn" href="https://marketplace.visualstudio.com/items?itemName=nickeolofsson.dbt-studio-vscode">Install from Marketplace</a>
+						<a class="btn secondary" href="https://github.com/NiclasOlofsson/dbt-studio">Follow project updates</a>
+					</div>
+				</div>
+
+				<div class="hero-media">
+					<p class="label">🎬 &nbsp;In a world where SQL tooling was broken... one extension dared to fix it. &nbsp;<em>Coming to a terminal near you.</em></p>
+					<img alt="dbt Studio demo movie" src="https://raw.githubusercontent.com/NiclasOlofsson/dbt-studio/main/demo.webp" />
+				</div>
+			</section>
+
+			<h2 id="features" style="text-align: center;">Stuff you'll actually use</h2>
+			<p class="lead" style="margin-bottom: 32px; max-width: 72ch;">Most of this is what you'd expect from any serious language extension: completions, hover, go-to-definition, diagnostics. Some of it you didn't know you needed until you see it work.</p>
+			<div class="feature-rail-wrap">
+				<div class="feature-rail" aria-label="Feature cards" id="featureRail">
+					<article class="feature" data-accent="cyan">
+						<span class="feature-num" aria-hidden="true">01</span>
+						<h3>Column intelligence</h3>
+						<div class="feature-media">
+							<img alt="Column intelligence preview" src="images/cards/01-column.png" style="object-position: 54% 46%;" />
+						</div>
+						<p>Type in a <code>SELECT</code> and get completions from actual upstream columns. Hover shows origin. Rename updates references across your project. It works through refs, sources, CTEs, joins, and YAML, without making you babysit metadata files.</p>
+					<p>Go-to-definition, find references, and call hierarchy work too. The full language server experience, for SQL and dbt. Finally.</p>
+					</article>
+					<article class="feature" data-accent="violet">
+						<span class="feature-num" aria-hidden="true">02</span>
+						<h3>Jinja-first parsing</h3>
+						<div class="feature-media">
+							<img alt="Jinja parsing preview" src="images/cards/02-jinja.png" style="object-position: 44% 35%;" />
+						</div>
+						<p>Most SQL tooling treats Jinja like noise. dbt Studio treats it as a first-class layer, so completions, hover, diagnostics, and go-to-definition keep working inside <code>{% if %}</code> blocks, loops, and macros. Quietly, yes. Jinja ninja.</p>
+					<p>Macro calls get signature help as you type. Both Jinja-SQL and Jinja-in-YAML have dedicated grammars, so highlighting is accurate in model files and schema definitions.</p>
+					</article>
+					<article class="feature" data-accent="amber">
+						<span class="feature-num" aria-hidden="true">03</span>
+						<h3>Lineage + impact</h3>
+						<div class="feature-media">
+							<img alt="Lineage impact preview" src="images/cards/03-lineage.png" style="object-position: 55% 58%;" />
+						</div>
+						<p>Interactive model and column lineage that follows your editor. Parsed SQL, not regex guesswork. Fast enough that you stop thinking about the tool and get back to shipping models.</p>
+					<p>Click into column-level lineage to trace an individual column through the DAG. Open a model and the graph updates. No manual refresh, no separate tool to open.</p>
+					</article>
+					<article class="feature" data-accent="green">
+						<span class="feature-num" aria-hidden="true">04</span>
+						<h3>Debugger</h3>
+						<div class="feature-media debugger-slices">
+							<img alt="Debugger variables panel" class="slice-variables" src="images/cards/04-debugger-variables.png" />
+							<img alt="Debugger context menu and editor" class="slice-context" src="images/cards/04-debugger-context.png" />
+							<img alt="Debugger call stack and data pipeline" class="slice-lower-panels" src="images/cards/04-debugger-panels.png" />
+							<img alt="Debugger query result display" class="slice-results" src="images/cards/04-debugger-results.png" />
+						</div>
+						<p>Press <code>F5</code> to run ad-hoc SQL (Jinja included). Step CTE-by-CTE with <code>F10</code>, step clauses with <code>F11</code>, and find exactly where row counts go from “reasonable” to “why is this 12x bigger?”</p>					<p>Step Back replays cached results (it's free). Edit a CTE mid-session and Restart Frame recompiles just that piece. Step Into a <code>ref()</code> and it opens a nested debug session for that model. Standard VS Code debugger UI throughout.</p>					</article>
+					<article class="feature" data-accent="rose">
+						<span class="feature-num" aria-hidden="true">05</span>
+						<h3>Profiler</h3>
+						<div class="feature-media profiler-slices">
+							<img alt="Profiler gutter and pipeline tree" class="slice-sidebar" src="images/cards/05-profiler-sidebar.png" />
+							<img alt="Profiler editor with flame markers" class="slice-editor" src="images/cards/05-profiler-editor.png" />
+							<img alt="Profiler minimap with performance heat indicators" class="slice-minimap" src="images/cards/05-profiler-minimap.png" />
+						</div>
+						<p>Not a flame-graph profiler. A practical one. Runs each CTE, shows row counts and timing, flags hot spots in the editor.</p>
+					<p>Gutter icons mark the hot and warm CTEs directly in the file. The minimap shows a heat signature across the whole model so you can see the expensive parts without scrolling. Often that's enough to find the CTE scanning 40 million rows when it should be scanning 40.</p>
+					</article>
+					<article class="feature" data-accent="lime">
+						<span class="feature-num" aria-hidden="true">06</span>
+						<h3>Ninja</h3>
+						<div class="feature-media">
+							<img alt="Ninja diagnostics: aliasing, unused columns, operator position rules" src="images/cards/08-ninja-2.png" />
+						</div>
+						<p>The same parser that powers completions now enforces your SQL style. Capitalization, aliasing, layout, structural checks, all on the AST that's already there. Zero extra parse cost.</p>
+						<p>Violations appear inline as you type, and workspace-wide diagnostics let you scan every model at once. Reads your existing <code>.sqlfluff</code> config. Fixable rules auto-correct on save.</p>
+					</article>
+					<article class="feature" data-accent="sky">
+						<span class="feature-num" aria-hidden="true">07</span>
+						<h3>Copilot toolset</h3>
+						<div class="feature-media copilot-logo-media">
+							<img alt="GitHub Copilot" src="images/copilot.svg" />
+						</div>
+						<p>Copilot gets real tools: project metadata, lineage/impact analysis, direct warehouse queries, plus run/test/build/compile workflows. These are not canned responses. It can actually do the work and report back.</p>
+					<p>14 tools in total, covering project info, dependency tracing, column lineage, warehouse queries, and dbt execution. Ask Copilot what would break if you dropped a column. It will check.</p>
+					</article>
+				</div>
+				<div class="feature-nav">
+					<button aria-label="Previous card" class="rail-control" id="railPrev" type="button">‹</button>
+					<div class="rail-dots" id="railDots"></div>
+					<button aria-label="Next card" class="rail-control" id="railNext" type="button">›</button>
+				</div>
+			</div>
+
+
+			<!-- SQL Editor -->
+			<div class="split-section">
+				<div>
+					<h2>SQL edit &amp; query</h2>
+					<p>Run queries against your warehouse directly from VS Code: ad-hoc SQL, a full model, or a single CTE in isolation using the <code>model::cte_name</code> convention. Jinja compiles first, so <code>{{ ref() }}</code> and macros work exactly as they do in production.</p>
+				</div>
+				<div class="img-frame">
+					<img alt="SQL editor with Jinja refs and Press F5 to run hints" class="split-img" src="images/cards/06-sql-editor-write.png" />
+				</div>
+				<p>Results land in a grid with per-column statistics: null counts, distinct values, min/max, mean. Select a range of cells and the status bar shows a live sum and average. Export to CSV, JSON, TSV, or Markdown, copy as-is, or open directly in the SQL editor. Excel-style handling without leaving VS Code.</p>
+				<div class="img-frame">
+					<img alt="Query results grid showing row data, column stats, and export options" class="split-img" src="images/cards/06-sql-editor.png" />
+				</div>
+			</div>
+
+			<!-- Testing -->
+			<div class="split-section">
+				<div class="img-frame" style="aspect-ratio: 608/494;">
+					<img alt="VS Code Testing panel showing 57 passing dbt tests grouped by model" class="split-img" src="images/cards/07-testing.png" />
+				</div>
+				<div>
+					<h2>Testing</h2>
+					<p>Most dbt tests are data quality checks: <code>not_null</code>, <code>unique</code>, the occasional <code>accepted_values</code>. Useful, but not what a developer means when they say they want to test their logic. dbt does have unit tests now, and they are what developers actually want.</p>
+					<p>dbt Studio at least makes running them less painful: results show up in a sidebar with pass, fail, and warn grouped by status, and the real error output is right there without digging through terminal logs. Tests integrate with VS Code's native Test Controller, so the Testing panel works too.</p>
+					<p>You can also test individual CTEs in isolation using the <code>model::cte_name</code> convention, useful when a model has complex intermediate steps and you want to verify one of them without running the whole thing.</p>
+				</div>
+			</div>
+
+			<!-- Ninja -->
+			<div class="split-section">
+				<div>
+					<h2>Ninja</h2>
+					<p>The same parser that powers completions, hover, and diagnostics now enforces your SQL style too. Ninja is a built-in linter and formatter: capitalization, aliasing, layout, structural checks, all running on the AST that's already there. No extra parse cost, no external process.</p>
+					<p>Keyword casing, trailing commas, implicit aliases, indentation, line length, unused CTEs, all configurable per rule with per-line suppression via <code>-- noqa</code>. Reads your existing <code>.sqlfluff</code> config if you have one.</p>
+					<p>Fixable rules auto-correct on save or on demand. The rest appear as inline diagnostics, exactly where the violation is. And when you want the full picture, a single command runs diagnostics across every model in the workspace, so you can enforce standards project-wide, not just in open files.</p>
+				</div>
+				<div class="img-frame">
+					<img alt="VS Code Problems panel showing Ninja diagnostics across multiple dbt models" class="split-img" src="images/cards/08-ninja.png" />
+				</div>
+			</div>
+
+			<!-- Getting started -->
+			<div class="prose-section getting-started">
+				<h2>Getting started</h2>
+				<ol class="steps">
+					<li><span class="step-num">1</span><span>Install <strong>dbt Studio</strong> from the VS Code Extensions panel, or <a href="https://marketplace.visualstudio.com/items?itemName=nickeolofsson.dbt-studio-vscode" style="color: var(--accent-hover);">directly from the Marketplace</a></span></li>
+					<li><span class="step-num">2</span><span>Open a folder containing <code>dbt_project.yml</code></span></li>
+					<li><span class="step-num">3</span><span>The extension activates and starts indexing automatically. No setup required.*</span></li>
+				</ol>
+				<p style="margin-top: 16px; font-size: 0.7rem; color: var(--muted);">* This extension is compatible with Visual Studio Code in its stable release configuration. Compatibility with the stable release does not constitute endorsement of the stable release. The stable release is fine. You should still be on <a href="https://code.visualstudio.com/insiders/" style="color: var(--muted); text-decoration: underline;">VS Code Insiders</a>. Furthermore, it is assumed that the end user is operating GitHub Copilot Chat at the time of installation, or will do so imminently, or is at least thinking about it. The extension does not require Python as a standalone dependency. It does, however, require a functioning dbt Core installation, the absence of which shall be treated as user error. Said installation will be located, interrogated, and put to work automatically. No configuration is necessary. None was ever necessary. &nbsp;WARNING: use of this software has been linked to sudden and irreversible increases in work satisfaction, compulsive model refactoring, and in rare cases a complete loss of tolerance for bad SQL tooling. The author accepts no liability for productivity gains, existential crises triggered by finally understanding your own data lineage, or any civilisation-ending events that may occur as a direct or indirect consequence of installing a VS Code extension. Side effects include: shipping faster, sleeping better, and occasionally explaining column lineage to your manager using actual facts. If symptoms persist, open an issue. &nbsp;This software is provided free of charge to the end user. All applicable fees have been prepaid in full by the author in the form of blood, sweat, tears, and an unreasonable number of late evenings staring at AST node representations of SQL clauses. No further payment is required. No refunds are available. No refunds have ever been available. This has always been free.</p>
+			</div>
+
+			<!-- Full feature list -->
+			<div class="feature-grid">
+				<h2 style="text-align: center;">Everything, in detail</h2>
+				<p class="lead" style="margin-bottom: 32px; max-width: 72ch;">Every feature, listed. This is what ships today, not a roadmap, not a wish list.</p>
+				<div class="feature-grid-cols">
+					<div>
+						<h3>Language support</h3>
+						<ul>
+							<li><strong>Column completions:</strong> <code>ref()</code>, <code>source()</code>, Jinja blocks, column names, YAML schema</li>
+							<li><strong>Hover info:</strong> model details, column metadata, source descriptions</li>
+							<li>Go to definition for models, sources, and macros</li>
+							<li>Find all references for models, sources, CTEs, and column aliases</li>
+							<li><strong>Rename with F2:</strong> models (including the file), CTEs, column aliases, and inline aliases</li>
+							<li><strong>Call hierarchy:</strong> see which models reference yours, and which yours references</li>
+							<li><strong>Diagnostics:</strong> parse errors, unresolved refs, column mismatches, SQL syntax errors</li>
+							<li><strong>Inline / restore ref:</strong> quick-fix to expand a <code>ref()</code> to its compiled SQL or restore it</li>
+							<li><strong>Quick Fix:</strong> create missing model files from unresolved refs</li>
+							<li><strong>CodeLens:</strong> per-CTE query actions inline above each CTE definition</li>
+							<li><strong>Document symbols:</strong> navigate CTEs and model structure via the outline</li>
+							<li><strong>Workspace symbols:</strong> find any model or source by name (Ctrl+T)</li>
+							<li>Signature help for Jinja macros</li>
+							<li>Syntax highlighting for Jinja SQL and Jinja in YAML</li>
+						</ul>
+						<h3 style="margin-top: 18px;">Navigation &amp; project</h3>
+						<ul>
+							<li><strong>Interactive lineage graph:</strong> model-level and column-level, follows your active editor</li>
+							<li><strong>Model Explorer:</strong> browse the project tree with materialisation icons</li>
+							<li><strong>Python env auto-detection:</strong> venv, uv, poetry, pipenv, conda, system</li>
+							<li><strong>Disk caching:</strong> near-instant startup when cache is valid</li>
+							<li><strong>Databricks SQL Statement API:</strong> direct queries, no <code>dbt show</code> needed</li>
+							<li><strong>Per-feature toggles:</strong> turn off what you don't need, no window reload</li>
+						</ul>
+					</div>
+					<div>
+						<h3>Execution &amp; debugging</h3>
+						<ul>
+							<li><strong>SQL edit &amp; query:</strong> ad-hoc SQL, full models, individual CTEs via <code>model::cte_name</code></li>
+							<li>Result grid with per-column stats (nulls, distinct, min/max, mean), live selection sum/avg</li>
+							<li>Export to CSV, JSON, TSV, Markdown, or open in editor</li>
+							<li><strong>SQL Debugger:</strong> step through CTEs and clauses with F10/F11, inspect intermediate results, step back for free, breakpoints by name or line, edit and continue, cross-model step-in</li>
+							<li><strong>Model Profiler:</strong> per-CTE row counts and timing, gutter icons, sidebar summary, minimap heat signature</li>
+							<li><strong>Test Explorer:</strong> pass/fail/warn by status, integrates with VS Code Testing panel</li>
+							<li>CTE isolation testing via <code>model::cte_name</code></li>
+						</ul>
+						<h3 style="margin-top: 18px;">Copilot tools</h3>
+						<ul>
+							<li><strong>run_models</strong>: run dbt models via node selection syntax; supports tags, paths, wildcards, full-refresh, fail-fast, and state:modified selection</li>
+							<li><strong>test_models</strong>: run dbt tests with selection and exclusion; optionally generate CTE test models before running</li>
+							<li><strong>build_models</strong>: run + test in one command; supports resource type filtering and state-based selection</li>
+							<li><strong>compile_model</strong>: compile a model and return the generated SQL without executing it</li>
+							<li><strong>get_project_info</strong>: project name, adapter type, model count, dbt version; optionally runs <code>dbt debug</code> to verify connection</li>
+							<li><strong>list_resources</strong>: list all project resources with optional filtering by type: models, tests, sources, snapshots, seeds, exposures, metrics</li>
+							<li><strong>get_resource_info</strong>: full details for any resource: columns, descriptions, compiled SQL, raw SQL, and tests; triggers compilation if needed</li>
+							<li><strong>get_lineage</strong>: upstream and downstream lineage for any resource; configurable depth and direction</li>
+							<li><strong>get_column_lineage</strong>: trace a single column through SQL transformations: CTEs, JOINs, aggregations; configurable depth and direction</li>
+							<li><strong>analyze_impact</strong>: which downstream models, seeds, and snapshots are affected if a resource changes</li>
+							<li><strong>query_database</strong>: execute SQL against the warehouse directly from chat; supports Jinja <code>ref()</code> and <code>source()</code>; can extract and query a named CTE from any model</li>
+							<li><strong>install_deps</strong>: run <code>dbt deps</code> to install project package dependencies</li>
+							<li><strong>load_seeds</strong>: load seed CSV files into the database; supports selection, full-refresh, state-based selection, and show</li>
+							<li><strong>snapshot_models</strong>: run dbt snapshots to capture slowly-changing dimension records</li>
+						</ul>
+					</div>
+					<div>
+						<h3>Ninja</h3>
+						<ul>
+							<li>38 built-in rules across 8 categories, 22 with one-click auto-fix</li>
+							<li>Runs on the same DocumentModel as completions and hover: zero extra parse cost, no subprocess</li>
+							<li><strong>Capitalisation (4 rules, all ⚡):</strong> keywords, functions, literals, datatypes; upper, lower, or consistent-within-file policy</li>
+							<li><strong>Convention (9 rules, 6 ⚡):</strong> <code>!=</code> vs <code>&lt;&gt;</code>, <code>count(*)</code> over <code>count(1)</code>, <code>IS NULL</code> instead of <code>= NULL</code>, <code>COALESCE</code> over <code>IFNULL</code>/<code>NVL</code>, <code>LEFT JOIN</code> not <code>LEFT OUTER JOIN</code>, explicit <code>UNION ALL</code>/<code>UNION DISTINCT</code>, comma and operator position</li>
+							<li><strong>Ambiguity (4 rules, 1 ⚡):</strong> unqualified columns when multiple sources present, bare <code>JOIN</code> made explicit as <code>INNER JOIN</code>, bare <code>UNION</code>, redundant <code>DISTINCT</code> alongside <code>GROUP BY</code></li>
+							<li><strong>Aliasing (6 rules, 2 ⚡):</strong> implicit column aliases, missing table aliases in multi-source queries, self-alias, duplicate aliases, unused aliases, expressions in final SELECT without an alias</li>
+							<li><strong>Structure (7 rules, 2 ⚡):</strong> unused CTEs (auto-deleted precisely), unused columns across CTEs, <code>SELECT *</code> inside CTEs, redundant <code>ELSE NULL</code>, boolean CASE simplification, unnecessary <code>DISTINCT()</code> parentheses, JOINed tables never referenced</li>
+							<li><strong>Layout (7 rules, 6 ⚡):</strong> indentation style and size, line length, trailing whitespace, leading blank lines, consecutive blank lines, trailing newlines, space between function name and <code>(</code></li>
+							<li><strong>Jinja (1 rule ⚡):</strong> padding inside <code>{{ }}</code> and <code>{% %}</code> tags</li>
+							<li><strong>Workspace-wide diagnostics:</strong> scan every model at once from a single command</li>
+							<li>Auto-fix on save for fixable rules, or on demand via the command palette</li>
+							<li>Per-line suppression via <code>-- noqa</code> or <code>-- noqa: rule.id</code></li>
+							<li>Reads existing <code>.sqlfluff</code> config if present</li>
+						</ul>
+					</div>
+				</div>
+			</div>
+			<!-- Under the hood -->
+			<div class="prose-section" style="max-width: 100%;">
+				<h2 style="text-align: center;">Under the hood</h2>
+				<p class="lead" style="margin-bottom: 32px; max-width: 72ch;">This extension is a fair bit more ambitious than a thin wrapper around a language server. Here's what's in it.</p>
+				<p><strong>No conflicts.</strong> dbt Studio uses your existing Python environment and your existing dbt installation. It auto-detects your setup (venv, uv, poetry, pipenv, conda, system Python) and bridges the VS Code Node.js world to dbt Core over a JSON process boundary, with nothing to configure. All core dbt operations: parse, compile, run, test, build, seed, snapshot, and query, go through this bridge. No bundled runtimes, no parallel installations, no version mismatches. The one thing it cannot help with is a broken dbt setup. That part is on you.</p>
+				<p><strong>Terminal monitoring.</strong> The extension also monitors your terminals. If a dbt command is detected that would conflict with something the extension is doing, or vice versa, it mediates. Running dbt from two places against the same target is a bad idea, and dbt Studio knows when that's about to happen.</p>
+				<p><strong>Not blindly executing dbt.</strong> It minimises database communication to only what is strictly necessary. The extension runs against its own separate dbt target. When it does something internally, it doesn't touch your schema.</p>
+				<p><strong>Aggressive caching at every level.</strong> dbt is not invoked unless it needs to be. Parsing results, compiled SQL, column metadata, all cached to disk and reused across restarts. All dbt execution is coordinated through priority queues, because not all operations are equally urgent, and the extension takes advantage of that.</p>
+				<p><strong>Adapter-aware where it counts.</strong> Query execution is optimised for Databricks (using the SQL Statement API directly, bypassing <code>dbt show</code>) and DuckDB (local execution). More adapters are on the way.</p>
+				<p><strong>Built-in compiler, always running.</strong> For operations that do not require dbt at all, dbt Studio uses its own compiler: a hyper-fast, fully multithreaded SQL and Jinja parser that consumes every available thread and runs continuously in the background. It re-parses the active document on every keystroke (not on save, every keystroke), providing instant diagnostics as you type. On a project with 4,000 models, a full re-parse completes in under 10 seconds. Individual models parse in 2–5ms on average. That parser is written in Python but does not run Python. It is compiled to WebAssembly via <a href="https://pyodide.org" style="color: var(--accent-hover);">Pyodide</a> and executes natively in the extension host: multithreaded, no subprocess, no startup cost. It is built on <a href="https://github.com/tobymao/sqlglot" style="color: var(--accent-hover);">sqlglot</a>, which has no dependencies of its own.</p>
+				<p><strong>Everything is toggleable.</strong> Some of what dbt Studio does is opinionated, so every feature can be turned off individually from Settings. Changes take effect immediately, no reload required.</p>
+				<p><strong>dbt Fusion support is planned.</strong> When it arrives, the debugger, profiler, and other execution-dependent features will be available there too. The extension doesn't depend on Python being part of your environment; in a Fusion world it may not be. At work we haven't gotten around to Fusion yet - it's a fairly large migration and we've been putting it off.</p>
+			</div>
 		</section>
 	</main>
+	<footer class="page-footer">
+		Coded with ❤️ for analytics engineers who'd rather ship than make slide decks.
+	</footer>
+	<script>
+		(() => {
+			const rail = document.getElementById('featureRail');
+			const dotsWrap = document.getElementById('railDots');
+			const prev = document.getElementById('railPrev');
+			const next = document.getElementById('railNext');
+			if (!rail || !dotsWrap) return;
+
+			const cards = Array.from(rail.querySelectorAll('.feature'));
+			const count = cards.length;
+			let current = 0;
+
+			// Build dots
+			const dots = cards.map((_, i) => {
+				const btn = document.createElement('button');
+				btn.className = 'rail-dot' + (i === 0 ? ' active' : '');
+				btn.setAttribute('aria-label', `Go to card ${i + 1}`);
+				btn.addEventListener('click', () => goTo(i));
+				dotsWrap.appendChild(btn);
+				return btn;
+			});
+
+			const goTo = (i) => {
+				current = (i + count) % count;
+				rail.scrollTo({ left: rail.clientWidth * current, behavior: 'smooth' });
+				dots.forEach((d, j) => d.classList.toggle('active', j === current));
+			};
+
+			prev?.addEventListener('click', () => goTo(current - 1));
+			next?.addEventListener('click', () => goTo(current + 1));
+
+			// Sync dots on manual scroll
+			let scrollTimer;
+			rail.addEventListener('scroll', () => {
+				clearTimeout(scrollTimer);
+				scrollTimer = setTimeout(() => {
+					const idx = Math.round(rail.scrollLeft / rail.clientWidth);
+					if (idx !== current) {
+						current = idx;
+						dots.forEach((d, j) => d.classList.toggle('active', j === current));
+					}
+				}, 80);
+			}, { passive: true });
+		})();
+	</script>
 </body>
 </html>
