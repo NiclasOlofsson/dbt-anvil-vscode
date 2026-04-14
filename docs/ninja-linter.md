@@ -68,7 +68,7 @@ Ninja is configured through VS Code settings under the `dbt-studio.ninja` namesp
 
 ## Rules Reference
 
-Ninja ships with **37 built-in rules** across 8 categories. Rules marked with ⚡ provide one-click auto-fix.
+Ninja ships with **38 built-in rules** across 8 categories. Rules marked with ⚡ provide one-click auto-fix.
 
 ### Capitalisation
 
@@ -358,14 +358,21 @@ select ifnull(amount, 0), nvl(status, 'unknown')
 select coalesce(amount, 0), coalesce(status, 'unknown')
 ```
 
-#### `ninja.convention.union-style`
+#### `ninja.convention.union-style` ⚡
 
-> UNION should always use an explicit `ALL` or `DISTINCT` qualifier.
+> Enforce a consistent UNION qualifier — either always `ALL` or always `DISTINCT`.
 
-Configured via `dbt-studio.ninja.convention.unionStyle`. In `all` mode, bare `UNION` is flagged (use `UNION ALL`). In `distinct` mode, bare `UNION` is flagged (use `UNION DISTINCT`). This makes intent explicit.
+Configured via `dbt-studio.ninja.convention.unionStyle` (`"all"` or `"distinct"`, default `"all"`). When a `UNION ALL` or `UNION DISTINCT` is found with the wrong qualifier, it is flagged. Bare `UNION` (no qualifier) is handled separately by `ninja.ambiguity.bare-union`.
 
 - **Default severity:** warning
-- **No auto-fix** — changing `UNION` to `UNION DISTINCT` vs `UNION ALL` changes semantics.
+- **Auto-fix:** Replaces the qualifier with the configured style (e.g. `DISTINCT` → `ALL`).
+
+```sql
+-- Flags (unionStyle = "all"):
+select 1 union distinct select 2
+-- Fix →
+select 1 union all select 2
+```
 
 #### `ninja.ambiguity.qualified-columns`
 
@@ -694,8 +701,8 @@ select count(*), sum(amount)
 | Capitalisation | 4 | 4 |
 | Jinja | 1 | 1 |
 | Structure | 7 | 2 |
-| Convention | 8 | 5 |
+| Convention | 9 | 6 |
 | Ambiguity | 4 | 1 |
 | Aliasing | 6 | 2 |
 | Layout | 7 | 6 |
-| **Total** | **37** | **21** |
+| **Total** | **38** | **22** |

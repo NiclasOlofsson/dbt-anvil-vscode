@@ -26,6 +26,7 @@ import { countRowsRule } from './rules/convention-count-rows';
 import { isNullRule } from './rules/convention-is-null';
 import { leftJoinRule } from './rules/convention-left-join';
 import { coalesceRule } from './rules/convention-coalesce';
+import { unionStyleRule } from './rules/convention-union-style';
 
 // -- Ambiguity rules --
 import { qualifiedColumnsRule } from './rules/ambiguity-qualified-columns';
@@ -87,6 +88,7 @@ const ALL_RULES: NinjaRule[] = [
 	elseNullRule,
 	simpleCaseRule,
 	coalesceRule,
+	unionStyleRule,
 	trailingWhitespaceRule,
 	trailingNewlineRule,
 	leadingWhitespaceRule,
