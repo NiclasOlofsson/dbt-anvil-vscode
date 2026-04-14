@@ -54,6 +54,8 @@ Ninja is configured through VS Code settings under the `dbt-studio.ninja` namesp
   "dbt-studio.ninja.layout.commaPosition": "trailing",
   "dbt-studio.ninja.layout.operatorPosition": "trailing",
   "dbt-studio.ninja.structure.allowStarInCte": false,
+  "dbt-studio.ninja.convention.notEqual": "!=",
+  "dbt-studio.ninja.convention.unionStyle": "all",
   "dbt-studio.ninja.rules": {
     "ninja.cap.keywords": "warning",
     "ninja.structure.unused-cte": "error",
@@ -66,7 +68,7 @@ Ninja is configured through VS Code settings under the `dbt-studio.ninja` namesp
 
 ## Rules Reference
 
-Ninja ships with **20 built-in rules** across 7 categories. Rules marked with ⚡ provide one-click auto-fix.
+Ninja ships with **37 built-in rules** across 8 categories. Rules marked with ⚡ provide one-click auto-fix.
 
 ### Capitalisation
 
@@ -276,9 +278,94 @@ where
     amount > 100
 ```
 
----
+#### `ninja.convention.not-equal` ⚡
 
-### Ambiguity
+> Inequality comparisons should use the configured style (`!=` or `<>`).
+
+Configured via `dbt-studio.ninja.convention.notEqual`. Default is `!=`. Both `!=` and `<>` are valid SQL but mixing them is inconsistent.
+
+- **Default severity:** warning
+- **Auto-fix:** Replaces the operator with the configured style.
+
+```sql
+-- notEqual: != → flags <>
+where status <> 'active'   -- flags
+-- Fix →
+where status != 'active'
+```
+
+#### `ninja.convention.count-rows` ⚡
+
+> Use `count(*)` instead of `count(0)` or `count(1)` for counting rows.
+
+`count(*)` is the SQL standard for row counting and is universally understood. Numeric arguments like `count(1)` are a historical artifact with no semantic advantage.
+
+- **Default severity:** warning
+- **Auto-fix:** Replaces `count(0)` or `count(1)` with `count(*)`.
+
+```sql
+-- Flags:
+select count(1) from orders
+-- Fix →
+select count(*) from orders
+```
+
+#### `ninja.convention.is-null` ⚡
+
+> Use `IS NULL` / `IS NOT NULL` instead of `= NULL` / `!= NULL`.
+
+Comparing with `= NULL` always returns `NULL` (not `TRUE`/`FALSE`) due to SQL's three-valued logic. This is a common bug source.
+
+- **Default severity:** error
+- **Auto-fix:** Replaces `= NULL` with `IS NULL` and `!= NULL` / `<> NULL` with `IS NOT NULL`.
+
+```sql
+-- Flags:
+where status = NULL or category != NULL
+-- Fix →
+where status IS NULL or category IS NOT NULL
+```
+
+#### `ninja.convention.left-join` ⚡
+
+> Use `LEFT JOIN` instead of `LEFT OUTER JOIN`.
+
+`OUTER` is redundant in `LEFT OUTER JOIN` — the word `LEFT` already implies outer semantics. Dropping it reduces noise.
+
+- **Default severity:** warning
+- **Auto-fix:** Removes the `OUTER` keyword.
+
+```sql
+-- Flags:
+select * from orders left outer join items on orders.id = items.order_id
+-- Fix →
+select * from orders left join items on orders.id = items.order_id
+```
+
+#### `ninja.convention.coalesce` ⚡
+
+> Use `COALESCE` instead of legacy null-handling functions (`IFNULL`, `NVL`, `ISNULL`).
+
+`COALESCE` is the SQL standard and works across all databases. `IFNULL`, `NVL`, and `ISNULL` are vendor-specific aliases.
+
+- **Default severity:** warning
+- **Auto-fix:** Replaces the function name with `coalesce`.
+
+```sql
+-- Flags:
+select ifnull(amount, 0), nvl(status, 'unknown')
+-- Fix →
+select coalesce(amount, 0), coalesce(status, 'unknown')
+```
+
+#### `ninja.convention.union-style`
+
+> UNION should always use an explicit `ALL` or `DISTINCT` qualifier.
+
+Configured via `dbt-studio.ninja.convention.unionStyle`. In `all` mode, bare `UNION` is flagged (use `UNION ALL`). In `distinct` mode, bare `UNION` is flagged (use `UNION DISTINCT`). This makes intent explicit.
+
+- **Default severity:** warning
+- **No auto-fix** — changing `UNION` to `UNION DISTINCT` vs `UNION ALL` changes semantics.
 
 #### `ninja.ambiguity.qualified-columns`
 
@@ -301,9 +388,47 @@ from orders o
 join items i on o.id = i.order_id
 ```
 
----
+#### `ninja.ambiguity.implicit-join` ⚡
 
-### Aliasing
+> Bare `JOIN` should be explicit `INNER JOIN`.
+
+A `JOIN` without a qualifier is an `INNER JOIN` but the intent is unclear to readers. Being explicit prevents confusion with `OUTER`, `CROSS`, or `NATURAL` joins.
+
+- **Default severity:** warning
+- **Auto-fix:** Inserts `INNER ` before the `JOIN` keyword.
+- **Allowed:** `LEFT JOIN`, `RIGHT JOIN`, `CROSS JOIN`, `FULL JOIN`, `NATURAL JOIN`, and their `OUTER` variants.
+
+```sql
+-- Flags: bare JOIN
+select * from orders o join items i on o.id = i.order_id
+-- Fix →
+select * from orders o INNER join items i on o.id = i.order_id
+```
+
+#### `ninja.ambiguity.bare-union`
+
+> UNION should include an explicit `ALL` or `DISTINCT` qualifier.
+
+Bare `UNION` implies `DISTINCT` by SQL standard, but this is easy to miss. Being explicit clarifies whether duplicates are removed.
+
+- **Default severity:** warning
+- **No auto-fix** — choosing ALL vs DISTINCT changes query semantics.
+
+```sql
+-- Flags: bare UNION
+select id from orders
+union
+select id from archive_orders
+```
+
+#### `ninja.ambiguity.distinct-groupby`
+
+> Avoid using DISTINCT together with GROUP BY — it is redundant.
+
+When a GROUP BY is present, results are already unique per the grouping keys. Adding DISTINCT is at best redundant and at worst misleading.
+
+- **Default severity:** warning
+- **No auto-fix** — removing DISTINCT changes how the intent reads.
 
 #### `ninja.aliasing.column-as` ⚡
 
@@ -345,6 +470,138 @@ join items i on orders.id = i.order_id
 select o.id, i.name
 from orders o
 join items i on o.id = i.order_id
+```
+
+#### `ninja.aliasing.self-alias` ⚡
+
+> Do not alias a table to its own name.
+
+Aliasing `orders AS orders` (or `orders orders`) is a no-op that adds visual noise without benefit.
+
+- **Default severity:** warning
+- **Auto-fix:** Removes the redundant alias clause.
+
+```sql
+-- Flags: orders aliased to itself
+select o.id from orders orders
+-- Fix →
+select o.id from orders
+```
+
+#### `ninja.aliasing.unique-table`
+
+> Table aliases must be unique within a query.
+
+Duplicate aliases make it impossible to unambiguously qualify column references.
+
+- **Default severity:** warning
+- **No auto-fix** — choosing distinct aliases requires human judgment.
+
+```sql
+-- Flags: both tables aliased to 'o'
+select o.id from orders o join other_orders o on o.id = o.order_id
+```
+
+#### `ninja.aliasing.unused-alias`
+
+> Table alias is defined but never referenced by any column.
+
+An alias that is never used to qualify a column reference serves no purpose.
+
+- **Default severity:** info
+- **No auto-fix** — deciding whether to use the alias or remove it requires human judgment.
+
+```sql
+-- Flags: alias 'o' never used
+select id from orders o
+```
+
+#### `ninja.aliasing.expression-no-alias`
+
+> Expressions in the final SELECT should have an explicit alias.
+
+Expressions like `count(*)` without an alias produce auto-generated column names that differ across databases and are hard to reference in downstream tools.
+
+- **Default severity:** warning
+- **No auto-fix** — choosing a meaningful alias name requires human judgment.
+
+```sql
+-- Flags: count(*) has no alias
+select id, count(*)
+from orders
+group by id
+-- Better →
+select id, count(*) as total_orders
+from orders
+group by id
+```
+
+---
+
+### Structure (additional)
+
+#### `ninja.structure.else-null`
+
+> Redundant `ELSE NULL` — CASE already returns NULL by default.
+
+When the last branch of a CASE expression is `ELSE NULL`, it can be removed — CASE returns NULL implicitly if no branch matches.
+
+- **Default severity:** info
+- **Auto-fix:** Removes `ELSE NULL` leaving just `... END`.
+
+```sql
+-- Flags:
+case when status = 'active' then 1 else null end
+-- Fix →
+case when status = 'active' then 1 end
+```
+
+#### `ninja.structure.simple-case`
+
+> `CASE WHEN x THEN TRUE ELSE FALSE END` can be simplified to just `x`.
+
+Boolean CASE expressions that return `TRUE`/`FALSE` (or `1`/`0`) based on a condition are equivalent to the condition itself.
+
+- **Default severity:** info
+- **No auto-fix** — the replacement expression depends on surrounding context and formatting.
+
+```sql
+-- Flags:
+case when amount > 0 then true else false end
+-- Better →
+amount > 0
+```
+
+#### `ninja.structure.distinct-parens`
+
+> Remove unnecessary parentheses around DISTINCT.
+
+`DISTINCT(id)` reads like a function call but `DISTINCT` is not a function — the parentheses are superfluous.
+
+- **Default severity:** warning
+- **No auto-fix** — removing parentheses may change formatting.
+
+```sql
+-- Flags:
+select count(distinct(id))
+-- Better →
+select count(distinct id)
+```
+
+#### `ninja.structure.unused-join`
+
+> JOINed table is never referenced by any column.
+
+A JOIN that contributes no columns to the query may indicate dead code, a missing column reference, or a JOIN that should be EXISTS instead.
+
+- **Default severity:** warning
+- **No auto-fix** — the correct resolution depends on intent.
+
+```sql
+-- Flags: customers is joined but no c.* is referenced
+select o.id, o.amount
+from orders o
+join customers c on o.customer_id = c.id
 ```
 
 ---
@@ -436,9 +693,9 @@ select count(*), sum(amount)
 |----------|------:|:-------------:|
 | Capitalisation | 4 | 4 |
 | Jinja | 1 | 1 |
-| Structure | 3 | 1 |
-| Convention | 2 | 0 |
-| Ambiguity | 1 | 0 |
-| Aliasing | 2 | 1 |
+| Structure | 7 | 2 |
+| Convention | 8 | 5 |
+| Ambiguity | 4 | 1 |
+| Aliasing | 6 | 2 |
 | Layout | 7 | 6 |
-| **Total** | **20** | **13** |
+| **Total** | **37** | **21** |
