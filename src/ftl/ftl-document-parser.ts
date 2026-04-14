@@ -104,7 +104,10 @@ export function extractCtes(ast: AstPayload[], sql: string, wildcardCtes?: Array
 			for (const { index: exprIdx } of expressionsOf(ast, bodySelect.index)) {
 				const colName = _colExprName(ast, exprIdx);
 				if (!colName) continue;
-				columns.push({ name: colName, line: _colExprLine(ast, exprIdx) });
+			const colEntry: ColumnInfo = { name: colName, line: _colExprLine(ast, exprIdx) };
+			const colPos = _colExprCol(ast, exprIdx);
+			if (colPos !== undefined) colEntry.col = colPos;
+			columns.push(colEntry);
 			}
 		}
 
@@ -141,11 +144,51 @@ function _colExprName(ast: AstPayload[], exprIdx: number): string | undefined {
 	return undefined;
 }
 
+/**
+ * For an Alias expression, returns the alias Identifier index if it has position
+ * metadata (user-written AS alias). Returns undefined for qualify()-synthesised aliases
+ * which have no _meta.
+ */
+function _aliasIdentIdx(ast: AstPayload[], exprIdx: number): number | undefined {
+	if (ast[exprIdx]?.c !== 'Alias') return undefined;
+	const child = childOf(ast, exprIdx, 'alias');
+	if (child?.node.c === 'Identifier' && child.node.m !== undefined) return child.index;
+	return undefined;
+}
+
+/**
+ * Returns the index of the first Identifier descendant (including the node itself)
+ * that has position metadata (_meta present). Skips synthesised identifiers with no _meta.
+ */
+function _firstPositionedIdentIdx(ast: AstPayload[], exprIdx: number): number | undefined {
+	for (const { node, index } of findDescendants(ast, exprIdx, 'Identifier')) {
+		if (node.m !== undefined) return index;
+	}
+	return undefined;
+}
+
 function _colExprLine(ast: AstPayload[], exprIdx: number): number {
-	const ident = findDescendant(ast, exprIdx, 'Identifier');
-	if (ident?.node.m?.line !== undefined) return ident.node.m.line - 1;
-	const m = ast[exprIdx]?.m;
-	return m?.line !== undefined ? m.line - 1 : 0;
+	// User-written Alias: use alias identifier position.
+	// Synthesised Alias (qualify()): alias identifier has no _meta — fall through.
+	const identIdx = _aliasIdentIdx(ast, exprIdx) ?? _firstPositionedIdentIdx(ast, exprIdx);
+	if (identIdx !== undefined && ast[identIdx].m?.line !== undefined) return ast[identIdx].m!.line - 1;
+	return 0;
+}
+
+/**
+ * Returns the 0-based start column of the column name identifier in the source.
+ * For Alias nodes (e.g. `count(*) as losses`), uses the alias identifier.
+ * Returns undefined when position metadata is absent.
+ */
+function _colExprCol(ast: AstPayload[], exprIdx: number): number | undefined {
+	// User-written Alias: use alias identifier position.
+	// Synthesised Alias (qualify()): alias identifier has no _meta — fall through.
+	const identIdx = _aliasIdentIdx(ast, exprIdx) ?? _firstPositionedIdentIdx(ast, exprIdx);
+	if (identIdx === undefined) return undefined;
+	const m = ast[identIdx].m;
+	if (m?.col === undefined) return undefined;
+	const name = identifierName(ast, identIdx);
+	return name ? m.col - name.length : undefined;
 }
 
 /** Bounding box of an expression in 0-based line/col. Iterates all Identifier descendants. */
@@ -335,6 +378,7 @@ export function extractTokens(ast: AstPayload[], ctes: CteInfo[]): TokenInfo[] {
 				line: cte.line,
 				col: cte.col,
 				endCol: cte.col + cte.name.length,
+				cteDefinition: true,
 			});
 		}
 	}
@@ -402,6 +446,9 @@ export function extractTokens(ast: AstPayload[], ctes: CteInfo[]): TokenInfo[] {
 						token.aliasLine = aPos.line;
 						token.aliasCol = aPos.col;
 						token.aliasEndCol = aPos.endCol;
+					} else {
+						// No source position → alias was synthesised by qualify(), not written by the user.
+						token.synthesized = true;
 					}
 				}
 			}

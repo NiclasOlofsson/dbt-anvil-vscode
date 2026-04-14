@@ -34,7 +34,9 @@ _SQL_STUB = '__jinja__'
 
 def _tokenize(sql, dialect):
     try:
-        d = dialect if dialect not in ('ansi', '', None) else None
+        if not dialect:
+            raise ValueError(f"dialect is required, got {dialect!r}")
+        d = None if dialect == "ansi" else dialect
         tok = _Dialect.get_or_raise(d).tokenizer_class() if d else _Tokenizer()
         return [
             {
@@ -99,9 +101,131 @@ def _ser_scopes(root):
     return out
 
 
+def _collect_select_star_metas(ast: _exp.Expression) -> dict:
+    """Before qualify() expands SELECT *, capture the _meta of each Star expression
+    keyed by the parent SELECT node's source position (line, col).  This lets
+    _annotate_synthesized_columns anchor the synthesised Column nodes to the '*' that
+    produced them — the most semantically accurate source position."""
+    result = {}
+    for select in ast.find_all(_exp.Select):
+        if select._meta is None:
+            continue
+        sel_key = (select._meta.get("line"), select._meta.get("col"))
+        if sel_key == (None, None):
+            continue
+        for expr in select.expressions:
+            if (
+                isinstance(expr, _exp.Star)
+                and expr._meta
+                and expr._meta.get("line") is not None
+            ):
+                result[sel_key] = dict(expr._meta)
+                break  # a SELECT list can only contain one Star
+    return result
+
+
+def _annotate_synthesized_columns(
+    ast: _exp.Expression, select_star_metas: dict | None = None
+) -> int:
+    """Annotate Column nodes that have no source position (synthesised by qualify()'s
+    SELECT * expansion).  Without a position, the TypeScript extractTokens() call skips
+    them silently and the column_ref tokens are never emitted, which makes
+    structure-unused-columns incorrectly flag every column in the source CTE as unused.
+
+    Anchor priority:
+      1. The '*' position captured before qualify() via select_star_metas.
+      2. The FROM clause's Table identifier (fallback when star meta is unavailable).
+
+    Returns the number of Identifier nodes that were annotated.
+    """
+    annotated = 0
+    for select in ast.find_all(_exp.Select):
+        # Only process SELECTs that originated as a pure SELECT * (i.e. all columns are
+        # synthesised by qualify()'s star expansion and none have a source position).
+        # If any Column in the SELECT list already has a _meta position, this was a
+        # mixed or explicit SELECT — skip it to avoid stamping duplicate positions that
+        # would collide with existing tokens and break resolveAtPosition lookups.
+        has_positioned_column = False
+        for expr in select.expressions:
+            col = (
+                expr
+                if isinstance(expr, _exp.Column)
+                else (
+                    expr.this
+                    if isinstance(expr, _exp.Alias)
+                    and isinstance(expr.this, _exp.Column)
+                    else None
+                )
+            )
+            if col is None:
+                continue
+            ident = col.args.get("this")
+            if (
+                ident
+                and isinstance(ident, _exp.Identifier)
+                and ident._meta
+                and ident._meta.get("line") is not None
+            ):
+                has_positioned_column = True
+                break
+
+        if has_positioned_column:
+            continue
+
+        # Anchor priority 1: the '*' position captured before qualify().
+        anchor_meta: dict | None = None
+        if select_star_metas and select._meta:
+            sel_key = (select._meta.get("line"), select._meta.get("col"))
+            anchor_meta = select_star_metas.get(sel_key)
+
+        # Anchor priority 2: FROM clause's Table identifier.
+        if anchor_meta is None:
+            from_clause = select.args.get("from_")
+            if from_clause:
+                tbl = from_clause.find(_exp.Table)
+                if tbl:
+                    tbl_ident = tbl.args.get("this")
+                    if (
+                        tbl_ident
+                        and isinstance(tbl_ident, _exp.Identifier)
+                        and tbl_ident._meta
+                    ):
+                        anchor_meta = tbl_ident._meta
+
+        if anchor_meta is None:
+            continue
+
+        # Stamp anchor position onto every Column.this Identifier that lacks one.
+        for expr in select.expressions:
+            col = (
+                expr
+                if isinstance(expr, _exp.Column)
+                else (
+                    expr.this
+                    if isinstance(expr, _exp.Alias)
+                    and isinstance(expr.this, _exp.Column)
+                    else None
+                )
+            )
+            if col is None:
+                continue
+            ident = col.args.get("this")
+            if (
+                ident
+                and isinstance(ident, _exp.Identifier)
+                and (ident._meta is None or ident._meta.get("line") is None)
+            ):
+                ident._meta = dict(anchor_meta)
+                annotated += 1
+
+    return annotated
+
+
 def _parse(sql, dialect, schema_json):
+    if not dialect:
+        raise ValueError(f"dialect is required, got {dialect!r}")
     schema = _json.loads(schema_json) if schema_json else {}
-    d = dialect if dialect not in ('ansi', '', None) else None
+    d = None if dialect == "ansi" else dialect
     warnings = []
     t0 = _time.time()
     sql_tokens = _tokenize(sql, dialect)
@@ -156,10 +280,52 @@ def _parse(sql, dialect, schema_json):
             m = getattr(star, 'meta', None) or {}
             line_1 = m.get('line', 1)
             wildcard_ctes.append({'name': cte.alias, 'line': line_1 - 1})
+    # Build a schema supplement from CTE output columns so that qualify()'s
+    # expand_stars() can expand SELECT * even when the external schema is absent
+    # or when infer_schema can't determine a CTE's columns (e.g. GROUP BY ALL).
+    cte_schema_supplement = {}
+    for cte in ast.find_all(_exp.CTE):
+        cte_name = cte.alias
+        body = cte.this
+        if not isinstance(body, _exp.Select):
+            continue
+        cte_cols: dict = {}
+        has_star = False
+        for expr in body.expressions:
+            if isinstance(expr, _exp.Star):
+                has_star = True
+                break
+            elif isinstance(expr, _exp.Alias):
+                cte_cols[expr.alias] = "TEXT"
+            elif isinstance(expr, _exp.Column):
+                col_name = expr.name
+                if col_name:
+                    cte_cols[col_name] = "TEXT"
+        if cte_cols and not has_star:
+            cte_schema_supplement[cte_name] = cte_cols
+    merged_schema = {**cte_schema_supplement, **(schema or {})} or None
+    # Capture Star positions before qualify() replaces them with explicit Column nodes.
+    select_star_metas = _collect_select_star_metas(ast)
     try:
-        ast = _qualify(ast, schema=schema, infer_schema=True, qualify_columns=True, validate_qualify_columns=False)
-    except Exception:
-        pass
+        ast = _qualify(
+            ast,
+            dialect=d,
+            schema=merged_schema,
+            infer_schema=True,
+            qualify_columns=True,
+            validate_qualify_columns=False,
+        )
+    except Exception as _qe:
+        warnings.append(
+            {
+                "message": f"qualify() failed: {type(_qe).__name__}: {_qe}",
+                "rule": "qualify",
+            }
+        )
+    # After qualify(), synthesised Column nodes (from SELECT * expansion) have no _meta
+    # (no source position). Annotate them with the '*' position (or FROM table as fallback)
+    # so extractTokens() in TypeScript can emit column_ref tokens for them.
+    _annotate_synthesized_columns(ast, select_star_metas)
     t2 = _time.time()
     root = None
     try:
@@ -611,8 +777,10 @@ def _trace_lineage(compiled_sql: str, column_name: str, schema_json: str, dialec
 
 def _trace_lineage_inner(compiled_sql: str, column_name: str, schema_json: str, dialect: str) -> str:
     """Inner implementation — called by _trace_lineage which wraps with top-level error handling."""
+    if not dialect:
+        raise ValueError(f"dialect is required, got {dialect!r}")
     schema: dict[str, _Any] = _json.loads(schema_json) if schema_json else {}
-    d = dialect or None
+    d = None if dialect == "ansi" else dialect
 
     wrapped_ast = _wrap_final_select(compiled_sql, column_name, dialect)
 
@@ -674,7 +842,14 @@ def _parse_to_ast(sql: str, schema: dict, dialect: str | None) -> tuple[_Any, _A
     """Parse, qualify and build scope. Returns (ast, scope). Scope may be None on failure."""
     ast = _parse_one(sql, dialect=dialect, error_level=None)
     try:
-        ast = _qualify(ast, schema=schema, infer_schema=True, qualify_columns=True, validate_qualify_columns=False)
+        ast = _qualify(
+            ast,
+            dialect=dialect,
+            schema=schema,
+            infer_schema=True,
+            qualify_columns=True,
+            validate_qualify_columns=False,
+        )
     except Exception:
         pass
     scope = None
@@ -755,15 +930,24 @@ def _dump_lineage_node(node: _Any) -> dict[str, _Any]:
 def _trace_lineage_v2(sql: str, column_name: str, schema_json: str, dialect: str) -> str:
     """New lineage entry point: parse once, strip static branches, return raw lineage tree."""
     try:
+        if not dialect:
+            raise ValueError(f"dialect is required, got {dialect!r}")
         schema: dict[str, _Any] = _json.loads(schema_json) if schema_json else {}
-        d = dialect or None
+        d = None if dialect == "ansi" else dialect
 
         ast = _parse_one(sql, dialect=d, error_level=None)
         ast = _deep_strip_static_unions(ast)
         ast = _wrap_final_select_from_ast(ast, column_name, d)
 
         try:
-            ast = _qualify(ast, schema=schema, infer_schema=True, qualify_columns=True, validate_qualify_columns=False)
+            ast = _qualify(
+                ast,
+                dialect=d,
+                schema=schema,
+                infer_schema=True,
+                qualify_columns=True,
+                validate_qualify_columns=False,
+            )
         except Exception:
             pass
         scope = _build_scope(ast)
@@ -790,7 +974,9 @@ def _decompose_query(compiled_sql: str, dialect: str) -> str:
     """
     from sqlglot.tokens import TokenType as _TT  # noqa: PLC0415
 
-    sqlglot_dialect: str | None = dialect if dialect not in ("ansi", "", None) else None
+    if not dialect:
+        raise ValueError(f"dialect is required, got {dialect!r}")
+    sqlglot_dialect: str | None = None if dialect == "ansi" else dialect
 
     if not compiled_sql:
         return _json.dumps({"success": False, "error": "compiled_sql is required"})

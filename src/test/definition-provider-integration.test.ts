@@ -857,9 +857,13 @@ describe('definition-provider integration (FTL)', () => {
 		}, 30_000);
 
 		it('addr.street in `enriched` resolves to the address_with_country table_ref (line 6), not gold__address (line 2)', () => {
+			// SQL3 line 5: "    select addr.street" — inside the `enriched` CTE body (lines 4–7).
+			// NOTE: `address_with_country` body (line 1) also contains a synthesised `street`
+			// column_ref (from `select addr.*` expanded by qualify()), which correctly resolves
+			// to gold__address. We must pick the explicit token at line 5, not that synthesised one.
 			const streetTok = model3.tokens
 				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
-				.find(t => t.name === 'street' && t.table === 'addr');
+				.find(t => t.name === 'street' && t.table === 'addr' && t.line === 5);
 			expect(streetTok).toBeDefined();
 			// Must point to the `address_with_country as addr` on line 6, not `gold__address as addr` on line 2
 			expect(streetTok!.resolvedTableRef).toBeDefined();

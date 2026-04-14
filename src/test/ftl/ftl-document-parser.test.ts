@@ -193,7 +193,7 @@ describe('extractCtes', () => {
 		expect(cte.col).toBe(5);
 		expect(cte.endLine).toBe(3);
 		expect(cte.endCol).toBe(1);
-		expect(cte.columns).toEqual([{ name: 'id', line: 1 }]);
+		expect(cte.columns).toEqual([{ name: 'id', line: 1, col: 7 }]);
 	});
 
 	it('returns empty array when there are no CTE nodes', () => {
@@ -254,7 +254,36 @@ describe('extractCtes', () => {
 		];
 		const result = extractCtes(aliasAst, aliasSql);
 		expect(result).toHaveLength(1);
-		expect(result[0].columns).toEqual([{ name: 'user_id', line: 1 }]);
+		expect(result[0].columns).toEqual([{ name: 'user_id', line: 1, col: 1 }]);
+	});
+
+	it('column col points to Column identifier when qualify() wraps a bare column in a synthesised Alias', () => {
+		// qualify() synthesises: `losing_team` → `Alias(Column(Identifier "losing_team"), Identifier "losing_team")`
+		// The alias Identifier has no _meta. col must fall back to the Column Identifier's position.
+		// SQL: WITH t AS (\nSELECT losing_team\n)\nSELECT * FROM t
+		//   line 1: "SELECT losing_team"  → "losing_team" starts at col 7
+		//   Identifier "losing_team" m={line:2, col:18}  (sqlglot col = exclusive end)
+		const synthAliasSql = 'WITH t AS (\nSELECT losing_team\n)\nSELECT * FROM t';
+		const synthAliasAst: AstPayload[] = [
+			{ c: 'With' },
+			{ c: 'CTE', i: 0, k: 'expressions', a: true },
+			{ c: 'Select', i: 1, k: 'this' },
+			// qualify()-synthesised Alias node — alias Identifier has no _meta
+			{ c: 'Alias', i: 2, k: 'expressions', a: true },
+			{ c: 'Identifier', i: 3, k: 'alias' },                             // no m (synthesised)
+			{ i: 4, k: 'this', v: 'losing_team' },
+			{ c: 'Column', i: 3, k: 'this' },
+			{ c: 'Identifier', i: 6, k: 'this', m: { line: 2, col: 18 } },     // "losing_team" col=18 → start=7
+			{ i: 7, k: 'this', v: 'losing_team' },
+			{ c: 'TableAlias', i: 1, k: 'alias' },
+			{ c: 'Identifier', i: 9, k: 'this', m: { line: 1, col: 6 } },      // "t"
+			{ i: 10, k: 'this', v: 't' },
+			{ c: 'Select', i: 0, k: 'this' },
+		];
+		const result = extractCtes(synthAliasAst, synthAliasSql);
+		expect(result).toHaveLength(1);
+		// col must be 7 (start of "losing_team"), not 0
+		expect(result[0].columns).toEqual([{ name: 'losing_team', line: 1, col: 7 }]);
 	});
 
 	it('two CTEs are both extracted in order', () => {
@@ -526,7 +555,7 @@ describe('extractTokens', () => {
 		const ctes = [{ name: 'base', line: 0, col: 5, endLine: 3, endCol: 1, columns: [] }];
 		const result = extractTokens([], ctes);
 		expect(result).toHaveLength(1);
-		expect(result[0]).toEqual({ type: 'table_ref', name: 'base', line: 0, col: 5, endCol: 9 });
+		expect(result[0]).toEqual({ type: 'table_ref', name: 'base', line: 0, col: 5, endCol: 9, cteDefinition: true });
 	});
 
 	it('skips CTE definition token when col is undefined', () => {
@@ -630,6 +659,29 @@ describe('extractTokens', () => {
 		expect(tok.aliasLine).toBe(1);
 		expect(tok.aliasCol).toBe(17);
 		expect(tok.aliasEndCol).toBe(18);
+	});
+
+	it('sets alias but no aliasLine for synthesized TableAlias (qualify() expansion)', () => {
+		// qualify() adds "orders AS orders" but the synthesised alias Identifier
+		// has no _meta → alias is set for column-ref resolution, but aliasLine
+		// is not set, signalling it was not user-written.
+		const ast: AstPayload[] = [
+			{ c: 'Select' },
+			{ c: 'From', i: 0, k: 'from' },
+			{ c: 'Table', i: 1, k: 'this' },
+			{ c: 'Identifier', i: 2, k: 'this', m: { line: 2, col: 13 } },  // 'orders'
+			{ i: 3, k: 'this', v: 'orders' },
+			{ c: 'TableAlias', i: 2, k: 'alias' },
+			{ c: 'Identifier', i: 5, k: 'this' },   // no _meta — synthesised by qualify()
+			{ i: 6, k: 'this', v: 'orders' },
+		];
+		const result = extractTokens(ast, []);
+		expect(result).toHaveLength(1);
+		const tok = result[0] as any;
+		expect(tok.alias).toBe('orders');        // alias present for column-ref resolution
+		expect(tok.synthesized).toBe(true);      // flagged as synthesised
+		expect(tok.aliasLine).toBeUndefined();   // no source position
+		expect(tok.aliasCol).toBeUndefined();
 	});
 
 	it('returns empty array for empty AST and no CTEs', () => {
