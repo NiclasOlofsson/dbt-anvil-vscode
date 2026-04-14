@@ -10,7 +10,7 @@
 		"type": "git",
 		"url": "https://github.com/NiclasOlofsson/dbt-studio"
 	},
-	"homepage": "https://github.com/NiclasOlofsson/dbt-studio",
+	"homepage": "https://niclasolofsson.github.io/dbt-studio-vscode/",
 	"bugs": {
 		"url": "https://github.com/NiclasOlofsson/dbt-studio/issues"
 	},
@@ -307,6 +307,14 @@
 			{
 				"command": "dbt-studio.debug.showFrameSql",
 				"title": "Show SQL"
+			},
+			{
+				"command": "dbt-studio.setAsDefaultFormatter",
+				"title": "Set dbt Studio as Default SQL Formatter"
+			},
+			{
+				"command": "dbt-studio.suppressFormatterWarning",
+				"title": "Suppress Formatter Warning"
 			}
 		],
 		"viewsContainers": {
@@ -794,6 +802,11 @@
 						"type": "boolean",
 						"default": false,
 						"markdownDescription": "Suppress the warning about auto-save triggering frequent dbt parse runs."
+					},
+					"dbt-studio.notifications.suppressFormatterWarning": {
+						"type": "boolean",
+						"default": false,
+						"markdownDescription": "Suppress the warning about dbt Studio not being set as the default formatter for SQL files."
 					}
 				}
 			},
