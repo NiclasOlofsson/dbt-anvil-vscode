@@ -97,4 +97,21 @@ describe(RULE, () => {
 		const sql = 'select 1';
 		expect(check(sql, model())).toHaveLength(0);
 	});
+
+	it('no violation when single real FROM ref exists but cteDefinition tokens inflate the count', () => {
+		// Regression: cteDefinition tokens were counted in tableRefs, making a single-source
+		// query look like it had 2+ sources, triggering false positives on unqualified columns.
+		const sql = 'with cte_a as (\n  select id\n)\nselect id from cte_a';
+		const m = model({
+			tokens: [
+				// CTE definition site token — must NOT count toward the 2+ threshold
+				{ type: 'table_ref' as const, name: 'cte_a', line: 0, col: 5, endCol: 10, cteDefinition: true },
+				// The real single FROM reference
+				tableRef('cte_a', 3, 15),
+				// Unqualified column — should NOT be flagged since there is only 1 real source
+				colRef('id', 3, 7),
+			],
+		});
+		expect(check(sql, m)).toHaveLength(0);
+	});
 });

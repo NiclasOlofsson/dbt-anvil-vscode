@@ -20,10 +20,14 @@ export const expressionNoAliasRule: TokenRule = {
 			if (!col.expression) continue;
 			if (col.aliasLine !== undefined) continue;
 
+			const insertPos = new vscode.Position(col.endLine, col.endCol);
+			const placeholder = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(col.name) ? col.name : 'alias';
+
 			violations.push({
 				rule: 'ninja.aliasing.expression-no-alias',
 				message: `Expression column '${col.expression}' should have an explicit alias.`,
 				range: new vscode.Range(col.line, col.col, col.endLine, col.endCol),
+				snippetFix: { position: insertPos, snippet: ` as \${1:${placeholder}}` },
 			});
 		}
 

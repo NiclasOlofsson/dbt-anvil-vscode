@@ -103,7 +103,7 @@ describe(RULE, () => {
 		const v = check(sql, m);
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('name');
-		expect(v[0].message).toContain("CTE 'a'");
+		expect(v[0].message).toContain('CTE \'a\'');
 	});
 
 	it('ignores column_refs inside the CTE body (self-references)', () => {
@@ -142,7 +142,7 @@ describe(RULE, () => {
 			tokens: [],
 		});
 		const v = check(sql, m);
-		expect(v[0].message).toBe("Column 'total' in CTE 'my_data' is never referenced downstream.");
+		expect(v[0].message).toBe('Column \'total\' in CTE \'my_data\' is never referenced downstream.');
 	});
 
 	it('no fix is provided (info-only rule)', () => {
@@ -153,5 +153,44 @@ describe(RULE, () => {
 		});
 		const v = check(sql, m);
 		expect(v[0].fix).toBeUndefined();
+	});
+
+	it('no violation when CTE columns are consumed via SELECT * that qualify() expands to column_refs', () => {
+		// qualify() expands SELECT * in cte_final to explicit column_ref tokens for each
+		// column in cte_interim_calcs. The rule must treat those as proper references.
+		const sql = [
+			'with cte_interim_calcs as (', // line 0
+			'  select game_id, home_team',  // line 1
+			'),',                           // line 2
+			'cte_final as (',               // line 3
+			'  select *, home_score',       // line 4
+			'  from cte_interim_calcs',     // line 5
+			')',                            // line 6
+			'select * from cte_final',      // line 7
+		].join('\n');
+
+		const refInterim = tableRef('cte_interim_calcs', 5, 7);
+		const refFinal = tableRef('cte_final', 7, 14);
+
+		const m = model({
+			ctes: [
+				cte('cte_interim_calcs', 0, 2, ['game_id', 'home_team']),
+				cte('cte_final', 3, 6, ['game_id', 'home_team', 'home_score']),
+			],
+			tokens: [
+				refInterim,
+				refFinal,
+				// qualify() expanded cte_final's SELECT * → explicit column_ref tokens for cte_interim_calcs
+				colRef('game_id', 4, 9, 'cte_interim_calcs', refInterim),
+				colRef('home_team', 4, 18, 'cte_interim_calcs', refInterim),
+				// home_score is explicitly selected in cte_final
+				colRef('home_score', 7, 7, 'cte_final', refFinal),
+				// qualify() expanded outer SELECT * → explicit column_ref tokens for cte_final
+				colRef('game_id', 7, 16, 'cte_final', refFinal),
+				colRef('home_team', 7, 25, 'cte_final', refFinal),
+			],
+		});
+
+		expect(check(sql, m)).toHaveLength(0);
 	});
 });

@@ -22,11 +22,12 @@ export const requireTableAliasRule: TokenRule = {
 		const { model } = ctx;
 
 		const tableRefs = model.tokens.filter(t => t.type === 'table_ref') as TableRefToken[];
-		if (tableRefs.length < 2) return [];
+		const fromRefs = tableRefs.filter(t => !t.cteDefinition && !t.synthesized);
+		if (fromRefs.length < 2) return [];
 
 		const violations: NinjaViolation[] = [];
 
-		for (const ref of tableRefs) {
+		for (const ref of fromRefs) {
 			if (ref.alias) continue;
 
 			const range = new vscode.Range(ref.line, ref.col, ref.line, ref.endCol);

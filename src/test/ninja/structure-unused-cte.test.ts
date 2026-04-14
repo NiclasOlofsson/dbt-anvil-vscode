@@ -159,4 +159,21 @@ describe(RULE, () => {
 		// Rule is still invoked directly, severity is engine-level; just verify it produces violations
 		expect(check(sql, m)).toHaveLength(1);
 	});
+
+	// ── cteDefinition tokens must not count as usages ───────────────────────
+
+	it('flags CTE as unused when only cteDefinition tokens are present (not FROM/JOIN refs)', () => {
+		// Regression: extractTokens() emits a cteDefinition:true token for every CTE definition
+		// site. The rule must not count those as FROM/JOIN usages, or every CTE will appear
+		// "referenced" and the rule will never fire.
+		const sql = 'with cte_empty as (\n  select losing_team\n  from t\n  where 1 = 0\n)\nselect 1';
+		const m = model({
+			ctes: [cte('cte_empty', 0, 4)],
+			// Only the cteDefinition token — no actual FROM/JOIN table_ref
+			tokens: [{ type: 'table_ref' as const, name: 'cte_empty', line: 0, col: 5, endCol: 14, cteDefinition: true }],
+		});
+		const v = check(sql, m);
+		expect(v).toHaveLength(1);
+		expect(v[0].message).toContain('cte_empty');
+	});
 });

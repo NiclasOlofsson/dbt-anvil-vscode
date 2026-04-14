@@ -17,6 +17,7 @@ export const selfAliasRule: TokenRule = {
 		for (const tok of model.tokens) {
 			if (tok.type !== 'table_ref') continue;
 			if (!tok.alias) continue;
+			if (tok.synthesized) continue;
 			if (tok.name.toLowerCase() !== tok.alias.toLowerCase()) continue;
 
 			const aliasLine = tok.aliasLine ?? tok.line;

@@ -50,7 +50,7 @@ export const DEFAULT_CONFIG: NinjaConfig = {
 	maxLineLength: 120,
 	layout: {
 		commaPosition: 'trailing',
-		operatorPosition: 'trailing',
+		operatorPosition: 'leading',
 	},
 	structure: {
 		allowStarInCte: false,

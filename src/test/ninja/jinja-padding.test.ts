@@ -117,4 +117,18 @@ describe(RULE, () => {
 		const v = violationsFor(runJinja('{# this is a comment #}'), RULE);
 		expect(v.length).toBe(0);
 	});
+
+	// ── Multi-line blocks ──────────────────────────────────────────────────
+
+	it('passes multiline config block (newline after opening)', () => {
+		const sql = '{{\n    config(\n        materialized="table"\n    )\n}}';
+		const v = violationsFor(runJinja(sql), RULE);
+		expect(v.length).toBe(0);
+	});
+
+	it('passes multiline block with no spaces at delimiters', () => {
+		const sql = '{{\nconfig(\n    materialized="table"\n)\n}}';
+		const v = violationsFor(runJinja(sql), RULE);
+		expect(v.length).toBe(0);
+	});
 });

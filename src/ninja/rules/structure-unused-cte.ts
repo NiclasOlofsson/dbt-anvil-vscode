@@ -13,17 +13,19 @@ export const unusedCteRule: TokenRule = {
 	id: 'ninja.structure.unused-cte',
 	type: 'token',
 	category: NinjaCategory.Structure,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'info',
 	description: 'CTE is defined but never referenced.',
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document } = ctx;
 		if (model.ctes.length === 0) return [];
 
-		// Collect all table_ref names (lower-cased) that appear in FROM/JOIN
+		// Collect table_ref names from real FROM/JOIN references only.
+		// Exclude cteDefinition tokens (the CTE name at its definition site) and
+		// synthesized tokens (qualify()-generated aliases) — neither counts as a usage.
 		const usedNames = new Set<string>();
 		for (const tok of model.tokens) {
-			if (tok.type === 'table_ref') {
+			if (tok.type === 'table_ref' && !tok.cteDefinition && !tok.synthesized) {
 				usedNames.add(tok.name.toLowerCase());
 			}
 		}
@@ -42,6 +44,7 @@ export const unusedCteRule: TokenRule = {
 				message: `CTE '${cte.name}' is defined but never referenced.`,
 				range,
 				fix: buildDeleteFix(model.ctes, i, model.sqlTokens, document),
+				noAutoFix: true,
 			});
 		}
 
