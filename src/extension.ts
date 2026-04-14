@@ -544,6 +544,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.commands.registerCommand('dbt-studio.suppressAutoSaveWarning', async () => {
 			await vscode.workspace.getConfiguration('dbt-studio').update('notifications.suppressAutoSaveWarning', true, vscode.ConfigurationTarget.Global);
 		}),
+		vscode.commands.registerCommand('dbt-studio.setAsDefaultFormatter', async () => {
+			await vscode.workspace.getConfiguration('editor', { languageId: 'jinja-sql' }).update('defaultFormatter', 'nickeolofsson.dbt-studio-vscode', vscode.ConfigurationTarget.Global, true);
+		}),
+		vscode.commands.registerCommand('dbt-studio.suppressFormatterWarning', async () => {
+			await vscode.workspace.getConfiguration('dbt-studio').update('notifications.suppressFormatterWarning', true, vscode.ConfigurationTarget.Global);
+		}),
 		vscode.commands.registerCommand('dbt-studio.goToLine', async (args: { uri: string; line: number }) => {
 			const uri = vscode.Uri.parse(args.uri);
 			const pos = new vscode.Position(args.line, 0);

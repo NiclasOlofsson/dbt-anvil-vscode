@@ -34,6 +34,8 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 	private readonly _sqlfluffCollection: vscode.DiagnosticCollection;
 	/** Warning shown on dbt_project.yml when auto-save is enabled (triggers frequent dbt parse). */
 	private readonly _autoSaveCollection: vscode.DiagnosticCollection;
+	/** Warning shown on dbt_project.yml when dbt Studio is not the default formatter for jinja-sql. */
+	private readonly _formatterCollection: vscode.DiagnosticCollection;
 	/** Ninja style-linting diagnostics (capitalisation, whitespace, jinja padding). */
 	private readonly _ninjaCollection: vscode.DiagnosticCollection;
 	/** Stores the last Ninja result per document URI for quick-fix code actions. */
@@ -65,6 +67,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		this._sqlglotCollection = vscode.languages.createDiagnosticCollection('dbt-studio-sqlglot');
 		this._sqlfluffCollection = vscode.languages.createDiagnosticCollection('dbt-studio-sqlfluff');
 		this._autoSaveCollection = vscode.languages.createDiagnosticCollection('dbt-studio-autosave');
+		this._formatterCollection = vscode.languages.createDiagnosticCollection('dbt-studio-formatter');
 		this._ninjaCollection = vscode.languages.createDiagnosticCollection('dbt-studio-ninja');
 		this._syntaxErrorDim = vscode.window.createTextEditorDecorationType({ opacity: '0.5' });
 		this._disposables.push(this._syntaxErrorDim);
@@ -75,6 +78,9 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		// Auto-save warning: shown on dbt_project.yml when auto-save is enabled.
 		// Cleared when the user sets dbt-studio.notifications.suppressAutoSaveWarning in settings.
 		this._updateAutoSaveDiagnostic();
+		// Formatter warning: shown on dbt_project.yml when dbt Studio is not the default formatter.
+		// Cleared when the user sets the formatter or sets dbt-studio.notifications.suppressFormatterWarning.
+		this._updateFormatterDiagnostic();
 		this._disposables.push(
 			vscode.workspace.onDidChangeConfiguration((e) => {
 				if (e.affectsConfiguration('dbt-studio.notifications.suppressSqlFluffWarning')) {
@@ -82,6 +88,9 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 				}
 				if (e.affectsConfiguration('dbt-studio.notifications.suppressAutoSaveWarning') || e.affectsConfiguration('files.autoSave')) {
 					this._updateAutoSaveDiagnostic();
+				}
+		if (e.affectsConfiguration('dbt-studio.notifications.suppressFormatterWarning') || e.affectsConfiguration('editor.defaultFormatter')) {
+					this._updateFormatterDiagnostic();
 				}
 			}),
 			vscode.extensions.onDidChange(() => this._updateSqlFluffDiagnostic()),
@@ -567,6 +576,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		this._sqlglotCollection.clear();
 		this._sqlfluffCollection.clear();
 		this._autoSaveCollection.clear();
+		this._formatterCollection.clear();
 		this._ninjaCollection.clear();
 		this._ninjaResults.clear();
 		this._syntaxErrorDimRanges.clear();
@@ -588,6 +598,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		this._sqlglotCollection.dispose();
 		this._sqlfluffCollection.dispose();
 		this._autoSaveCollection.dispose();
+		this._formatterCollection.dispose();
 		this._ninjaCollection.dispose();
 	}
 
@@ -607,6 +618,24 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		diag.source = 'dbt-studio';
 		diag.code = 'autosave-active';
 		this._autoSaveCollection.set(projectYml, [diag]);
+	}
+
+	private _updateFormatterDiagnostic(): void {
+		const suppressed = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('notifications.suppressFormatterWarning');
+		const projectYml = vscode.Uri.file(`${this.projectDir}/dbt_project.yml`);
+		const defaultFormatter = vscode.workspace.getConfiguration('editor', { languageId: 'jinja-sql' }).get<string>('defaultFormatter');
+		if (suppressed || defaultFormatter === 'nickeolofsson.dbt-studio-vscode') {
+			this._formatterCollection.delete(projectYml);
+			return;
+		}
+		const diag = new vscode.Diagnostic(
+			new vscode.Range(0, 0, 0, 0),
+			'dbt Studio is not set as the default formatter for SQL files. Auto-fix (format on save) will use a different formatter and ninja fixes won\'t be applied automatically.',
+			vscode.DiagnosticSeverity.Warning,
+		);
+		diag.source = 'dbt-studio';
+		diag.code = 'formatter-not-set';
+		this._formatterCollection.set(projectYml, [diag]);
 	}
 
 	private _updateSqlFluffDiagnostic(): void {
