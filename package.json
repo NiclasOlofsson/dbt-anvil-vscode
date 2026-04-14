@@ -907,6 +907,29 @@
 							"leading"
 						],
 						"markdownDescription": "Whether operators (AND, OR, +, etc.) should appear at end (trailing) or start (leading) of lines."
+					},
+					"dbt-studio.ninja.structure.allowStarInCte": {
+						"type": "boolean",
+						"default": false,
+						"markdownDescription": "Allow `SELECT *` inside CTEs (only flag it in the final SELECT)."
+					},
+					"dbt-studio.ninja.convention.notEqual": {
+						"type": "string",
+						"default": "!=",
+						"enum": [
+							"!=",
+							"<>"
+						],
+						"markdownDescription": "Preferred not-equal operator style."
+					},
+					"dbt-studio.ninja.convention.unionStyle": {
+						"type": "string",
+						"default": "all",
+						"enum": [
+							"all",
+							"distinct"
+						],
+						"markdownDescription": "Whether bare `UNION` should be auto-fixed to `UNION ALL` or `UNION DISTINCT`."
 					}
 				}
 			},

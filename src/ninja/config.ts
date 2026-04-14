@@ -3,6 +3,8 @@ import type { NinjaSeverity } from './rule';
 export type CapitalisationPolicy = 'upper' | 'lower' | 'consistent';
 export type CommaPosition = 'trailing' | 'leading';
 export type OperatorPosition = 'trailing' | 'leading';
+export type NotEqualStyle = '!=' | '<>';
+export type UnionStyle = 'all' | 'distinct';
 
 export interface NinjaConfig {
 	enabled: boolean;
@@ -26,6 +28,10 @@ export interface NinjaConfig {
 	structure: {
 		allowStarInCte: boolean;
 	};
+	convention: {
+		notEqual: NotEqualStyle;
+		unionStyle: UnionStyle;
+	};
 }
 
 export const DEFAULT_CONFIG: NinjaConfig = {
@@ -48,5 +54,9 @@ export const DEFAULT_CONFIG: NinjaConfig = {
 	},
 	structure: {
 		allowStarInCte: false,
+	},
+	convention: {
+		notEqual: '!=',
+		unionStyle: 'all',
 	},
 };

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { NinjaConfig, CapitalisationPolicy, CommaPosition, OperatorPosition } from './config';
+import type { NinjaConfig, CapitalisationPolicy, CommaPosition, OperatorPosition, NotEqualStyle, UnionStyle } from './config';
 import { DEFAULT_CONFIG } from './config';
 import type { NinjaSeverity } from './rule';
 
@@ -27,6 +27,13 @@ export function loadConfig(): NinjaConfig {
 		layout: {
 			commaPosition: cfg.get<CommaPosition>('layout.commaPosition', DEFAULT_CONFIG.layout.commaPosition),
 			operatorPosition: cfg.get<OperatorPosition>('layout.operatorPosition', DEFAULT_CONFIG.layout.operatorPosition),
+		},
+		structure: {
+			allowStarInCte: cfg.get<boolean>('structure.allowStarInCte', DEFAULT_CONFIG.structure.allowStarInCte),
+		},
+		convention: {
+			notEqual: cfg.get<NotEqualStyle>('convention.notEqual', DEFAULT_CONFIG.convention.notEqual),
+			unionStyle: cfg.get<UnionStyle>('convention.unionStyle', DEFAULT_CONFIG.convention.unionStyle),
 		},
 	};
 }

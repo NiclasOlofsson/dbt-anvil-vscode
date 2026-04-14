@@ -21,13 +21,31 @@ import { selectStarRule } from './rules/structure-select-star';
 // -- Convention rules --
 import { commaPositionRule } from './rules/convention-comma-position';
 import { operatorPositionRule } from './rules/convention-operator-position';
+import { notEqualRule } from './rules/convention-not-equal';
+import { countRowsRule } from './rules/convention-count-rows';
+import { isNullRule } from './rules/convention-is-null';
+import { leftJoinRule } from './rules/convention-left-join';
+import { coalesceRule } from './rules/convention-coalesce';
 
 // -- Ambiguity rules --
 import { qualifiedColumnsRule } from './rules/ambiguity-qualified-columns';
+import { bareUnionRule } from './rules/ambiguity-bare-union';
+import { implicitJoinRule } from './rules/ambiguity-implicit-join';
+import { distinctGroupByRule } from './rules/ambiguity-distinct-groupby';
 
 // -- Aliasing rules --
 import { columnAsRule } from './rules/alias-column-as';
 import { requireTableAliasRule } from './rules/alias-require-table-alias';
+import { selfAliasRule } from './rules/alias-self-alias';
+import { uniqueTableRule } from './rules/alias-unique-table';
+import { unusedAliasRule } from './rules/alias-unused';
+import { expressionNoAliasRule } from './rules/alias-expression-no-alias';
+
+// -- Structure rules (additional) --
+import { distinctParensRule } from './rules/structure-distinct-parens';
+import { unusedJoinRule } from './rules/structure-unused-join';
+import { elseNullRule } from './rules/structure-else-null';
+import { simpleCaseRule } from './rules/structure-simple-case';
 
 // -- Layout rules --
 import { trailingWhitespaceRule } from './rules/layout-trailing-whitespace';
@@ -50,9 +68,25 @@ const ALL_RULES: NinjaRule[] = [
 	selectStarRule,
 	commaPositionRule,
 	operatorPositionRule,
+	notEqualRule,
+	countRowsRule,
+	isNullRule,
+	leftJoinRule,
 	qualifiedColumnsRule,
+	bareUnionRule,
+	implicitJoinRule,
+	distinctGroupByRule,
 	columnAsRule,
 	requireTableAliasRule,
+	selfAliasRule,
+	uniqueTableRule,
+	unusedAliasRule,
+	expressionNoAliasRule,
+	distinctParensRule,
+	unusedJoinRule,
+	elseNullRule,
+	simpleCaseRule,
+	coalesceRule,
 	trailingWhitespaceRule,
 	trailingNewlineRule,
 	leadingWhitespaceRule,
