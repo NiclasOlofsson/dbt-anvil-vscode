@@ -11,6 +11,8 @@ export interface ColumnInfo {
 	name: string;
 	/** 0-based line of the column expression in the document */
 	line: number;
+	/** 0-based start column of the column name identifier (absent if position unavailable) */
+	col?: number;
 }
 
 export interface CteInfo {
@@ -102,6 +104,18 @@ export interface TableRefToken {
 	aliasLine?: number;
 	aliasCol?: number;
 	aliasEndCol?: number;
+	/**
+	 * True when the alias was synthesised by qualify() rather than written by the
+	 * user. Synthesised aliases have no source position (aliasLine is absent).
+	 * Rules should check this flag instead of inspecting aliasLine directly.
+	 */
+	synthesized?: true;
+	/**
+	 * True when this token represents a CTE definition site (the `name` in
+	 * `WITH name AS (...)`), not a FROM/JOIN reference. These should not be
+	 * flagged by aliasing rules that apply to FROM/JOIN table references.
+	 */
+	cteDefinition?: true;
 }
 
 export interface ColumnDefToken {
@@ -192,6 +206,11 @@ export interface DocumentModel {
 	finalSelect?: FinalSelectInfo;
 	tokens: TokenInfo[];
 	timing: { parseMs: number; totalMs: number };
+	/**
+	 * Parse status. 'syntax_error' means the model's structural data (ctes, tokens, etc.) is
+	 * carried over from the last good parse — only sqlglotWarnings reflects the current state.
+	 */
+	status?: 'ok' | 'syntax_error';
 	/** Structural warnings emitted by sqlglot during scope building. */
 	sqlglotWarnings?: SqlglotWarning[];
 	/**
@@ -382,6 +401,10 @@ export class ParseService {
 		this._inflight.set(inflightKey, promise);
 		try {
 			return await promise;
+		} catch (err) {
+			this._logger.error('[parse-service] bridge crash for ' + document.fileName + ': ' + String(err));
+			// Return stale model if available so providers remain functional.
+			return this._cache.get(key)?.model ?? null;
 		} finally {
 			this._inflight.delete(inflightKey);
 		}
@@ -654,30 +677,37 @@ export class ParseService {
 
 		if (variants.length <= 1) {
 			// Fast path: no Jinja conditionals, single parser call.
-			try {
-				model = await this._parser.parse(rawText, dialect || 'ansi', options);
-			} catch (err) {
-				this._logger.debug('[parse-service] parse_document failed for ' + document.fileName + ': ' + String(err));
-				return null;
-			}
+			model = await this._parser.parse(rawText, dialect, options);
 		} else {
 			// Multi-variant path: parse each branch combination and merge.
 			const variantModels: DocumentModel[] = [];
 			for (const variant of variants) {
 				try {
-					variantModels.push(await this._parser.parse(variant.sql, dialect || 'ansi', options));
+					variantModels.push(await this._parser.parse(variant.sql, dialect, options));
 				} catch {
-					// silently skip failed variants
+					// silently skip failed variants — individual branch failures are expected
 				}
 			}
 			if (variantModels.length === 0) {
-				this._logger.debug('[parse-service] all ' + variants.length + ' variants failed for ' + document.fileName);
-				return null;
+				throw new Error(`all ${variants.length} Jinja variants failed to parse for ${document.fileName}`);
 			}
 			model = mergeModels(variantModels);
 		}
 
-		const entry: CacheEntry = { version: document.version, model, dialect: dialect || 'ansi' };
+		const hasSyntaxError = model.sqlglotWarnings?.some(w => w.type === 'syntax_error') ?? false;
+		if (hasSyntaxError) {
+			// Overlay warnings onto last good model so consumers still get useful structural data.
+			const prev = this._cache.get(key)?.model;
+			if (prev) {
+				model = { ...prev, status: 'syntax_error', sqlglotWarnings: model.sqlglotWarnings, timing: model.timing };
+			} else {
+				model = { ...model, status: 'syntax_error' };
+			}
+		} else {
+			model = { ...model, status: 'ok' };
+		}
+
+		const entry: CacheEntry = { version: document.version, model, dialect };
 		this._cache.set(key, entry);
 		this._logger.debug(
 			`[parse-service] parsed ${document.fileName} — ${model.ctes.length} CTEs, `
@@ -700,7 +730,7 @@ export class ParseService {
 	 */
 	async parseSqlString(sql: string, dialect: string): Promise<CteInfo[]> {
 		try {
-			const model = await this._parser.parse(sql, dialect || 'ansi');
+			const model = await this._parser.parse(sql, dialect);
 			return model.ctes;
 		} catch {
 			return [];
@@ -714,7 +744,7 @@ export class ParseService {
 	 */
 	async parseRawForTokens(sql: string, dialect: string): Promise<{ sqlTokens: SqlToken[]; jinjaTags: JinjaTagSpan[] } | undefined> {
 		try {
-			const model = await this._parser.parse(sql, dialect || 'ansi');
+			const model = await this._parser.parse(sql, dialect);
 			if (!model.sqlTokens) return undefined;
 			return { sqlTokens: model.sqlTokens, jinjaTags: model.jinjaTags ?? [] };
 		} catch {
