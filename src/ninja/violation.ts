@@ -10,4 +10,15 @@ export interface NinjaViolation {
 	range: vscode.Range;
 	/** Auto-fix edits (omit when not fixable). */
 	fix?: vscode.TextEdit[];
+	/**
+	 * When true the fix is excluded from bulk/auto-fix actions ("Fix all" and source.fixAll.ninja).
+	 * Use for destructive fixes like deleting a CTE.
+	 */
+	noAutoFix?: true;
+	/**
+	 * Snippet-based fix: insert a SnippetString at a position so VS Code places the
+	 * cursor at a tab stop after applying. Used when the fix requires user input
+	 * (e.g. choosing an alias name). Mutually exclusive with `fix`.
+	 */
+	snippetFix?: { position: import('vscode').Position; snippet: string };
 }
