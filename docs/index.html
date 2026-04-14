@@ -474,7 +474,7 @@
 			display: grid;
 			grid-template-columns: 1fr 1fr;
 			gap: 32px 48px;
-			align-items: start;
+			align-items: center;
 		}
 
 		.split-section h2 {
@@ -806,7 +806,7 @@
 				</div>
 			</div>
 			<!-- Under the hood -->
-			<div class="prose-section" style="max-width: 100%;">
+			<div class="prose-section" style="max-width: 100%; background-image: linear-gradient(rgba(18,18,20,0.3), rgba(18,18,20,0.3)), url('hero-bg.svg'); background-size: auto, 2560px 900px; background-position: top left, top left; background-repeat: repeat, repeat; border-radius: 8px; padding: 32px 38px; margin-top: 56px; border: 1px solid var(--border);">
 				<h2 style="text-align: center;">Under the hood</h2>
 				<p class="lead" style="margin-bottom: 32px; max-width: 72ch;">This extension is a fair bit more ambitious than a thin wrapper around a language server. Here's what's in it.</p>
 				<p><strong>No conflicts.</strong> dbt Studio uses your existing Python environment and your existing dbt installation. It auto-detects your setup (venv, uv, poetry, pipenv, conda, system Python) and bridges the VS Code Node.js world to dbt Core over a JSON process boundary, with nothing to configure. All core dbt operations: parse, compile, run, test, build, seed, snapshot, and query, go through this bridge. No bundled runtimes, no parallel installations, no version mismatches. The one thing it cannot help with is a broken dbt setup. That part is on you.</p>
