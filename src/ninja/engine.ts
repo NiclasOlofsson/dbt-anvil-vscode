@@ -13,6 +13,22 @@ import { literalCapRule } from './rules/cap-literals';
 import { typeCapRule } from './rules/cap-types';
 import { jinjaPaddingRule } from './rules/jinja-padding';
 
+// -- Structure rules --
+import { unusedCteRule } from './rules/structure-unused-cte';
+import { unusedColumnsRule } from './rules/structure-unused-columns';
+import { selectStarRule } from './rules/structure-select-star';
+
+// -- Convention rules --
+import { commaPositionRule } from './rules/convention-comma-position';
+import { operatorPositionRule } from './rules/convention-operator-position';
+
+// -- Ambiguity rules --
+import { qualifiedColumnsRule } from './rules/ambiguity-qualified-columns';
+
+// -- Aliasing rules --
+import { columnAsRule } from './rules/alias-column-as';
+import { requireTableAliasRule } from './rules/alias-require-table-alias';
+
 // -- Layout rules --
 import { trailingWhitespaceRule } from './rules/layout-trailing-whitespace';
 import { trailingNewlineRule } from './rules/layout-trailing-newline';
@@ -29,6 +45,14 @@ const ALL_RULES: NinjaRule[] = [
 	literalCapRule,
 	typeCapRule,
 	jinjaPaddingRule,
+	unusedCteRule,
+	unusedColumnsRule,
+	selectStarRule,
+	commaPositionRule,
+	operatorPositionRule,
+	qualifiedColumnsRule,
+	columnAsRule,
+	requireTableAliasRule,
 	trailingWhitespaceRule,
 	trailingNewlineRule,
 	leadingWhitespaceRule,
