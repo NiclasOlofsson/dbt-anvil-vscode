@@ -30,4 +30,18 @@ describe(RULE, () => {
 		const v = check([tableRef('Orders', 0, 0, 'ORDERS')]);
 		expect(v).toHaveLength(1);
 	});
+
+	it('ignores synthesized self-alias with no source position (qualify() expansion)', () => {
+		// Token has alias=name but synthesized=true → qualify()-synthesised, not user-written.
+		const tok: ReturnType<typeof tableRef> = {
+			type: 'table_ref',
+			name: 'orders',
+			line: 0,
+			col: 0,
+			endCol: 6,
+			alias: 'orders',
+			synthesized: true,
+		};
+		expect(check([tok])).toHaveLength(0);
+	});
 });

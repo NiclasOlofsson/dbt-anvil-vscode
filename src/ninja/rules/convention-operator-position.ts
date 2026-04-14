@@ -41,12 +41,19 @@ export const operatorPositionRule: TokenRule = {
 			if (policy === 'trailing') {
 				// Leading operator violation: operator is the first non-whitespace on line
 				const beforeOp = lineText.slice(0, opStart).trim();
-				if (beforeOp === '') {
+				if (beforeOp === '' && line > 0) {
 					const range = new vscode.Range(line, opStart, line, opStart + opLen);
+					const opText = lineText.slice(opStart, opStart + opLen).trim();
+					const prevLineText = lines[line - 1];
+					const trailingSpace = lineText[opStart + opLen] === ' ' ? 1 : 0;
 					violations.push({
 						rule: 'ninja.convention.operator-position',
-						message: `'${lineText.slice(opStart, opStart + opLen).trim()}' should be at the end of the previous line (trailing), not at the start.`,
+						message: `'${opText}' should be at the end of the previous line (trailing), not at the start.`,
 						range,
+						fix: [
+							vscode.TextEdit.insert(new vscode.Position(line - 1, prevLineText.length), ` ${opText}`),
+							vscode.TextEdit.delete(new vscode.Range(line, opStart, line, opStart + opLen + trailingSpace)),
+						],
 					});
 				}
 			} else {
@@ -55,10 +62,18 @@ export const operatorPositionRule: TokenRule = {
 				if (afterOp === '' || afterOp.startsWith('--')) {
 					if (line + 1 < lines.length && lines[line + 1].trim() !== '') {
 						const range = new vscode.Range(line, opStart, line, opStart + opLen);
+						const opText = lineText.slice(opStart, opStart + opLen).trim();
+						const nextLineText = lines[line + 1];
+						const nextIndent = nextLineText.length - nextLineText.trimStart().length;
+						const spaceBefore = opStart > 0 && lineText[opStart - 1] === ' ' ? 1 : 0;
 						violations.push({
 							rule: 'ninja.convention.operator-position',
-							message: `'${lineText.slice(opStart, opStart + opLen).trim()}' should be at the start of the next line (leading), not at the end.`,
+							message: `'${opText}' should be at the start of the next line (leading), not at the end.`,
 							range,
+							fix: [
+								vscode.TextEdit.delete(new vscode.Range(line, opStart - spaceBefore, line, opStart + opLen)),
+								vscode.TextEdit.insert(new vscode.Position(line + 1, nextIndent), `${opText} `),
+							],
 						});
 					}
 				}

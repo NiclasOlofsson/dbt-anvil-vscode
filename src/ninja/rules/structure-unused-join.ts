@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import type { NinjaViolation } from '../violation';
+import type { TableRefToken } from '../../services/parse-service';
 
 export const unusedJoinRule: TokenRule = {
 	id: 'ninja.structure.unused-join',
@@ -14,8 +15,10 @@ export const unusedJoinRule: TokenRule = {
 		const { model } = ctx;
 		const violations: NinjaViolation[] = [];
 
-		// Collect all table refs — first one is FROM, rest are JOINs
-		const tableRefs = model.tokens.filter(t => t.type === 'table_ref');
+		// Collect only real FROM/JOIN refs — exclude CTE definition sites and qualify()-synthesized aliases
+		const tableRefs = model.tokens.filter(
+			t => t.type === 'table_ref' && !t.cteDefinition && !t.synthesized,
+		) as TableRefToken[];
 		if (tableRefs.length < 2) return [];
 
 		// All column qualifiers
@@ -31,6 +34,13 @@ export const unusedJoinRule: TokenRule = {
 			const tr = tableRefs[i];
 			const label = tr.alias ?? tr.name;
 			if (usedQualifiers.has(label.toLowerCase())) continue;
+
+			// No alias: columns from this table appear unqualified in SQL.
+			// If unqualified column refs exist, they may come from this table — can't flag unused.
+			if (!tr.alias) {
+				const hasUnqualifiedRefs = model.tokens.some(t => t.type === 'column_ref' && !t.table);
+				if (hasUnqualifiedRefs) continue;
+			}
 
 			violations.push({
 				rule: 'ninja.structure.unused-join',

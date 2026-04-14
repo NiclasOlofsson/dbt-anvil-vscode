@@ -21,8 +21,11 @@ export const qualifiedColumnsRule: TokenRule = {
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model } = ctx;
 
-		// Count table_ref tokens — if <2, no ambiguity possible
-		const tableRefs = model.tokens.filter(t => t.type === 'table_ref');
+		// Count only real FROM/JOIN refs — exclude cteDefinition and synthesized tokens
+		// so a single-source CTE query is not treated as multi-source.
+		const tableRefs = model.tokens.filter(
+			t => t.type === 'table_ref' && !t.cteDefinition && !t.synthesized,
+		);
 		if (tableRefs.length < 2) return [];
 
 		const violations: NinjaViolation[] = [];

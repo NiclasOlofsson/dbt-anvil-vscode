@@ -46,4 +46,16 @@ describe(RULE, () => {
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('customers');
 	});
+
+	it('no violation when joined table has no alias and there are unqualified column refs', () => {
+		// cte_home_margin is joined without alias; columns appear unqualified
+		// → can't determine if they come from this table; must not flag
+		const v = check([
+			tableRef('some_table', 0, 0, 't'),
+			tableRef('cte_home_margin', 1, 0),   // no alias
+			colRef('team', 2, 0, 't'),            // qualified ref (some_table)
+			colRef('home_pt_diff', 3, 0),         // unqualified — might be from cte_home_margin
+		]);
+		expect(v).toHaveLength(0);
+	});
 });

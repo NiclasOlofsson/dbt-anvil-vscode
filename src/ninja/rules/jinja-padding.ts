@@ -25,6 +25,9 @@ export const jinjaPaddingRule: TokenRule = {
 
 		for (const token of tokens) {
 			if (token.type !== 'expression' && token.type !== 'tag') continue;
+			// Padding rules don't apply to multiline blocks — a newline after the
+			// opening delimiter (or before the closing one) is intentional formatting.
+			if (token.raw.includes('\n')) continue;
 
 			const raw = token.raw;
 			const openLen = 2; // {{ or {%
@@ -39,7 +42,7 @@ export const jinjaPaddingRule: TokenRule = {
 
 			// Check opening padding: should be exactly one space after opener (+ optional dash)
 			const afterOpen = raw[contentStart];
-			if (afterOpen !== ' ' && afterOpen !== '\n') {
+			if (afterOpen !== ' ') {
 				// Need a space after the opening delimiter
 				const pos = ctx.document.positionAt(token.start + contentStart);
 				const range = new vscode.Range(pos, pos);
@@ -68,7 +71,7 @@ export const jinjaPaddingRule: TokenRule = {
 
 			// Check closing padding: should be exactly one space before closer (+ optional dash)
 			const beforeClose = raw[contentEnd - 1];
-			if (beforeClose !== ' ' && beforeClose !== '\n') {
+			if (beforeClose !== ' ') {
 				const pos = ctx.document.positionAt(token.start + contentEnd);
 				const range = new vscode.Range(pos, pos);
 				violations.push({

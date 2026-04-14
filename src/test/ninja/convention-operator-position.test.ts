@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import * as vscode from 'vscode';
 import { mockDocument, cfg, model, sqlTok } from './helpers';
 import { operatorPositionRule } from '../../ninja/rules/convention-operator-position';
 import type { SqlToken } from '../../ftl/parse-result';
@@ -92,11 +93,63 @@ describe(RULE, () => {
 		expect(check(sql, 'leading')).toHaveLength(0);
 	});
 
-	it('no fix is provided', () => {
+	it('fix moves leading AND to end of previous line (trailing mode)', () => {
 		const sql = 'select *\nfrom t\nwhere a = 1\n  AND b = 2';
 		const v = check(sql, 'trailing');
-		if (v.length > 0) {
-			expect(v[0].fix).toBeUndefined();
-		}
+		expect(v).toHaveLength(1);
+		expect(v[0].fix).toHaveLength(2);
+		// Appends ' AND' to end of previous line
+		const insert = v[0].fix!.find(e => e.newText === ' AND');
+		expect(insert).toBeDefined();
+		expect(insert!.range.start).toEqual(new vscode.Position(2, 11)); // end of 'where a = 1'
+		// Removes 'AND ' from current line (keeps indent)
+		const del = v[0].fix!.find(e => e.newText === '');
+		expect(del).toBeDefined();
+		expect(del!.range).toEqual(new vscode.Range(3, 2, 3, 6)); // 'AND ' = 4 chars at col 2
+	});
+
+	it('fix moves trailing AND to start of next line (leading mode)', () => {
+		const sql = 'select *\nfrom t\nwhere a = 1 AND\n  b = 2';
+		const v = check(sql, 'leading');
+		expect(v).toHaveLength(1);
+		expect(v[0].fix).toHaveLength(2);
+		// Removes ' AND' from end of line 2 (space at 11, AND at 12-14, end exclusive = 15)
+		const del = v[0].fix!.find(e => e.newText === '');
+		expect(del).toBeDefined();
+		expect(del!.range).toEqual(new vscode.Range(2, 11, 2, 15));
+		// Inserts 'AND ' at start of content on next line (after 2-space indent)
+		const insert = v[0].fix!.find(e => e.newText === 'AND ');
+		expect(insert).toBeDefined();
+		expect(insert!.range.start).toEqual(new vscode.Position(3, 2));
+	});
+
+	it('fix moves leading OR to end of previous line (trailing mode)', () => {
+		const sql = 'select *\nfrom t\nwhere a = 1\n  OR b = 2';
+		const v = check(sql, 'trailing');
+		expect(v).toHaveLength(1);
+		expect(v[0].fix).toHaveLength(2);
+		// Inserts ' OR' at end of line 2
+		const insert = v[0].fix!.find(e => e.newText === ' OR');
+		expect(insert).toBeDefined();
+		expect(insert!.range.start).toEqual(new vscode.Position(2, 11));
+		// Deletes 'OR ' from line 3 (OR at cols 2-3, space at 4 → Range(3,2,3,5))
+		const del = v[0].fix!.find(e => e.newText === '');
+		expect(del).toBeDefined();
+		expect(del!.range).toEqual(new vscode.Range(3, 2, 3, 5));
+	});
+
+	it('fix moves trailing OR to start of next line (leading mode)', () => {
+		const sql = 'select *\nfrom t\nwhere a = 1 OR\n  b = 2';
+		const v = check(sql, 'leading');
+		expect(v).toHaveLength(1);
+		expect(v[0].fix).toHaveLength(2);
+		// Removes ' OR' from end of line 2 (space at 11, OR at 12-13, end exclusive = 14)
+		const del = v[0].fix!.find(e => e.newText === '');
+		expect(del).toBeDefined();
+		expect(del!.range).toEqual(new vscode.Range(2, 11, 2, 14));
+		// Inserts 'OR ' at start of content on next line
+		const insert = v[0].fix!.find(e => e.newText === 'OR ');
+		expect(insert).toBeDefined();
+		expect(insert!.range.start).toEqual(new vscode.Position(3, 2));
 	});
 });

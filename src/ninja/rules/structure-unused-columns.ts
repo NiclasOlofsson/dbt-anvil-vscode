@@ -37,7 +37,8 @@ export const unusedColumnsRule: TokenRule = {
 			for (const col of cte.columns) {
 				if (refSet?.has(col.name.toLowerCase())) continue;
 
-				const range = new vscode.Range(col.line, 0, col.line, col.name.length);
+				const startCol = col.col ?? 0;
+				const range = new vscode.Range(col.line, startCol, col.line, startCol + col.name.length);
 				violations.push({
 					rule: 'ninja.structure.unused-columns',
 					message: `Column '${col.name}' in CTE '${cte.name}' is never referenced downstream.`,

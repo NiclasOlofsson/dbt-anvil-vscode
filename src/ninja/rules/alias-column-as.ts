@@ -32,8 +32,10 @@ export const columnAsRule: TokenRule = {
 			const hasAs = aliasTokens.some(t => {
 				if (t.line < col.line || t.line > col.aliasLine!) return false;
 				if (t.line === col.line && t.line === col.aliasLine!) {
-					// Single line: AS must be between expression and alias
-					return t.end < col.aliasCol!;
+					// Single line: AS must be between expression end and alias start.
+					// Use t.col (0-based exclusive end column, line-relative) not t.end
+					// (absolute char offset) — they only coincide on line 0.
+					return t.col <= col.aliasCol!;
 				}
 				// Multi-line: AS on any intermediate line or at acceptable position on boundary lines
 				return true;
