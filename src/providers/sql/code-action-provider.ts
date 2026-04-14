@@ -10,6 +10,10 @@ import type { NinjaResult } from '../../ninja/engine';
  * - Inline refs: replace {{ ref('x') }} / {{ source('s','t') }} with relation name (ad-hoc only)
  * - Restore refs: replace relation names back to {{ ref() }} / {{ source() }} (ad-hoc only)
  * - Ninja quick-fixes: auto-fix capitalisation, whitespace, jinja padding violations
+ *
+ * Ninja fixes with `noAutoFix: true` (e.g. delete unused CTE) are offered as
+ * individual code fixes but are excluded from "Fix all" and `source.fixAll.ninja`
+ * to prevent silent destructive edits.
  */
 export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 	static readonly providedCodeActionKinds = [
@@ -161,22 +165,41 @@ export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 		const ninjaResult = this._getNinjaResult?.(document.uri);
 		if (ninjaResult) {
 			for (const v of ninjaResult.violations) {
-				if (!v.fix || v.fix.length === 0) continue;
 				if (!v.range.intersection(range)) continue;
-				const action = new vscode.CodeAction(
-					`Fix: ${v.message}`,
-					vscode.CodeActionKind.QuickFix,
-				);
-				action.edit = new vscode.WorkspaceEdit();
-				for (const edit of v.fix) {
-					action.edit.replace(document.uri, edit.range, edit.newText);
+
+				if (v.fix && v.fix.length > 0) {
+					const action = new vscode.CodeAction(
+						`Fix: ${v.message}`,
+						vscode.CodeActionKind.QuickFix,
+					);
+					action.edit = new vscode.WorkspaceEdit();
+					for (const edit of v.fix) {
+						action.edit.replace(document.uri, edit.range, edit.newText);
+					}
+					action.diagnostics = [new vscode.Diagnostic(v.range, v.message)];
+					actions.push(action);
+				} else if (v.snippetFix) {
+					// Snippet fix: insert a template at a position, placing the cursor at $1.
+					// Excluded from bulk/format actions — requires interactive user input.
+					const action = new vscode.CodeAction(
+						`Fix: ${v.message}`,
+						vscode.CodeActionKind.QuickFix,
+					);
+					action.edit = new vscode.WorkspaceEdit();
+					action.edit.set(document.uri, [
+						vscode.SnippetTextEdit.insert(
+							v.snippetFix.position,
+							new vscode.SnippetString(v.snippetFix.snippet),
+						),
+					]);
+					action.diagnostics = [new vscode.Diagnostic(v.range, v.message)];
+					actions.push(action);
 				}
-				action.diagnostics = [new vscode.Diagnostic(v.range, v.message)];
-				actions.push(action);
 			}
 
 			// "Fix all ninja violations" action when there are fixable violations
-			const fixable = ninjaResult.violations.filter(v => v.fix && v.fix.length > 0);
+			// Exclude noAutoFix violations (e.g. delete-CTE) — those are code fixes only.
+			const fixable = ninjaResult.violations.filter(v => v.fix && v.fix.length > 0 && !v.noAutoFix);
 			if (fixable.length > 1) {
 				const fixAll = new vscode.CodeAction(
 					`Fix all ${fixable.length} ninja violations`,

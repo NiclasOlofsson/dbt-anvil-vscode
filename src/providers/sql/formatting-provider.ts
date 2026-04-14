@@ -8,6 +8,7 @@ import { tokenize } from '../../dbt/jinja-tokenizer';
 /**
  * Document formatting provider powered by Ninja.
  * Collects all auto-fixable violations and applies their edits.
+ * Violations with `noAutoFix: true` (e.g. delete unused CTE) are excluded.
  */
 export class NinjaFormattingProvider implements vscode.DocumentFormattingEditProvider {
 	constructor(
@@ -31,7 +32,7 @@ export class NinjaFormattingProvider implements vscode.DocumentFormattingEditPro
 
 		const edits: vscode.TextEdit[] = [];
 		for (const v of result.violations) {
-			if (v.fix) edits.push(...v.fix);
+			if (v.fix && !v.noAutoFix) edits.push(...v.fix);
 		}
 		return edits;
 	}
