@@ -147,7 +147,7 @@ cast(id as int), cast(name as varchar(255))
 
 > Jinja tags should have single-space padding inside delimiters.
 
-Checks `{{ }}` expression tags and `{% %}` block tags. Requires exactly one space after the opening delimiter and one space before the closing delimiter. Jinja comments (`{# #}`) are skipped. Whitespace-control dashes (`{{-`, `-}}`, `{%-`, `-%}`) are respected.
+Checks `{{ }}` expression tags and `{% %}` block tags. Requires exactly one space after the opening delimiter and one space before the closing delimiter. Jinja comments (`{# #}`) are skipped. Whitespace-control dashes (`{{-`, `-}}`, `{%-`, `-%}`) are respected. Multiline blocks (where the content spans multiple lines) are skipped entirely — padding rules don't apply to block-style config calls.
 
 - **Default severity:** warning
 - **Auto-fix:** Inserts missing space or deletes excess spaces to produce exactly one space of padding.
@@ -157,6 +157,11 @@ Checks `{{ }}` expression tags and `{% %}` block tags. Requires exactly one spac
 select {{customer_id}}, {{  order_date  }}
 -- Fix →
 select {{ customer_id }}, {{ order_date }}
+
+-- Not flagged: multiline block
+{{
+    config(materialized='table')
+}}
 ```
 
 ---
@@ -165,14 +170,14 @@ select {{ customer_id }}, {{ order_date }}
 
 These rules analyse the semantic structure of SQL using the DocumentModel's CTE definitions, column lists, and resolved references.
 
-#### `ninja.structure.unused-cte` ⚡
+#### `ninja.structure.unused-cte` ⚡†
 
 > CTE is defined but never referenced.
 
 Finds CTEs whose names never appear as a `table_ref` in any downstream FROM or JOIN clause. A CTE that is defined but never read from is dead code.
 
-- **Default severity:** warning
-- **Auto-fix:** Precisely deletes the unused CTE definition. Handles three distinct cases:
+- **Default severity:** info
+- **Code fix (†):** Precisely deletes the unused CTE definition. Because deleting a CTE is a destructive, hard-to-reverse operation, the fix is offered as an individual code fix only — it is intentionally excluded from the bulk "Fix all" action and the `source.fixAll.ninja` on-save action. Handles three distinct cases:
   1. **Only CTE** — removes the entire `WITH ... AS (...)` block, leaving just the final SELECT.
   2. **First of several** — removes from the CTE name through the comma before the next CTE.
   3. **Middle or last** — removes from the preceding comma through the closing parenthesis of the unused CTE.
@@ -257,24 +262,34 @@ select
 from orders
 ```
 
-#### `ninja.convention.operator-position`
+#### `ninja.convention.operator-position` ⚡
 
 > Boolean operators (AND/OR) should be placed consistently (trailing or leading).
 
 Same convention logic as commas but applied to `AND` and `OR` operators. In **trailing** mode, operators end the line. In **leading** mode, operators start the next line.
 
+Configured via `dbt-studio.ninja.convention.operatorPosition`. Default is `leading` (dbt community standard).
+
 - **Default severity:** warning
-- **No auto-fix** — moving operators across lines requires adjusting indentation.
+- **Auto-fix:** Moves the operator to the correct position (appends to previous line in trailing mode, prepends to next line in leading mode).
 
 ```sql
+-- Leading mode (default) flags trailing operators:
+where
+    status = 'active' and   -- violation: trailing AND
+    amount > 100
+-- Fix →
+where
+    status = 'active'
+    and amount > 100
+
 -- Trailing mode flags leading operators:
 where
     status = 'active'
     and amount > 100    -- violation: leading AND
-
--- Leading mode flags trailing operators:
+-- Fix →
 where
-    status = 'active' and   -- violation: trailing AND
+    status = 'active' and
     amount > 100
 ```
 
@@ -696,13 +711,16 @@ select count(*), sum(amount)
 
 ## Summary
 
-| Category | Rules | With Auto-Fix |
-|----------|------:|:-------------:|
-| Capitalisation | 4 | 4 |
-| Jinja | 1 | 1 |
-| Structure | 7 | 2 |
-| Convention | 9 | 6 |
-| Ambiguity | 4 | 1 |
-| Aliasing | 6 | 2 |
-| Layout | 7 | 6 |
-| **Total** | **38** | **22** |
+⚡ = auto-fix (included in "Fix all" and `source.fixAll.ninja`)
+⚡† = code fix only (available in the lightbulb menu, but excluded from bulk fix actions)
+
+| Category | Rules | ⚡ Auto-fix | ⚡† Code fix only |
+|----------|------:|:-----------:|:-----------------:|
+| Capitalisation | 4 | 4 | — |
+| Jinja | 1 | 1 | — |
+| Structure | 7 | 1 | 1 |
+| Convention | 9 | 7 | — |
+| Ambiguity | 4 | 1 | — |
+| Aliasing | 6 | 2 | — |
+| Layout | 7 | 6 | — |
+| **Total** | **38** | **22** | **1** |

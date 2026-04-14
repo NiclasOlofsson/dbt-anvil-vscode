@@ -29,8 +29,8 @@ with
         from {{ ref("nba_latest_results") }} lr
         inner join
             {{ ref("nba_results_log") }} r
-            on r.game_id = lr.game_id
-            and r.favored_team = lr.winning_team
+            on r.game_id = lr.game_id and
+            r.favored_team = lr.winning_team
         group by all
     ),
 
@@ -39,8 +39,8 @@ with
         from {{ ref("nba_latest_results") }} lr
         inner join
             {{ ref("nba_results_log") }} r
-            on r.game_id = lr.game_id
-            and r.favored_team = lr.losing_team
+            on r.game_id = lr.game_id and
+            r.favored_team = lr.losing_team
         group by all
     ),
 
@@ -49,10 +49,10 @@ with
         from {{ ref("nba_latest_results") }} lr
         inner join
             {{ ref("nba_results_log") }} r
-            on r.game_id = lr.game_id
-            and (
-                (lr.winning_team = r.home_team and r.visiting_team_above_avg = 1)
-                or (lr.winning_team = r.visiting_team and r.home_team_above_avg = 1)
+            on r.game_id = lr.game_id and
+            (
+                (lr.winning_team = r.home_team and r.visiting_team_above_avg = 1) or
+                (lr.winning_team = r.visiting_team and r.home_team_above_avg = 1)
             )
         group by all
     ),
@@ -62,10 +62,10 @@ with
         from {{ ref("nba_latest_results") }} lr
         inner join
             {{ ref("nba_results_log") }} r
-            on r.game_id = lr.game_id
-            and (
-                (lr.losing_team = r.visiting_team and r.home_team_above_avg = 1)
-                or (lr.losing_team = r.home_team and r.visiting_team_above_avg = 1)
+            on r.game_id = lr.game_id and
+            (
+                (lr.losing_team = r.visiting_team and r.home_team_above_avg = 1) or
+                (lr.losing_team = r.home_team and r.visiting_team_above_avg = 1)
             )
         group by all
     ),
@@ -85,7 +85,7 @@ with
     )
 
 select
-    t.team,
+    t.team as team,
     coalesce(w.wins, 0) as wins,
     coalesce(l.losses, 0) as losses,
     coalesce(fw.wins, 0) as wins_as_favorite,
