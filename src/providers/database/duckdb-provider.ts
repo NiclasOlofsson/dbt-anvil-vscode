@@ -3,7 +3,7 @@ import { DuckDBInstance } from '@duckdb/node-api';
 import type { ILogger } from '../../types/logger';
 import type { DbtExecutionService, DbtJobPriority } from '../../dbt/execution-service';
 import { Priority } from '../../dbt/execution-service';
-import type { DuckdbConnection } from './profiles-reader';
+import type { DuckdbConnection } from '../../dbt/dbt-project-service';
 import type { CancelSignal, ColumnDefinition, DatabaseProvider, QueryHints, QueryResult } from './database-provider';
 
 const JINJA_PATTERN = /\{\{|\{%/;

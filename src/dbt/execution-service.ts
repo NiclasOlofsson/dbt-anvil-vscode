@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { BridgeRunner, DbtCommandResult } from './bridge-runner';
-import type { ManifestWatcher } from '../indexing/manifest-watcher';
+import type { IManifestSuppressor } from '../indexing/manifest-watcher';
 import type { ManifestLoader } from './manifest-loader';
 import type { ILogger } from '../types/logger';
 
@@ -92,7 +92,7 @@ export class DbtExecutionService implements vscode.Disposable {
 	constructor(
 		private readonly bridge: BridgeRunner,
 		private readonly loader: ManifestLoader,
-		private readonly watcher: ManifestWatcher,
+		private readonly watcher: IManifestSuppressor,
 		private readonly logger: ILogger,
 	) {}
 

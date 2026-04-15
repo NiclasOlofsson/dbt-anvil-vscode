@@ -1,6 +1,5 @@
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 
 export interface PythonEnvironment {
@@ -123,18 +122,6 @@ function getVenvPython(venvPath: string): string {
 
 	// Fallback
 	return path.join(venvPath, 'bin', 'python');
-}
-
-/**
- * Detect the dbt profiles directory for a project.
- * Checks the project dir first, then falls back to ~/.dbt.
- */
-export function detectProfilesDir(projectDir: string): string {
-	const projectProfiles = path.join(projectDir, 'profiles.yml');
-	if (fs.existsSync(projectProfiles)) {
-		return projectDir;
-	}
-	return path.join(os.homedir(), '.dbt');
 }
 
 /**
