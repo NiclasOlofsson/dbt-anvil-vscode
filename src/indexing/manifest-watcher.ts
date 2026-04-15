@@ -2,12 +2,18 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { ILogger } from '../types/logger';
-import type { DbtExecutionService } from '../dbt/execution-service';
-import { Priority } from '../dbt/execution-service';
 import { ManifestLoader } from '../dbt/manifest-loader';
 import { ManifestIndexer } from './manifest-indexer';
-import type { ParseService } from '../services/parse-service';
-import type { CompileCache } from '../dbt/compile-cache';
+
+/**
+ * Minimal interface required by DbtExecutionService to suppress/resume manifest
+ * change handling around bridge commands that rewrite manifest.json as a side
+ * effect (describe_table, show, etc.).
+ */
+export interface IManifestSuppressor {
+	suppress(): void;
+	resume(): void;
+}
 
 /**
  * Watches the manifest.json path configured by ManifestLoader and rebuilds the index.
@@ -16,22 +22,27 @@ import type { CompileCache } from '../dbt/compile-cache';
  */
 export class ManifestWatcher {
 	private _manifestWatcher: vscode.FileSystemWatcher | null = null;
-	private _projectWatcher: vscode.FileSystemWatcher | null = null;
 	private _sqlSaveDisposable: vscode.Disposable | null = null;
 	private _projectDir: string | null = null;
 	private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
 	private _parseDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 	private _suppressed = false;
-	private _executionService: DbtExecutionService | null = null;
-	private _parseService: ParseService | null = null;
-	private _compileCache: CompileCache | null = null;
 	private readonly _contentHashes = new Map<string, string>();
 	private readonly _nonWsHashes = new Map<string, string>();
 	private readonly _onIndexRebuild = new vscode.EventEmitter<ManifestIndexer>();
 	private readonly _onProjectConfigChanged = new vscode.EventEmitter<void>();
+	private readonly _onParseRequested = new vscode.EventEmitter<void>();
+	private readonly _onEnrichmentInvalidated = new vscode.EventEmitter<Set<string>>();
+	private readonly _onCompileInvalidated = new vscode.EventEmitter<string>();
 
 	readonly onIndexRebuild = this._onIndexRebuild.event;
 	readonly onProjectConfigChanged = this._onProjectConfigChanged.event;
+	/** Fires when an on-save model change should trigger a background dbt parse. */
+	readonly onParseRequested = this._onParseRequested.event;
+	/** Fires with the set of evicted unique IDs after column store invalidation. */
+	readonly onEnrichmentInvalidated = this._onEnrichmentInvalidated.event;
+	/** Fires with the unique ID of the saved model so its compile cache entry can be cleared. */
+	readonly onCompileInvalidated = this._onCompileInvalidated.event;
 
 	constructor(
 		private readonly loader: ManifestLoader,
@@ -42,16 +53,6 @@ export class ManifestWatcher {
 	start(projectDir: string): void {
 		this._projectDir = projectDir;
 		this._startManifestWatcher();
-
-		const projectPattern = new vscode.RelativePattern(projectDir, 'dbt_project.yml');
-		this._projectWatcher = vscode.workspace.createFileSystemWatcher(projectPattern);
-		this._projectWatcher.onDidChange(() => {
-			this.loader.reloadProjectConfig();
-			this._onProjectConfigChanged.fire();
-			// Target path may have changed — restart the manifest watcher on the new path
-			this._startManifestWatcher();
-			this._rebuild('dbt_project.yml changed');
-		});
 
 		// Invalidate column store entries when a SQL model file is saved
 		this._sqlSaveDisposable = vscode.workspace.onDidSaveTextDocument((doc) => {
@@ -87,18 +88,27 @@ export class ManifestWatcher {
 			if (!uniqueId || uniqueId.startsWith('analysis.')) return; // not a project model — skip parse
 
 			const evicted = this.indexer.invalidateModel(uniqueId);
-			// Invalidate compile cache for the saved model
-			this._compileCache?.invalidate(uniqueId);
+			this._onCompileInvalidated.fire(uniqueId);
 			if (evicted.size > 0) {
 				this.logger.info(`Model saved: ${uniqueId} — evicted ${evicted.size} column store entries`);
-				// Surgical enrichment invalidation: only clear aliases for
-				// documents that reference evicted nodes, not all documents.
-				this._parseService?.invalidateEnrichmentFor(evicted);
+				this._onEnrichmentInvalidated.fire(evicted);
 			}
 			this._debouncedParse();
 		});
 
 		this.logger.info('ManifestWatcher started');
+	}
+
+	/**
+	 * Handle a dbt_project.yml change that was detected externally (e.g. by ManifestService
+	 * via DbtProjectService.onProjectChanged). Reloads project config, fires onProjectConfigChanged,
+	 * restarts the manifest file watcher (target path may have changed), and rebuilds.
+	 */
+	handleProjectConfigChanged(): void {
+		this.loader.reloadProjectConfig();
+		this._onProjectConfigChanged.fire();
+		this._startManifestWatcher();
+		this._rebuild('dbt_project.yml changed');
 	}
 
 	private _debouncedRebuild(reason: string): void {
@@ -156,18 +166,6 @@ export class ManifestWatcher {
 		this._rebuild('external dbt command completed');
 	}
 
-	setExecutionService(service: DbtExecutionService): void {
-		this._executionService = service;
-	}
-
-	setParseService(service: ParseService): void {
-		this._parseService = service;
-	}
-
-	setCompileCache(cache: CompileCache): void {
-		this._compileCache = cache;
-	}
-
 	private _debouncedParse(): void {
 		if (this._parseDebounceTimer) clearTimeout(this._parseDebounceTimer);
 		this._parseDebounceTimer = setTimeout(() => {
@@ -177,16 +175,7 @@ export class ManifestWatcher {
 	}
 
 	private _triggerBackgroundParse(): void {
-		if (!this._executionService) return;
-		this._executionService.submit({
-			type: 'parse',
-			args: ['parse'],
-			priority: Priority.Background,
-			origin: 'background',
-			label: 'parse (on save)',
-		}).catch(() => {
-			// Superseded or cancelled — that's fine
-		});
+		this._onParseRequested.fire();
 	}
 
 	/**
@@ -260,8 +249,10 @@ export class ManifestWatcher {
 			clearTimeout(this._parseDebounceTimer);
 		}
 		this._manifestWatcher?.dispose();
-		this._projectWatcher?.dispose();
 		this._sqlSaveDisposable?.dispose();
 		this._onIndexRebuild.dispose();
+		this._onParseRequested.dispose();
+		this._onEnrichmentInvalidated.dispose();
+		this._onCompileInvalidated.dispose();
 	}
 }

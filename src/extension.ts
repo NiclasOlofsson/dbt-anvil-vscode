@@ -3,24 +3,15 @@ import { VSCodeLogger } from './types/logger';
 import { ServiceContainer } from './types/service-container';
 import { ManifestLoader } from './dbt/manifest-loader';
 import { ManifestIndexer } from './indexing/manifest-indexer';
-import { ManifestWatcher } from './indexing/manifest-watcher';
-import { detectPythonEnvironment, detectProfilesDir, validatePythonEnvironment, dbtPackagesExist, checkEnvManagerAvailable, getBootstrapCommand, validateDbtInstalled } from './dbt/env-detector';
+import { ManifestService } from './indexing/manifest-service';
+import { detectPythonEnvironment, validatePythonEnvironment, dbtPackagesExist, checkEnvManagerAvailable, getBootstrapCommand, validateDbtInstalled } from './dbt/env-detector';
 import { writeShims } from './dbt/terminal-env';
 import { BridgeRunner } from './dbt/bridge-runner';
 import { DbtExecutionService, Priority } from './dbt/execution-service';
 import { CompileCache } from './dbt/compile-cache';
 import { CompileCachePersistence } from './dbt/compile-cache-persistence';
 import { DescribeCache } from './dbt/describe-cache';
-import {
-	loadProjectConfig,
-	resolveAnalysisPaths,
-	resolveMacroPaths,
-	resolveModelPaths,
-	resolveSeedPaths,
-	resolveSnapshotPaths,
-	resolveTargetPath,
-	resolveTestPaths,
-} from './dbt/project-config';
+import { DbtProjectService } from './dbt/dbt-project-service';
 import { DbtPathResolver } from './dbt/dbt-path-resolver';
 import { createDatabaseProvider } from './providers/database/database-provider-factory';
 import { ColumnStorePersistence } from './indexing/column-store-persistence';
@@ -108,7 +99,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const projectDir = workspaceFolders[0].uri.fsPath;
 	const storageDir = context.storageUri?.fsPath ?? context.globalStorageUri.fsPath;
 	const extensionTargetDir = path.join(storageDir, 'target');
-	const hasDbtProject = !!loadProjectConfig(projectDir);
+	const projectService = new DbtProjectService(projectDir, logger);
+	context.subscriptions.push({ dispose: () => projectService.dispose() });
+	projectService.startWatching();
+	const hasDbtProject = !!projectService.projectConfig;
 
 	// -------- Detect Python environment --------
 	const pythonEnv = detectPythonEnvironment(projectDir);
@@ -237,8 +231,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	}
 
 	// -------- Set up manifest loading and indexing --------
-	const manifestLoader = new ManifestLoader(projectDir, extensionTargetDir);
-	const manifestIndexer = new ManifestIndexer(manifestLoader, logger);
+	const manifestService = new ManifestService(projectService, extensionTargetDir, logger);
+	const manifestLoader = manifestService.loader;
+	const manifestIndexer = manifestService.indexer;
 
 	const container = ServiceContainer.getInstance();
 	container.setManifestLoader(manifestLoader);
@@ -264,13 +259,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// Restore content hashes before start() so the first save after a restart
 	// does not falsely trigger a dbt parse for files that haven't changed.
 	const contentHashPersistence = new ContentHashPersistence(context, logger);
-	const manifestWatcher = new ManifestWatcher(manifestLoader, manifestIndexer, logger);
-	manifestWatcher.restoreHashes(contentHashPersistence.restore());
-	manifestWatcher.start(projectDir);
-	container.setManifestWatcher(manifestWatcher);
-	context.subscriptions.push({ dispose: () => manifestWatcher.dispose() });
-	context.subscriptions.push({ dispose: () => { const { hashes, nonWsHashes } = manifestWatcher.getHashes(); contentHashPersistence.save(hashes, nonWsHashes); } });
+	manifestService.restoreHashes(contentHashPersistence.restore());
+	manifestService.start();
+	container.setManifestWatcher(manifestService);
+	context.subscriptions.push({ dispose: () => manifestService.dispose() });
+	context.subscriptions.push({ dispose: () => { const { hashes, nonWsHashes } = manifestService.getHashes(); contentHashPersistence.save(hashes, nonWsHashes); } });
 	context.subscriptions.push({ dispose: () => columnStorePersistence.save(manifestIndexer) });
+	const manifestWatcher = manifestService;
 
 	// -------- Python bridge --------
 	// Single persistent bridge process for dbt commands and inline compilation.
@@ -286,7 +281,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	context.subscriptions.push({ dispose: () => executionService.dispose() });
 
 	// Connect manifest watcher to execution service for background parse-on-save
-	manifestWatcher.setExecutionService(executionService);
+	context.subscriptions.push(
+		manifestWatcher.onParseRequested(() => {
+			void executionService.submit({
+				type: 'parse',
+				args: ['parse'],
+				priority: Priority.Background,
+				origin: 'background',
+				label: 'parse (on save)',
+			}).catch(() => { /* superseded or cancelled */ });
+		}),
+	);
 
 	// -------- dbt deps check --------
 	if (envReady && !initError && hasDbtProject && !dbtPackagesExist(projectDir)) {
@@ -338,25 +343,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	}));
 
 	// -------- Database provider (direct warehouse access, bypasses dbt bridge queue) --------
-	const projectConfig = loadProjectConfig(projectDir);
-	const profileName = projectConfig?.profile ?? 'default';
-	const profilesDir = detectProfilesDir(projectDir);
-	const projectTargetDir = resolveTargetPath(projectConfig, projectDir);
 	logger.info('Resolved dbt/extension paths:');
 	logger.info(`  projectDir: ${projectDir}`);
 	logger.info(`  storageDir: ${storageDir}`);
 	logger.info(`  extensionTargetDir: ${extensionTargetDir}`);
 	logger.info(`  extensionManifestPath: ${manifestLoader.manifestPath}`);
 	logger.info(`  stateDir: ${stateDir}`);
-	logger.info(`  projectTargetDir (dbt_project.yml): ${projectTargetDir}`);
-	logger.info(`  profilesDir: ${profilesDir}`);
-	logger.info(`  modelPaths: ${resolveModelPaths(projectConfig, projectDir).join(', ')}`);
-	logger.info(`  seedPaths: ${resolveSeedPaths(projectConfig, projectDir).join(', ')}`);
-	logger.info(`  macroPaths: ${resolveMacroPaths(projectConfig, projectDir).join(', ')}`);
-	logger.info(`  analysisPaths: ${resolveAnalysisPaths(projectConfig, projectDir).join(', ')}`);
-	logger.info(`  snapshotPaths: ${resolveSnapshotPaths(projectConfig, projectDir).join(', ')}`);
-	logger.info(`  testPaths: ${resolveTestPaths(projectConfig, projectDir).join(', ')}`);
-	const databaseProvider = await createDatabaseProvider(manifestIndexer.adapterType, profileName, profilesDir, projectDir, executionService, logger);
+	logger.info(`  projectTargetDir (dbt_project.yml): ${projectService.targetPath}`);
+	logger.info(`  profilesDir: ${projectService.profilesDir}`);
+	logger.info(`  modelPaths: ${projectService.modelPaths.join(', ')}`);
+	logger.info(`  seedPaths: ${projectService.seedPaths.join(', ')}`);
+	logger.info(`  macroPaths: ${projectService.macroPaths.join(', ')}`);
+	logger.info(`  analysisPaths: ${projectService.analysisPaths.join(', ')}`);
+	logger.info(`  snapshotPaths: ${projectService.snapshotPaths.join(', ')}`);
+	logger.info(`  testPaths: ${projectService.testPaths.join(', ')}`);
+	const databaseProvider = await createDatabaseProvider(projectService.activeConnection, projectDir, executionService, logger);
 	container.setDatabaseProvider(databaseProvider);
 	describeCache.setProvider(databaseProvider);
 
@@ -394,8 +395,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	logger.info('Parse service: FTL worker pool ready');
 	const parseService = new ParseService(ftlParser, logger, { describeCache, indexer: manifestIndexer });
 	context.subscriptions.push(ftlParser);
-	manifestWatcher.setParseService(parseService);
-	manifestWatcher.setCompileCache(compileCache);
+
+	context.subscriptions.push(
+		manifestWatcher.onEnrichmentInvalidated((evicted) => {
+			parseService.invalidateEnrichmentFor(evicted);
+		}),
+		manifestWatcher.onCompileInvalidated((uid) => {
+			compileCache.invalidate(uid);
+		}),
+	);
 
 	// -------- Model profiler --------
 	const dbtQueryService = new DbtQueryService(compileCache, parseService, manifestIndexer);
@@ -486,7 +494,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				}
 				try {
 					manifestIndexer.build(true);
-					const refreshedProvider = await createDatabaseProvider(manifestIndexer.adapterType, profileName, profilesDir, projectDir, executionService, logger);
+					const refreshedProvider = await createDatabaseProvider(projectService.activeConnection, projectDir, executionService, logger);
 					container.setDatabaseProvider(refreshedProvider);
 					describeCache.setProvider(refreshedProvider);
 					modelProfiler.setProvider(refreshedProvider);
@@ -536,7 +544,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	// -------- Path resolver (file classification from dbt_project.yml) --------
 	const pathResolver = new DbtPathResolver(projectDir);
-	pathResolver.refresh(loadProjectConfig(projectDir));
+	pathResolver.refresh(projectService.projectConfig);
 
 	// -------- File-category context key (drives menu visibility) --------
 	const updateFileCategory = (editor: vscode.TextEditor | undefined) => {

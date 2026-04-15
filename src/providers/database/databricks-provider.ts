@@ -2,7 +2,7 @@
 import type { ILogger } from '../../types/logger';
 import type { DbtExecutionService, DbtJobPriority } from '../../dbt/execution-service';
 import { Priority } from '../../dbt/execution-service';
-import type { DatabricksConnection } from './profiles-reader';
+import type { DatabricksConnection } from '../../dbt/dbt-project-service';
 import type { CancelSignal, ColumnDefinition, DatabaseProvider, QueryHints, QueryResult } from './database-provider';
 
 /** Databricks SQL Statement Execution API base path */
