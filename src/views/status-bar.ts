@@ -8,6 +8,7 @@ export class StatusBarManager implements vscode.Disposable {
 	private _activeJob: DbtJobInfo | null = null;
 	private _queueSize = 0;
 	private _ready = false;
+	private _errorMessage: string | null = null;
 
 	constructor(
 		service: DbtExecutionService,
@@ -44,6 +45,11 @@ export class StatusBarManager implements vscode.Disposable {
 		this._update();
 	}
 
+	setError(message: string): void {
+		this._errorMessage = message;
+		this._update();
+	}
+
 	private _update(): void {
 		if (this._activeJob) {
 			const origin = this._activeJob.origin === 'copilot' ? ' (Copilot)' : '';
@@ -51,6 +57,13 @@ export class StatusBarManager implements vscode.Disposable {
 			this._item.text = `$(sync~spin) dbt: ${this._activeJob.label}${origin}${queue}`;
 			this._item.tooltip = this._buildTooltip();
 			this._item.command = undefined;
+			return;
+		}
+
+		if (this._errorMessage) {
+			this._item.text = '$(error) dbt: Setup Required';
+			this._item.tooltip = this._errorMessage;
+			this._item.command = 'dbt-studio.showOutputChannel';
 			return;
 		}
 

@@ -4,7 +4,7 @@ import { ServiceContainer } from './types/service-container';
 import { ManifestLoader } from './dbt/manifest-loader';
 import { ManifestIndexer } from './indexing/manifest-indexer';
 import { ManifestWatcher } from './indexing/manifest-watcher';
-import { detectPythonEnvironment, detectProfilesDir, validatePythonEnvironment, dbtPackagesExist } from './dbt/env-detector';
+import { detectPythonEnvironment, detectProfilesDir, validatePythonEnvironment, dbtPackagesExist, checkEnvManagerAvailable, getBootstrapCommand, validateDbtInstalled } from './dbt/env-detector';
 import { writeShims } from './dbt/terminal-env';
 import { BridgeRunner } from './dbt/bridge-runner';
 import { DbtExecutionService, Priority } from './dbt/execution-service';
@@ -114,17 +114,103 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const pythonEnv = detectPythonEnvironment(projectDir);
 	logger.info(`Python environment: ${pythonEnv.description} (${pythonEnv.command.join(' ')})`);
 
-	const envReady = await validatePythonEnvironment(pythonEnv);
+	let initError: string | null = null;
+	let envReady = await validatePythonEnvironment(pythonEnv);
+
 	if (!envReady) {
-		logger.warn(`Python environment validation failed: ${pythonEnv.description}`);
-		void vscode.window.showWarningMessage(
-			`dbt Studio: Python environment not found or not working (${pythonEnv.description}). dbt features are disabled.`,
-			'Reload Window',
-		).then((selection) => {
-			if (selection === 'Reload Window') {
-				void vscode.commands.executeCommand('workbench.action.reloadWindow');
+		// Check whether the env manager (pipenv/uv/poetry) is even installed.
+		const managerAvailable = await checkEnvManagerAvailable(pythonEnv);
+		if (!managerAvailable) {
+			const mgr = pythonEnv.description.split(' ')[0]; // e.g. 'pipenv'
+			logger.warn(`Environment manager not found on PATH: ${mgr}`);
+			initError = `${mgr} is not installed or not on PATH. Install it (e.g. pip install ${mgr}), then reload the window.`;
+			void vscode.window.showErrorMessage(
+				`dbt Studio: ${mgr} is not installed or not on PATH. Install it, then reload the window.`,
+				'Reload Window',
+			).then((selection) => {
+				if (selection === 'Reload Window') {
+					void vscode.commands.executeCommand('workbench.action.reloadWindow');
+				}
+			});
+		} else {
+			// Manager is available — try to bootstrap the environment from the lockfile.
+			const bootstrapCmd = getBootstrapCommand(pythonEnv, projectDir);
+			if (bootstrapCmd) {
+				logger.info(`Bootstrapping Python environment: ${bootstrapCmd.join(' ')}`);
+				envReady = await vscode.window.withProgress(
+					{ location: vscode.ProgressLocation.Notification, title: 'dbt Studio: Setting up Python environment…', cancellable: false },
+					() => _runBootstrap(bootstrapCmd, projectDir, pythonEnv.envVars),
+				);
+				if (envReady) {
+					envReady = await validatePythonEnvironment(pythonEnv);
+				}
+				if (!envReady) {
+					logger.warn(`Bootstrap completed but Python environment still not working: ${pythonEnv.description}`);
+					initError = `Python environment setup failed (${pythonEnv.description}). Check the dbt Studio output channel for details.`;
+					void vscode.window.showErrorMessage(
+						`dbt Studio: Python environment setup failed. See the dbt Studio output channel for details.`,
+						'Show Output',
+					).then((selection) => {
+						if (selection === 'Show Output') {
+							void vscode.commands.executeCommand('dbt-studio.showOutputChannel');
+						}
+					});
+				} else {
+					logger.info('Python environment bootstrap succeeded.');
+				}
+			} else {
+				logger.warn(`Python environment validation failed: ${pythonEnv.description}`);
+				initError = `Python environment not working (${pythonEnv.description}). dbt features are disabled.`;
+				void vscode.window.showWarningMessage(
+					`dbt Studio: Python environment not found or not working (${pythonEnv.description}). dbt features are disabled.`,
+					'Reload Window',
+				).then((selection) => {
+					if (selection === 'Reload Window') {
+						void vscode.commands.executeCommand('workbench.action.reloadWindow');
+					}
+				});
 			}
-		});
+		}
+	}
+
+	if (envReady && !initError) {
+		const dbtInstalled = await validateDbtInstalled(pythonEnv, projectDir);
+		if (!dbtInstalled) {
+			logger.warn(`dbt not found in Python environment: ${pythonEnv.description}`);
+			// dbt missing but env manager is available — try bootstrapping first.
+			const bootstrapCmd = getBootstrapCommand(pythonEnv, projectDir);
+			if (bootstrapCmd) {
+				logger.info(`dbt missing — bootstrapping environment: ${bootstrapCmd.join(' ')}`);
+				const bootstrapOk = await vscode.window.withProgress(
+					{ location: vscode.ProgressLocation.Notification, title: 'dbt Studio: Installing project dependencies…', cancellable: false },
+					() => _runBootstrap(bootstrapCmd, projectDir, pythonEnv.envVars),
+				);
+				if (bootstrapOk && await validateDbtInstalled(pythonEnv, projectDir)) {
+					logger.info('Bootstrap succeeded — dbt is now available.');
+				} else {
+					logger.warn(`dbt still not found after bootstrap: ${pythonEnv.description}`);
+					initError = `dbt is not installed in the Python environment (${pythonEnv.description}). Add dbt to your project dependencies and reload.`;
+					void vscode.window.showErrorMessage(
+						`dbt Studio: dbt is not installed in the Python environment. Add it to your project dependencies and reload the window.`,
+						'Reload Window',
+					).then((selection) => {
+						if (selection === 'Reload Window') {
+							void vscode.commands.executeCommand('workbench.action.reloadWindow');
+						}
+					});
+				}
+			} else {
+				initError = `dbt is not installed in the Python environment (${pythonEnv.description}). Add dbt to your project dependencies and reload.`;
+				void vscode.window.showErrorMessage(
+					`dbt Studio: dbt is not installed in the Python environment. Add it to your project dependencies and reload the window.`,
+					'Reload Window',
+				).then((selection) => {
+					if (selection === 'Reload Window') {
+						void vscode.commands.executeCommand('workbench.action.reloadWindow');
+					}
+				});
+			}
+		}
 	}
 
 	// -------- Terminal environment setup --------
@@ -203,7 +289,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	manifestWatcher.setExecutionService(executionService);
 
 	// -------- dbt deps check --------
-	if (envReady && hasDbtProject && !dbtPackagesExist(projectDir)) {
+	if (envReady && !initError && hasDbtProject && !dbtPackagesExist(projectDir)) {
 		void vscode.window.showWarningMessage(
 			'dbt packages not installed. Run dbt deps to set up your project.',
 			'Run dbt deps',
@@ -281,6 +367,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// Otherwise the status bar stays in "Initializing" until onIndexRebuild fires.
 	if (manifestLoader.manifestExists()) {
 		statusBar.setReady();
+	}
+	if (initError) {
+		statusBar.setError(initError);
 	}
 	context.subscriptions.push(statusBar);
 
@@ -391,7 +480,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 					label: 'parse (startup bootstrap)',
 				});
 				if (!result.success) {
-					logger.warn(`Startup parse failed: ${result.stderr}`);
+					const msg = `Startup parse failed: ${result.stderr}`;
+					logger.warn(msg);
+					statusBar.setError(msg);
 					return;
 				}
 				try {
@@ -402,10 +493,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 					columnStorePersistence.save(manifestIndexer);
 					logger.info('Startup parse completed and manifest index rebuilt');
 				} catch (err) {
-					logger.warn(`Startup parse succeeded but manifest rebuild failed: ${err}`);
+					const msg = `Startup parse succeeded but manifest rebuild failed: ${err}`;
+					logger.warn(msg);
+					statusBar.setError(msg);
 				}
 			} catch (err) {
-				logger.warn(`Startup parse error: ${err}`);
+				const msg = `Startup parse error: ${err}`;
+				logger.warn(msg);
+				statusBar.setError(msg);
 			}
 		})();
 	}
@@ -539,6 +634,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	// -------- Register commands --------
 	context.subscriptions.push(
+		vscode.commands.registerCommand('dbt-studio.showOutputChannel', () => {
+			outputChannel.show(true);
+		}),
 		vscode.commands.registerCommand('dbt-studio.suppressSqlFluffWarning', async () => {
 			await vscode.workspace.getConfiguration('dbt-studio').update('notifications.suppressSqlFluffWarning', true, vscode.ConfigurationTarget.Global);
 		}),
@@ -1131,6 +1229,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	);
 
 	logger.info(`dbt Studio v${version} activated.`);
+}
+
+/**
+ * Run the env manager's install command (e.g. `pipenv install`) inside the
+ * project directory and resolve to true on exit code 0.
+ */
+async function _runBootstrap(cmd: string[], projectDir: string, envVars?: Record<string, string>): Promise<boolean> {
+	const { spawn } = await import('node:child_process');
+	return new Promise((resolve) => {
+		const [executable, ...args] = cmd;
+		const child = spawn(executable, args, {
+			cwd: projectDir,
+			env: { ...process.env, ...envVars },
+			windowsHide: true,
+		});
+		child.on('error', () => resolve(false));
+		child.on('close', (code) => resolve(code === 0));
+	});
 }
 
 async function ensureLaunchConfig(folder: vscode.WorkspaceFolder | undefined): Promise<void> {

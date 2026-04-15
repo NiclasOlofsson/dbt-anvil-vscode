@@ -54,10 +54,17 @@ export class NinjaWorkspaceScanner implements vscode.Disposable {
 		this._scanAbort = abort;
 
 		this.logger.debug('[workspace-scanner] starting full scan');
+		const start = Date.now();
 
 		const config = loadConfig();
 		if (!config.enabled) {
 			this.clear();
+			return;
+		}
+
+		const dialect = this.indexer.dialect;
+		if (!dialect) {
+			this.logger.debug('[workspace-scanner] no dialect resolved — skipping scan (manifest not loaded)');
 			return;
 		}
 
@@ -93,7 +100,6 @@ export class NinjaWorkspaceScanner implements vscode.Disposable {
 
 		this.logger.debug(`[workspace-scanner] found ${uris.length} SQL files in model/analysis dirs`);
 
-		const dialect = this.indexer.dialect;
 		let active = 0;
 		let index = 0;
 
@@ -118,7 +124,7 @@ export class NinjaWorkspaceScanner implements vscode.Disposable {
 
 		if (!abort.signal.aborted) {
 			this._updateStatusBar();
-			this.logger.debug('[workspace-scanner] scan complete');
+			this.logger.debug(`[workspace-scanner] scan complete in ${((Date.now() - start) / 1000).toFixed(1)}s`);
 		}
 	}
 
@@ -201,7 +207,7 @@ export class NinjaWorkspaceScanner implements vscode.Disposable {
 	private _updateStatusBar(): void {
 		let total = 0;
 		this._collection.forEach((_, diags) => { total += diags.length; });
-		this._statusBarItem.text = total > 0 ? `$(shield) Ninja: ${total} issues` : `$(shield) Ninja`;
+		this._statusBarItem.text = total > 0 ? `$(shield) Ninja: ${total} issues` : '$(shield) Ninja';
 		this._statusBarItem.color = total > 0 ? new vscode.ThemeColor('statusBarItem.warningForeground') : undefined;
 	}
 }
