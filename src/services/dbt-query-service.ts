@@ -25,7 +25,7 @@ export class DbtQueryService {
 		);
 		if (!compiledSql) return null;
 
-		const adapterType = this._indexer.index?.adapterType ?? 'ansi';
+		const adapterType = this._indexer.dialect;
 		const ctes = await this._parseService.parseSqlString(compiledSql, adapterType);
 		return { compiledSql, ctes };
 	}

@@ -381,9 +381,13 @@ export class ParseService {
 	 */
 	async getDocumentModel(
 		document: vscode.TextDocument,
-		dialect: string,
+		dialect: string | undefined,
 		{ skipEnrichment = false }: { skipEnrichment?: boolean } = {},
 	): Promise<DocumentModel | null> {
+		if (!dialect) {
+			return null;
+		}
+
 		const key = document.uri.toString();
 		const cached = this._cache.get(key);
 		if (cached && cached.version === document.version) {
@@ -728,7 +732,9 @@ export class ParseService {
 	 * Used by the profiler to extract CTE positions from compiled SQL.
 	 * No caching, no enrichment, no variant expansion — single bridge call.
 	 */
-	async parseSqlString(sql: string, dialect: string): Promise<CteInfo[]> {
+	async parseSqlString(sql: string, dialect: string | undefined): Promise<CteInfo[]> {
+		if (!dialect) return [];
+
 		try {
 			const model = await this._parser.parse(sql, dialect);
 			return model.ctes;
@@ -742,7 +748,9 @@ export class ParseService {
 	 * Returns `undefined` when the parser backend does not supply tokens.
 	 * No caching, no enrichment, no variant expansion.
 	 */
-	async parseRawForTokens(sql: string, dialect: string): Promise<{ sqlTokens: SqlToken[]; jinjaTags: JinjaTagSpan[] } | undefined> {
+	async parseRawForTokens(sql: string, dialect: string | undefined): Promise<{ sqlTokens: SqlToken[]; jinjaTags: JinjaTagSpan[] } | undefined> {
+		if (!dialect) return undefined;
+
 		try {
 			const model = await this._parser.parse(sql, dialect);
 			if (!model.sqlTokens) return undefined;
@@ -757,7 +765,9 @@ export class ParseService {
 	 * Returns raw JSON string from the Pyodide backend.
 	 * Returns `undefined` when the parser backend does not support decompose.
 	 */
-	async decomposeQuery(compiledSql: string, dialect: string): Promise<string | undefined> {
+	async decomposeQuery(compiledSql: string, dialect: string | undefined): Promise<string | undefined> {
+		if (!dialect) return undefined;
+
 		return this._parser.decomposeQuery?.(compiledSql, dialect);
 	}
 }

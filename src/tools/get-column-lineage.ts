@@ -18,46 +18,6 @@ interface GetColumnLineageInput {
 // Schema mapping shape sent to the bridge: {database: {schema: {table: {col: type}}}}
 type SchemaMapping = Record<string, Record<string, Record<string, Record<string, string>>>>;
 
-/**
- * Map dbt adapter type to sqlglot dialect name.
- * Ported from dbt-core-mcp get_column_lineage._map_dbt_adapter_to_sqlglot_dialect.
- */
-export function mapAdapterToDialect(adapterType: string): string {
-	const map: Record<string, string> = {
-		athena: 'athena',
-		bigquery: 'bigquery',
-		clickhouse: 'clickhouse',
-		databricks: 'databricks',
-		doris: 'doris',
-		dremio: 'dremio',
-		duckdb: 'duckdb',
-		fabric: 'fabric',
-		hive: 'hive',
-		materialize: 'materialize',
-		mysql: 'mysql',
-		oracle: 'oracle',
-		postgres: 'postgres',
-		postgresql: 'postgres',
-		redshift: 'redshift',
-		risingwave: 'risingwave',
-		singlestore: 'singlestore',
-		snowflake: 'snowflake',
-		spark: 'spark',
-		sqlite: 'sqlite',
-		starrocks: 'starrocks',
-		teradata: 'teradata',
-		trino: 'trino',
-		// Adapters needing explicit dialect mapping
-		synapse: 'tsql',
-		sqlserver: 'tsql',
-		glue: 'spark',
-		fabricspark: 'spark',
-	};
-	return map[adapterType.toLowerCase()] ?? adapterType.toLowerCase();
-}
-
-
-
 export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnLineageInput> {
 	constructor(
 		private readonly indexer: ManifestIndexer,
@@ -541,8 +501,8 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		const compiledCode = await this._ensureCompiled(uniqueId);
 		if (!compiledCode) return manifestCols;
 
-		const index = this.indexer.index;
-		const dialect = mapAdapterToDialect(index?.adapterType ?? 'ansi');
+		const dialect = this.indexer.dialect;
+		if (!dialect) return manifestCols;
 		const upstreamLineage = this.indexer.getLineage(uniqueId, 5, 0);
 		const schemaMapping = await this._buildSchemaMapping(upstreamLineage.upstream.map(n => n.uniqueId));
 
@@ -582,8 +542,14 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 
 		const rawSql = fs.readFileSync(path.join(this.indexer.projectDir, rawNode.original_file_path), 'utf8');
 
-		const index = this.indexer.index;
-		const dialect = mapAdapterToDialect(index?.adapterType ?? 'ansi');
+		const dialect = this.indexer.dialect;
+		if (!dialect) {
+			return {
+				error: 'Could not determine dbt adapter type from manifest or profiles.yml',
+				dependencies: [],
+				columnEdges: GetColumnLineageTool._emptyColumnEdges,
+			};
+		}
 
 		const upstreamLineage = this.indexer.getLineage(uniqueId, 5, 0);
 		const schemaMapping = await this._buildSchemaMapping(upstreamLineage.upstream.map(n => n.uniqueId));
@@ -648,7 +614,10 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		}
 
 		if (direction === 'upstream' || direction === 'both') {
-			const dialect = mapAdapterToDialect(this.indexer.index?.adapterType ?? 'ansi');
+			const dialect = this.indexer.dialect;
+			if (!dialect) {
+				return toolResult({ error: 'Could not determine dbt adapter type from manifest or profiles.yml' });
+			}
 			const rootLineage = await this._traceColumn(modelInfo.uniqueId, modelInfo.name, column, dialect);
 			return toolResult(this._formatLineageResponse(
 				modelInfo.name,

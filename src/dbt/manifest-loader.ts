@@ -118,13 +118,13 @@ export class ManifestLoader {
 	 * Resolve the SQL dialect to use for parsing.
 	 * Returns the adapter type from the manifest when available, otherwise
 	 * sniffs the first `type:` value from profiles.yml in the project directory.
-	 * Falls back to 'ansi' if neither is readable.
+	 * Returns undefined if neither source is readable.
 	 */
-	resolveDialect(): string {
+	resolveDialect(): string | undefined {
 		// 1. Prefer the manifest — it's authoritative.
 		try {
 			const result = this.load();
-			return result.manifest.metadata.adapter_type ?? 'ansi';
+			return result.manifest.metadata.adapter_type?.toLowerCase();
 		} catch {
 			// manifest not available, fall through
 		}
@@ -141,6 +141,6 @@ export class ManifestLoader {
 			// profiles.yml unreadable
 		}
 
-		return 'ansi';
+		return undefined;
 	}
 }

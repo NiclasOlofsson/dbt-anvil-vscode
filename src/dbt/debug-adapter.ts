@@ -485,7 +485,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		if (this._pathResolver.classifyFile(editor.document.fileName) === 'model') {
 			const modelId = this._manifestIndexer.findModelByFilePath(editor.document.fileName);
 			if (modelId) {
-				const adapterType = this._manifestIndexer.index?.adapterType ?? 'ansi';
+				const adapterType = this._manifestIndexer.dialect;
 				const model = await this._parseService.getDocumentModel(editor.document, adapterType, { skipEnrichment: true });
 				const cursorLine = editor.selection.active.line;
 				const cte = model?.ctes.find(c => cursorLine >= c.line && cursorLine <= c.endLine);
@@ -535,7 +535,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			sql = args.sql;
 		} else if (category === 'model' || category === 'analysis' || category === 'snapshot') {
 			const sourceText = editor.document.getText();
-			const symbolResult = await this._compileWithSymbols(sourceText, this._manifestIndexer.index?.adapterType ?? 'duckdb');
+			const symbolResult = await this._compileWithSymbols(sourceText, this._manifestIndexer.dialect);
 			if (!symbolResult) {
 				this._logger.warn('Debug adapter: compile failed');
 				this._output('Failed to compile. Check dbt output.\n');
@@ -1455,7 +1455,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			return;
 		}
 
-		const adapterType = this._manifestIndexer.index?.adapterType ?? 'duckdb';
+		const adapterType = this._manifestIndexer.dialect;
 		const sourceText = editor.document.getText();
 		const compileResult = await this._compileWithSymbols(sourceText, adapterType);
 		if (!compileResult) {
@@ -2231,7 +2231,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		}
 
 		// Re-decompose with the neutralized join.
-		const adapterType = this._manifestIndexer.index?.adapterType ?? 'duckdb';
+		const adapterType = this._manifestIndexer.dialect;
 		const decomposed = await this._decompose(mutatedSql, adapterType);
 		if (!decomposed) {
 			this._output(`goto: re-decompose FAILED after neutralizing line ${joinLine}\n`);
@@ -2378,7 +2378,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	// Bridge communication
 	// ──────────────────────────────────────────────────────────────
 
-	private async _decompose(sql: string, dialect: string): Promise<DecomposeResult | undefined> {
+	private async _decompose(sql: string, dialect: string | undefined): Promise<DecomposeResult | undefined> {
 		try {
 			const raw = await this._parseService.decomposeQuery(sql, dialect);
 			if (!raw) return undefined;
@@ -2403,7 +2403,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 
 	private async _compileWithSymbols(
 		sourceText: string,
-		dialect: string,
+		dialect: string | undefined,
 	): Promise<{ compiledSql: string; sourceMap: SourceMap | undefined } | undefined> {
 		try {
 			const tokenResult = await this._parseService.parseRawForTokens(sourceText, dialect);
@@ -2527,7 +2527,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		const model = models[0];
 		this._output(`Stepping into ref('${refName}') → ${model.path}\n`);
 
-		const adapterType = this._manifestIndexer.index?.adapterType ?? 'duckdb';
+		const adapterType = this._manifestIndexer.dialect;
 
 		// Read the child model's source file.
 		const childUri = vscode.Uri.file(model.path);

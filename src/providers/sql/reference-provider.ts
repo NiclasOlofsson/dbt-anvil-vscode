@@ -30,7 +30,7 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 		if (isLinePositionInComment(line, position.character)) return [];
 
 		if (this.parseService) {
-			const dialect = this.indexer.index?.adapterType ?? 'ansi';
+			const dialect = this.indexer.dialect;
 			const model = await this.parseService.getDocumentModel(document, dialect);
 			if (!token.isCancellationRequested && model) {
 				// Check refs: full {{ ref(...) }} jinja span is clickable

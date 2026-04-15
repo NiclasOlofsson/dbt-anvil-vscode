@@ -30,7 +30,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		// Skip comments
 		if (isLinePositionInComment(line, position.character)) return undefined;
 
-		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const dialect = this.indexer.dialect;
 		const model = await this.parseService.getDocumentModel(document, dialect);
 		if (token.isCancellationRequested || !model) return undefined;
 

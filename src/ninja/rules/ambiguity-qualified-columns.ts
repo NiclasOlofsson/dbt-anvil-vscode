@@ -35,6 +35,8 @@ export const qualifiedColumnsRule: TokenRule = {
 			if (tok.type !== 'column_ref') continue;
 			const colRef = tok as ColumnRefToken;
 
+			if (colRef.line < 0 || colRef.line >= document.lineCount) continue;
+
 			// Skip if already qualified
 			if (colRef.table) continue;
 

@@ -11,7 +11,8 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import type { ManifestIndexer, ManifestIndex, IndexedModel, IndexedSource } from '../../indexing/manifest-indexer';
-import { GetColumnLineageTool, mapAdapterToDialect } from '../../tools/get-column-lineage';
+import { mapAdapterToDialect } from '../../indexing/manifest-indexer';
+import { GetColumnLineageTool } from '../../tools/get-column-lineage';
 import type { FtlDocumentParser } from '../../ftl/ftl-document-parser';
 import { createMockLogger, createMockCompileCache } from '../helpers';
 
@@ -116,6 +117,7 @@ function createMockIndexer(index: ManifestIndex, rawNode?: Record<string, unknow
 				.filter(m => m.name === name)
 				.map(m => ({ uniqueId: m.uniqueId, name: m.name, type: 'model' })),
 		),
+		dialect: mapAdapterToDialect(index.adapterType),
 	} as unknown as ManifestIndexer;
 }
 

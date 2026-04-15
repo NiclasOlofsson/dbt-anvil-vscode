@@ -25,7 +25,7 @@ export class SqlDocumentSymbolProvider implements vscode.DocumentSymbolProvider 
 	}
 
 	private async _sqlSymbols(document: vscode.TextDocument): Promise<vscode.DocumentSymbol[]> {
-		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const dialect = this.indexer.dialect;
 		const model = await this.parseService.getDocumentModel(document, dialect);
 		if (!model) return [];
 		return this._symbolsFromModel(document, model);
