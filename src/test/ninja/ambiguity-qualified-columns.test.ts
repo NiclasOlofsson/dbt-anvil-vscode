@@ -6,7 +6,7 @@ const RULE = 'ninja.ambiguity.qualified-columns';
 
 function check(sql: string, m: ReturnType<typeof model>) {
 	const doc = mockDocument(sql);
-	return qualifiedColumnsRule.check({ model: m, document: doc, config: cfg() });
+	return qualifiedColumnsRule.check({ model: m, document: doc, jinjaTokens: [], config: cfg() });
 }
 
 describe(RULE, () => {

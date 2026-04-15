@@ -24,6 +24,7 @@ export function loadConfig(): NinjaConfig {
 			size: cfg.get<number>('indentation.size', DEFAULT_CONFIG.indentation.size),
 		},
 		maxLineLength: cfg.get<number>('maxLineLength', DEFAULT_CONFIG.maxLineLength),
+		maxBlankLines: cfg.get<number>('maxBlankLines', DEFAULT_CONFIG.maxBlankLines),
 		layout: {
 			commaPosition: cfg.get<CommaPosition>('layout.commaPosition', DEFAULT_CONFIG.layout.commaPosition),
 			operatorPosition: cfg.get<OperatorPosition>('layout.operatorPosition', DEFAULT_CONFIG.layout.operatorPosition),

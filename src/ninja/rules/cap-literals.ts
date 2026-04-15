@@ -3,9 +3,11 @@ import { NinjaCategory } from '../categories';
 import type { NinjaViolation } from '../violation';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import type { CapitalisationPolicy } from '../config';
+import { tokenText, tokenRange } from '../token-utils';
 
 // Boolean/null literals that should follow capitalisation policy.
-const SQL_LITERALS = new Set(['null', 'true', 'false']);
+// These token types are emitted by sqlglot and never appear inside SQL comments.
+const LITERAL_TOKEN_TYPES = new Set(['null', 'true', 'false']);
 
 function checkPolicy(word: string, policy: CapitalisationPolicy, expected: Map<string, string>): string | undefined {
 	if (policy === 'upper') {
@@ -37,47 +39,23 @@ export const literalCapRule: TokenRule = {
 		const violations: NinjaViolation[] = [];
 		const consistentMap = new Map<string, string>();
 
+		if (!ctx.model.sqlTokens) return violations;
+
 		const text = ctx.document.getText();
-		const lines = text.split('\n');
 
-		// Build identifier positions to skip
-		const identifierPositions = new Set<string>();
-		for (const token of ctx.model.tokens) {
-			identifierPositions.add(`${token.line}:${token.col}`);
-		}
+		for (const token of ctx.model.sqlTokens) {
+			if (!LITERAL_TOKEN_TYPES.has(token.type.toLowerCase())) continue;
 
-		for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
-			const line = lines[lineIdx];
-			let i = 0;
-			while (i < line.length) {
-				const ch = line.charCodeAt(i);
-				if ((ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch === 95) {
-					const start = i;
-					i++;
-					while (i < line.length) {
-						const c = line.charCodeAt(i);
-						if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 95) {
-							i++;
-						} else {
-							break;
-						}
-					}
-					const word = line.slice(start, i);
-					if (SQL_LITERALS.has(word.toLowerCase()) && !identifierPositions.has(`${lineIdx}:${start}`)) {
-						const fix = checkPolicy(word, policy, consistentMap);
-						if (fix !== undefined) {
-							const range = new vscode.Range(lineIdx, start, lineIdx, start + word.length);
-							violations.push({
-								rule: 'ninja.cap.literals',
-								message: `Expected literal '${word}' to be '${fix}'`,
-								range,
-								fix: [vscode.TextEdit.replace(range, fix)],
-							});
-						}
-					}
-				} else {
-					i++;
-				}
+			const word = tokenText(text, token);
+			const fix = checkPolicy(word, policy, consistentMap);
+			if (fix !== undefined) {
+				const range = tokenRange(text, token);
+				violations.push({
+					rule: 'ninja.cap.literals',
+					message: `Expected literal '${word}' to be '${fix}'`,
+					range,
+					fix: [vscode.TextEdit.replace(range, fix)],
+				});
 			}
 		}
 

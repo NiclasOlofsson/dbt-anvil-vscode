@@ -3,16 +3,17 @@ import { NinjaCategory } from '../categories';
 import type { NinjaViolation } from '../violation';
 import type { LayoutRule, LayoutRuleContext } from '../rule';
 
-/** LT15: There should be at most one consecutive blank line. */
+/** LT15: There should be at most N consecutive blank lines (configurable, default 2). */
 export const maxBlankLinesRule: LayoutRule = {
 	id: 'ninja.layout.max-blank-lines',
 	type: 'layout',
 	category: NinjaCategory.Layout,
 	defaultSeverity: 'warning',
-	description: 'There should be at most one consecutive blank line',
+	description: 'There should be at most N consecutive blank lines',
 
 	check(ctx: LayoutRuleContext): NinjaViolation[] {
 		const violations: NinjaViolation[] = [];
+		const max = ctx.config.maxBlankLines;
 		let consecutiveBlanks = 0;
 		let blankStart = -1;
 
@@ -22,12 +23,12 @@ export const maxBlankLinesRule: LayoutRule = {
 				if (consecutiveBlanks === 0) blankStart = i;
 				consecutiveBlanks++;
 			} else {
-				if (consecutiveBlanks > 1) {
-					// Keep one blank line, delete the extras
-					const range = new vscode.Range(blankStart + 1, 0, blankStart + consecutiveBlanks, 0);
+				if (consecutiveBlanks > max) {
+					// Keep `max` blank lines, delete the extras
+					const range = new vscode.Range(blankStart + max, 0, blankStart + consecutiveBlanks, 0);
 					violations.push({
 						rule: 'ninja.layout.max-blank-lines',
-						message: `${consecutiveBlanks} consecutive blank lines (max 1)`,
+						message: `${consecutiveBlanks} consecutive blank lines (max ${max})`,
 						range,
 						fix: [vscode.TextEdit.delete(range)],
 					});
@@ -36,16 +37,8 @@ export const maxBlankLinesRule: LayoutRule = {
 			}
 		}
 
-		// Handle trailing consecutive blanks (before EOF)
-		if (consecutiveBlanks > 1) {
-			const range = new vscode.Range(blankStart + 1, 0, blankStart + consecutiveBlanks, 0);
-			violations.push({
-				rule: 'ninja.layout.max-blank-lines',
-				message: `${consecutiveBlanks} consecutive blank lines (max 1)`,
-				range,
-				fix: [vscode.TextEdit.delete(range)],
-			});
-		}
+		// Trailing blank lines at EOF are owned by ninja.layout.trailing-newline.
+		// Do not emit a violation here to avoid overlapping fix ranges.
 
 		return violations;
 	},

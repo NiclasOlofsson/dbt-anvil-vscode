@@ -1,9 +1,85 @@
 import { describe, it, expect } from 'vitest';
-import { run, violationsFor, capCfg, emptyModel, mockDocument, cfg } from './helpers';
-import { DEFAULT_CONFIG } from '../../ninja/config';
+import { violationsFor, capCfg, mockDocument, cfg, model, sqlTok } from './helpers';
 import { runNinja } from '../../ninja/engine';
+import type { SqlToken } from '../../ftl/parse-result';
 
 const RULE = 'ninja.cap.keywords';
+
+// SQL keywords recognised by sqlglot — stored lowercase for comparison.
+const KEYWORD_TYPES = new Set([
+	'select', 'from', 'where', 'and', 'or', 'not', 'in', 'is', 'null',
+	'as', 'on', 'join', 'left', 'right', 'inner', 'outer', 'full', 'cross',
+	'group', 'by', 'order', 'having', 'limit', 'offset', 'union', 'all',
+	'distinct', 'case', 'when', 'then', 'else', 'end', 'with', 'recursive',
+	'insert', 'into', 'values', 'update', 'set', 'delete', 'create', 'table',
+	'drop', 'alter', 'index', 'view', 'if', 'exists', 'between', 'like',
+	'ilike', 'asc', 'desc', 'nulls', 'first', 'last', 'over', 'partition',
+	'window', 'rows', 'range', 'unbounded', 'preceding', 'following', 'current',
+	'row', 'except', 'intersect', 'true', 'false', 'cast', 'using', 'natural',
+	'lateral', 'any', 'some', 'qualify', 'for', 'fetch', 'next', 'only',
+	'top', 'returning', 'do', 'nothing', 'replace', 'ignore',
+	'temporary', 'temp', 'materialized', 'unique', 'primary', 'key', 'foreign',
+	'references', 'constraint', 'check', 'default', 'cascade', 'restrict',
+	'no', 'action', 'grant', 'revoke', 'begin', 'commit', 'rollback',
+	'savepoint', 'release', 'transaction', 'explain', 'analyze', 'type', 'interval',
+]);
+
+/**
+ * Build a minimal SqlToken[] by scanning the SQL for keyword words only,
+ * skipping -- line comments and /* *\/ block comments.
+ * Used so unit tests don't need pyodide.
+ */
+function keywordTokens(sql: string): SqlToken[] {
+	const tokens: SqlToken[] = [];
+	const lines = sql.split('\n');
+	let absoluteOffset = 0;
+	let inBlock = false;
+
+	for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+		const line = lines[lineIdx];
+		let i = 0;
+		while (i < line.length) {
+			if (inBlock) {
+				if (line[i] === '*' && line[i + 1] === '/') { i += 2; inBlock = false; }
+				else i++;
+				continue;
+			}
+			if (line[i] === '-' && line[i + 1] === '-') break;
+			if (line[i] === '/' && line[i + 1] === '*') { i += 2; inBlock = true; continue; }
+			if (line[i] === '\'') {
+				i++;
+				while (i < line.length && line[i] !== '\'') { if (line[i] === '\\') i++; i++; }
+				i++; continue;
+			}
+			const ch = line.charCodeAt(i);
+			if ((ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch === 95) {
+				const start = i;
+				i++;
+				while (i < line.length) {
+					const c = line.charCodeAt(i);
+					if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 95) i++;
+					else break;
+				}
+				const word = line.slice(start, i);
+				if (KEYWORD_TYPES.has(word.toLowerCase())) {
+					const absStart = absoluteOffset + start;
+					const absEnd = absoluteOffset + i - 1;
+					tokens.push(sqlTok(word.toUpperCase(), absStart, absEnd, lineIdx, i));
+				}
+			} else {
+				i++;
+			}
+		}
+		absoluteOffset += line.length + 1; // +1 for \n
+	}
+	return tokens;
+}
+
+function run(sql: string, config?: Partial<import('../../ninja/config').NinjaConfig>): ReturnType<typeof runNinja> {
+	const doc = mockDocument(sql);
+	const m = model({ sqlTokens: keywordTokens(sql) });
+	return runNinja(doc, m, [], cfg(config));
+}
 
 describe(RULE, () => {
 	// ── Policy: lower ──────────────────────────────────────────────────────
@@ -106,16 +182,23 @@ describe(RULE, () => {
 
 	// ── Identifier skipping ────────────────────────────────────────────────
 
-	it('skips words at identifier token positions', () => {
-		const model = {
-			...emptyModel,
-			tokens: [{ type: 'column_ref' as const, name: 'select', line: 0, col: 7, endCol: 13 }],
-		};
-		// 'select' at position 0:0 is a keyword, 'select' at 0:7 is an identifier token
-		const v = violationsFor(run('select select from t', capCfg('keywords', 'upper'), model), RULE);
-		// Should flag 'select' at col 0 and 'from' at col 14, but NOT 'select' at col 7
+	it('only flags tokens that are in sqlTokens — non-keyword VAR tokens are not flagged', () => {
+		// The parser produces a VAR token for identifiers, not a keyword token.
+		// Only SELECT at col 0 and FROM are in sqlTokens; 'SELECT' at col 7 is absent
+		// (simulating the parser classifying it as VAR, not a keyword).
+		const sql = 'SELECT SELECT FROM t';
+		const tokens: SqlToken[] = [
+			sqlTok('SELECT', 0, 5, 0, 6),   // keyword at col 0
+			sqlTok('FROM', 14, 17, 0, 18),   // FROM keyword
+			// 'SELECT' at col 7 intentionally absent
+		];
+		const doc = mockDocument(sql);
+		const m = model({ sqlTokens: tokens });
+		const v = violationsFor(runNinja(doc, m, [], cfg(capCfg('keywords', 'lower'))), RULE);
 		const flaggedCols = v.map(x => x.range.start.character);
-		expect(flaggedCols).not.toContain(7);
+		expect(flaggedCols).toContain(0);   // SELECT at col 0 is flagged
+		expect(flaggedCols).toContain(14);  // FROM is flagged
+		expect(flaggedCols).not.toContain(7); // 'SELECT' at col 7 not in sqlTokens — not flagged
 	});
 
 	// ── Multi-line ─────────────────────────────────────────────────────────
@@ -145,6 +228,34 @@ describe(RULE, () => {
 		const sql = 'with orders as (select 1)\nselect * from orders\n';
 		const v = violationsFor(run(sql, capCfg('keywords', 'lower')), RULE);
 		// 'with', 'as', 'select', 'from' are all lower — should pass
+		expect(v.length).toBe(0);
+	});
+
+	// ── Comment lines must be ignored ─────────────────────────────────────
+
+	it('does not flag uppercase keywords inside a -- line comment', () => {
+		const sql = [
+			'select',
+			'    i.scenario_id,',
+			'    s.game_id',
+			'from cte_scenario_gen as i',
+			'cross join nba_schedules as s',
+			'    -- LEFT JOIN other_table AS r ON r.game_id = s.game_id',
+			'    -- WHERE r.game_id IS NULL',
+		].join('\n');
+		const v = violationsFor(run(sql, capCfg('keywords', 'lower')), RULE);
+		// LEFT, JOIN, AS, ON, WHERE, IS, NULL are all inside comments — zero violations
+		expect(v.length).toBe(0);
+	});
+
+	it('does not flag uppercase keywords inside a /* */ block comment', () => {
+		const sql = [
+			'select id',
+			'from orders',
+			'/* WHERE status = \'active\'',
+			'   AND id > 0 */',
+		].join('\n');
+		const v = violationsFor(run(sql, capCfg('keywords', 'lower')), RULE);
 		expect(v.length).toBe(0);
 	});
 });

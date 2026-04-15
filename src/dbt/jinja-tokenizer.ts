@@ -44,6 +44,13 @@ export function tokenize(source: string): JinjaToken[] {
 	};
 
 	while (i < len) {
+		// Skip SQL -- line comments: advance to end of line without looking for Jinja.
+		if (source[i] === '-' && source[i + 1] === '-') {
+			const nl = source.indexOf('\n', i);
+			i = nl === -1 ? len : nl + 1;
+			continue;
+		}
+
 		if (source[i] !== '{') {
 			i++;
 			continue;

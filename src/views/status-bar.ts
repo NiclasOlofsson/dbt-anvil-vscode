@@ -7,7 +7,6 @@ export class StatusBarManager implements vscode.Disposable {
 	private readonly _disposables: vscode.Disposable[] = [];
 	private _activeJob: DbtJobInfo | null = null;
 	private _queueSize = 0;
-	private _errorCount = 0;
 	private _ready = false;
 
 	constructor(
@@ -45,11 +44,6 @@ export class StatusBarManager implements vscode.Disposable {
 		this._update();
 	}
 
-	setErrorCount(count: number): void {
-		this._errorCount = count;
-		this._update();
-	}
-
 	private _update(): void {
 		if (this._activeJob) {
 			const origin = this._activeJob.origin === 'copilot' ? ' (Copilot)' : '';
@@ -57,13 +51,6 @@ export class StatusBarManager implements vscode.Disposable {
 			this._item.text = `$(sync~spin) dbt: ${this._activeJob.label}${origin}${queue}`;
 			this._item.tooltip = this._buildTooltip();
 			this._item.command = undefined;
-			return;
-		}
-
-		if (this._errorCount > 0) {
-			this._item.text = `$(error) dbt: ${this._errorCount} error${this._errorCount !== 1 ? 's' : ''}`;
-			this._item.tooltip = 'Click to show dbt errors';
-			this._item.command = 'workbench.action.showErrorsWarnings';
 			return;
 		}
 

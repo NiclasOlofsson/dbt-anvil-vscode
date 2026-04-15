@@ -95,6 +95,14 @@ export class ManifestIndexer {
 	) { }
 
 	/**
+	 * The SQL dialect to use for parsing.
+	 * Reads from the manifest when available; falls back to profiles.yml; then 'ansi'.
+	 */
+	get dialect(): string {
+		return this.loader.resolveDialect();
+	}
+
+	/**
 	 * Build or rebuild the index from the current manifest.
 	 */
 	build(force = false): ManifestIndex {

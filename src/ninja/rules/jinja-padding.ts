@@ -1,8 +1,7 @@
 import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { NinjaViolation } from '../violation';
-import type { TokenRule, TokenRuleContext } from '../rule';
-import { tokenize } from '../../dbt/jinja-tokenizer';
+import type { LayoutRule, LayoutRuleContext } from '../rule';
 
 /**
  * JJ01: Jinja tags should have single-space padding inside delimiters.
@@ -11,24 +10,22 @@ import { tokenize } from '../../dbt/jinja-tokenizer';
  * Checks expression `{{ }}` and tag `{% %}` tokens. Comments `{# #}` are skipped.
  * Whitespace-control dashes (`{{- -}}`, `{%- -%}`) are respected.
  */
-export const jinjaPaddingRule: TokenRule = {
+export const jinjaPaddingRule: LayoutRule = {
 	id: 'ninja.jinja.padding',
-	type: 'token',
+	type: 'layout',
 	category: NinjaCategory.Jinja,
 	defaultSeverity: 'warning',
 	description: 'Jinja tags should have single-space padding inside delimiters',
 
-	check(ctx: TokenRuleContext): NinjaViolation[] {
+	check(ctx: LayoutRuleContext): NinjaViolation[] {
 		const violations: NinjaViolation[] = [];
-		const text = ctx.document.getText();
-		const tokens = tokenize(text);
+		const tokens = ctx.jinjaTokens;
 
 		for (const token of tokens) {
 			if (token.type !== 'expression' && token.type !== 'tag') continue;
 			// Padding rules don't apply to multiline blocks — a newline after the
 			// opening delimiter (or before the closing one) is intentional formatting.
 			if (token.raw.includes('\n')) continue;
-
 			const raw = token.raw;
 			const openLen = 2; // {{ or {%
 			const closeLen = 2; // }} or %}

@@ -1,5 +1,72 @@
 import { describe, it, expect } from 'vitest';
-import { run, ruleIds, violationsFor, cfg as buildCfg } from './helpers';
+import { ruleIds, violationsFor, mockDocument, cfg as buildCfg, model, sqlTok } from './helpers';
+import { runNinja } from '../../ninja/engine';
+import type { SqlToken } from '../../ftl/parse-result';
+
+// SQL keyword token types (subset sufficient for engine tests)
+const KEYWORD_TYPES = new Set([
+	'select', 'from', 'where', 'and', 'or', 'not', 'in', 'is', 'null',
+	'as', 'on', 'join', 'left', 'right', 'inner', 'outer', 'full', 'cross',
+	'group', 'by', 'order', 'having', 'limit', 'offset', 'union', 'all',
+	'distinct', 'case', 'when', 'then', 'else', 'end', 'with', 'recursive',
+	'true', 'false', 'cast',
+]);
+
+/**
+ * Build SqlToken[] for keyword and literal tokens, skipping -- line comments,
+ * block comments, and string literals.
+ */
+function tokens(sql: string): SqlToken[] {
+	const result: SqlToken[] = [];
+	const lines = sql.split('\n');
+	let absoluteOffset = 0;
+	let inBlock = false;
+
+	for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+		const line = lines[lineIdx];
+		let i = 0;
+		while (i < line.length) {
+			if (inBlock) {
+				if (line[i] === '*' && line[i + 1] === '/') { i += 2; inBlock = false; }
+				else i++;
+				continue;
+			}
+			if (line[i] === '-' && line[i + 1] === '-') break;
+			if (line[i] === '/' && line[i + 1] === '*') { i += 2; inBlock = true; continue; }
+			if (line[i] === '\'') {
+				i++;
+				while (i < line.length && line[i] !== '\'') { if (line[i] === '\\') i++; i++; }
+				i++; continue;
+			}
+			const ch = line.charCodeAt(i);
+			if ((ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch === 95) {
+				const start = i;
+				i++;
+				while (i < line.length) {
+					const c = line.charCodeAt(i);
+					if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 95) i++;
+					else break;
+				}
+				const word = line.slice(start, i);
+				if (KEYWORD_TYPES.has(word.toLowerCase())) {
+					const absStart = absoluteOffset + start;
+					const absEnd = absoluteOffset + i - 1;
+					result.push(sqlTok(word.toUpperCase(), absStart, absEnd, lineIdx, i));
+				}
+			} else {
+				i++;
+			}
+		}
+		absoluteOffset += line.length + 1;
+	}
+	return result;
+}
+
+function run(sql: string, config?: Partial<import('../../ninja/config').NinjaConfig>): ReturnType<typeof runNinja> {
+	const doc = mockDocument(sql);
+	const m = model({ sqlTokens: tokens(sql) });
+	return runNinja(doc, m, [], buildCfg(config));
+}
 
 describe('engine', () => {
 	it('returns empty violations when disabled', () => {

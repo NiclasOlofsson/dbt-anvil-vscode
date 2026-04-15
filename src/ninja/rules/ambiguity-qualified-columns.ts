@@ -3,6 +3,7 @@ import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import type { NinjaViolation } from '../violation';
 import type { ColumnRefToken } from '../../services/parse-service';
+import type { JinjaToken } from '../../dbt/jinja-tokenizer';
 
 /**
  * Flags column references that lack a table qualifier in multi-source contexts.
@@ -19,7 +20,7 @@ export const qualifiedColumnsRule: TokenRule = {
 	description: 'Column references should be qualified with a table name when multiple sources are present.',
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
-		const { model } = ctx;
+		const { model, document, jinjaTokens = [] } = ctx;
 
 		// Count only real FROM/JOIN refs — exclude cteDefinition and synthesized tokens
 		// so a single-source CTE query is not treated as multi-source.
@@ -40,6 +41,10 @@ export const qualifiedColumnsRule: TokenRule = {
 			// Skip wildcard columns (*)
 			if (colRef.name === '*') continue;
 
+			// Skip column refs that originate inside a Jinja expression (blanker placeholder)
+			const colOffset = document.offsetAt(new vscode.Position(colRef.line, colRef.col));
+			if (isInsideJinja(colOffset, jinjaTokens)) continue;
+
 			const range = new vscode.Range(colRef.line, colRef.col, colRef.line, colRef.endCol);
 			violations.push({
 				rule: 'ninja.ambiguity.qualified-columns',
@@ -51,3 +56,7 @@ export const qualifiedColumnsRule: TokenRule = {
 		return violations;
 	},
 };
+
+function isInsideJinja(offset: number, tokens: JinjaToken[]): boolean {
+	return tokens.some(t => offset >= t.start && offset < t.end);
+}
