@@ -96,7 +96,7 @@ function createMockIndexer(index: ManifestIndex | null): ManifestIndexer {
 			const matches = [...index.models.values()].filter(m => m.name === name);
 			return matches.map(m => ({ uniqueId: m.uniqueId, name: m.name, type: 'model' }));
 		}),
-		dialect: index?.adapterType,
+		adapterType: index?.adapterType,
 	} as unknown as ManifestIndexer;
 }
 

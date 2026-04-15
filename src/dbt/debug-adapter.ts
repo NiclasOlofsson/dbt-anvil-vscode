@@ -485,8 +485,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		if (this._pathResolver.classifyFile(editor.document.fileName) === 'model') {
 			const modelId = this._manifestIndexer.findModelByFilePath(editor.document.fileName);
 			if (modelId) {
-				const adapterType = this._manifestIndexer.dialect;
-				const model = await this._parseService.getDocumentModel(editor.document, adapterType, { skipEnrichment: true });
+				const model = await this._parseService.getDocumentModel(editor.document, { skipEnrichment: true });
 				const cursorLine = editor.selection.active.line;
 				const cte = model?.ctes.find(c => cursorLine >= c.line && cursorLine <= c.endLine);
 				if (cte) {
@@ -535,7 +534,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			sql = args.sql;
 		} else if (category === 'model' || category === 'analysis' || category === 'snapshot') {
 			const sourceText = editor.document.getText();
-			const symbolResult = await this._compileWithSymbols(sourceText, this._manifestIndexer.dialect);
+		const symbolResult = await this._compileWithSymbols(sourceText);
 			if (!symbolResult) {
 				this._logger.warn('Debug adapter: compile failed');
 				this._output('Failed to compile. Check dbt output.\n');
@@ -565,8 +564,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 
 		this._compiledSql = sql;
 
-		const adapterType = this._manifestIndexer.index?.adapterType;
-		if (!adapterType) {
+		if (!this._manifestIndexer.adapterType) {
 			this._logger.warn('Debug adapter: no manifest index — cannot determine adapter type');
 			this._output('No dbt manifest found. Run dbt compile first.\n');
 			this._terminate();
@@ -574,7 +572,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		}
 
 		this._output('Decomposing query structure…\n');
-		const decomposed = await this._decompose(sql, adapterType);
+		const decomposed = await this._decompose(sql);
 
 		if (!decomposed) {
 			this._logger.warn('Debug adapter: decompose failed — running query without stepping');
@@ -1455,9 +1453,8 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			return;
 		}
 
-		const adapterType = this._manifestIndexer.dialect;
 		const sourceText = editor.document.getText();
-		const compileResult = await this._compileWithSymbols(sourceText, adapterType);
+		const compileResult = await this._compileWithSymbols(sourceText);
 		if (!compileResult) {
 			this._output('restartFrame: recompile failed — keeping current session.\n');
 			this._sendStopped('step');
@@ -1465,7 +1462,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		}
 
 		// 2. Re-decompose the fresh compiled SQL.
-		const decomposed = await this._decompose(compileResult.compiledSql, adapterType);
+		const decomposed = await this._decompose(compileResult.compiledSql);
 		if (!decomposed) {
 			this._output('restartFrame: re-decompose failed — keeping current session.\n');
 			this._sendStopped('step');
@@ -2231,8 +2228,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		}
 
 		// Re-decompose with the neutralized join.
-		const adapterType = this._manifestIndexer.dialect;
-		const decomposed = await this._decompose(mutatedSql, adapterType);
+		const decomposed = await this._decompose(mutatedSql);
 		if (!decomposed) {
 			this._output(`goto: re-decompose FAILED after neutralizing line ${joinLine}\n`);
 			this._activeSkips.pop();
@@ -2378,9 +2374,9 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	// Bridge communication
 	// ──────────────────────────────────────────────────────────────
 
-	private async _decompose(sql: string, dialect: string | undefined): Promise<DecomposeResult | undefined> {
+	private async _decompose(sql: string): Promise<DecomposeResult | undefined> {
 		try {
-			const raw = await this._parseService.decomposeQuery(sql, dialect);
+			const raw = await this._parseService.decomposeQuery(sql);
 			if (!raw) return undefined;
 
 			const data = JSON.parse(raw) as DecomposeResult & { success: boolean; error?: string };
@@ -2403,10 +2399,9 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 
 	private async _compileWithSymbols(
 		sourceText: string,
-		dialect: string | undefined,
 	): Promise<{ compiledSql: string; sourceMap: SourceMap | undefined } | undefined> {
 		try {
-			const tokenResult = await this._parseService.parseRawForTokens(sourceText, dialect);
+			const tokenResult = await this._parseService.parseRawForTokens(sourceText);
 			const emitResult = tokenResult
 				? emitDebugSymbolsFromTokens(sourceText, tokenResult.sqlTokens, tokenResult.jinjaTags)
 				: undefined;
@@ -2527,8 +2522,6 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		const model = models[0];
 		this._output(`Stepping into ref('${refName}') → ${model.path}\n`);
 
-		const adapterType = this._manifestIndexer.dialect;
-
 		// Read the child model's source file.
 		const childUri = vscode.Uri.file(model.path);
 		let sourceText: string;
@@ -2542,14 +2535,14 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		}
 
 		// Compile + decompose the child model.
-		const symbolResult = await this._compileWithSymbols(sourceText, adapterType);
+		const symbolResult = await this._compileWithSymbols(sourceText);
 		if (!symbolResult) {
 			this._output(`Failed to compile ${refName}.\n`);
 			this._sendStopped('step');
 			return;
 		}
 
-		const decomposed = await this._decompose(symbolResult.compiledSql, adapterType);
+		const decomposed = await this._decompose(symbolResult.compiledSql);
 		if (!decomposed || decomposed.frames.length === 0) {
 			this._output(`Could not decompose ${refName}.\n`);
 			this._sendStopped('step');

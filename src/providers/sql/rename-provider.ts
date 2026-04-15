@@ -40,8 +40,7 @@ export class DbtRenameProvider implements vscode.RenameProvider {
 		}
 
 		if (this.parseService) {
-			const dialect = this.indexer.dialect;
-			const model = await this.parseService.getDocumentModel(document, dialect);
+			const model = await this.parseService.getDocumentModel(document);
 			if (model) {
 				const resolved = ParseService.resolveAtPosition(model, position.line, position.character);
 				if (resolved) {
@@ -121,8 +120,7 @@ export class DbtRenameProvider implements vscode.RenameProvider {
 
 		// Token-based in-file rename (column, alias, CTE name)
 		if (this.parseService) {
-			const dialect = this.indexer.dialect;
-			const docModel = await this.parseService.getDocumentModel(document, dialect);
+			const docModel = await this.parseService.getDocumentModel(document);
 			if (docModel) {
 				const resolved = ParseService.resolveAtPosition(docModel, position.line, position.character);
 				if (resolved) {

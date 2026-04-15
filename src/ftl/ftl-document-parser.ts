@@ -3,6 +3,47 @@ import type { ColumnDefToken, ColumnInfo, ColumnRefToken, CteInfo, DocumentModel
 import type { DocumentParser, ParseOptions } from '../services/document-parser';
 import type { SqlParser } from './sql-parser';
 import { PyodideWorkerPool, type PoolOptions } from './pyodide-worker-pool';
+
+/**
+ * Map a dbt adapter type to the canonical sqlglot dialect name.
+ * Most adapter names match sqlglot's own dialect names; this handles the exceptions.
+ * Lives here because FtlDocumentParser is the sqlglot boundary.
+ */
+export function mapAdapterToDialect(adapterType: string | undefined): string | undefined {
+	if (!adapterType) return undefined;
+
+	const map: Record<string, string> = {
+		athena: 'athena',
+		bigquery: 'bigquery',
+		clickhouse: 'clickhouse',
+		databricks: 'databricks',
+		doris: 'doris',
+		dremio: 'dremio',
+		duckdb: 'duckdb',
+		fabric: 'fabric',
+		hive: 'hive',
+		materialize: 'materialize',
+		mysql: 'mysql',
+		oracle: 'oracle',
+		postgres: 'postgres',
+		postgresql: 'postgres',
+		redshift: 'redshift',
+		risingwave: 'risingwave',
+		singlestore: 'singlestore',
+		snowflake: 'snowflake',
+		spark: 'spark',
+		sqlite: 'sqlite',
+		starrocks: 'starrocks',
+		teradata: 'teradata',
+		trino: 'trino',
+		// Adapters needing explicit dialect mapping
+		synapse: 'tsql',
+		sqlserver: 'tsql',
+		glue: 'spark',
+		fabricspark: 'spark',
+	};
+	return map[adapterType.toLowerCase()] ?? adapterType.toLowerCase();
+}
 import { buildLineStarts, lineAtOffset } from './jinja-spans';
 import { findMatchingParen } from '../tools/cte-extractor';
 import {
@@ -702,16 +743,29 @@ export function walkLineageTree(tree: LineageTreeNode): LineageResult {
 	return { dependencies, via_ctes, transformations };
 }
 
+/**
+ * The subset of ManifestIndexer that FtlDocumentParser needs.
+ * Defined here so FtlDocumentParser owns the contract; ManifestIndexer
+ * satisfies it structurally via its `adapterType` getter.
+ */
+export interface AdapterContext {
+	readonly adapterType: string | undefined;
+}
+
 export class FtlDocumentParser implements DocumentParser {
 	private readonly _pool: PyodideWorkerPool | undefined;
 
-	constructor(private readonly _sqlParser: SqlParser, pool?: PyodideWorkerPool) {
+	constructor(
+		private readonly _sqlParser: SqlParser,
+		private readonly _context: AdapterContext,
+		pool?: PyodideWorkerPool,
+	) {
 		this._pool = pool;
 	}
 
-	static create(pyodideDir: string, vendorDir: string, scriptsDir: string, options?: PoolOptions): FtlDocumentParser {
+	static create(pyodideDir: string, vendorDir: string, scriptsDir: string, context: AdapterContext, options?: PoolOptions): FtlDocumentParser {
 		const pool = new PyodideWorkerPool(pyodideDir, vendorDir, scriptsDir, options);
-		return new FtlDocumentParser(pool, pool);
+		return new FtlDocumentParser(pool, context, pool);
 	}
 
 	ready(): Promise<void> {
@@ -726,18 +780,26 @@ export class FtlDocumentParser implements DocumentParser {
 		throw new Error('traceLineage (v1) is deprecated — use traceLineageV2');
 	}
 
-	async traceLineageV2(sql: string, columnName: string, dialect: string, schemaJson: string): Promise<LineageResult | { error: string }> {
+	async traceLineageV2(sql: string, columnName: string, schemaJson: string): Promise<LineageResult | { error: string }> {
+		const adapterType = this._context.adapterType;
+		if (!adapterType) return { error: 'No adapter type available — manifest not loaded' };
+		const dialect = mapAdapterToDialect(adapterType) ?? adapterType;
 		const raw = await this._pool!.traceLineageV2(sql, columnName, dialect, schemaJson);
 		const result = JSON.parse(raw) as RawLineageV2;
 		if (!result.success) return { error: result.error };
 		return walkLineageTree(result.tree);
 	}
 
-	async decomposeQuery(compiledSql: string, dialect: string): Promise<string> {
+	async decomposeQuery(compiledSql: string): Promise<string> {
+		const adapterType = this._context.adapterType;
+		if (!adapterType) return '';
+		const dialect = mapAdapterToDialect(adapterType) ?? adapterType;
 		return this._pool!.decomposeQuery(compiledSql, dialect);
 	}
 
-	async parse(sql: string, dialect: string, options?: ParseOptions): Promise<DocumentModel> {
+	async parse(sql: string, options?: ParseOptions): Promise<DocumentModel> {
+		const adapterType = this._context.adapterType ?? '';
+		const dialect = mapAdapterToDialect(adapterType) ?? adapterType;
 		const result = await this._sqlParser.parse(sql, dialect, options?.schema);
 		const ctes = extractCtes(result.ast, sql, result.wildcardCtes);
 		const tokens = extractTokens(result.ast, ctes);

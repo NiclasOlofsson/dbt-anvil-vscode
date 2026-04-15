@@ -121,8 +121,7 @@ export class ProfilerDecorationProvider implements vscode.Disposable {
 			this._clearAll(editor);
 			return;
 		}
-		const adapterType = this._indexer.dialect;
-		const model = await this._parseService.getDocumentModel(editor.document, adapterType, { skipEnrichment: true });
+		const model = await this._parseService.getDocumentModel(editor.document, { skipEnrichment: true });
 		const cteByName = new Map((model?.ctes ?? []).map(c => [c.name, c]));
 		this._apply(editor, result, cteByName);
 	}

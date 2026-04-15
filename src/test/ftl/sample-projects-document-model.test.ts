@@ -11,6 +11,9 @@ import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { initPyodide } from '../../ftl/pyodide-loader';
 import { PyodideSqlParser } from '../../ftl/pyodide-sql-parser';
 import { FtlDocumentParser } from '../../ftl/ftl-document-parser';
+import type { AdapterContext } from '../../ftl/ftl-document-parser';
+
+const DUCKDB_CONTEXT: AdapterContext = { adapterType: 'duckdb' };
 
 const SAMPLES_ROOT = path.join(__dirname, '..', '..', '..', 'samples');
 const PYODIDE_DIR  = path.join(__dirname, '..', '..', '..', 'node_modules', 'pyodide');
@@ -44,7 +47,7 @@ let documentParser: FtlDocumentParser;
 
 beforeAll(async () => {
 	const runtime = await initPyodide(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR);
-	documentParser = new FtlDocumentParser(PyodideSqlParser.create(runtime.pyodide));
+	documentParser = new FtlDocumentParser(PyodideSqlParser.create(runtime.pyodide), DUCKDB_CONTEXT);
 }, 60_000);
 
 describe('sample project DocumentModel', () => {
@@ -58,7 +61,7 @@ describe('sample project DocumentModel', () => {
 
 		it(label, async () => {
 			const raw    = fs.readFileSync(filePath, 'utf8');
-			const model  = await documentParser.parse(raw, 'duckdb');
+			const model  = await documentParser.parse(raw);
 
 			const warnings = (model.sqlglotWarnings ?? []).map(w => w.message);
 
@@ -96,7 +99,7 @@ describe('sample project DocumentModel — stress (50 iterations)', () => {
 
 	beforeAll(async () => {
 		const cores = os.cpus().length;
-		poolParser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR, { minWorkers: cores, maxWorkers: cores });
+		poolParser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR, DUCKDB_CONTEXT, { minWorkers: cores, maxWorkers: cores });
 		await poolParser.ready();
 	}, 120_000);
 
@@ -110,7 +113,7 @@ describe('sample project DocumentModel — stress (50 iterations)', () => {
 
 		for (let i = 0; i < STRESS_ITERATIONS; i++) {
 			const start = performance.now();
-			await Promise.all(sqlContents.map(sql => poolParser.parse(sql, 'duckdb')));
+			await Promise.all(sqlContents.map(sql => poolParser.parse(sql)));
 			iterationMs.push(performance.now() - start);
 		}
 
@@ -142,7 +145,7 @@ describe('qualify() dialect regression', () => {
 
 	beforeAll(async () => {
 		const runtime = await initPyodide(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR);
-		singleParser = new FtlDocumentParser(PyodideSqlParser.create(runtime.pyodide));
+		singleParser = new FtlDocumentParser(PyodideSqlParser.create(runtime.pyodide), DUCKDB_CONTEXT);
 	}, 60_000);
 
 	it('reg_season_predictions — SELECT * in cte_final expands to column_refs for cte_interim_calcs columns', async () => {
@@ -160,7 +163,7 @@ describe('qualify() dialect regression', () => {
 			nba_results_by_team: { team: 'varchar', score: 'varchar' },
 		};
 
-		const model = await singleParser.parse(raw, 'duckdb', { schema });
+		const model = await singleParser.parse(raw, { schema });
 
 		// cte_final does SELECT * FROM cte_interim_calcs.
 		// qualify() must expand SELECT * to explicit column refs, so home_team (and all other

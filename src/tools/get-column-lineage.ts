@@ -99,7 +99,6 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		resourceType: string,
 		raw: ReturnType<ManifestIndexer['getRawNode']>,
 		compiledCode: string,
-		dialect: string,
 		schemaMapping: SchemaMapping,
 	): Promise<{ columns: string[]; source: string }> {
 		if (raw === null || raw === undefined) return { columns: [], source: 'none' };
@@ -123,7 +122,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		}
 
 		// Models: SQL parsing via Pyodide
-		const cols = await this._getOutputColumns(compiledCode, dialect, schemaMapping);
+		const cols = await this._getOutputColumns(compiledCode, schemaMapping);
 		return { columns: cols, source: cols.length > 0 ? 'sql' : 'none' };
 	}
 
@@ -266,7 +265,6 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		modelUniqueId: string,
 		_modelName: string,
 		columnName: string,
-		dialect: string,
 	): Promise<LineageResult | null> {
 		const raw = this.indexer.getRawNode(modelUniqueId);
 		if (!raw || raw.resource_type !== 'model') return null;
@@ -278,7 +276,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 
 		try {
 			const schemaJson = JSON.stringify(schemaMapping);
-			const result = await this.ftlParser.traceLineageV2(sql, columnName, dialect, schemaJson);
+			const result = await this.ftlParser.traceLineageV2(sql, columnName, schemaJson);
 			if ('error' in result) {
 				this.logger.warn(`Column lineage error for ${_modelName}.${columnName}: ${result.error}`);
 				return null;
@@ -296,7 +294,6 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 	 */
 	private async _getOutputColumns(
 		compiledCode: string,
-		dialect: string,
 		schemaMapping: SchemaMapping,
 	): Promise<string[]> {
 		// Flatten 4-level schema (db→schema→table→col) to 2-level (table→col) for qualify()
@@ -309,7 +306,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 			}
 		}
 		try {
-			const result = await this.ftlParser.parse(compiledCode, dialect, { schema: flatSchema });
+			const result = await this.ftlParser.parse(compiledCode, { schema: flatSchema });
 			return result.finalColumns.map(c => c.name);
 		} catch {
 			return [];
@@ -324,7 +321,6 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		modelUniqueId: string,
 		modelName: string,
 		columnName: string,
-		dialect: string,
 		maxDepth: number,
 		currentDepth: number,
 		relationLookup: Map<string, string>,
@@ -346,7 +342,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 
 		this.logger.info(`[lineage] depth=${currentDepth} tracing ${modelName}.${columnName} (${modelUniqueId})`);
 
-		const lineageResult = await this._traceColumn(modelUniqueId, modelName, columnName, dialect);
+		const lineageResult = await this._traceColumn(modelUniqueId, modelName, columnName);
 		if (!lineageResult) {
 			this.logger.warn(`[lineage] _traceColumn returned null for ${modelName}.${columnName} — parser returned no result`);
 			return [];
@@ -396,7 +392,6 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 						resolvedId,
 						node.name,
 						effectiveColumn,
-						dialect,
 						maxDepth,
 						currentDepth + 1,
 						relationLookup,
@@ -419,7 +414,6 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 	 */
 	private async _enrichDependencyTransformations(
 		dependencies: ColumnDependency[],
-		dialect: string,
 	): Promise<void> {
 		const cache = new Map<string, Pick<ColumnDependency, 'transformations' | 'via_ctes'>>();
 		for (const dep of dependencies) {
@@ -434,7 +428,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 				continue;
 			}
 			try {
-				const result = await this._traceColumn(dep.dbt_resource, raw.name, dep.column, dialect);
+				const result = await this._traceColumn(dep.dbt_resource, raw.name, dep.column);
 				if (result && result.transformations.length > 0) {
 					dep.transformations = result.transformations;
 					dep.via_ctes = result.transformations
@@ -501,8 +495,6 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		const compiledCode = await this._ensureCompiled(uniqueId);
 		if (!compiledCode) return manifestCols;
 
-		const dialect = this.indexer.dialect;
-		if (!dialect) return manifestCols;
 		const upstreamLineage = this.indexer.getLineage(uniqueId, 5, 0);
 		const schemaMapping = await this._buildSchemaMapping(upstreamLineage.upstream.map(n => n.uniqueId));
 
@@ -510,7 +502,6 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 			rawNode.resource_type,
 			rawNode,
 			compiledCode,
-			dialect,
 			schemaMapping,
 		);
 
@@ -542,22 +533,12 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 
 		const rawSql = fs.readFileSync(path.join(this.indexer.projectDir, rawNode.original_file_path), 'utf8');
 
-		const dialect = this.indexer.dialect;
-		if (!dialect) {
-			return {
-				error: 'Could not determine dbt adapter type from manifest or profiles.yml',
-				dependencies: [],
-				columnEdges: GetColumnLineageTool._emptyColumnEdges,
-			};
-		}
-
 		const upstreamLineage = this.indexer.getLineage(uniqueId, 5, 0);
 		const schemaMapping = await this._buildSchemaMapping(upstreamLineage.upstream.map(n => n.uniqueId));
 		const { columns: outputColumns } = await this._resolveOutputColumns(
 			rawNode.resource_type,
 			rawNode,
 			rawSql,
-			dialect,
 			schemaMapping,
 		);
 
@@ -578,7 +559,6 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 			uniqueId,
 			rawNode.name,
 			column,
-			dialect,
 			maxDepth,
 			0,
 			relationLookup,
@@ -586,7 +566,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 			columnEdges,
 		);
 
-		await this._enrichDependencyTransformations(dependencies, dialect);
+		await this._enrichDependencyTransformations(dependencies);
 		return { dependencies, columnEdges };
 	}
 
@@ -614,11 +594,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		}
 
 		if (direction === 'upstream' || direction === 'both') {
-			const dialect = this.indexer.dialect;
-			if (!dialect) {
-				return toolResult({ error: 'Could not determine dbt adapter type from manifest or profiles.yml' });
-			}
-			const rootLineage = await this._traceColumn(modelInfo.uniqueId, modelInfo.name, column, dialect);
+			const rootLineage = await this._traceColumn(modelInfo.uniqueId, modelInfo.name, column);
 			return toolResult(this._formatLineageResponse(
 				modelInfo.name,
 				modelInfo.uniqueId,

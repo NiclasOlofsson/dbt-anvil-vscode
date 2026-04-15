@@ -31,8 +31,7 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 		// Skip comments
 		if (isLinePositionInComment(line, position.character)) return undefined;
 
-		const dialect = this.indexer.dialect;
-		const model = await this.parseService.getDocumentModel(document, dialect);
+		const model = await this.parseService.getDocumentModel(document);
 		if (token.isCancellationRequested || !model) return undefined;
 
 		const ctx = resolvePositionContext(model, line, position);
@@ -191,8 +190,7 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 
 		try {
 			const targetDoc = await vscode.workspace.openTextDocument(uri);
-			const dialect = this.indexer.dialect;
-			const targetModel = await this.parseService!.getDocumentModel(targetDoc, dialect);
+			const targetModel = await this.parseService!.getDocumentModel(targetDoc);
 			if (targetModel) {
 				const col = targetModel.finalColumns.find(c => c.name.toLowerCase() === column.toLowerCase());
 				if (col) {

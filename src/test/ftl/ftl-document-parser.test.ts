@@ -867,8 +867,8 @@ describe('FtlDocumentParser', () => {
 		};
 
 		const mockParser: SqlParser = { parse: async () => fakeResult };
-		const parser = new FtlDocumentParser(mockParser);
-		const model = await parser.parse(sql, 'ansi');
+		const parser = new FtlDocumentParser(mockParser, { adapterType: 'ansi' });
+		const model = await parser.parse(sql);
 
 		expect(model.refs).toHaveLength(1);
 		expect(model.refs[0].model).toBe('orders');

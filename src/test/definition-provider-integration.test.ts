@@ -23,6 +23,7 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import * as path from 'node:path';
 import { FtlDocumentParser } from '../ftl/ftl-document-parser';
+import type { AdapterContext } from '../ftl/ftl-document-parser';
 import { ParseService } from '../services/parse-service';
 import type { ColumnDefToken, ColumnRefToken, DocumentModel, TableRefToken } from '../services/parse-service';
 import { DbtDefinitionProvider } from '../providers/sql/definition-provider';
@@ -88,9 +89,9 @@ describe('definition-provider integration (FTL)', () => {
 	let model: DocumentModel;
 
 	beforeAll(async () => {
-		const ftlParser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR);
+		const ftlParser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR, { adapterType: 'ansi' } as AdapterContext);
 		await ftlParser.ready();
-		model = await ftlParser.parse(SQL, 'ansi', { schema: SQL_SCHEMA });
+		model = await ftlParser.parse(SQL, { schema: SQL_SCHEMA });
 		ftlParser.dispose();
 	}, 60_000);
 
@@ -735,9 +736,9 @@ describe('definition-provider integration (FTL)', () => {
 		let model2: DocumentModel;
 
 		beforeAll(async () => {
-			const ftlParser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR);
+			const ftlParser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR, { adapterType: 'ansi' } as AdapterContext);
 			await ftlParser.ready();
-			model2 = await ftlParser.parse(SQL2, 'ansi', { schema: { model_a: { col_a: 'TEXT' }, model_b: { col_b: 'TEXT' } } });
+			model2 = await ftlParser.parse(SQL2, { schema: { model_a: { col_a: 'TEXT' }, model_b: { col_b: 'TEXT' } } });
 			ftlParser.dispose();
 		}, 30_000);
 
@@ -850,9 +851,9 @@ describe('definition-provider integration (FTL)', () => {
 		let model3: DocumentModel;
 
 		beforeAll(async () => {
-			const ftlParser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR);
+			const ftlParser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR, { adapterType: 'ansi' } as AdapterContext);
 			await ftlParser.ready();
-			model3 = await ftlParser.parse(SQL3, 'ansi', { schema: { gold__address: { street: 'TEXT' } } });
+			model3 = await ftlParser.parse(SQL3, { schema: { gold__address: { street: 'TEXT' } } });
 			ftlParser.dispose();
 		}, 30_000);
 

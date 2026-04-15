@@ -62,9 +62,9 @@ export class NinjaWorkspaceScanner implements vscode.Disposable {
 			return;
 		}
 
-		const dialect = this.indexer.dialect;
-		if (!dialect) {
-			this.logger.debug('[workspace-scanner] no dialect resolved — skipping scan (manifest not loaded)');
+		const adapterType = this.indexer.adapterType;
+		if (!adapterType) {
+			this.logger.debug('[workspace-scanner] no adapterType resolved — skipping scan (manifest not loaded)');
 			return;
 		}
 
@@ -111,7 +111,7 @@ export class NinjaWorkspaceScanner implements vscode.Disposable {
 				while (active < CONCURRENCY && index < uris.length) {
 					const uri = uris[index++];
 					active++;
-					this._scanFile(uri, dialect, config, abort.signal)
+					this._scanFile(uri, config, abort.signal)
 						.catch(err => this.logger.debug(`[workspace-scanner] error scanning ${uri.fsPath}: ${String(err)}`))
 						.finally(() => {
 							active--;
@@ -137,10 +137,8 @@ export class NinjaWorkspaceScanner implements vscode.Disposable {
 		if (!config.enabled) return;
 
 		this._contentHashes.delete(uri.toString());
-		const dialect = this.indexer.dialect;
-
 		try {
-			await this._scanFile(uri, dialect, config, new AbortController().signal);
+			await this._scanFile(uri, config, new AbortController().signal);
 		} catch (err) {
 			this.logger.debug(`[workspace-scanner] error invalidating ${uri.fsPath}: ${String(err)}`);
 		}
@@ -163,7 +161,6 @@ export class NinjaWorkspaceScanner implements vscode.Disposable {
 
 	private async _scanFile(
 		uri: vscode.Uri,
-		dialect: string | undefined,
 		config: ReturnType<typeof loadConfig>,
 		signal: AbortSignal,
 	): Promise<void> {
@@ -179,7 +176,7 @@ export class NinjaWorkspaceScanner implements vscode.Disposable {
 		if (this._contentHashes.get(key) === hash) return;
 		this._contentHashes.set(key, hash);
 
-		const model = await this.parseService.getDocumentModel(document, dialect, { skipEnrichment: true });
+		const model = await this.parseService.getDocumentModel(document, { skipEnrichment: true });
 		if (signal.aborted) return;
 
 		const emptyModel: DocumentModel = { ctes: [], refs: [], sources: [], tokens: [], finalColumns: [], timing: { parseMs: 0, totalMs: 0 } };
