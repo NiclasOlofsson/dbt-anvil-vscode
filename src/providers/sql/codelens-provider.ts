@@ -56,7 +56,7 @@ export class SqlCodeLensProvider implements vscode.CodeLensProvider {
 		this.logger.debug(`CodeLens: adding lenses for model '${modelName}'`);
 
 		const modelId = this.indexer.findModelByFilePath(document.fileName);
-		const adapterType = this.indexer.index?.adapterType ?? 'ansi';
+		const adapterType = this.indexer.dialect;
 		const model = modelId
 			? await this.parseService.getDocumentModel(document, adapterType, { skipEnrichment: true })
 			: null;

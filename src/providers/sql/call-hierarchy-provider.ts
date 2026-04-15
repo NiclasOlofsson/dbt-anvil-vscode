@@ -39,7 +39,7 @@ export class DbtCallHierarchyProvider implements vscode.CallHierarchyProvider {
 		position: vscode.Position,
 		_token: vscode.CancellationToken,
 	): Promise<DbtHierarchyItem | null> {
-		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const dialect = this.indexer.dialect;
 		const model = await this.parseService.getDocumentModel(document, dialect);
 		if (!model) return null;
 
@@ -224,7 +224,7 @@ export class DbtCallHierarchyProvider implements vscode.CallHierarchyProvider {
 			return [];
 		}
 
-		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const dialect = this.indexer.dialect;
 		const model = await this.parseService.getDocumentModel(document, dialect);
 		if (!model) return [];
 
@@ -268,7 +268,7 @@ export class DbtCallHierarchyProvider implements vscode.CallHierarchyProvider {
 			return [];
 		}
 
-		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const dialect = this.indexer.dialect;
 		const model = await this.parseService.getDocumentModel(document, dialect);
 		if (!model || !item.cteName) return [];
 
@@ -338,7 +338,7 @@ export class DbtCallHierarchyProvider implements vscode.CallHierarchyProvider {
 			return [];
 		}
 
-		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const dialect = this.indexer.dialect;
 		const model = await this.parseService.getDocumentModel(document, dialect);
 		if (!model || !item.cteName) return [];
 

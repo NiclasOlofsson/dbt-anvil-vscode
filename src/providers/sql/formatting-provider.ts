@@ -24,7 +24,7 @@ export class NinjaFormattingProvider implements vscode.DocumentFormattingEditPro
 		const config = loadConfig();
 		if (!config.enabled) return [];
 
-		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const dialect = this.indexer.dialect;
 		const model = await this.parseService.getDocumentModel(document, dialect);
 		const jinjaTokens = tokenize(document.getText());
 		const emptyModel: DocumentModel = { ctes: [], refs: [], sources: [], tokens: [], finalColumns: [], timing: { parseMs: 0, totalMs: 0 } };

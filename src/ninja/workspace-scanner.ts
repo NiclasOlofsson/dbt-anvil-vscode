@@ -93,7 +93,7 @@ export class NinjaWorkspaceScanner implements vscode.Disposable {
 
 		this.logger.debug(`[workspace-scanner] found ${uris.length} SQL files in model/analysis dirs`);
 
-		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const dialect = this.indexer.dialect;
 		let active = 0;
 		let index = 0;
 
@@ -131,7 +131,7 @@ export class NinjaWorkspaceScanner implements vscode.Disposable {
 		if (!config.enabled) return;
 
 		this._contentHashes.delete(uri.toString());
-		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const dialect = this.indexer.dialect;
 
 		try {
 			await this._scanFile(uri, dialect, config, new AbortController().signal);
@@ -157,7 +157,7 @@ export class NinjaWorkspaceScanner implements vscode.Disposable {
 
 	private async _scanFile(
 		uri: vscode.Uri,
-		dialect: string,
+		dialect: string | undefined,
 		config: ReturnType<typeof loadConfig>,
 		signal: AbortSignal,
 	): Promise<void> {

@@ -3,6 +3,46 @@ import type { DbtManifest, DbtMacroArgument, DbtNode, DbtSource, ResourceType } 
 import { ManifestLoader } from '../dbt/manifest-loader';
 import type { ILogger } from '../types/logger';
 
+/**
+ * Map a dbt adapter type to the canonical sqlglot dialect name.
+ * Most adapter names match sqlglot's own dialect names; this handles the exceptions.
+ */
+export function mapAdapterToDialect(adapterType: string | undefined): string | undefined {
+	if (!adapterType) return undefined;
+
+	const map: Record<string, string> = {
+		athena: 'athena',
+		bigquery: 'bigquery',
+		clickhouse: 'clickhouse',
+		databricks: 'databricks',
+		doris: 'doris',
+		dremio: 'dremio',
+		duckdb: 'duckdb',
+		fabric: 'fabric',
+		hive: 'hive',
+		materialize: 'materialize',
+		mysql: 'mysql',
+		oracle: 'oracle',
+		postgres: 'postgres',
+		postgresql: 'postgres',
+		redshift: 'redshift',
+		risingwave: 'risingwave',
+		singlestore: 'singlestore',
+		snowflake: 'snowflake',
+		spark: 'spark',
+		sqlite: 'sqlite',
+		starrocks: 'starrocks',
+		teradata: 'teradata',
+		trino: 'trino',
+		// Adapters needing explicit dialect mapping
+		synapse: 'tsql',
+		sqlserver: 'tsql',
+		glue: 'spark',
+		fabricspark: 'spark',
+	};
+	return map[adapterType.toLowerCase()] ?? adapterType.toLowerCase();
+}
+
 export interface LineageNode {
 	uniqueId: string;
 	name: string;
@@ -59,7 +99,7 @@ export interface ManifestIndex {
 	parentMap: Map<string, string[]>;
 	childMap: Map<string, string[]>;
 	dbtVersion: string;
-	adapterType: string;
+	adapterType?: string;
 	buildTime: Date;
 }
 
@@ -95,11 +135,13 @@ export class ManifestIndexer {
 	) { }
 
 	/**
-	 * The SQL dialect to use for parsing.
-	 * Reads from the manifest when available; falls back to profiles.yml; then 'ansi'.
+	 * The canonical sqlglot dialect to use for parsing.
+	 * Reads from the manifest when available; otherwise falls back to profiles.yml.
+	 * The raw dbt adapter type is mapped to the sqlglot dialect name so all consumers
+	 * receive a parser-ready value (e.g. 'postgresql' → 'postgres', 'synapse' → 'tsql').
 	 */
-	get dialect(): string {
-		return this.loader.resolveDialect();
+	get dialect(): string | undefined {
+		return mapAdapterToDialect(this.loader.resolveDialect());
 	}
 
 	/**
@@ -225,7 +267,7 @@ export class ManifestIndexer {
 			parentMap,
 			childMap,
 			dbtVersion: manifest.metadata.dbt_version,
-			adapterType: manifest.metadata.adapter_type ?? 'ansi',
+			adapterType: manifest.metadata.adapter_type?.toLowerCase(),
 			buildTime: new Date(),
 		};
 	}

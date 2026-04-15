@@ -168,7 +168,7 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 	}
 
 	private async _getScopeAliases(document: vscode.TextDocument, _token: vscode.CancellationToken): Promise<Record<string, string[]>> {
-		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const dialect = this.indexer.dialect;
 		const model = await this.parseService.getDocumentModel(document, dialect);
 		return model ? ParseService.resolveAliases(model) : {};
 	}
@@ -185,7 +185,7 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 		let sortIndex = 0;
 
 		// CTE names from ParseService (highest priority)
-		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const dialect = this.indexer.dialect;
 		const model = await this.parseService.getDocumentModel(document, dialect);
 		if (token.isCancellationRequested) return [];
 		if (model) {

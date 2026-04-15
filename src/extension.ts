@@ -270,7 +270,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	logger.info(`  analysisPaths: ${resolveAnalysisPaths(projectConfig, projectDir).join(', ')}`);
 	logger.info(`  snapshotPaths: ${resolveSnapshotPaths(projectConfig, projectDir).join(', ')}`);
 	logger.info(`  testPaths: ${resolveTestPaths(projectConfig, projectDir).join(', ')}`);
-	const adapterType = manifestIndexer.index?.adapterType ?? 'ansi';
+	const adapterType = manifestIndexer.dialect ?? 'unknown';
 	const databaseProvider = await createDatabaseProvider(adapterType, profileName, profilesDir, projectDir, executionService, logger);
 	container.setDatabaseProvider(databaseProvider);
 	describeCache.setProvider(databaseProvider);
@@ -849,7 +849,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 		vscode.commands.registerCommand('dbt-studio.profiler.goToCte', async (filePath: string, cteName: string) => {
 			const doc = await vscode.workspace.openTextDocument(filePath);
-			const adapterType = manifestIndexer.index?.adapterType ?? 'ansi';
+			const adapterType = manifestIndexer.dialect;
 			const model = await parseService.getDocumentModel(doc, adapterType, { skipEnrichment: true });
 			let line: number;
 			if (cteName === '_main_') {
