@@ -164,3 +164,79 @@ export function validatePythonEnvironment(env: PythonEnvironment): Promise<boole
 export function dbtPackagesExist(projectDir: string): boolean {
 	return fs.existsSync(path.join(projectDir, 'dbt_packages'));
 }
+
+/**
+ * Check that the environment manager CLI (pipenv/uv/poetry) is available on
+ * PATH. For env types that need no manager (venv, system Python, conda) this
+ * always returns true.
+ */
+export function checkEnvManagerAvailable(env: PythonEnvironment): Promise<boolean> {
+	const manager = _envManagerExecutable(env);
+	if (!manager) return Promise.resolve(true);
+
+	return new Promise((resolve) => {
+		const child = spawn(manager, ['--version'], {
+			env: { ...process.env, ...env.envVars },
+			timeout: 10_000,
+			windowsHide: true,
+		});
+		child.on('error', () => resolve(false));
+		child.on('close', (code) => resolve(code === 0));
+	});
+}
+
+/**
+ * Return the shell command that installs the locked dependencies for this
+ * environment. Returns null for env types that have no managed lockfile
+ * (venv, system Python, conda).
+ */
+export function getBootstrapCommand(env: PythonEnvironment, projectDir: string): string[] | null {
+	if (env.description.startsWith('pipenv')) {
+		return ['pipenv', 'install'];
+	}
+	if (env.description.startsWith('uv')) {
+		return ['uv', 'sync', '--directory', projectDir];
+	}
+	if (env.description.startsWith('poetry')) {
+		return ['poetry', 'install', '--directory', projectDir];
+	}
+	return null;
+}
+
+/**
+ * Validate that `dbt` is installed inside the detected Python environment by
+ * running `dbt --version` through the environment's wrapper prefix.
+ */
+export function validateDbtInstalled(env: PythonEnvironment, projectDir: string): Promise<boolean> {
+	let cmd: string[];
+	if (env.venvBinDir) {
+		const dbtExe = process.platform === 'win32'
+			? path.join(env.venvBinDir, 'dbt.exe')
+			: path.join(env.venvBinDir, 'dbt');
+		cmd = fs.existsSync(dbtExe) ? [dbtExe, '--version'] : [...env.wrapperPrefix, 'dbt', '--version'];
+	} else if (env.wrapperPrefix.length > 0) {
+		cmd = [...env.wrapperPrefix, 'dbt', '--version'];
+	} else {
+		cmd = ['dbt', '--version'];
+	}
+
+	return new Promise((resolve) => {
+		const [executable, ...args] = cmd;
+		const child = spawn(executable, args, {
+			cwd: projectDir,
+			env: { ...process.env, ...env.envVars },
+			timeout: 15_000,
+			windowsHide: true,
+		});
+		child.on('error', () => resolve(false));
+		child.on('close', (code) => resolve(code === 0));
+	});
+}
+
+/** Returns the manager executable name, or null if the env needs no manager. */
+function _envManagerExecutable(env: PythonEnvironment): string | null {
+	if (env.description.startsWith('pipenv')) return 'pipenv';
+	if (env.description.startsWith('uv')) return 'uv';
+	if (env.description.startsWith('poetry')) return 'poetry';
+	return null;
+}

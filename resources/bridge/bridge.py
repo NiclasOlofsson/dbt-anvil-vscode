@@ -73,9 +73,7 @@ def run_command(
     Returns True if successful, False otherwise.
     """
     # Always inject --profiles-dir and --log-format unless caller provided them
-    if "--profiles-dir" not in args:
-        args = [*args, "--profiles-dir", profiles_dir]
-    if "--target-path" not in args:
+    if "--target-path" not in args and (len(args) == 0 or args[0] not in ("deps",)):
         args = [*args, "--target-path", extension_target_path]
     if "--log-format" not in args and len(args) > 0 and args[0] not in ("deps",):
         args = [*args, "--log-format", "text"]
