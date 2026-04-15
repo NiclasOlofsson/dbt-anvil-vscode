@@ -13,6 +13,7 @@ import { generateVariants } from '../dbt/sql-variant-generator';
 import { BridgeRunner } from '../dbt/bridge-runner';
 import { detectPythonEnvironment, type PythonEnvironment } from '../dbt/env-detector';
 import { FtlDocumentParser } from '../ftl/ftl-document-parser';
+import type { AdapterContext } from '../ftl/ftl-document-parser';
 import { mergeModels } from '../services/parse-service';
 import type { DocumentModel } from '../services/parse-service';
 import { createMockLogger } from './helpers';
@@ -20,6 +21,7 @@ import { createMockLogger } from './helpers';
 const PYODIDE_DIR = path.join(__dirname, '..', '..', 'node_modules', 'pyodide');
 const VENDOR_DIR = path.join(__dirname, '..', '..', 'resources', 'ftl', 'vendor');
 const SCRIPTS_DIR = path.join(__dirname, '..', '..', 'resources', 'ftl');
+const ANSI_CONTEXT: AdapterContext = { adapterType: 'ansi' };
 
 const JAFFLE_SHOP = path.join(__dirname, '..', '..', 'samples', 'jaffle_shop');
 const BRIDGE_PY = path.join(__dirname, '..', '..', 'resources', 'bridge', 'bridge.py');
@@ -153,7 +155,7 @@ describe('ftl parse_document', () => {
 	let parser: FtlDocumentParser;
 
 	beforeAll(async () => {
-		parser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR);
+		parser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR, ANSI_CONTEXT);
 		await parser.ready();
 	}, 60_000);
 
@@ -162,7 +164,7 @@ describe('ftl parse_document', () => {
 	});
 
 	function parseSql(sql: string, schema?: Record<string, Record<string, string>>) {
-		return parser.parse(sql, 'ansi', schema ? { schema } : undefined);
+		return parser.parse(sql, schema ? { schema } : undefined);
 	}
 
 	it('parses plain SQL with CTEs', async () => {
@@ -332,7 +334,7 @@ describe('ftl parse_document – sqlglotWarnings', () => {
 	let parser: FtlDocumentParser;
 
 	beforeAll(async () => {
-		parser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR);
+		parser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR, ANSI_CONTEXT);
 		await parser.ready();
 	}, 60_000);
 
@@ -341,7 +343,7 @@ describe('ftl parse_document – sqlglotWarnings', () => {
 	});
 
 	function parseSql(sql: string) {
-		return parser.parse(sql, 'ansi');
+		return parser.parse(sql);
 	}
 
 	it('reports a syntax_error with position for a typo in a keyword', async () => {
@@ -381,7 +383,7 @@ describe('ftl parse_document – conditional branches', () => {
 	let parser: FtlDocumentParser;
 
 	beforeAll(async () => {
-		parser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR);
+		parser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR, ANSI_CONTEXT);
 		await parser.ready();
 	}, 60_000);
 
@@ -394,7 +396,7 @@ describe('ftl parse_document – conditional branches', () => {
 		const models: DocumentModel[] = [];
 		for (const variant of variants) {
 			try {
-				models.push(await parser.parse(variant.sql, 'ansi'));
+				models.push(await parser.parse(variant.sql));
 			} catch {
 				// skip failed variants
 			}

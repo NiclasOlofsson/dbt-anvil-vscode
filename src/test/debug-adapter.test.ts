@@ -149,6 +149,7 @@ function mockCompileCache(): CompileCache {
 
 function mockManifestIndexer(): ManifestIndexer {
 	return {
+		adapterType: 'duckdb',
 		index: {
 			adapterType: 'duckdb',
 			models: new Map([['model.jaffle.orders', { name: 'orders', path: '/models/orders.sql' }]]),

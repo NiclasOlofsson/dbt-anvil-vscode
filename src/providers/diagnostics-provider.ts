@@ -388,9 +388,8 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 			return;
 		}
 
-		const dialect = this.indexer.dialect;
 		const model = this.parseService
-			? await this.parseService.getDocumentModel(document, dialect)
+			? await this.parseService.getDocumentModel(document)
 			: null;
 
 		// If we can't get a parse result, run layout rules only (no token rules)
@@ -442,8 +441,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		this._columnCtsSources.set(key, cts);
 		const token = cts.token;
 
-		const dialect = this.indexer.dialect;
-		const model = await this.parseService.getDocumentModel(document, dialect);
+		const model = await this.parseService.getDocumentModel(document);
 		const tokens = model?.tokens ?? [];
 		if (token.isCancellationRequested) return;
 

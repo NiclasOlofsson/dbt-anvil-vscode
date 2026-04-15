@@ -21,11 +21,13 @@ export const unusedCteRule: TokenRule = {
 		if (model.ctes.length === 0) return [];
 
 		// Collect table_ref names from real FROM/JOIN references only.
-		// Exclude cteDefinition tokens (the CTE name at its definition site) and
-		// synthesized tokens (qualify()-generated aliases) — neither counts as a usage.
+		// Exclude cteDefinition tokens (the CTE name at its definition site).
+		// Do NOT exclude synthesized tokens: synthesized only means qualify() added a
+		// positionless alias to the Table node (e.g. for PIVOT/UNPIVOT). The table name
+		// itself is always user-written and is a genuine CTE reference.
 		const usedNames = new Set<string>();
 		for (const tok of model.tokens) {
-			if (tok.type === 'table_ref' && !tok.cteDefinition && !tok.synthesized) {
+			if (tok.type === 'table_ref' && !tok.cteDefinition) {
 				usedNames.add(tok.name.toLowerCase());
 			}
 		}

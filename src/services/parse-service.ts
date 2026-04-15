@@ -238,8 +238,6 @@ export interface EnrichmentConfig {
 interface CacheEntry {
 	version: number;
 	model: DocumentModel;
-	/** Dialect used for this parse. */
-	dialect: string;
 }
 
 /**
@@ -381,13 +379,8 @@ export class ParseService {
 	 */
 	async getDocumentModel(
 		document: vscode.TextDocument,
-		dialect: string | undefined,
 		{ skipEnrichment = false }: { skipEnrichment?: boolean } = {},
 	): Promise<DocumentModel | null> {
-		if (!dialect) {
-			return null;
-		}
-
 		const key = document.uri.toString();
 		const cached = this._cache.get(key);
 		if (cached && cached.version === document.version) {
@@ -401,7 +394,7 @@ export class ParseService {
 			return existing;
 		}
 
-		const promise = this._parse(document, key, dialect, skipEnrichment);
+		const promise = this._parse(document, key, skipEnrichment);
 		this._inflight.set(inflightKey, promise);
 		try {
 			return await promise;
@@ -639,7 +632,6 @@ export class ParseService {
 	private async _parse(
 		document: vscode.TextDocument,
 		key: string,
-		dialect: string,
 		skipEnrichment = false,
 	): Promise<DocumentModel | null> {
 		const rawText = document.getText();
@@ -681,13 +673,13 @@ export class ParseService {
 
 		if (variants.length <= 1) {
 			// Fast path: no Jinja conditionals, single parser call.
-			model = await this._parser.parse(rawText, dialect, options);
+			model = await this._parser.parse(rawText, options);
 		} else {
 			// Multi-variant path: parse each branch combination and merge.
 			const variantModels: DocumentModel[] = [];
 			for (const variant of variants) {
 				try {
-					variantModels.push(await this._parser.parse(variant.sql, dialect, options));
+					variantModels.push(await this._parser.parse(variant.sql, options));
 				} catch {
 					// silently skip failed variants — individual branch failures are expected
 				}
@@ -711,7 +703,7 @@ export class ParseService {
 			model = { ...model, status: 'ok' };
 		}
 
-		const entry: CacheEntry = { version: document.version, model, dialect };
+		const entry: CacheEntry = { version: document.version, model };
 		this._cache.set(key, entry);
 		this._logger.debug(
 			`[parse-service] parsed ${document.fileName} — ${model.ctes.length} CTEs, `
@@ -732,11 +724,9 @@ export class ParseService {
 	 * Used by the profiler to extract CTE positions from compiled SQL.
 	 * No caching, no enrichment, no variant expansion — single bridge call.
 	 */
-	async parseSqlString(sql: string, dialect: string | undefined): Promise<CteInfo[]> {
-		if (!dialect) return [];
-
+	async parseSqlString(sql: string): Promise<CteInfo[]> {
 		try {
-			const model = await this._parser.parse(sql, dialect);
+			const model = await this._parser.parse(sql);
 			return model.ctes;
 		} catch {
 			return [];
@@ -748,11 +738,9 @@ export class ParseService {
 	 * Returns `undefined` when the parser backend does not supply tokens.
 	 * No caching, no enrichment, no variant expansion.
 	 */
-	async parseRawForTokens(sql: string, dialect: string | undefined): Promise<{ sqlTokens: SqlToken[]; jinjaTags: JinjaTagSpan[] } | undefined> {
-		if (!dialect) return undefined;
-
+	async parseRawForTokens(sql: string): Promise<{ sqlTokens: SqlToken[]; jinjaTags: JinjaTagSpan[] } | undefined> {
 		try {
-			const model = await this._parser.parse(sql, dialect);
+			const model = await this._parser.parse(sql);
 			if (!model.sqlTokens) return undefined;
 			return { sqlTokens: model.sqlTokens, jinjaTags: model.jinjaTags ?? [] };
 		} catch {
@@ -765,9 +753,7 @@ export class ParseService {
 	 * Returns raw JSON string from the Pyodide backend.
 	 * Returns `undefined` when the parser backend does not support decompose.
 	 */
-	async decomposeQuery(compiledSql: string, dialect: string | undefined): Promise<string | undefined> {
-		if (!dialect) return undefined;
-
-		return this._parser.decomposeQuery?.(compiledSql, dialect);
+	async decomposeQuery(compiledSql: string): Promise<string | undefined> {
+		return this._parser.decomposeQuery?.(compiledSql);
 	}
 }

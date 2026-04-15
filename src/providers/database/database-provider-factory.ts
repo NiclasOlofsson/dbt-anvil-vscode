@@ -19,13 +19,17 @@ import { ProfilesReader, type DatabricksConnection, type DuckdbConnection } from
  * @param logger        Logger instance.
  */
 export async function createDatabaseProvider(
-	adapterType: string,
+	adapterType: string | undefined,
 	profileName: string,
 	profilesDir: string,
 	projectDir: string,
 	executionService: DbtExecutionService,
 	logger: ILogger,
 ): Promise<DatabaseProvider> {
+	if (!adapterType) {
+		logger.info('DatabaseProviderFactory: no adapter type — using DbtDatabaseProvider');
+		return new DbtDatabaseProvider('unknown', executionService, logger);
+	}
 	const preferNative = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('database.preferNativeAdapter', true);
 	if (preferNative && adapterType === 'databricks') {
 		const reader = new ProfilesReader(profileName, profilesDir);

@@ -41,10 +41,14 @@ export class ModelProfiler implements vscode.Disposable {
 
 	constructor(
 		private readonly _dbtQueryService: DbtQueryService,
-		private readonly _dbProvider: DatabaseProvider,
+		private _dbProvider: DatabaseProvider,
 		private readonly _indexer: ManifestIndexer,
 		private readonly _logger: ILogger,
 	) {}
+
+	setProvider(provider: DatabaseProvider): void {
+		this._dbProvider = provider;
+	}
 
 	/**
 	 * Attach a persistence layer. Call once at activation after constructing the profiler.

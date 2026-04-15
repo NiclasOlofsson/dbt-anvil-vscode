@@ -20,7 +20,7 @@ export interface ParseOptions {
  * ParseService injects this and owns caching, variant expansion, and enrichment.
  */
 export interface DocumentParser {
-	parse(sql: string, dialect: string, options?: ParseOptions): Promise<DocumentModel>;
+	parse(sql: string, options?: ParseOptions): Promise<DocumentModel>;
 	/** Decompose compiled SQL into debug frames. Only implemented by FtlDocumentParser. */
-	decomposeQuery?(compiledSql: string, dialect: string): Promise<string>;
+	decomposeQuery?(compiledSql: string): Promise<string>;
 }

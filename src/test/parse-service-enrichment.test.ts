@@ -107,7 +107,7 @@ describe('ParseService — enrichment tier', () => {
 			const parser = createMockParser();
 			const service = new ParseService(parser, mockLogger);
 
-			const model = await service.getDocumentModel(createMockDocument('SELECT 1'), 'duckdb');
+			const model = await service.getDocumentModel(createMockDocument('SELECT 1'));
 
 			expect(model).not.toBeNull();
 			expect(model!.aliases).toEqual({});
@@ -117,7 +117,7 @@ describe('ParseService — enrichment tier', () => {
 			const parser = createMockParser({ aliases: { orders: ['id', 'amount'] } });
 			const service = new ParseService(parser, mockLogger, createEnrichment());
 
-			const model = await service.getDocumentModel(createMockDocument('SELECT 1'), 'duckdb');
+			const model = await service.getDocumentModel(createMockDocument('SELECT 1'));
 
 			expect(model).not.toBeNull();
 			expect(model!.aliases).toEqual({ orders: ['id', 'amount'] });
@@ -128,8 +128,8 @@ describe('ParseService — enrichment tier', () => {
 			const service = new ParseService(parser, mockLogger);
 			const doc = createMockDocument('SELECT 1');
 
-			await service.getDocumentModel(doc, 'duckdb');
-			await service.getDocumentModel(doc, 'duckdb');
+			await service.getDocumentModel(doc);
+			await service.getDocumentModel(doc);
 
 			expect(parser.parse).toHaveBeenCalledTimes(1);
 		});
@@ -141,8 +141,8 @@ describe('ParseService — enrichment tier', () => {
 			const doc1 = createMockDocument('SELECT 1', 1, 'file:///a.sql');
 			const doc2 = createMockDocument('SELECT 2', 2, 'file:///a.sql');
 
-			await service.getDocumentModel(doc1, 'duckdb');
-			await service.getDocumentModel(doc2, 'duckdb');
+			await service.getDocumentModel(doc1);
+			await service.getDocumentModel(doc2);
 
 			expect(parser.parse).toHaveBeenCalledTimes(2);
 		});
@@ -159,7 +159,6 @@ describe('ParseService — enrichment tier', () => {
 			const service = new ParseService(parser, mockLogger, { describeCache, indexer });
 			await service.getDocumentModel(
 				createMockDocument('SELECT id FROM {{ ref("orders") }}'),
-				'duckdb',
 			);
 
 			expect(describeCache.columns).toHaveBeenCalled();

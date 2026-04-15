@@ -69,6 +69,18 @@ describe(RULE, () => {
 		expect(check(sql, m)).toHaveLength(0);
 	});
 
+	it('no violation when CTE is used inside PIVOT/UNPIVOT (synthesized alias)', () => {
+		// qualify() attaches a positionless alias to the Table node when a CTE is used
+		// with PIVOT/UNPIVOT, causing synthesized=true. The table name is still real.
+		const sql = 'with base as (\n  select 1\n)\nselect * from base unpivot (...)';
+		const tok = { ...tableRef('base', 3, 14), synthesized: true as const };
+		const m = model({
+			ctes: [cte('base', 0, 2)],
+			tokens: [tok],
+		});
+		expect(check(sql, m)).toHaveLength(0);
+	});
+
 	it('range points to CTE name', () => {
 		const sql = 'with my_cte as (\n  select 1\n)\nselect 1';
 		const m = model({

@@ -356,8 +356,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	logger.info(`  analysisPaths: ${resolveAnalysisPaths(projectConfig, projectDir).join(', ')}`);
 	logger.info(`  snapshotPaths: ${resolveSnapshotPaths(projectConfig, projectDir).join(', ')}`);
 	logger.info(`  testPaths: ${resolveTestPaths(projectConfig, projectDir).join(', ')}`);
-	const adapterType = manifestIndexer.dialect ?? 'unknown';
-	const databaseProvider = await createDatabaseProvider(adapterType, profileName, profilesDir, projectDir, executionService, logger);
+	const databaseProvider = await createDatabaseProvider(manifestIndexer.adapterType, profileName, profilesDir, projectDir, executionService, logger);
 	container.setDatabaseProvider(databaseProvider);
 	describeCache.setProvider(databaseProvider);
 
@@ -390,7 +389,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const pyodideDir = path.join(context.extensionPath, 'node_modules', 'pyodide');
 	const vendorDir = path.join(context.extensionPath, 'resources', 'ftl', 'vendor');
 	const scriptsDir = path.join(context.extensionPath, 'resources', 'ftl');
-	const ftlParser = FtlDocumentParser.create(pyodideDir, vendorDir, scriptsDir);
+	const ftlParser = FtlDocumentParser.create(pyodideDir, vendorDir, scriptsDir, manifestIndexer);
 	await ftlParser.ready();
 	logger.info('Parse service: FTL worker pool ready');
 	const parseService = new ParseService(ftlParser, logger, { describeCache, indexer: manifestIndexer });
@@ -487,6 +486,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				}
 				try {
 					manifestIndexer.build(true);
+					const refreshedProvider = await createDatabaseProvider(manifestIndexer.adapterType, profileName, profilesDir, projectDir, executionService, logger);
+					container.setDatabaseProvider(refreshedProvider);
+					describeCache.setProvider(refreshedProvider);
+					modelProfiler.setProvider(refreshedProvider);
 					testExplorerProvider.refresh();
 					modelExplorerProvider.refresh();
 					lineageGraphProvider.refreshGraph();
@@ -947,8 +950,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 		vscode.commands.registerCommand('dbt-studio.profiler.goToCte', async (filePath: string, cteName: string) => {
 			const doc = await vscode.workspace.openTextDocument(filePath);
-			const adapterType = manifestIndexer.dialect;
-			const model = await parseService.getDocumentModel(doc, adapterType, { skipEnrichment: true });
+			const model = await parseService.getDocumentModel(doc, { skipEnrichment: true });
 			let line: number;
 			if (cteName === '_main_') {
 				// Navigate to the final SELECT

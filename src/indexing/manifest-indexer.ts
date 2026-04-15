@@ -6,42 +6,9 @@ import type { ILogger } from '../types/logger';
 /**
  * Map a dbt adapter type to the canonical sqlglot dialect name.
  * Most adapter names match sqlglot's own dialect names; this handles the exceptions.
+ * @deprecated Moved to ftl/ftl-document-parser.ts — import from there.
  */
-export function mapAdapterToDialect(adapterType: string | undefined): string | undefined {
-	if (!adapterType) return undefined;
-
-	const map: Record<string, string> = {
-		athena: 'athena',
-		bigquery: 'bigquery',
-		clickhouse: 'clickhouse',
-		databricks: 'databricks',
-		doris: 'doris',
-		dremio: 'dremio',
-		duckdb: 'duckdb',
-		fabric: 'fabric',
-		hive: 'hive',
-		materialize: 'materialize',
-		mysql: 'mysql',
-		oracle: 'oracle',
-		postgres: 'postgres',
-		postgresql: 'postgres',
-		redshift: 'redshift',
-		risingwave: 'risingwave',
-		singlestore: 'singlestore',
-		snowflake: 'snowflake',
-		spark: 'spark',
-		sqlite: 'sqlite',
-		starrocks: 'starrocks',
-		teradata: 'teradata',
-		trino: 'trino',
-		// Adapters needing explicit dialect mapping
-		synapse: 'tsql',
-		sqlserver: 'tsql',
-		glue: 'spark',
-		fabricspark: 'spark',
-	};
-	return map[adapterType.toLowerCase()] ?? adapterType.toLowerCase();
-}
+export { mapAdapterToDialect } from '../ftl/ftl-document-parser';
 
 export interface LineageNode {
 	uniqueId: string;
@@ -135,13 +102,12 @@ export class ManifestIndexer {
 	) { }
 
 	/**
-	 * The canonical sqlglot dialect to use for parsing.
-	 * Reads from the manifest when available; otherwise falls back to profiles.yml.
-	 * The raw dbt adapter type is mapped to the sqlglot dialect name so all consumers
-	 * receive a parser-ready value (e.g. 'postgresql' → 'postgres', 'synapse' → 'tsql').
+	 * The raw dbt adapter type from the manifest or profiles.yml.
+	 * Returns the raw dbt value (e.g. 'postgresql', 'synapse') — dialect mapping
+	 * is deferred to the sqlglot boundary (FtlDocumentParser).
 	 */
-	get dialect(): string | undefined {
-		return mapAdapterToDialect(this.loader.resolveDialect());
+	get adapterType(): string | undefined {
+		return this.loader.resolveDialect();
 	}
 
 	/**

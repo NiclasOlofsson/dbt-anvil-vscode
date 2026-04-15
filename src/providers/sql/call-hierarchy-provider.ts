@@ -39,8 +39,7 @@ export class DbtCallHierarchyProvider implements vscode.CallHierarchyProvider {
 		position: vscode.Position,
 		_token: vscode.CancellationToken,
 	): Promise<DbtHierarchyItem | null> {
-		const dialect = this.indexer.dialect;
-		const model = await this.parseService.getDocumentModel(document, dialect);
+		const model = await this.parseService.getDocumentModel(document);
 		if (!model) return null;
 
 		// Determine scope: CTE if cursor falls inside a CTE body
@@ -224,8 +223,7 @@ export class DbtCallHierarchyProvider implements vscode.CallHierarchyProvider {
 			return [];
 		}
 
-		const dialect = this.indexer.dialect;
-		const model = await this.parseService.getDocumentModel(document, dialect);
+		const model = await this.parseService.getDocumentModel(document);
 		if (!model) return [];
 
 		const calls: vscode.CallHierarchyOutgoingCall[] = [];
@@ -268,8 +266,7 @@ export class DbtCallHierarchyProvider implements vscode.CallHierarchyProvider {
 			return [];
 		}
 
-		const dialect = this.indexer.dialect;
-		const model = await this.parseService.getDocumentModel(document, dialect);
+		const model = await this.parseService.getDocumentModel(document);
 		if (!model || !item.cteName) return [];
 
 		const cteName = item.cteName;
@@ -338,8 +335,7 @@ export class DbtCallHierarchyProvider implements vscode.CallHierarchyProvider {
 			return [];
 		}
 
-		const dialect = this.indexer.dialect;
-		const model = await this.parseService.getDocumentModel(document, dialect);
+		const model = await this.parseService.getDocumentModel(document);
 		if (!model || !item.cteName) return [];
 
 		if (item.cteName === '__final__') {
