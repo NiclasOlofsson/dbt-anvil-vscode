@@ -1,12 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { emptyModel, mockDocument, cfg, violationsFor } from './helpers';
 import { runNinja } from '../../ninja/engine';
+import { tokenize } from '../../dbt/jinja-tokenizer';
 
 const RULE = 'ninja.jinja.padding';
 
 function runJinja(sql: string) {
 	const doc = mockDocument(sql);
-	return runNinja(doc, emptyModel, [], cfg());
+	return runNinja(doc, emptyModel, tokenize(sql), cfg());
 }
 
 describe(RULE, () => {

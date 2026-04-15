@@ -543,6 +543,62 @@ describe('extractFinalSelect', () => {
 		expect(result!.endLine).toBe(1);
 		expect(result!.endCol).toBe(10); // 'name' endCol
 	});
+
+	it('excludes a column whose AST line falls on a -- comment line', () => {
+		// SQL line 0: 'SELECT'
+		// SQL line 1: '  id,'       ← real column
+		// SQL line 2: '  -- ghost,' ← comment — buildCommentedLines adds line 2
+		// SQL line 3: '  status'    ← real column
+		const sql = 'SELECT\n  id,\n  -- ghost,\n  status';
+		const ast: AstPayload[] = [
+			// 0: Select
+			{ c: 'Select' },
+			// 1..3: Column 'id' at 0-based line 1 (m.line=2)
+			{ c: 'Column', i: 0, k: 'expressions', a: true },
+			{ c: 'Identifier', i: 1, k: 'this', m: { line: 2, col: 4 } },
+			{ i: 2, k: 'this', v: 'id' },
+			// 4..6: Column 'ghost' at 0-based line 2 (m.line=3) — comment line
+			{ c: 'Column', i: 0, k: 'expressions', a: true },
+			{ c: 'Identifier', i: 4, k: 'this', m: { line: 3, col: 9 } },
+			{ i: 5, k: 'this', v: 'ghost' },
+			// 7..9: Column 'status' at 0-based line 3 (m.line=4)
+			{ c: 'Column', i: 0, k: 'expressions', a: true },
+			{ c: 'Identifier', i: 7, k: 'this', m: { line: 4, col: 10 } },
+			{ i: 8, k: 'this', v: 'status' },
+		];
+		const result = extractFinalSelect(ast, sql);
+		expect(result).toBeDefined();
+		expect(result!.columns.map(c => c.name)).toEqual(['id', 'status']);
+	});
+
+	it('excludes a column whose AST line falls inside a /* */ block comment', () => {
+		// SQL line 0: 'SELECT'
+		// SQL line 1: '  id,'     ← real column
+		// SQL line 2: '  /*'      ← block comment start — buildCommentedLines adds lines 2,3,4
+		// SQL line 3: '  ghost,'  ← inside block comment
+		// SQL line 4: '  */'      ← block comment end
+		// SQL line 5: '  status'  ← real column
+		const sql = 'SELECT\n  id,\n  /*\n  ghost,\n  */\n  status';
+		const ast: AstPayload[] = [
+			// 0: Select
+			{ c: 'Select' },
+			// 1..3: Column 'id' at 0-based line 1 (m.line=2)
+			{ c: 'Column', i: 0, k: 'expressions', a: true },
+			{ c: 'Identifier', i: 1, k: 'this', m: { line: 2, col: 4 } },
+			{ i: 2, k: 'this', v: 'id' },
+			// 4..6: Column 'ghost' at 0-based line 3 (m.line=4) — inside block comment
+			{ c: 'Column', i: 0, k: 'expressions', a: true },
+			{ c: 'Identifier', i: 4, k: 'this', m: { line: 4, col: 8 } },
+			{ i: 5, k: 'this', v: 'ghost' },
+			// 7..9: Column 'status' at 0-based line 5 (m.line=6)
+			{ c: 'Column', i: 0, k: 'expressions', a: true },
+			{ c: 'Identifier', i: 7, k: 'this', m: { line: 6, col: 10 } },
+			{ i: 8, k: 'this', v: 'status' },
+		];
+		const result = extractFinalSelect(ast, sql);
+		expect(result).toBeDefined();
+		expect(result!.columns.map(c => c.name)).toEqual(['id', 'status']);
+	});
 });
 
 // ---------------------------------------------------------------------------

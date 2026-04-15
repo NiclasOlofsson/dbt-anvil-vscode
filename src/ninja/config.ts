@@ -21,6 +21,7 @@ export interface NinjaConfig {
 		size: number;
 	};
 	maxLineLength: number;
+	maxBlankLines: number;
 	layout: {
 		commaPosition: CommaPosition;
 		operatorPosition: OperatorPosition;
@@ -48,6 +49,7 @@ export const DEFAULT_CONFIG: NinjaConfig = {
 		size: 4,
 	},
 	maxLineLength: 120,
+	maxBlankLines: 2,
 	layout: {
 		commaPosition: 'trailing',
 		operatorPosition: 'leading',

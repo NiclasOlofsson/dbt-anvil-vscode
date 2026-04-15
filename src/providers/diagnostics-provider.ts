@@ -89,7 +89,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 				if (e.affectsConfiguration('dbt-studio.notifications.suppressAutoSaveWarning') || e.affectsConfiguration('files.autoSave')) {
 					this._updateAutoSaveDiagnostic();
 				}
-		if (e.affectsConfiguration('dbt-studio.notifications.suppressFormatterWarning') || e.affectsConfiguration('editor.defaultFormatter')) {
+				if (e.affectsConfiguration('dbt-studio.notifications.suppressFormatterWarning') || e.affectsConfiguration('editor.defaultFormatter')) {
 					this._updateFormatterDiagnostic();
 				}
 			}),
@@ -388,7 +388,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 			return;
 		}
 
-		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const dialect = this.indexer.dialect;
 		const model = this.parseService
 			? await this.parseService.getDocumentModel(document, dialect)
 			: null;
@@ -442,7 +442,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		this._columnCtsSources.set(key, cts);
 		const token = cts.token;
 
-		const dialect = this.indexer.index?.adapterType ?? 'ansi';
+		const dialect = this.indexer.dialect;
 		const model = await this.parseService.getDocumentModel(document, dialect);
 		const tokens = model?.tokens ?? [];
 		if (token.isCancellationRequested) return;
@@ -566,7 +566,6 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		this._ninjaCollection.forEach((_, diags) => { ninjaCount += diags.length; });
 		const total = parseCount + refCount + colCount + sqlglotCount + ninjaCount;
 		this.logger.trace(`[diagnostics] counts — parse:${parseCount} refs:${refCount} columns:${colCount} sqlglot:${sqlglotCount} ninja:${ninjaCount} total:${total}`);
-		this.statusBar.setErrorCount(total);
 	}
 
 	clearAll(): void {
@@ -583,7 +582,6 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		for (const editor of vscode.window.visibleTextEditors) {
 			editor.setDecorations(this._syntaxErrorDim, []);
 		}
-		this.statusBar.setErrorCount(0);
 	}
 
 	dispose(): void {

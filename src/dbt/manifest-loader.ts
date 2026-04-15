@@ -113,4 +113,34 @@ export class ManifestLoader {
 			return undefined;
 		}
 	}
+
+	/**
+	 * Resolve the SQL dialect to use for parsing.
+	 * Returns the adapter type from the manifest when available, otherwise
+	 * sniffs the first `type:` value from profiles.yml in the project directory.
+	 * Falls back to 'ansi' if neither is readable.
+	 */
+	resolveDialect(): string {
+		// 1. Prefer the manifest — it's authoritative.
+		try {
+			const result = this.load();
+			return result.manifest.metadata.adapter_type ?? 'ansi';
+		} catch {
+			// manifest not available, fall through
+		}
+
+		// 2. Sniff profiles.yml — look for the first `type:` line.
+		const profilesPath = path.join(this._projectDir, 'profiles.yml');
+		try {
+			const raw = fs.readFileSync(profilesPath, 'utf-8');
+			for (const line of raw.split('\n')) {
+				const m = line.match(/^\s+type:\s*(\w+)/);
+				if (m) return m[1].toLowerCase();
+			}
+		} catch {
+			// profiles.yml unreadable
+		}
+
+		return 'ansi';
+	}
 }

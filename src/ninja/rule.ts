@@ -23,6 +23,8 @@ export interface NinjaRuleBase {
 export interface TokenRuleContext {
 	model: DocumentModel;
 	document: vscode.TextDocument;
+	/** Jinja token positions for the document — omit or pass [] when not available. */
+	jinjaTokens?: JinjaToken[];
 	config: NinjaConfig;
 }
 

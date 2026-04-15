@@ -148,7 +148,7 @@ export function runNinja(
 
 		let ruleViolations: NinjaViolation[];
 		if (rule.type === 'token') {
-			ruleViolations = rule.check({ model, document, config });
+			ruleViolations = rule.check({ model, document, jinjaTokens, config });
 		} else {
 			ruleViolations = rule.check({ text, lines, jinjaTokens, document, config });
 		}

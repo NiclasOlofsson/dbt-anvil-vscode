@@ -4,7 +4,7 @@ import { initPyodide } from '../../ftl/pyodide-loader.js';
 import type { PyodideRuntime } from '../../ftl/pyodide-loader.js';
 import { PyodideSqlParser } from '../../ftl/pyodide-sql-parser.js';
 import { renToRawLine } from '../../ftl/nunjucks-renderer.js';
-import { walkLineageTree } from '../../ftl/ftl-document-parser.js';
+import { walkLineageTree, extractFinalSelect } from '../../ftl/ftl-document-parser.js';
 import type { LineageTreeNode, LineageResult } from '../../ftl/ftl-document-parser.js';
 
 const PYODIDE_DIR = path.join(__dirname, '..', '..', '..', 'node_modules', 'pyodide');
@@ -611,5 +611,31 @@ describe('traceLineageV2', () => {
         );
         expect(result!.dependencies.some(d => d.table === 'dummy')).toBe(false);
         expect(result!.via_ctes).toContain('base');
+    });
+});
+
+describe('extractFinalSelect — commented trailing lines', () => {
+    // Regression: columns from commented-out JOIN/WHERE lines after the FROM clause
+    // were being picked up as SELECT columns.
+    it('does not include columns mentioned only in trailing -- comments after FROM', async () => {
+        const sql = [
+            'select',
+            '    i.scenario_id,',
+            '    s.game_id,',
+            '    (random() * 10000)::smallint as rand_result,',
+            '    1 as sim_start_game_id',
+            'from cte_scenario_gen as i',
+            'cross join',
+            '    nba_schedules as s',
+            '    -- LEFT JOIN other_table AS r ON r.game_id = s.game_id',
+            '    -- WHERE r.game_id IS NULL OR (r.game_id IS NOT NULL AND i.scenario_id = 1)',
+        ].join('\n');
+
+        const result = await parser.parse(sql, 'duckdb');
+        const finalSelect = extractFinalSelect(result.ast, sql);
+
+        expect(finalSelect).toBeDefined();
+        const names = finalSelect!.columns.map(c => c.name);
+        expect(names).toEqual(['scenario_id', 'game_id', 'rand_result', 'sim_start_game_id']);
     });
 });

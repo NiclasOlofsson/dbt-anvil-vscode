@@ -67,6 +67,7 @@ import { SqlDebugConfigProvider } from './dbt/debug-config-provider';
 import { DataPipelineProvider } from './dbt/debug-pipeline-provider';
 import { SymbolSqlProvider } from './providers/symbol-sql-provider';
 import { splitStatements } from './dbt/statement-splitter';
+import { NinjaWorkspaceScanner } from './ninja/workspace-scanner';
 import * as path from 'node:path';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -550,6 +551,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.commands.registerCommand('dbt-studio.suppressFormatterWarning', async () => {
 			await vscode.workspace.getConfiguration('dbt-studio').update('notifications.suppressFormatterWarning', true, vscode.ConfigurationTarget.Global);
 		}),
+		vscode.commands.registerCommand('dbt-studio.ninja.scanWorkspace', () => { void workspaceScanner?.scanAll(); }),
 		vscode.commands.registerCommand('dbt-studio.goToLine', async (args: { uri: string; line: number }) => {
 			const uri = vscode.Uri.parse(args.uri);
 			const pos = new vscode.Position(args.line, 0);
@@ -1074,8 +1076,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			// Check if any arg has a frameId or id property
 			for (const arg of args) {
 				if (arg && typeof arg === 'object') {
-					const obj = arg as any;
-					frameId = obj.frameId ?? obj.id ?? obj.frameID;
+					const obj = arg as Record<string, unknown>;
+					frameId = obj['frameId'] as number ?? obj['id'] as number ?? obj['frameID'] as number;
 					if (frameId !== undefined) {
 						logger.info('showFrameSql: found frameId in arg', { frameId, arg: JSON.stringify(arg) });
 						break;
@@ -1100,6 +1102,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	// -------- Ensure .vscode/launch.json exists with SQL runner configs --------
 	void ensureLaunchConfig(vscode.workspace.workspaceFolders?.[0]);
+
+	// -------- Ninja workspace scanner (last — needs everything else ready) --------
+	let workspaceScanner: NinjaWorkspaceScanner | undefined;
+
+	const initWorkspaceScanner = (): void => {
+		workspaceScanner?.dispose();
+		const enabled = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('ninja.workspaceDiagnostics', false);
+		if (!enabled) {
+			workspaceScanner = undefined;
+			return;
+		}
+		workspaceScanner = new NinjaWorkspaceScanner(parseService, manifestIndexer, pathResolver, logger);
+		context.subscriptions.push(workspaceScanner);
+		void workspaceScanner.scanAll();
+	};
+
+	initWorkspaceScanner();
+
+	context.subscriptions.push(
+		manifestWatcher.onIndexRebuild(() => { void workspaceScanner?.scanAll(); }),
+		vscode.workspace.onDidSaveTextDocument(doc => {
+			if (doc.languageId === 'jinja-sql') void workspaceScanner?.invalidate(doc.uri);
+		}),
+		vscode.workspace.onDidChangeConfiguration(e => {
+			if (e.affectsConfiguration('dbt-studio.ninja.workspaceDiagnostics')) initWorkspaceScanner();
+		}),
+	);
 
 	logger.info(`dbt Studio v${version} activated.`);
 }

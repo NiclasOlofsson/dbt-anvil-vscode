@@ -26,10 +26,26 @@ describe(RULE, () => {
 		expect(v[0].fix![0].newText).toBe('\n');
 	});
 
-	it('provides delete fix for extra trailing newlines', () => {
+	it('provides replace fix for extra trailing newlines', () => {
 		const v = violationsFor(run('select 1\n\n\n'), RULE);
 		expect(v[0].fix).toBeDefined();
-		expect(v[0].fix![0].newText).toBe('');
+		expect(v[0].fix![0].newText).toBe('\n');
+	});
+
+	it('flags whitespace-only trailing line', () => {
+		const v = violationsFor(run('select 1\n   \n'), RULE);
+		expect(v.length).toBe(1);
+		expect(v[0].message).toContain('exactly one');
+	});
+
+	it('provides replace fix for whitespace-only trailing line', () => {
+		const v = violationsFor(run('select 1\n   \n'), RULE);
+		expect(v[0].fix![0].newText).toBe('\n');
+	});
+
+	it('flags multiple trailing blank lines including whitespace', () => {
+		const v = violationsFor(run('select 1\n\n  \n'), RULE);
+		expect(v.length).toBe(1);
 	});
 
 	it('handles file with only newlines', () => {

@@ -309,6 +309,10 @@
 				"title": "Show SQL"
 			},
 			{
+				"command": "dbt-studio.ninja.scanWorkspace",
+				"title": "Ninja: Scan All SQL Files"
+			},
+			{
 				"command": "dbt-studio.setAsDefaultFormatter",
 				"title": "Set dbt Studio as Default SQL Formatter"
 			},
@@ -903,6 +907,13 @@
 						"maximum": 500,
 						"markdownDescription": "Maximum line length before the long-lines rule triggers."
 					},
+					"dbt-studio.ninja.maxBlankLines": {
+						"type": "number",
+						"default": 2,
+						"minimum": 1,
+						"maximum": 10,
+						"markdownDescription": "Maximum number of consecutive blank lines allowed."
+					},
 					"dbt-studio.ninja.layout.commaPosition": {
 						"type": "string",
 						"default": "trailing",
@@ -943,6 +954,11 @@
 							"distinct"
 						],
 						"markdownDescription": "Whether bare `UNION` should be auto-fixed to `UNION ALL` or `UNION DISTINCT`."
+					},
+					"dbt-studio.ninja.workspaceDiagnostics": {
+						"type": "boolean",
+						"default": false,
+						"markdownDescription": "Run Ninja linting on all SQL files in the workspace (not just open files). Results appear in the Problems panel and a status bar item shows the total issue count."
 					}
 				}
 			},

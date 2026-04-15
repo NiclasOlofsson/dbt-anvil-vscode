@@ -104,10 +104,10 @@ export function extractCtes(ast: AstPayload[], sql: string, wildcardCtes?: Array
 			for (const { index: exprIdx } of expressionsOf(ast, bodySelect.index)) {
 				const colName = _colExprName(ast, exprIdx);
 				if (!colName) continue;
-			const colEntry: ColumnInfo = { name: colName, line: _colExprLine(ast, exprIdx) };
-			const colPos = _colExprCol(ast, exprIdx);
-			if (colPos !== undefined) colEntry.col = colPos;
-			columns.push(colEntry);
+				const colEntry: ColumnInfo = { name: colName, line: _colExprLine(ast, exprIdx) };
+				const colPos = _colExprCol(ast, exprIdx);
+				if (colPos !== undefined) colEntry.col = colPos;
+				columns.push(colEntry);
 			}
 		}
 
@@ -284,15 +284,76 @@ export function extractFinalColumns(ast: AstPayload[]): ColumnInfo[] {
 	return result;
 }
 
+/**
+ * Returns a Set of 0-based line numbers that are fully or partially inside a
+ * SQL comment region (-- line comments or /* block comments *​/).
+ * Used to filter AST nodes whose reported position falls inside a comment —
+ * which can happen when the jinja blanker replaces {{ }} tags inside SQL
+ * comments, causing sqlglot to mis-attribute node positions.
+ */
+function buildCommentedLines(sql: string): Set<number> {
+	const result = new Set<number>();
+	let line = 0;
+	let i = 0;
+	const n = sql.length;
+
+	while (i < n) {
+		const ch = sql[i];
+
+		if (ch === '\n') { line++; i++; continue; }
+
+		// -- line comment: rest of line is commented
+		if (ch === '-' && sql[i + 1] === '-') {
+			result.add(line);
+			// advance to end of line
+			while (i < n && sql[i] !== '\n') i++;
+			continue;
+		}
+
+		// /* block comment */
+		if (ch === '/' && sql[i + 1] === '*') {
+			const startLine = line;
+			i += 2;
+			while (i < n) {
+				if (sql[i] === '\n') { result.add(line); line++; i++; }
+				else if (sql[i] === '*' && sql[i + 1] === '/') { i += 2; break; }
+				else i++;
+			}
+			// mark every line from startLine to current line
+			for (let l = startLine; l <= line; l++) result.add(l);
+			continue;
+		}
+
+		// Single-quoted string — skip contents so -- inside a string is not a comment
+		if (ch === '\'') {
+			i++;
+			while (i < n) {
+				if (sql[i] === '\n') { line++; i++; }
+				else if (sql[i] === '\'' && sql[i + 1] === '\'') { i += 2; } // escaped quote
+				else if (sql[i] === '\'') { i++; break; }
+				else i++;
+			}
+			continue;
+		}
+
+		i++;
+	}
+
+	return result;
+}
+
 export function extractFinalSelect(ast: AstPayload[], sql: string): FinalSelectInfo | undefined {
 	const sel = _finalSelectNode(ast);
 	if (!sel) return undefined;
 
 	const sqlLines = sql.split('\n');
+	const commentedLines = buildCommentedLines(sql);
 	const columns: FinalSelectColumnInfo[] = [];
 	for (const { index: exprIdx } of expressionsOf(ast, sel.index)) {
 		const col = _buildSelectColumn(ast, exprIdx);
-		if (col) columns.push(col);
+		if (!col) continue;
+		if (commentedLines.has(col.line)) continue;
+		columns.push(col);
 	}
 
 	// Scan backward from the first column line to find the SELECT keyword.

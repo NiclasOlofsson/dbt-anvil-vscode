@@ -12,42 +12,37 @@ export const trailingNewlineRule: LayoutRule = {
 	description: 'Files should end with a single trailing newline',
 
 	check(ctx: LayoutRuleContext): NinjaViolation[] {
-		const violations: NinjaViolation[] = [];
 		const text = ctx.text;
 
-		if (text.length === 0) return violations;
+		if (text.length === 0) return [];
 
-		if (text[text.length - 1] !== '\n') {
-			// No trailing newline — add one
-			const lastLine = ctx.lines.length - 1;
-			const lastCol = ctx.lines[lastLine].length;
-			const pos = new vscode.Position(lastLine, lastCol);
-			violations.push({
-				rule: 'ninja.layout.trailing-newline',
-				message: 'File should end with a trailing newline',
-				range: new vscode.Range(pos, pos),
-				fix: [vscode.TextEdit.insert(pos, '\n')],
-			});
-		} else {
-			// Check for multiple trailing newlines
-			let i = text.length - 1;
-			while (i > 0 && text[i - 1] === '\n') i--;
-			// i now points to the last non-newline char + 1 (i.e. first trailing newline)
-			const trailingNewlines = text.length - i;
-			if (trailingNewlines > 1) {
-				// Keep exactly one trailing newline, remove extras
-				const startPos = ctx.document.positionAt(i + 1);
-				const endPos = ctx.document.positionAt(text.length);
-				const range = new vscode.Range(startPos, endPos);
-				violations.push({
-					rule: 'ninja.layout.trailing-newline',
-					message: 'File should end with exactly one trailing newline',
-					range,
-					fix: [vscode.TextEdit.delete(range)],
-				});
-			}
-		}
+		// Find where trailing whitespace (newlines, spaces, CR) begins.
+		// Everything from that point to EOF should be exactly '\n'.
+		const trimLen = text.trimEnd().length;
+		const tail = text.slice(trimLen);
 
-		return violations;
+		const eol = text.includes('\r\n') ? '\r\n' : '\n';
+
+		if (tail === eol) return [];
+
+		const fixStart = ctx.document.positionAt(trimLen);
+		const fixEnd = ctx.document.positionAt(text.length);
+		const fixRange = new vscode.Range(fixStart, fixEnd);
+
+		// Point the squiggle at the excess beyond the first newline (when one is present),
+		// or at the end of file when the trailing newline is missing entirely.
+		const squiggleOffset = tail.startsWith(eol) ? trimLen + eol.length : trimLen;
+		const diagnosticRange = new vscode.Range(ctx.document.positionAt(squiggleOffset), fixEnd);
+
+		const message = tail === ''
+			? 'File should end with a trailing newline'
+			: 'File should end with exactly one trailing newline';
+
+		return [{
+			rule: 'ninja.layout.trailing-newline',
+			message,
+			range: diagnosticRange,
+			fix: [vscode.TextEdit.replace(fixRange, eol)],
+		}];
 	},
 };
