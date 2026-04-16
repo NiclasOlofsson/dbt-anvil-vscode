@@ -10,6 +10,7 @@ export const leadingWhitespaceRule: LayoutRule = {
 	category: NinjaCategory.Layout,
 	defaultSeverity: 'warning',
 	description: 'Files should not start with blank lines',
+	fixes: 'auto',
 
 	check(ctx: LayoutRuleContext): NinjaViolation[] {
 		const violations: NinjaViolation[] = [];

@@ -9,6 +9,7 @@ export const isNullRule: TokenRule = {
 	category: NinjaCategory.Convention,
 	defaultSeverity: 'warning',
 	description: 'Use IS NULL / IS NOT NULL instead of = NULL / != NULL.',
+	fixes: 'auto',
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document } = ctx;

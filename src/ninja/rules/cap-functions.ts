@@ -68,6 +68,7 @@ export const functionCapRule: TokenRule = {
 	category: NinjaCategory.Capitalisation,
 	defaultSeverity: 'warning',
 	description: 'SQL function names should follow the configured capitalisation policy',
+	fixes: 'auto',
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const policy = ctx.config.capitalisation.functions;

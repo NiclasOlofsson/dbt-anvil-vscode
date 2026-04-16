@@ -9,6 +9,7 @@ export const selfAliasRule: TokenRule = {
 	category: NinjaCategory.Aliasing,
 	defaultSeverity: 'warning',
 	description: 'Do not alias a table to its own name.',
+	fixes: 'auto',
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model } = ctx;

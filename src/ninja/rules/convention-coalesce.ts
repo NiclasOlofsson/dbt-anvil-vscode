@@ -20,6 +20,7 @@ export const coalesceRule: TokenRule = {
 	category: NinjaCategory.Convention,
 	defaultSeverity: 'warning',
 	description: 'Use COALESCE instead of legacy null-handling functions (IFNULL, NVL, ISNULL).',
+	fixes: 'auto',
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document } = ctx;

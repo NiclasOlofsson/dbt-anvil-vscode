@@ -10,6 +10,14 @@ import { loadConfig } from './config-loader';
 import { tokenize } from '../dbt/jinja-tokenizer';
 import { TextDocumentShim } from './text-document-shim';
 
+/** Summary emitted after a full workspace scan completes. */
+export interface ScanSummary {
+	fileCount: number;
+	/** Violation counts under the user's current severity config. */
+	ruleCounts: Map<string, number>;
+	durationMs: number;
+}
+
 /**
  * Runs workspace-wide Ninja diagnostics for all SQL files in the dbt model and
  * analysis directories. Owns its own DiagnosticCollections — independent of
@@ -25,6 +33,9 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 	/** Lets a new scanAll() cancel an already-running scan. */
 	private _scanAbort: AbortController | null = null;
 	private _scanning = false;
+
+	private readonly _onDidComplete = new vscode.EventEmitter<ScanSummary>();
+	readonly onDidComplete = this._onDidComplete.event;
 
 	constructor(
 		private readonly parseService: ParseService,
@@ -42,7 +53,7 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 		this._updateStatusBar();
 		this._statusBarItem.show();
 
-		this._disposables.push(this._ninjaCollection, this._contractsCollection, this._statusBarItem);
+		this._disposables.push(this._ninjaCollection, this._contractsCollection, this._statusBarItem, this._onDidComplete);
 	}
 
 	/**
@@ -109,7 +120,13 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 
 			if (!abort.signal.aborted) {
 				this._runCrossModelChecks();
-				this.logger.debug(`[workspace-scanner] scan complete in ${((Date.now() - start) / 1000).toFixed(1)}s`);
+				const durationMs = Date.now() - start;
+				this.logger.debug(`[workspace-scanner] scan complete in ${(durationMs / 1000).toFixed(1)}s`);
+				this._onDidComplete.fire({
+					fileCount: uris.length,
+					ruleCounts: this._aggregateRuleCounts(),
+					durationMs,
+				});
 			}
 		} finally {
 			this._scanning = false;
@@ -150,7 +167,7 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 			while (queue.length > 0 && !signal.aborted) {
 				const uri = queue.shift()!;
 				await this._scanFile(uri, signal, config, dialectSymbols)
-					.catch(err => this.logger.debug(`[workspace-scanner] error scanning ${uri.fsPath}: ${String(err)}`));
+					.catch((err: unknown) => this.logger.debug(`[workspace-scanner] error scanning ${uri.fsPath}: ${String(err)}`));
 			}
 		};
 		await Promise.all(Array.from({ length: 4 }, worker));
@@ -201,6 +218,48 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 			return diag;
 		});
 		this._ninjaCollection.set(uri, diagnostics);
+	}
+
+	/**
+	 * Runs the given config against all SQL files in the model/analysis directories.
+	 * Returns per-rule violation counts. No side effects — does not touch DiagnosticCollections.
+	 */
+	async scan(config: ReturnType<typeof loadConfig>): Promise<Map<string, number>> {
+		const dirs = [
+			...this.pathResolver.paths.model,
+			...this.pathResolver.paths.analysis,
+		];
+		const uriSets = await Promise.all(
+			dirs.map(dir => vscode.workspace.findFiles(
+				new vscode.RelativePattern(vscode.Uri.file(dir), '**/*.sql'),
+			)),
+		);
+		const seen = new Set<string>();
+		const uris: vscode.Uri[] = [];
+		for (const set of uriSets) {
+			for (const uri of set) {
+				if (!seen.has(uri.toString())) {
+					seen.add(uri.toString());
+					uris.push(uri);
+				}
+			}
+		}
+		const dialectSymbols = await this.parseService.getDialectSymbols().catch(() => undefined);
+		const counts = new Map<string, number>();
+		for (const uri of uris) {
+			const raw = await fsPromises.readFile(uri.fsPath, 'utf8').catch(() => undefined);
+			if (!raw) continue;
+			const content = raw.includes('\r') ? raw.replace(/\r\n/g, '\n') : raw;
+			const model = await this.parseService.parseContent(uri, content).catch(() => undefined);
+			const parsedModel: DocumentModel = model ?? { ctes: [], refs: [], sources: [], tokens: [], finalColumns: [], timing: { parseMs: 0, totalMs: 0 } };
+			const shim = new TextDocumentShim(uri, content);
+			const jinjaTokens = tokenize(content);
+			const result = runNinja(shim, parsedModel, jinjaTokens, config, dialectSymbols ?? undefined);
+			for (const v of result.violations) {
+				counts.set(v.rule, (counts.get(v.rule) ?? 0) + 1);
+			}
+		}
+		return counts;
 	}
 
 	private _runCrossModelChecks(): void {
@@ -280,6 +339,19 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 		for (const [uriStr, diags] of diagsByUri) {
 			this._contractsCollection.set(vscode.Uri.parse(uriStr), diags);
 		}
+	}
+
+	/** Aggregate per-rule violation counts from the current ninja diagnostic collection. */
+	private _aggregateRuleCounts(): Map<string, number> {
+		const counts = new Map<string, number>();
+		this._ninjaCollection.forEach((_uri, diags) => {
+			for (const d of diags) {
+				if (typeof d.code === 'string') {
+					counts.set(d.code, (counts.get(d.code) ?? 0) + 1);
+				}
+			}
+		});
+		return counts;
 	}
 
 	private _updateStatusBar(): void {

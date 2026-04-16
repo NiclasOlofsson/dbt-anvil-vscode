@@ -58,6 +58,7 @@ import { DataPipelineProvider } from './dbt/debug-pipeline-provider';
 import { SymbolSqlProvider } from './providers/symbol-sql-provider';
 import { splitStatements } from './dbt/statement-splitter';
 import { WorkspaceDiagnosticsScanner } from './ninja/workspace-diagnostics-scanner';
+import { NinjaEditorPanel } from './ninja/editor';
 import * as path from 'node:path';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -673,9 +674,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			await vscode.workspace.getConfiguration('dbt-studio').update('notifications.suppressFormatterWarning', true, vscode.ConfigurationTarget.Global);
 		}),
 		vscode.commands.registerCommand('dbt-studio.ninja.scanWorkspace', () => { void workspaceScanner?.scanAll(); }),
+		vscode.commands.registerCommand('dbt-studio.ninja.openRuleEditor', () => {
+			const panel = NinjaEditorPanel.getInstance();
+			panel.setScanner(workspaceScanner);
+			void panel.open();
+		}),
 		vscode.commands.registerCommand('dbt-studio.ninja.statusBarMenu', async () => {
 			const items: vscode.QuickPickItem[] = [
 				{ label: '$(search) Rescan all files', description: 'Run Ninja on every SQL file in the workspace' },
+				{ label: '$(edit) Rule Editor', description: 'Open the Ninja Rule Editor' },
 				{ label: '$(warning) Open Problems panel', description: 'Show all Ninja diagnostics' },
 				{ label: '$(gear) Open Ninja settings', description: 'Configure dbt-studio.ninja options' },
 				{ label: '$(trash) Clear Ninja diagnostics', description: 'Remove all Ninja issues from the Problems panel' },
@@ -684,6 +691,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			if (!pick) return;
 			if (pick.label.includes('Rescan')) {
 				void workspaceScanner?.scanAll();
+			} else if (pick.label.includes('Rule Editor')) {
+				void vscode.commands.executeCommand('dbt-studio.ninja.openRuleEditor');
 			} else if (pick.label.includes('Open Problems')) {
 				void vscode.commands.executeCommand('workbench.action.problems.focus');
 			} else if (pick.label.includes('settings')) {
@@ -1297,6 +1306,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.window.onDidChangeVisibleTextEditors(_editors => { /* scanner no longer owns a collection */ }),
 		vscode.workspace.onDidChangeConfiguration(e => {
 			if (e.affectsConfiguration('dbt-studio.ninja.workspaceDiagnostics')) initWorkspaceScanner();
+			if (e.affectsConfiguration('dbt-studio.ninja') && workspaceScanner) {
+				void workspaceScanner.scanAll();
+			}
 		}),
 	);
 
