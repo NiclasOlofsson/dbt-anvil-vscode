@@ -28,7 +28,7 @@ describe(RULE, () => {
 		const v = check(sql, tokens);
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('Redundant');
-		expect(v[0].fix).toBeDefined();
+		expect(v[0].action).toBeDefined();
 	});
 
 	it('no violation for ELSE <value> END', () => {

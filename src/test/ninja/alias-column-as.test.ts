@@ -3,6 +3,7 @@ import { mockDocument, cfg, model, sqlTok } from './helpers';
 import { columnAsRule } from '../../ninja/rules/alias-column-as';
 import type { FinalSelectInfo, FinalSelectColumnInfo } from '../../services/parse-service';
 import type { SqlToken } from '../../ftl/parse-result';
+import { FixAction } from '../../ninja/violation';
 
 const RULE = 'ninja.aliasing.column-as';
 
@@ -66,9 +67,9 @@ describe(RULE, () => {
 		};
 		const tokens: SqlToken[] = [sqlTok('SELECT', 0, 5, 0, 6)];
 		const v = check(sql, fs, tokens);
-		expect(v[0].fix).toBeDefined();
-		expect(v[0].fix![0].newText).toBe('AS ');
-		expect(v[0].fix![0].range.start.character).toBe(10);
+		expect(v[0].action).toBeDefined();
+		expect((v[0].action as FixAction).edits[0].newText).toBe('AS ');
+		expect((v[0].action as FixAction).edits[0].range.start.character).toBe(10);
 	});
 
 	it('no violation when column has no alias', () => {

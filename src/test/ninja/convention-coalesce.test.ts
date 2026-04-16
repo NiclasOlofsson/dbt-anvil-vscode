@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { model, sqlTok, run, violationsFor, mockDocument } from './helpers';
 import type { NinjaViolation } from '../../ninja/violation';
+import { FixAction } from '../../ninja/violation';
 import type { SqlToken } from '../../ftl/parse-result';
 
 const RULE = 'ninja.convention.coalesce';
@@ -22,8 +23,8 @@ describe(RULE, () => {
 		const v = check(sql, tokens);
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('IFNULL');
-		expect(v[0].fix).toBeDefined();
-		expect(v[0].fix![0].newText).toBe('coalesce');
+		expect(v[0].action).toBeDefined();
+		expect((v[0].action as FixAction).edits[0].newText).toBe('coalesce');
 	});
 
 	it('flags NVL', () => {

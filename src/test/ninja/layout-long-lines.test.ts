@@ -45,13 +45,13 @@ describe(RULE, () => {
 	it('does not provide auto-fix', () => {
 		const longLine = 'select ' + 'a'.repeat(200);
 		const v = violationsFor(run(longLine + '\n'), RULE);
-		expect(v[0].fix).toBeUndefined();
+		expect(v[0].action).toBeUndefined();
 	});
 
 	it('is not fixable — no TextEdit provided', () => {
 		const longLine = 'select ' + 'a'.repeat(200);
 		const v = violationsFor(run(longLine + '\n'), RULE);
-		expect(v[0].fix).toBeUndefined();
+		expect(v[0].action).toBeUndefined();
 	});
 
 	it('uses custom maxLineLength config', () => {

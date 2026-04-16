@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { violationsFor, capCfg, mockDocument, cfg, model, sqlTok } from './helpers';
 import { runNinja } from '../../ninja/engine';
 import type { SqlToken } from '../../ftl/parse-result';
+import { FixAction } from '../../ninja/violation';
 
 const RULE = 'ninja.cap.keywords';
 
@@ -103,7 +104,7 @@ describe(RULE, () => {
 	it('flags mixed-case keyword when policy is lower', () => {
 		const v = violationsFor(run('Select 1', capCfg('keywords', 'lower')), RULE);
 		expect(v.length).toBe(1);
-		expect(v[0].fix![0].newText).toBe('select');
+		expect((v[0].action as FixAction).edits[0].newText).toBe('select');
 	});
 
 	// ── Policy: upper ──────────────────────────────────────────────────────
@@ -122,8 +123,8 @@ describe(RULE, () => {
 	it('flags mixed-case keyword when policy is upper', () => {
 		const v = violationsFor(run('Select 1 From t', capCfg('keywords', 'upper')), RULE);
 		expect(v.length).toBe(2);
-		expect(v[0].fix![0].newText).toBe('SELECT');
-		expect(v[1].fix![0].newText).toBe('FROM');
+		expect((v[0].action as FixAction).edits[0].newText).toBe('SELECT');
+		expect((v[1].action as FixAction).edits[0].newText).toBe('FROM');
 	});
 
 	// ── Policy: consistent ─────────────────────────────────────────────────
@@ -138,7 +139,7 @@ describe(RULE, () => {
 		const v = violationsFor(run('SELECT 1\nselect 2', capCfg('keywords', 'upper')), RULE);
 		const v2 = violationsFor(run('SELECT 1\nselect 2', capCfg('keywords', 'consistent')), RULE);
 		expect(v2.length).toBe(1);
-		expect(v2[0].fix![0].newText).toBe('SELECT');
+		expect((v2[0].action as FixAction).edits[0].newText).toBe('SELECT');
 	});
 
 	it('passes consistent keywords (all lower)', () => {
@@ -162,8 +163,8 @@ describe(RULE, () => {
 	it('provides auto-fix with correct range', () => {
 		const r = run('SELECT 1');
 		const v = violationsFor(r, RULE);
-		expect(v[0].fix).toBeDefined();
-		expect(v[0].fix![0].newText).toBe('select');
+		expect(v[0].action).toBeDefined();
+		expect((v[0].action as FixAction).edits[0].newText).toBe('select');
 		expect(v[0].range.start.line).toBe(0);
 		expect(v[0].range.start.character).toBe(0);
 		expect(v[0].range.end.character).toBe(6);
@@ -174,10 +175,10 @@ describe(RULE, () => {
 		expect(v.length).toBe(2);
 		// SELECT at col 0
 		expect(v[0].range.start.character).toBe(0);
-		expect(v[0].fix![0].newText).toBe('select');
+		expect((v[0].action as FixAction).edits[0].newText).toBe('select');
 		// FROM at col 9
 		expect(v[1].range.start.character).toBe(9);
-		expect(v[1].fix![0].newText).toBe('from');
+		expect((v[1].action as FixAction).edits[0].newText).toBe('from');
 	});
 
 	// ── Identifier skipping ────────────────────────────────────────────────

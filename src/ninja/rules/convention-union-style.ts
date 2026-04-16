@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
-import type { NinjaViolation } from '../violation';
+import { FixAction, type NinjaViolation } from '../violation';
 
 export const unionStyleRule: TokenRule = {
 	id: 'ninja.convention.union-style',
@@ -38,10 +38,7 @@ export const unionStyleRule: TokenRule = {
 				rule: 'ninja.convention.union-style',
 				message: `Use UNION ${preferred.toUpperCase()} — UNION ${actual.toUpperCase()} conflicts with the configured style.`,
 				range,
-				fix: [{
-					range,
-					newText: preferred.toUpperCase(),
-				}],
+				action: { type: FixAction.TYPE, edits: [{ range, newText: preferred.toUpperCase() }], autoFix: true },
 			});
 		}
 

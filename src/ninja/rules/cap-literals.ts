@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
-import type { NinjaViolation } from '../violation';
+import { FixAction, type NinjaViolation } from '../violation';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import type { CapitalisationPolicy } from '../config';
 import { tokenText, tokenRange } from '../token-utils';
@@ -54,7 +54,7 @@ export const literalCapRule: TokenRule = {
 					rule: 'ninja.cap.literals',
 					message: `Expected literal '${word}' to be '${fix}'`,
 					range,
-					fix: [vscode.TextEdit.replace(range, fix)],
+					action: { type: FixAction.TYPE, edits: [vscode.TextEdit.replace(range, fix)], autoFix: true },
 				});
 			}
 		}

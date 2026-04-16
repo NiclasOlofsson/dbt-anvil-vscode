@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { run, violationsFor } from './helpers';
+import { FixAction } from '../../ninja/violation';
 
 const RULE = 'ninja.layout.max-blank-lines';
 
@@ -29,8 +30,8 @@ describe(RULE, () => {
 
 	it('provides delete fix for extra blank lines', () => {
 		const v = violationsFor(run('select 1\n\n\n\nfrom t\n'), RULE);
-		expect(v[0].fix).toBeDefined();
-		expect(v[0].fix![0].newText).toBe('');
+		expect(v[0].action).toBeDefined();
+		expect((v[0].action as FixAction).edits[0].newText).toBe('');
 	});
 
 	it('passes file with no blank lines', () => {

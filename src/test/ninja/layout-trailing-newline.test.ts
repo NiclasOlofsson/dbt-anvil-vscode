@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { run, violationsFor } from './helpers';
+import { FixAction } from '../../ninja/violation';
 
 const RULE = 'ninja.layout.trailing-newline';
 
@@ -22,14 +23,14 @@ describe(RULE, () => {
 
 	it('provides insert fix for missing newline', () => {
 		const v = violationsFor(run('select 1'), RULE);
-		expect(v[0].fix).toBeDefined();
-		expect(v[0].fix![0].newText).toBe('\n');
+		expect(v[0].action).toBeDefined();
+		expect((v[0].action as FixAction).edits[0].newText).toBe('\n');
 	});
 
 	it('provides replace fix for extra trailing newlines', () => {
 		const v = violationsFor(run('select 1\n\n\n'), RULE);
-		expect(v[0].fix).toBeDefined();
-		expect(v[0].fix![0].newText).toBe('\n');
+		expect(v[0].action).toBeDefined();
+		expect((v[0].action as FixAction).edits[0].newText).toBe('\n');
 	});
 
 	it('flags whitespace-only trailing line', () => {
@@ -40,7 +41,7 @@ describe(RULE, () => {
 
 	it('provides replace fix for whitespace-only trailing line', () => {
 		const v = violationsFor(run('select 1\n   \n'), RULE);
-		expect(v[0].fix![0].newText).toBe('\n');
+		expect((v[0].action as FixAction).edits[0].newText).toBe('\n');
 	});
 
 	it('flags multiple trailing blank lines including whitespace', () => {

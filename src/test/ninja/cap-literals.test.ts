@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { violationsFor, capCfg, mockDocument, cfg, model, sqlTok } from './helpers';
 import { runNinja } from '../../ninja/engine';
 import type { SqlToken } from '../../ftl/parse-result';
+import { FixAction } from '../../ninja/violation';
 
 const RULE = 'ninja.cap.literals';
 
@@ -69,7 +70,7 @@ describe(RULE, () => {
 	it('flags uppercase NULL when policy is lower', () => {
 		const v = violationsFor(run('select NULL'), RULE);
 		expect(v.length).toBe(1);
-		expect(v[0].fix![0].newText).toBe('null');
+		expect((v[0].action as FixAction).edits[0].newText).toBe('null');
 	});
 
 	it('passes lowercase null', () => {
@@ -80,13 +81,13 @@ describe(RULE, () => {
 	it('flags uppercase TRUE when policy is lower', () => {
 		const v = violationsFor(run('select TRUE'), RULE);
 		expect(v.length).toBe(1);
-		expect(v[0].fix![0].newText).toBe('true');
+		expect((v[0].action as FixAction).edits[0].newText).toBe('true');
 	});
 
 	it('flags uppercase FALSE when policy is lower', () => {
 		const v = violationsFor(run('select FALSE'), RULE);
 		expect(v.length).toBe(1);
-		expect(v[0].fix![0].newText).toBe('false');
+		expect((v[0].action as FixAction).edits[0].newText).toBe('false');
 	});
 
 	it('passes lowercase true and false', () => {
@@ -99,13 +100,13 @@ describe(RULE, () => {
 	it('flags lowercase null when policy is upper', () => {
 		const v = violationsFor(run('select null', capCfg('literals', 'upper')), RULE);
 		expect(v.length).toBe(1);
-		expect(v[0].fix![0].newText).toBe('NULL');
+		expect((v[0].action as FixAction).edits[0].newText).toBe('NULL');
 	});
 
 	it('flags lowercase true when policy is upper', () => {
 		const v = violationsFor(run('select true', capCfg('literals', 'upper')), RULE);
 		expect(v.length).toBe(1);
-		expect(v[0].fix![0].newText).toBe('TRUE');
+		expect((v[0].action as FixAction).edits[0].newText).toBe('TRUE');
 	});
 
 	it('passes uppercase literals when policy is upper', () => {
@@ -118,7 +119,7 @@ describe(RULE, () => {
 	it('flags inconsistent literal casing', () => {
 		const v = violationsFor(run('select null, NULL', capCfg('literals', 'consistent')), RULE);
 		expect(v.length).toBe(1);
-		expect(v[0].fix![0].newText).toBe('null');
+		expect((v[0].action as FixAction).edits[0].newText).toBe('null');
 	});
 
 	it('passes consistent literal casing (all lower)', () => {

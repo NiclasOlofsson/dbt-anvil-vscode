@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
-import type { NinjaViolation } from '../violation';
+import { SnippetAction, type NinjaViolation } from '../violation';
 
 export const expressionNoAliasRule: TokenRule = {
 	id: 'ninja.aliasing.expression-no-alias',
@@ -32,7 +32,7 @@ export const expressionNoAliasRule: TokenRule = {
 				rule: 'ninja.aliasing.expression-no-alias',
 				message: `Expression column '${col.expression}' should have an explicit alias.`,
 				range: new vscode.Range(col.line, col.col, col.endLine, col.endCol),
-				snippetFix: { position: insertPos, snippet: ` as \${1:${placeholder}}` },
+				action: { type: SnippetAction.TYPE, position: insertPos, snippet: ` as \${1:${placeholder}}` },
 			});
 		}
 

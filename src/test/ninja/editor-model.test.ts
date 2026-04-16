@@ -9,7 +9,6 @@ function makeRule(id: string, overrides: Partial<RuleViewModel> = {}): RuleViewM
 		category: NinjaCategory.Capitalisation,
 		description: `Test rule ${id}`,
 		defaultSeverity: 'warning',
-		fixes: 'none',
 		type: 'token',
 		...overrides,
 	};
@@ -19,7 +18,7 @@ const RULES: RuleViewModel[] = [
 	makeRule('cap-keywords'),
 	makeRule('cap-functions'),
 	makeRule('alias-column-as', { category: NinjaCategory.Aliasing, defaultSeverity: 'info' }),
-	makeRule('structure-unused-cte', { category: NinjaCategory.Structure, fixes: 'codeActionOnly' }),
+	makeRule('structure-unused-cte', { category: NinjaCategory.Structure }),
 ];
 
 describe('EditorModel', () => {

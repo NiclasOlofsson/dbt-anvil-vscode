@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mockDocument, cfg, model, sqlTok } from './helpers';
 import { distinctParensRule } from '../../ninja/rules/structure-distinct-parens';
 import type { SqlToken } from '../../ftl/parse-result';
+import { FixAction } from '../../ninja/violation';
 
 const RULE = 'ninja.structure.distinct-parens';
 
@@ -25,10 +26,10 @@ describe(RULE, () => {
 		const v = check(sql, tokens);
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('not a function');
-		expect(v[0].fix).toBeDefined();
+		expect(v[0].action).toBeDefined();
 		// Fix should remove ( and ) replacing ( with space
-		expect(v[0].fix![0].newText).toBe('');   // R_PAREN removal
-		expect(v[0].fix![1].newText).toBe(' ');   // L_PAREN to space
+		expect((v[0].action as FixAction).edits[0].newText).toBe('');   // R_PAREN removal
+		expect((v[0].action as FixAction).edits[1].newText).toBe(' ');   // L_PAREN to space
 	});
 
 	it('no violation for DISTINCT col (no parens)', () => {

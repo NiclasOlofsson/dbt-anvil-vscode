@@ -83,7 +83,7 @@ describe(RULE, () => {
 		const sql = 'select\n  a\n  ,b\nfrom t';
 		const v = check(sql, 'trailing');
 		if (v.length > 0) {
-			expect(v[0].fix).toBeUndefined();
+			expect(v[0].action).toBeUndefined();
 		}
 	});
 

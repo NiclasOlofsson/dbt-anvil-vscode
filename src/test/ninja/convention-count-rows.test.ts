@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { mockDocument, cfg, model, sqlTok } from './helpers';
 import { countRowsRule } from '../../ninja/rules/convention-count-rows';
+import { FixAction } from '../../ninja/violation';
 import type { SqlToken } from '../../ftl/parse-result';
 
 const RULE = 'ninja.convention.count-rows';
@@ -24,8 +25,8 @@ describe(RULE, () => {
 		const v = check(sql, tokens);
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('COUNT(*)');
-		expect(v[0].fix).toBeDefined();
-		expect(v[0].fix![0].newText).toBe('*');
+		expect(v[0].action).toBeDefined();
+		expect((v[0].action as FixAction).edits[0].newText).toBe('*');
 	});
 
 	it('no violation for COUNT(*)', () => {

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
-import type { NinjaViolation } from '../violation';
+import { FixAction, type NinjaViolation } from '../violation';
 
 export const distinctParensRule: TokenRule = {
 	id: 'ninja.structure.distinct-parens',
@@ -57,10 +57,7 @@ export const distinctParensRule: TokenRule = {
 				rule: 'ninja.structure.distinct-parens',
 				message: 'DISTINCT is not a function — remove parentheses.',
 				range,
-				fix: [
-					{ range: rparenRange, newText: '' },
-					{ range: lparenRange, newText: ' ' },
-				],
+				action: { type: FixAction.TYPE, edits: [{ range: rparenRange, newText: '' }, { range: lparenRange, newText: ' ' }], autoFix: true },
 			});
 		}
 

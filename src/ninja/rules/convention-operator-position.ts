@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
-import type { NinjaViolation } from '../violation';
+import { FixAction, type NinjaViolation } from '../violation';
 
 /**
  * Enforces consistent boolean operator placement (trailing or leading).
@@ -50,10 +50,10 @@ export const operatorPositionRule: TokenRule = {
 						rule: 'ninja.convention.operator-position',
 						message: `'${opText}' should be at the end of the previous line (trailing), not at the start.`,
 						range,
-						fix: [
+						action: { type: FixAction.TYPE, edits: [
 							vscode.TextEdit.insert(new vscode.Position(line - 1, prevLineText.length), ` ${opText}`),
 							vscode.TextEdit.delete(new vscode.Range(line, opStart, line, opStart + opLen + trailingSpace)),
-						],
+						], autoFix: true },
 					});
 				}
 			} else {
@@ -70,10 +70,10 @@ export const operatorPositionRule: TokenRule = {
 							rule: 'ninja.convention.operator-position',
 							message: `'${opText}' should be at the start of the next line (leading), not at the end.`,
 							range,
-							fix: [
-								vscode.TextEdit.delete(new vscode.Range(line, opStart - spaceBefore, line, opStart + opLen)),
-								vscode.TextEdit.insert(new vscode.Position(line + 1, nextIndent), `${opText} `),
-							],
+								action: { type: FixAction.TYPE, edits: [
+									vscode.TextEdit.delete(new vscode.Range(line, opStart - spaceBefore, line, opStart + opLen)),
+									vscode.TextEdit.insert(new vscode.Position(line + 1, nextIndent), `${opText} `),
+								], autoFix: true },
 						});
 					}
 				}

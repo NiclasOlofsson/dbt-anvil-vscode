@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { model, run, violationsFor } from './helpers';
 import type { NinjaViolation } from '../../ninja/violation';
+import { SnippetAction } from '../../ninja/violation';
 import type { FinalSelectInfo } from '../../services/parse-service';
 
 const RULE = 'ninja.aliasing.expression-no-alias';
@@ -47,11 +48,10 @@ describe(RULE, () => {
 			{ name: 'team', line: 0, col: 7, endLine: 0, endCol: 13, expression: 'team' },
 		]));
 		expect(v).toHaveLength(1);
-		expect(v[0].fix).toBeUndefined();
-		expect(v[0].snippetFix).toBeDefined();
-		expect(v[0].snippetFix!.snippet).toBe(' as ${1:team}');
-		expect(v[0].snippetFix!.position.line).toBe(0);
-		expect(v[0].snippetFix!.position.character).toBe(13);
+		expect(v[0].action?.type).toBe(SnippetAction.TYPE);
+		expect((v[0].action as SnippetAction).snippet).toBe(' as ${1:team}');
+		expect((v[0].action as SnippetAction).position.line).toBe(0);
+		expect((v[0].action as SnippetAction).position.character).toBe(13);
 	});
 
 	it('snippet fix uses generic placeholder when col name is not a safe identifier (e.g. count(*))', () => {
@@ -59,10 +59,9 @@ describe(RULE, () => {
 			{ name: 'count(*)', line: 0, col: 7, endLine: 0, endCol: 15, expression: 'count(*)' },
 		]));
 		expect(v).toHaveLength(1);
-		expect(v[0].fix).toBeUndefined();
-		expect(v[0].snippetFix).toBeDefined();
-		expect(v[0].snippetFix!.snippet).toBe(' as ${1:alias}');
-		expect(v[0].snippetFix!.position.line).toBe(0);
-		expect(v[0].snippetFix!.position.character).toBe(15);
+		expect(v[0].action?.type).toBe(SnippetAction.TYPE);
+		expect((v[0].action as SnippetAction).snippet).toBe(' as ${1:alias}');
+		expect((v[0].action as SnippetAction).position.line).toBe(0);
+		expect((v[0].action as SnippetAction).position.character).toBe(15);
 	});
 });

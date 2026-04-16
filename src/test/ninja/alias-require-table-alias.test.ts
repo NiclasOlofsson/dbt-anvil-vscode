@@ -80,6 +80,6 @@ describe(RULE, () => {
 			],
 		});
 		const v = check(sql, m);
-		expect(v[0].fix).toBeUndefined();
+		expect(v[0].action).toBeUndefined();
 	});
 });

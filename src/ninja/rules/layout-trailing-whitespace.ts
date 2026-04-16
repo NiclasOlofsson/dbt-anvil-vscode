@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
-import type { NinjaViolation } from '../violation';
+import { FixAction, type NinjaViolation } from '../violation';
 import type { LayoutRule, LayoutRuleContext } from '../rule';
 
 /** LT01: Lines should not have trailing whitespace. */
@@ -34,7 +34,7 @@ export const trailingWhitespaceRule: LayoutRule = {
 					rule: 'ninja.layout.trailing-whitespace',
 					message: 'Trailing whitespace',
 					range,
-					fix: [vscode.TextEdit.delete(range)],
+					action: { type: FixAction.TYPE, edits: [vscode.TextEdit.delete(range)], autoFix: true },
 				});
 			}
 		}

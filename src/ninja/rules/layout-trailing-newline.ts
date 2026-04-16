@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
-import type { NinjaViolation } from '../violation';
+import { FixAction, type NinjaViolation } from '../violation';
 import type { LayoutRule, LayoutRuleContext } from '../rule';
 
 /** LT12: Files should end with a single trailing newline. */
@@ -42,7 +42,7 @@ export const trailingNewlineRule: LayoutRule = {
 			rule: 'ninja.layout.trailing-newline',
 			message,
 			range: diagnosticRange,
-			fix: [vscode.TextEdit.replace(fixRange, eol)],
+			action: { type: FixAction.TYPE, edits: [vscode.TextEdit.replace(fixRange, eol)], autoFix: true },
 		}];
 	},
 };

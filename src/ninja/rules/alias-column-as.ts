@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
-import type { NinjaViolation } from '../violation';
+import { FixAction, type NinjaViolation } from '../violation';
 
 /**
  * Flags column aliases that omit the `AS` keyword.
@@ -50,7 +50,7 @@ export const columnAsRule: TokenRule = {
 					rule: 'ninja.aliasing.column-as',
 					message: `Column alias '${col.name}' should use explicit AS keyword.`,
 					range,
-					fix: [vscode.TextEdit.insert(new vscode.Position(col.aliasLine, col.aliasCol), 'AS ')],
+					action: { type: FixAction.TYPE, edits: [vscode.TextEdit.insert(new vscode.Position(col.aliasLine, col.aliasCol), 'AS ')], autoFix: true },
 				});
 			}
 		}

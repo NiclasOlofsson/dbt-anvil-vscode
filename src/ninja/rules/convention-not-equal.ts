@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
-import type { NinjaViolation } from '../violation';
+import { FixAction, type NinjaViolation } from '../violation';
 
 export const notEqualRule: TokenRule = {
 	id: 'ninja.convention.not-equal',
@@ -28,10 +28,7 @@ export const notEqualRule: TokenRule = {
 				rule: 'ninja.convention.not-equal',
 				message: `Use '${preferred}' instead of '${raw}'.`,
 				range,
-				fix: [{
-					range,
-					newText: preferred,
-				}],
+				action: { type: FixAction.TYPE, edits: [{ range, newText: preferred }], autoFix: true },
 			});
 		}
 

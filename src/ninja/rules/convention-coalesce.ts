@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
-import type { NinjaViolation } from '../violation';
+import { FixAction, type NinjaViolation } from '../violation';
 
 function lineOffset(text: string, charOffset: number): { line: number; col: number } {
 	let line = 0;
@@ -39,10 +39,7 @@ export const coalesceRule: TokenRule = {
 				rule: 'ninja.convention.coalesce',
 				message: `Use COALESCE instead of ${word.toUpperCase()}.`,
 				range: new vscode.Range(start.line, start.col, end.line, end.col),
-				fix: [{
-					range: new vscode.Range(start.line, start.col, end.line, end.col),
-					newText: 'coalesce',
-				}],
+				action: { type: FixAction.TYPE, edits: [{ range: new vscode.Range(start.line, start.col, end.line, end.col), newText: 'coalesce' }], autoFix: true },
 			});
 		}
 

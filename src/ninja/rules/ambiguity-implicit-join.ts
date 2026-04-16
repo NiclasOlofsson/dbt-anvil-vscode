@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
-import type { NinjaViolation } from '../violation';
+import { FixAction, type NinjaViolation } from '../violation';
 
 const JOIN_QUALIFIERS = new Set(['INNER', 'LEFT', 'RIGHT', 'CROSS', 'FULL', 'NATURAL']);
 
@@ -35,10 +35,7 @@ export const implicitJoinRule: TokenRule = {
 				rule: 'ninja.ambiguity.implicit-join',
 				message: 'Use INNER JOIN instead of bare JOIN.',
 				range,
-				fix: [{
-					range,
-					newText: `INNER ${raw}`,
-				}],
+				action: { type: FixAction.TYPE, edits: [{ range, newText: `INNER ${raw}` }], autoFix: true },
 			});
 		}
 

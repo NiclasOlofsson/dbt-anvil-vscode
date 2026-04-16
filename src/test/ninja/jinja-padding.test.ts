@@ -71,7 +71,7 @@ describe(RULE, () => {
 		const v = violationsFor(r, RULE);
 		const openingFix = v.find(x => x.message.includes('after'));
 		expect(openingFix).toBeDefined();
-		expect(openingFix!.fix).toBeDefined();
+		expect(openingFix!.action).toBeDefined();
 	});
 
 	it('provides insert fix for missing closing space', () => {
@@ -79,7 +79,7 @@ describe(RULE, () => {
 		const v = violationsFor(r, RULE);
 		const closingFix = v.find(x => x.message.includes('before'));
 		expect(closingFix).toBeDefined();
-		expect(closingFix!.fix).toBeDefined();
+		expect(closingFix!.action).toBeDefined();
 	});
 
 	// ── Mixed SQL + Jinja ──────────────────────────────────────────────────

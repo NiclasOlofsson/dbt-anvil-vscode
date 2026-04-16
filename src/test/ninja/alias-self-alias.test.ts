@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { model, tableRef, colRef, run, violationsFor } from './helpers';
 import type { NinjaViolation } from '../../ninja/violation';
+import { FixAction } from '../../ninja/violation';
 
 const RULE = 'ninja.aliasing.self-alias';
 
@@ -15,7 +16,7 @@ describe(RULE, () => {
 		const v = check([tableRef('orders', 0, 0, 'orders')]);
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('orders');
-		expect(v[0].fix).toBeDefined();
+		expect(v[0].action).toBeDefined();
 	});
 
 	it('ignores table aliased to different name', () => {

@@ -3,6 +3,7 @@ import { mockDocument, cfg, model, sqlTok } from './helpers';
 import { bareUnionRule } from '../../ninja/rules/ambiguity-bare-union';
 import { DEFAULT_CONFIG } from '../../ninja/config';
 import type { SqlToken } from '../../ftl/parse-result';
+import { FixAction } from '../../ninja/violation';
 
 const RULE = 'ninja.ambiguity.bare-union';
 
@@ -26,8 +27,8 @@ describe(RULE, () => {
 		const v = check(sql, tokens);
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('UNION ALL');
-		expect(v[0].fix).toBeDefined();
-		expect(v[0].fix![0].newText).toBe('union ALL');
+		expect(v[0].action).toBeDefined();
+		expect((v[0].action as FixAction).edits[0].newText).toBe('union ALL');
 	});
 
 	it('no violation for UNION ALL', () => {
@@ -56,7 +57,7 @@ describe(RULE, () => {
 			sqlTok('SELECT', 15, 20, 0, 21),
 		];
 		const v = check(sql, tokens, 'distinct');
-		expect(v[0].fix![0].newText).toBe('union DISTINCT');
+		expect((v[0].action as FixAction).edits[0].newText).toBe('union DISTINCT');
 	});
 
 	it('flags multiple bare UNIONs', () => {

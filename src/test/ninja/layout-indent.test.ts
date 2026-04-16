@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { run, violationsFor } from './helpers';
+import { FixAction } from '../../ninja/violation';
 
 const RULE = 'ninja.layout.indent';
 
@@ -83,20 +84,20 @@ describe(RULE, () => {
 
 	it('fixes tabs to spaces', () => {
 		const v = violationsFor(run('select\n\t1\n'), RULE);
-		expect(v[0].fix).toBeDefined();
-		expect(v[0].fix![0].newText).toBe('    ');
+		expect(v[0].action).toBeDefined();
+		expect((v[0].action as FixAction).edits[0].newText).toBe('    ');
 	});
 
 	it('fixes spaces to tabs', () => {
 		const v = violationsFor(run('select\n    1\n', { indentation: { unit: 'tab', size: 4 } }), RULE);
-		expect(v[0].fix).toBeDefined();
-		expect(v[0].fix![0].newText).toBe('\t');
+		expect(v[0].action).toBeDefined();
+		expect((v[0].action as FixAction).edits[0].newText).toBe('\t');
 	});
 
 	it('fixes non-multiple spacing to nearest multiple', () => {
 		const v = violationsFor(run('select\n   1\n', { indentation: { unit: 'space', size: 4 } }), RULE);
-		expect(v[0].fix).toBeDefined();
-		expect(v[0].fix![0].newText).toBe('    ');
+		expect(v[0].action).toBeDefined();
+		expect((v[0].action as FixAction).edits[0].newText).toBe('    ');
 	});
 
 	it('fix range covers only the indentation', () => {
