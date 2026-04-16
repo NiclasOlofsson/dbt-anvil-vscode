@@ -313,6 +313,14 @@
 				"title": "Ninja: Scan All SQL Files"
 			},
 			{
+				"command": "dbt-studio.ninja.statusBarMenu",
+				"title": "Ninja: Options"
+			},
+			{
+				"command": "dbt-studio.statusBarMenu",
+				"title": "dbt Studio: Options"
+			},
+			{
 				"command": "dbt-studio.setAsDefaultFormatter",
 				"title": "Set dbt Studio as Default SQL Formatter"
 			},
@@ -842,7 +850,57 @@
 					"dbt-studio.ninja.rules": {
 						"type": "object",
 						"default": {},
-						"markdownDescription": "Per-rule severity overrides. Keys are rule IDs (e.g. `ninja.cap.keywords`), values are `error`, `warning`, `info`, or `off`."
+						"markdownDescription": "Per-rule severity overrides. Keys are Ninja rule IDs, values are `error`, `warning`, `info`, or `off`.",
+						"propertyNames": {
+							"enum": [
+								"ninja.aliasing.column-as",
+								"ninja.aliasing.expression-no-alias",
+								"ninja.aliasing.require-table-alias",
+								"ninja.aliasing.self-alias",
+								"ninja.aliasing.unique-table",
+								"ninja.aliasing.unused-alias",
+								"ninja.ambiguity.bare-union",
+								"ninja.ambiguity.distinct-groupby",
+								"ninja.ambiguity.implicit-join",
+								"ninja.ambiguity.qualified-columns",
+								"ninja.cap.functions",
+								"ninja.cap.keywords",
+								"ninja.cap.literals",
+								"ninja.cap.types",
+								"ninja.convention.coalesce",
+								"ninja.convention.comma-position",
+								"ninja.convention.count-rows",
+								"ninja.convention.is-null",
+								"ninja.convention.left-join",
+								"ninja.convention.not-equal",
+								"ninja.convention.operator-position",
+								"ninja.convention.union-style",
+								"ninja.jinja.padding",
+								"ninja.layout.function_spacing",
+								"ninja.layout.indent",
+								"ninja.layout.leading-whitespace",
+								"ninja.layout.long-lines",
+								"ninja.layout.max-blank-lines",
+								"ninja.layout.trailing-newline",
+								"ninja.layout.trailing-whitespace",
+								"ninja.structure.distinct-parens",
+								"ninja.structure.else-null",
+								"ninja.structure.select-star",
+								"ninja.structure.simple-case",
+								"ninja.structure.unused-columns",
+								"ninja.structure.unused-cte",
+								"ninja.structure.unused-join"
+							]
+						},
+						"additionalProperties": {
+							"type": "string",
+							"enum": [
+								"error",
+								"warning",
+								"info",
+								"off"
+							]
+						}
 					},
 					"dbt-studio.ninja.capitalisation.keywords": {
 						"type": "string",

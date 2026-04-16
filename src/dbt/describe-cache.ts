@@ -46,6 +46,11 @@ export class DescribeCache {
 		this._provider = provider;
 	}
 
+	/** Clear the describe error flag so future describe attempts are retried. */
+	resetError(): void {
+		this._describeFailed = false;
+	}
+
 	/**
 	 * Return the columns for the given dbt resource, fetching from the warehouse
 	 * if not already cached. This is the preferred entry point — callers should

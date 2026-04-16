@@ -126,7 +126,7 @@ export class CompileCache {
 			});
 
 			if (!result.success) {
-				this.logger.warn(`CompileCache: compile failed for ${modelName}`);
+				this.logger.warn(`CompileCache: compile failed for ${modelName}\n${result.stderr}`);
 				return undefined;
 			}
 		} catch (err) {
@@ -167,13 +167,18 @@ export class CompileCache {
 				label: 'compile (warm cache)',
 			});
 			if (!result.success) {
-				this.logger.warn('CompileCache: background full compile failed — cache not warmed');
+				this.logger.warn(`CompileCache: background full compile failed — cache not warmed\n${result.stderr}`);
 				return;
 			}
 			this._populateCacheFromManifest(projectDir);
 			this.logger.info('CompileCache: background full compile complete — cache warmed');
 		} catch (err) {
-			this.logger.warn(`CompileCache: background full compile error: ${err}`);
+			const msg = err instanceof Error ? err.message : String(err);
+			if (msg.includes('Superseded')) {
+				this.logger.debug(`CompileCache: warm compile superseded — skipped`);
+			} else {
+				this.logger.warn(`CompileCache: background full compile error: ${msg}`);
+			}
 		}
 	}
 
@@ -223,6 +228,13 @@ export class CompileCache {
 		return Object.fromEntries(this._cache);
 	}
 
+	/** Clear all compiled SQL entries from the in-memory cache. */
+	clearAll(): void {
+		const count = this._cache.size;
+		this._cache.clear();
+		this.logger.info(`CompileCache: cleared ${count} entries`);
+	}
+
 	/**
 	 * Explicitly invalidate the cache entry for a model (e.g. on SQL file save).
 	 * Accepts either a unique_id or a short model name.
@@ -265,7 +277,7 @@ export class CompileCache {
 				});
 				count++;
 			}
-			this.logger.trace(`CompileCache: populated ${count} entries from manifest`);
+			this.logger.info(`CompileCache: populated ${count} entries from manifest`);
 		} catch (err) {
 			this.logger.warn(`CompileCache: failed to read manifest: ${err}`);
 		}

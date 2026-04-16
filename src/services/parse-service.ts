@@ -223,6 +223,12 @@ export interface DocumentModel {
 	sqlTokens?: SqlToken[];
 	/** Jinja ref/source spans. Only populated by FtlDocumentParser. */
 	jinjaTags?: JinjaTagSpan[];
+	/**
+	 * Virtual columns synthesised by PIVOT/UNPIVOT clauses, keyed by the
+	 * lowercased source-table name. Used to suppress false "column not found"
+	 * errors for virtual columns that don't exist in the source CTE's schema.
+	 */
+	pivotVirtualColumns?: Record<string, string[]>;
 }
 
 /**
@@ -337,7 +343,21 @@ export function mergeModels(models: DocumentModel[]): DocumentModel {
 	// finalSelect: take the first model that has one (variants produce the same select)
 	const finalSelect = models.find(m => m.finalSelect)?.finalSelect;
 
-	return { ctes: [...cteMap.values()], refs, sources, finalColumns, finalSelect, tokens, timing, sqlglotWarnings, aliases };
+	// pivotVirtualColumns: union per source table
+	const pivotVirtualColumns: Record<string, string[]> = {};
+	for (const m of models) {
+		for (const [table, cols] of Object.entries(m.pivotVirtualColumns ?? {})) {
+			if (!(table in pivotVirtualColumns)) {
+				pivotVirtualColumns[table] = [...cols];
+			} else {
+				const seen = new Set(pivotVirtualColumns[table]);
+				for (const c of cols) { if (!seen.has(c)) { pivotVirtualColumns[table].push(c); seen.add(c); } }
+			}
+		}
+	}
+
+	return { ctes: [...cteMap.values()], refs, sources, finalColumns, finalSelect, tokens, timing, sqlglotWarnings, aliases,
+		pivotVirtualColumns: Object.keys(pivotVirtualColumns).length > 0 ? pivotVirtualColumns : undefined };
 }
 
 /**
@@ -367,6 +387,21 @@ export class ParseService {
 		private readonly _logger: ILogger,
 		private readonly _enrichment?: EnrichmentConfig,
 	) {}
+
+	/** Cache for dialect symbol fetch — stored as a Promise for dedup on concurrent calls. */
+	private _symbolsPromise: Promise<import('../ftl/sql-parser').DialectSymbols | undefined> | undefined;
+
+	/**
+	 * Return the authoritative symbol lists (functions, keyword token types, data types)
+	 * for the active dialect. Fetched once and cached for the lifetime of this service.
+	 * Returns undefined when the parser does not support symbol extraction.
+	 */
+	getDialectSymbols(): Promise<import('../ftl/sql-parser').DialectSymbols | undefined> {
+		if (!this._symbolsPromise) {
+			this._symbolsPromise = this._parser.getDialectSymbols?.() ?? Promise.resolve(undefined);
+		}
+		return this._symbolsPromise;
+	}
 
 	/**
 	 * Return the DocumentModel for the given document.
@@ -416,7 +451,11 @@ export class ParseService {
 	static columnsForRef(ref: TableRefToken, model: DocumentModel): string[] | undefined {
 		const nameLc = ref.name.toLowerCase();
 		const cte = model.ctes.find(c => c.name.toLowerCase() === nameLc);
-		if (cte) return cte.columns.map(c => c.name);
+		if (cte) {
+			const base = cte.columns.map(c => c.name);
+			const extras = model.pivotVirtualColumns?.[nameLc];
+			return extras ? [...base, ...extras] : base;
+		}
 		return model.aliases?.[ref.name] ?? model.aliases?.[nameLc];
 	}
 
@@ -570,6 +609,33 @@ export class ParseService {
 	}
 
 	/**
+	 * Evict cache entries that were parsed before the manifest loaded.
+	 *
+	 * Detectable symptom: the model has ref() calls (model.refs.length > 0) but
+	 * aliases is an empty dict — enrichment ran but the indexer had no models yet,
+	 * so no schema was passed to the bridge. These entries will never be corrected
+	 * by OnAliasesReady (same version → cache hit) so they need explicit eviction
+	 * when the index becomes available.
+	 *
+	 * Called by extension.ts on each onIndexRebuild so the next getDocumentModel()
+	 * call triggers a fresh enriched parse.
+	 */
+	evictUnenrichedDocuments(): void {
+		if (!this._enrichment) return;
+		const toEvict: string[] = [];
+		for (const [key, entry] of this._cache) {
+			const { model } = entry;
+			if (model.refs.length > 0 && model.aliases !== undefined && Object.keys(model.aliases).length === 0) {
+				toEvict.push(key);
+			}
+		}
+		for (const k of toEvict) this._cache.delete(k);
+		if (toEvict.length > 0) {
+			this._logger.debug(`[parse-service] evicted ${toEvict.length} un-enriched cache entry(ies) on index rebuild`);
+		}
+	}
+
+	/**
 	 * Resolve a cursor position against the token map from the AST.
 	 * Returns what the cursor is sitting on: a column reference,
 	 * a table qualifier (the alias prefix of a column), a table reference
@@ -705,7 +771,7 @@ export class ParseService {
 
 		const entry: CacheEntry = { version: document.version, model };
 		this._cache.set(key, entry);
-		this._logger.debug(
+		this._logger.trace(
 			`[parse-service] parsed ${document.fileName} — ${model.ctes.length} CTEs, `
 			+ `${model.refs.length} refs, ${Object.keys(model.aliases ?? {}).length} aliases in ${model.timing.totalMs}ms`,
 		);

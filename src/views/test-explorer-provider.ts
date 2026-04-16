@@ -442,12 +442,10 @@ export class TestExplorerProvider implements vscode.TreeDataProvider<TestItem> {
 
 			const projectConfig = yaml.load(fs.readFileSync(projectFile, 'utf8')) as Record<string, unknown> ?? {};
 			const testPaths = (projectConfig['test-paths'] as string[] | undefined) ?? ['tests'];
+			const modelPaths = (projectConfig['model-paths'] as string[] | undefined) ?? ['models'];
 
-			const scanDirs: string[] = testPaths.map(p => path.join(projectDir, p));
-			const unitTestsDir = path.join(projectDir, 'unit_tests');
-			if (fs.existsSync(unitTestsDir) && !scanDirs.includes(unitTestsDir)) {
-				scanDirs.push(unitTestsDir);
-			}
+			const allPaths = [...new Set([...testPaths, ...modelPaths])];
+			const scanDirs: string[] = allPaths.map(p => path.join(projectDir, p));
 
 			const byModel = new Map<string, TestNodeItem[]>();
 

@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import type { ILogger } from '../types/logger';
 import type { DbtExecutionService } from './execution-service';
 import { Priority } from './execution-service';
-import type { ManifestWatcher } from '../indexing/manifest-watcher';
+import type { IManifestSuppressor } from '../indexing/manifest-watcher';
 
 /** Matches DB-writing dbt commands: run, build, seed, snapshot, clone, run-operation. */
 const DB_WRITE_PATTERN = /\bdbt\b\s+(?:\S+\s+)*(?:run|build|seed|snapshot|clone|run-operation)\b/;
@@ -30,7 +30,7 @@ export class ExternalDbtMonitor implements vscode.Disposable {
 	constructor(
 		private readonly projectDir: string,
 		private readonly executionService: DbtExecutionService,
-		private readonly watcher: ManifestWatcher,
+		private readonly watcher: IManifestSuppressor,
 		private readonly logger: ILogger,
 		private readonly context: vscode.ExtensionContext,
 	) {}

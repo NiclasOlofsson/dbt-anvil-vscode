@@ -6,13 +6,14 @@ import { ManifestLoader } from '../dbt/manifest-loader';
 import { ManifestIndexer } from './manifest-indexer';
 
 /**
- * Minimal interface required by DbtExecutionService to suppress/resume manifest
- * change handling around bridge commands that rewrite manifest.json as a side
- * effect (describe_table, show, etc.).
+ * Minimal interface required by DbtExecutionService and ExternalDbtMonitor to
+ * suppress/resume manifest change handling around bridge commands that rewrite
+ * manifest.json as a side effect (describe_table, show, etc.).
  */
 export interface IManifestSuppressor {
 	suppress(): void;
 	resume(): void;
+	triggerRebuild(): void;
 }
 
 /**
@@ -23,6 +24,7 @@ export interface IManifestSuppressor {
 export class ManifestWatcher {
 	private _manifestWatcher: vscode.FileSystemWatcher | null = null;
 	private _sqlSaveDisposable: vscode.Disposable | null = null;
+	private _sqlDeleteDisposable: vscode.Disposable | null = null;
 	private _projectDir: string | null = null;
 	private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
 	private _parseDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -94,6 +96,15 @@ export class ManifestWatcher {
 				this._onEnrichmentInvalidated.fire(evicted);
 			}
 			this._debouncedParse();
+		});
+
+		// Trigger a background parse when a SQL/YAML project file is deleted so
+		// the manifest no longer references the removed model.
+		this._sqlDeleteDisposable = vscode.workspace.onDidDeleteFiles((e) => {
+			const relevant = e.files.some(({ fsPath }) =>
+				fsPath.endsWith('.sql') || fsPath.endsWith('.yml') || fsPath.endsWith('.yaml'),
+			);
+			if (relevant) this._debouncedParse();
 		});
 
 		this.logger.info('ManifestWatcher started');
@@ -250,6 +261,7 @@ export class ManifestWatcher {
 		}
 		this._manifestWatcher?.dispose();
 		this._sqlSaveDisposable?.dispose();
+		this._sqlDeleteDisposable?.dispose();
 		this._onIndexRebuild.dispose();
 		this._onParseRequested.dispose();
 		this._onEnrichmentInvalidated.dispose();

@@ -40,6 +40,8 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 	private readonly _ninjaCollection: vscode.DiagnosticCollection;
 	/** Stores the last Ninja result per document URI for quick-fix code actions. */
 	private readonly _ninjaResults = new Map<string, NinjaResult>();
+	/** Blocks diagnostics until startup manifest/index initialization is complete. */
+	private _startupReady: boolean;
 	/** Visual-only dimming decoration applied from the syntax error token to end-of-file. */
 	private readonly _syntaxErrorDim: vscode.TextEditorDecorationType;
 	/** Tracks the dimmed range per document URI so it can be re-applied on tab switch. */
@@ -60,7 +62,9 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		onAliasesReady?: vscode.Event<vscode.Uri>,
 		onIndexRebuild?: vscode.Event<ManifestIndexer>,
 		onSqlglotWarnings?: vscode.Event<{ uri: vscode.Uri; warnings: SqlglotWarning[] }>,
+		startupReady = true,
 	) {
+		this._startupReady = startupReady;
 		this._parseCollection = vscode.languages.createDiagnosticCollection('dbt-studio');
 		this._refCollection = vscode.languages.createDiagnosticCollection('dbt-studio-refs');
 		this._columnCollection = vscode.languages.createDiagnosticCollection('dbt-studio-columns');
@@ -121,20 +125,23 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 			vscode.workspace.onDidOpenTextDocument((doc) => {
 				if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) return;
 				this._validateDocument(doc);
+				this._runNinjaDirect(doc);
 			}),
 			vscode.workspace.onDidChangeTextDocument((e) => {
 				if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) return;
 				this._validateDocumentDebounced(e.document);
+				this._runNinjaDebounced(e.document);
 			}),
-			vscode.workspace.onDidCloseTextDocument((doc) => {
-				this._refCollection.delete(doc.uri);
-				this._columnCollection.delete(doc.uri);
-				this._sqlglotCollection.delete(doc.uri);
-				this._ninjaCollection.delete(doc.uri);
-				this._ninjaResults.delete(doc.uri.toString());
-				this._syntaxErrorDimRanges.delete(doc.uri.toString());
-				this._updateStatusBar();
-			}),
+			// vscode.workspace.onDidCloseTextDocument((doc) => {
+			// 	this._refCollection.delete(doc.uri);
+			// 	this._columnCollection.delete(doc.uri);
+			// 	this._sqlglotCollection.delete(doc.uri);
+			// 	// Ninja diagnostics are intentionally kept after close — they represent
+			// 	// workspace-wide lint results that should remain visible in the Problems panel.
+			// 	this._ninjaResults.delete(doc.uri.toString());
+			// 	this._syntaxErrorDimRanges.delete(doc.uri.toString());
+			// 	this._updateStatusBar();
+			// }),
 			vscode.workspace.onDidChangeConfiguration((e) => {
 				if (e.affectsConfiguration('dbt-studio.providers.sql.diagnostics')) {
 					const enabled = vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true);
@@ -179,12 +186,18 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		if (onIndexRebuild) {
 			this._disposables.push(
 				onIndexRebuild(() => {
+					this.setStartupReady();
 					if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) return;
 					const openSqlDocs = vscode.workspace.textDocuments.filter(d => d.languageId === 'jinja-sql');
 					this.logger.debug(`[diagnostics] onIndexRebuild: re-validating refs/sources for ${openSqlDocs.length} open jinja-sql docs`);
-					// Flush stale ref/source diagnostics for ALL documents (including closed ones).
-					// Then immediately repopulate for all currently open documents.
-					this._refCollection.clear();
+					// Snapshot URIs currently tracked so we can clean up closed-doc entries
+					// without a global clear() that would flash open documents.
+					const openUris = new Set(openSqlDocs.map(d => d.uri.toString()));
+					const staleRefUris: vscode.Uri[] = [];
+					this._refCollection.forEach((uri) => {
+						if (!openUris.has(uri.toString())) staleRefUris.push(uri);
+					});
+					for (const uri of staleRefUris) this._refCollection.delete(uri);
 					for (const doc of openSqlDocs) {
 						this._validateRefsOnly(doc);					// Re-validate column diagnostics too — per-doc debounce ensures
 						// each file gets its own timer, so no file cancels another.
@@ -226,6 +239,21 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 			);
 		}
 
+		// Clean up all diagnostics when a file is deleted so stale entries don't linger.
+		this._disposables.push(
+			vscode.workspace.onDidDeleteFiles((e) => {
+				for (const uri of e.files) {
+					this._parseCollection.delete(uri);
+					this._refCollection.delete(uri);
+					this._columnCollection.delete(uri);
+					this._sqlglotCollection.delete(uri);
+					this._ninjaCollection.delete(uri);
+					this._ninjaResults.delete(uri.toString());
+					this._syntaxErrorDimRanges.delete(uri.toString());
+				}
+			}),
+		);
+
 		// Re-apply dim decoration when the user switches to a tab that already has a syntax error.
 		this._disposables.push(
 			vscode.window.onDidChangeVisibleTextEditors((editors) => {
@@ -243,14 +271,27 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		}
 	}
 
+	setStartupReady(): void {
+		if (this._startupReady) return;
+		this._startupReady = true;
+		this.logger.debug('[diagnostics] startup initialization complete — enabling document diagnostics');
+
+		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) return;
+		for (const editor of vscode.window.visibleTextEditors) {
+			this._validateDocument(editor.document);
+		}
+	}
+
 	// ---- Real-time ref/source validation ----
 
 	private _validateDocumentDebounced(document: vscode.TextDocument): void {
+		if (!this._startupReady) return;
 		if (this._debounceTimer) clearTimeout(this._debounceTimer);
 		this._debounceTimer = setTimeout(() => this._validateDocument(document), 250);
 	}
 
 	private _validateDocument(document: vscode.TextDocument): void {
+		if (!this._startupReady) return;
 		if (document.languageId !== 'jinja-sql') return;
 		if (!this.indexer.index) return;
 
@@ -269,8 +310,6 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 			this._validateColumnsDebounced(document);
 		}
 
-		// Ninja style linting (debounced separately — needs parse result)
-		this._runNinjaDebounced(document);
 	}
 
 	/** Re-validate only ref/source diagnostics (no column validation). Used by onIndexRebuild. */
@@ -367,20 +406,33 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 
 	private readonly _ninjaDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+	private _runNinjaDirect(document: vscode.TextDocument): void {
+		if (!this._startupReady) return;
+		if (document.languageId !== 'jinja-sql') return;
+		this._runNinjaAsync(document).catch(err => {
+			const stack = err instanceof Error ? err.stack ?? err.message : String(err);
+			this.logger.debug(`Ninja lint error in ${document.fileName}:\n${stack}`);
+		});
+	}
+
 	private _runNinjaDebounced(document: vscode.TextDocument): void {
+		if (!this._startupReady) return;
+		if (document.languageId !== 'jinja-sql') return;
 		const key = document.uri.toString();
 		const existing = this._ninjaDebounceTimers.get(key);
 		if (existing) clearTimeout(existing);
 		const timer = setTimeout(() => {
 			this._ninjaDebounceTimers.delete(key);
 			this._runNinjaAsync(document).catch(err => {
-				this.logger.debug(`Ninja lint error: ${err}`);
+				const stack = err instanceof Error ? err.stack ?? err.message : String(err);
+				this.logger.debug(`Ninja lint error in ${document.fileName}:\n${stack}`);
 			});
 		}, 300);
 		this._ninjaDebounceTimers.set(key, timer);
 	}
 
 	private async _runNinjaAsync(document: vscode.TextDocument): Promise<void> {
+		if (!this._startupReady) return;
 		const config = loadConfig();
 		if (!config.enabled) {
 			this._ninjaCollection.delete(document.uri);
@@ -388,14 +440,15 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 			return;
 		}
 
-		const model = this.parseService
-			? await this.parseService.getDocumentModel(document)
-			: null;
+		const [model, dialectSymbols] = await Promise.all([
+			this.parseService ? this.parseService.getDocumentModel(document) : Promise.resolve(null),
+			this.parseService ? this.parseService.getDialectSymbols() : Promise.resolve(undefined),
+		]);
 
 		// If we can't get a parse result, run layout rules only (no token rules)
 		const jinjaTokens = tokenize(document.getText());
 		const emptyModel: DocumentModel = { ctes: [], refs: [], sources: [], tokens: [], finalColumns: [], timing: { parseMs: 0, totalMs: 0 } };
-		const result = runNinja(document, model ?? emptyModel, jinjaTokens, config);
+		const result = runNinja(document, model ?? emptyModel, jinjaTokens, config, dialectSymbols ?? undefined);
 
 		this._ninjaResults.set(document.uri.toString(), result);
 
@@ -420,6 +473,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 	// ---- Column validation (async) ----
 
 	private _validateColumnsDebounced(document: vscode.TextDocument): void {
+		if (!this._startupReady) return;
 		const key = document.uri.toString();
 		const existing = this._columnDebounceTimers.get(key);
 		if (existing) clearTimeout(existing);
@@ -433,6 +487,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 	}
 
 	private async _validateColumnsAsync(document: vscode.TextDocument): Promise<void> {
+		if (!this._startupReady) return;
 		if (!this.parseService) return;
 
 		const key = document.uri.toString();
@@ -455,6 +510,17 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		let firstMiss: string | undefined;
 		const docLines = document.getText().split('\n');
 
+		// Count alias occurrences — shadowed aliases (same alias at multiple
+		// nesting levels) resolve ambiguously, so we suppress column diagnostics
+		// for them rather than risk false positives.
+		const aliasCount = new Map<string, number>();
+		for (const tok of tokens) {
+			if (tok.type === 'table_ref' && 'alias' in tok && tok.alias) {
+				const key = tok.alias.toLowerCase();
+				aliasCount.set(key, (aliasCount.get(key) ?? 0) + 1);
+			}
+		}
+
 		for (const t of tokens) {
 			if (t.type !== 'column_ref' || !t.table) continue;
 
@@ -472,6 +538,11 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 			if (!cols || cols.length === 0 || cols.includes('*')) continue;
 
 			if (!cols.some(c => c.toLowerCase() === t.name.toLowerCase())) {
+				// Shadowed alias — same name used at multiple nesting levels.
+				// resolveTableRefs picks the deepest table_ref but the column may
+				// come from a wrapping subquery (e.g. ROW_NUMBER() alias).  Skip.
+				if ((aliasCount.get(t.table.toLowerCase()) ?? 0) > 1) continue;
+
 				if (!firstMiss) firstMiss = `${t.table}.${t.name} (known: ${cols.slice(0, 3).join(', ')})`;
 				const range = new vscode.Range(
 					new vscode.Position(t.line, t.col),
@@ -489,21 +560,12 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		}
 
 		this._columnCollection.set(document.uri, diagnostics);
-		this.logger.debug(`[diagnostics] column validation: ${diagnostics.length} issues in ${path.basename(document.fileName)}`);
+		this.logger.trace(`[diagnostics] column validation: ${diagnostics.length} issues in ${path.basename(document.fileName)}`);
 		this._updateStatusBar();
 	}
 
 	private _handleParseOutput(output: string, success: boolean): void {
-		this._parseCollection.clear();
 		const errors = this._parseErrors(output);
-
-		if (errors.length === 0) {
-			this._updateStatusBar();
-			this.logger.debug(success
-				? 'Parse succeeded — no parse diagnostics'
-				: 'Parse failed but no extractable diagnostics');
-			return;
-		}
 
 		const byFile = new Map<string, vscode.Diagnostic[]>();
 		for (const err of errors) {
@@ -522,12 +584,25 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 			byFile.get(key)!.push(diagnostic);
 		}
 
+		// Merge: delete URIs no longer in error, set/update the rest.
+		// Avoids a global clear() that causes a visible flash before re-adding.
+		const staleParseUris: vscode.Uri[] = [];
+		this._parseCollection.forEach((uri) => {
+			if (!byFile.has(uri.toString())) staleParseUris.push(uri);
+		});
+		for (const uri of staleParseUris) this._parseCollection.delete(uri);
 		for (const [uriStr, diags] of byFile) {
 			this._parseCollection.set(vscode.Uri.parse(uriStr), diags);
 		}
 
 		this._updateStatusBar();
-		this.logger.info(`Parse failed — ${errors.length} diagnostic(s) created`);
+		if (errors.length === 0) {
+			this.logger.debug(success
+				? 'Parse succeeded — no parse diagnostics'
+				: 'Parse failed but no extractable diagnostics');
+		} else {
+			this.logger.info(`Parse failed — ${errors.length} diagnostic(s) created`);
+		}
 	}
 
 	private _parseErrors(output: string): DbtErrorLocation[] {

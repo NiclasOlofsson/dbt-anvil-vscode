@@ -1,4 +1,5 @@
 import type { DocumentModel } from './parse-service';
+import type { DialectSymbols } from '../ftl/sql-parser';
 
 /**
  * Options passed to a DocumentParser.parse() call.
@@ -23,4 +24,6 @@ export interface DocumentParser {
 	parse(sql: string, options?: ParseOptions): Promise<DocumentModel>;
 	/** Decompose compiled SQL into debug frames. Only implemented by FtlDocumentParser. */
 	decomposeQuery?(compiledSql: string): Promise<string>;
+	/** Return the dialect symbol lists (functions, keyword types, data types). Only implemented by FtlDocumentParser. */
+	getDialectSymbols?(): Promise<DialectSymbols | undefined>;
 }

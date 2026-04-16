@@ -4,7 +4,7 @@ import type { BridgeRunner } from '../dbt/bridge-runner';
 import type { DbtExecutionService } from '../dbt/execution-service';
 import type { ManifestLoader } from '../dbt/manifest-loader';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import type { ManifestWatcher } from '../indexing/manifest-watcher';
+import type { IManifestSuppressor } from '../indexing/manifest-watcher';
 import type { DatabaseProvider } from '../providers/database/database-provider';
 import type { ModelProfiler } from '../dbt/model-profiler';
 
@@ -33,7 +33,7 @@ export class ServiceContainer {
 	private _databaseProvider: DatabaseProvider | null = null;
 	private _manifestLoader: ManifestLoader | null = null;
 	private _manifestIndexer: ManifestIndexer | null = null;
-	private _manifestWatcher: ManifestWatcher | null = null;
+	private _manifestWatcher: IManifestSuppressor | null = null;
 	private _executionService: DbtExecutionService | null = null;
 	private _modelProfiler: ModelProfiler | null = null;
 
@@ -120,11 +120,11 @@ export class ServiceContainer {
 		return this._manifestIndexer;
 	}
 
-	setManifestWatcher(watcher: ManifestWatcher): void {
+	setManifestWatcher(watcher: IManifestSuppressor): void {
 		this._manifestWatcher = watcher;
 	}
 
-	getManifestWatcher(): ManifestWatcher | null {
+	getManifestWatcher(): IManifestSuppressor | null {
 		return this._manifestWatcher;
 	}
 

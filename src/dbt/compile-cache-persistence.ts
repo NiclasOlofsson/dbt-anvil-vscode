@@ -70,4 +70,16 @@ export class CompileCachePersistence {
 			this.logger.warn(`CompileCache: failed to save to disk: ${err}`);
 		}
 	}
+
+	/** Delete the persisted cache file from disk. */
+	clear(): void {
+		try {
+			if (fs.existsSync(this._filePath)) {
+				fs.unlinkSync(this._filePath);
+				this.logger.info('CompileCache: cleared persisted cache from disk');
+			}
+		} catch (err) {
+			this.logger.warn(`CompileCache: failed to clear persisted cache: ${err}`);
+		}
+	}
 }

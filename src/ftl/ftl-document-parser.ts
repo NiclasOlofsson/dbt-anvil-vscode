@@ -1,7 +1,7 @@
 import type { AstPayload, JinjaTagSpan, ParseWarning } from './parse-result';
 import type { ColumnDefToken, ColumnInfo, ColumnRefToken, CteInfo, DocumentModel, FinalSelectColumnInfo, FinalSelectInfo, RefInfo, SourceInfo, SqlglotWarning, TableRefToken, TokenInfo } from '../services/parse-service';
 import type { DocumentParser, ParseOptions } from '../services/document-parser';
-import type { SqlParser } from './sql-parser';
+import type { DialectSymbols, SqlParser } from './sql-parser';
 import { PyodideWorkerPool, type PoolOptions } from './pyodide-worker-pool';
 
 /**
@@ -427,6 +427,71 @@ export function extractFinalSelect(ast: AstPayload[], sql: string): FinalSelectI
  * matching table_ref by alias within the same CTE scope.  Mirrors the
  * post-processing pass in bridge.py.
  */
+/**
+ * Detect PIVOT/UNPIVOT nodes in the AST and return the virtual (output) column
+ * names they synthesise per source table.
+ *
+ * Standard UNPIVOT syntax: `FROM t UNPIVOT (val FOR name IN (col1, col2, ...))`
+ * creates two virtual columns — `val` (holds the pivoted value) and `name`
+ * (holds the category label). Neither exists in `t`'s schema, but both are
+ * valid references in the enclosing SELECT. This mapping lets column validation
+ * skip false "column not found" errors for those virtual names.
+ *
+ * Returns a plain object keyed by the lowercased source-table name.
+ */
+export function extractPivotVirtualColumns(ast: AstPayload[]): Record<string, string[]> {
+	const result: Record<string, string[]> = {};
+
+	for (const { index: pivotIdx } of findAll(ast, 'Pivot')) {
+		// Only handle UNPIVOT (unpivot arg = true leaf child)
+		const isUnpivot = ast.some(n => n.i === pivotIdx && n.k === 'unpivot' && n.v === true);
+		if (!isUnpivot) continue;
+
+		// The Pivot is attached to a Table via the `pivots` arg key
+		const pivotNode = ast[pivotIdx];
+		const tableIdx = pivotNode.i;
+		if (tableIdx === undefined) continue;
+		if (ast[tableIdx]?.c !== 'Table') continue;
+
+		// Source table name
+		const tableIdNode = childOf(ast, tableIdx, 'this');
+		if (!tableIdNode) continue;
+		const tableName = identifierName(ast, tableIdNode.index);
+		if (!tableName) continue;
+
+		const cols: string[] = result[tableName.toLowerCase()] ?? [];
+
+		// Value column(s) live in Pivot.expressions
+		for (const { index: exprIdx, node: exprNode } of expressionsOf(ast, pivotIdx, 'expressions')) {
+			const name = _pivotColName(ast, exprIdx, exprNode.c);
+			if (name) cols.push(name);
+		}
+
+		// Name/category column lives in Pivot.fields → In.this
+		for (const { index: fieldIdx } of expressionsOf(ast, pivotIdx, 'fields')) {
+			const inThisNode = childOf(ast, fieldIdx, 'this');
+			if (!inThisNode) continue;
+			const name = _pivotColName(ast, inThisNode.index, inThisNode.node.c);
+			if (name) cols.push(name);
+		}
+
+		if (cols.length > 0) result[tableName.toLowerCase()] = cols;
+	}
+
+	return result;
+}
+
+/** Extract the column name from a Column or Identifier AST node. */
+function _pivotColName(ast: AstPayload[], idx: number, className?: string): string | undefined {
+	if (className === 'Column') {
+		const colId = childOf(ast, idx, 'this');
+		if (colId?.node.c === 'Identifier') return identifierName(ast, colId.index);
+		return undefined;
+	}
+	if (className === 'Identifier') return identifierName(ast, idx);
+	return undefined;
+}
+
 export function resolveTableRefs(tokens: TokenInfo[], ctes: CteInfo[]): void {
 	const aliasedRefs = tokens.filter(
 		(t): t is TableRefToken => t.type === 'table_ref' && t.alias !== undefined,
@@ -754,6 +819,8 @@ export interface AdapterContext {
 
 export class FtlDocumentParser implements DocumentParser {
 	private readonly _pool: PyodideWorkerPool | undefined;
+	/** Cache of dialect symbol lookups, keyed by dialect string. */
+	private readonly _symbolsCache = new Map<string, Promise<DialectSymbols>>();
 
 	constructor(
 		private readonly _sqlParser: SqlParser,
@@ -797,11 +864,24 @@ export class FtlDocumentParser implements DocumentParser {
 		return this._pool!.decomposeQuery(compiledSql, dialect);
 	}
 
+	async getDialectSymbols(): Promise<DialectSymbols | undefined> {
+		const adapterType = this._context.adapterType;
+		if (!adapterType || !this._sqlParser.getDialectSymbols) return undefined;
+		const dialect = mapAdapterToDialect(adapterType) ?? adapterType;
+		let pending = this._symbolsCache.get(dialect);
+		if (!pending) {
+			pending = this._sqlParser.getDialectSymbols(dialect);
+			this._symbolsCache.set(dialect, pending);
+		}
+		return pending;
+	}
+
 	async parse(sql: string, options?: ParseOptions): Promise<DocumentModel> {
 		const adapterType = this._context.adapterType ?? '';
 		const dialect = mapAdapterToDialect(adapterType) ?? adapterType;
 		const result = await this._sqlParser.parse(sql, dialect, options?.schema);
 		const ctes = extractCtes(result.ast, sql, result.wildcardCtes);
+		const pivotVirtualColumns = extractPivotVirtualColumns(result.ast);
 		const tokens = extractTokens(result.ast, ctes);
 		resolveTableRefs(tokens, ctes);
 		const refs = extractRefs(result.jinjaTags ?? []);
@@ -838,6 +918,7 @@ export class FtlDocumentParser implements DocumentParser {
 			timing: { parseMs: result.timing.parseMs, totalMs: result.timing.totalMs },
 			sqlTokens: result.sqlTokens,
 			jinjaTags: result.jinjaTags,
+			pivotVirtualColumns: Object.keys(pivotVirtualColumns).length > 0 ? pivotVirtualColumns : undefined,
 		};
 	}
 }

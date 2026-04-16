@@ -55,7 +55,13 @@ interface DecomposeTask {
 	dialect: string;
 }
 
-type Task = ParseTask | LineageTask | LineageV2Task | DecomposeTask;
+interface SymbolsTask {
+	id: number;
+	type: 'symbols';
+	dialect: string;
+}
+
+type Task = ParseTask | LineageTask | LineageV2Task | DecomposeTask | SymbolsTask;
 
 const { pyodideDir, vendorDir, scriptsDir } = workerData as WorkerData;
 
@@ -84,6 +90,17 @@ async function main(): Promise<void> {
 			try {
 				const raw = parser.decomposeQuery(task.compiledSql, task.dialect);
 				parentPort!.postMessage({ id: task.id, decomposeResult: raw });
+			} catch (err) {
+				parentPort!.postMessage({ id: task.id, error: String(err) });
+			}
+		} else if ('type' in task && task.type === 'symbols') {
+			try {
+				const symbols = await parser.getDialectSymbols(task.dialect);
+				parentPort!.postMessage({ id: task.id, symbolsResult: JSON.stringify({
+					functions: [...symbols.functions],
+					keywordTokenTypes: [...symbols.keywordTokenTypes],
+					types: [...symbols.types],
+				}) });
 			} catch (err) {
 				parentPort!.postMessage({ id: task.id, error: String(err) });
 			}

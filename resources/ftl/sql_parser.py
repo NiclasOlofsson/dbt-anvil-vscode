@@ -1395,3 +1395,51 @@ def _decompose_query(compiled_sql: str, dialect: str) -> str:
                 "traceback": _traceback.format_exc(),
             }
         )
+
+
+def _get_dialect_symbols(dialect: str) -> str:
+    """Return the authoritative symbol lists for a given sqlglot dialect.
+
+    Returns JSON:
+    {
+      "functions": [...],          # lowercase SQL function names
+      "keywordTokenTypes": [...],  # lowercase sqlglot TokenType names for keywords
+      "types": [...]               # lowercase DataType.Type enum names
+    }
+    """
+    from sqlglot.parser import Parser as _BaseParser  # noqa: PLC0415
+
+    sqlglot_dialect: str | None = None if dialect == "ansi" else dialect
+
+    if sqlglot_dialect:
+        d_class = _Dialect.get_or_raise(sqlglot_dialect)
+        parser_cls = d_class.parser_class
+        tokenizer_cls = d_class.tokenizer_class
+    else:
+        parser_cls = _BaseParser
+        tokenizer_cls = _Tokenizer
+
+    # Functions: all entries in FUNCTIONS dict (uppercase → lowercase).
+    functions = sorted(k.lower() for k in parser_cls.FUNCTIONS)
+
+    # Keyword token types: unique TokenType names from the KEYWORDS dict.
+    # Filter to purely alphabetic names — excludes compound types like
+    # NOT_IN, L_PAREN, IS_NOT, HEX, BIT, etc. that are not user-visible keywords.
+    kw_types: set[str] = set()
+    for tok_type in tokenizer_cls.KEYWORDS.values():
+        name = tok_type.name.lower()
+        if name.isalpha():
+            kw_types.add(name)
+
+    # Data types: all DataType.Type enum members (AutoName → value equals name).
+    types: list[str] = sorted(
+        t.value.lower() for t in _exp.DataType.Type if isinstance(t.value, str)
+    )
+
+    return _json.dumps(
+        {
+            "functions": functions,
+            "keywordTokenTypes": sorted(kw_types),
+            "types": types,
+        }
+    )

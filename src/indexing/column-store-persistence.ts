@@ -65,4 +65,16 @@ export class ColumnStorePersistence {
 			this.logger.warn(`ColumnStore: failed to save to disk: ${err}`);
 		}
 	}
+
+	/** Delete the persisted column store file from disk. */
+	clear(): void {
+		try {
+			if (fs.existsSync(this._filePath)) {
+				fs.unlinkSync(this._filePath);
+				this.logger.info('ColumnStore: cleared persisted cache from disk');
+			}
+		} catch (err) {
+			this.logger.warn(`ColumnStore: failed to clear persisted cache: ${err}`);
+		}
+	}
 }
