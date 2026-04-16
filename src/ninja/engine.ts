@@ -182,7 +182,6 @@ export function getAllRuleMetadata(): RuleViewModel[] {
 		category: r.category,
 		description: r.description,
 		defaultSeverity: r.defaultSeverity,
-		fixes: r.fixes ?? 'none',
 		type: r.type,
 	}));
 }

@@ -43,7 +43,6 @@ export const typeCapRule: TokenRule = {
 	category: NinjaCategory.Capitalisation,
 	defaultSeverity: 'warning',
 	description: 'SQL datatype keywords should follow the configured capitalisation policy',
-	fixes: 'auto',
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const policy = ctx.config.capitalisation.types;

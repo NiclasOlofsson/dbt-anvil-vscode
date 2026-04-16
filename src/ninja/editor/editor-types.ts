@@ -1,5 +1,5 @@
 import type { NinjaCategory } from '../categories';
-import type { NinjaFixCapability, NinjaSeverity } from '../rule';
+import type { NinjaSeverity } from '../rule';
 
 // ── Scope ───────────────────────────────────────────────────────────
 
@@ -12,7 +12,6 @@ export interface RuleViewModel {
 	category: NinjaCategory;
 	description: string;
 	defaultSeverity: NinjaSeverity;
-	fixes: NinjaFixCapability;
 	type: 'token' | 'layout';
 }
 

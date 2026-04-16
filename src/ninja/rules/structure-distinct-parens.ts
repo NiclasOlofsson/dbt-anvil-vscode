@@ -9,7 +9,6 @@ export const distinctParensRule: TokenRule = {
 	category: NinjaCategory.Structure,
 	defaultSeverity: 'warning',
 	description: 'DISTINCT is not a function — remove unnecessary parentheses.',
-	fixes: 'auto',
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document } = ctx;
