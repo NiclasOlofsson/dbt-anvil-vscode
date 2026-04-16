@@ -99,7 +99,7 @@ export function mapWarnings(warnings: ParseWarning[]): SqlglotWarning[] {
 	}));
 }
 
-export function extractCtes(ast: AstPayload[], sql: string, wildcardCtes?: Array<{ name: string; line: number }>): CteInfo[] {
+export function extractCtes(ast: AstPayload[], sql: string, wildcardCtes?: Array<{ name: string; line: number; col?: number }>): CteInfo[] {
 	const lineStarts = buildLineStarts(sql);
 	const result: CteInfo[] = [];
 	const seen = new Set<string>();
@@ -140,7 +140,9 @@ export function extractCtes(ast: AstPayload[], sql: string, wildcardCtes?: Array
 		const columns: ColumnInfo[] = [];
 		if (wildcardEntry) {
 			// qualify() expanded SELECT * — restore the wildcard using the pre-qualify line.
-			columns.push({ name: '*', line: wildcardEntry.line });
+			const starEntry: ColumnInfo = { name: '*', line: wildcardEntry.line };
+			if (wildcardEntry.col !== undefined) starEntry.col = wildcardEntry.col;
+			columns.push(starEntry);
 		} else if (bodySelect) {
 			for (const { index: exprIdx } of expressionsOf(ast, bodySelect.index)) {
 				const colName = _colExprName(ast, exprIdx);
@@ -155,6 +157,46 @@ export function extractCtes(ast: AstPayload[], sql: string, wildcardCtes?: Array
 		const entry: CteInfo = { name, line: startLine0, endLine, columns };
 		if (namePos) entry.col = namePos.col;
 		if (endCol !== undefined) entry.endCol = endCol;
+		result.push(entry);
+	}
+
+	return result;
+}
+
+export function extractSubqueries(ast: AstPayload[]): CteInfo[] {
+	const result: CteInfo[] = [];
+
+	for (const { index: sqIdx, node: sqNode } of findAll(ast, 'Subquery')) {
+		const tableAlias = childOf(ast, sqIdx, 'alias');
+		if (!tableAlias || tableAlias.node.c !== 'TableAlias') continue;
+		const aliasIdent = childOf(ast, tableAlias.index, 'this');
+		if (!aliasIdent || aliasIdent.node.c !== 'Identifier') continue;
+		const name = identifierName(ast, aliasIdent.index);
+		if (!name) continue;
+
+		const aliasPos = identifierPosition(aliasIdent.node, name);
+		const startLine0 = sqNode.m?.line !== undefined ? sqNode.m.line - 1 : (aliasPos?.line ?? 0);
+		const endLine = aliasPos?.line ?? startLine0;
+
+		// Inner Select — unwrap Union to leftmost branch (same as extractCtes)
+		let bodySelect = childOf(ast, sqIdx, 'this');
+		while (bodySelect && bodySelect.node.c !== 'Select') {
+			bodySelect = childOf(ast, bodySelect.index, 'this') ?? undefined;
+		}
+		const columns: ColumnInfo[] = [];
+		if (bodySelect) {
+			for (const { index: exprIdx } of expressionsOf(ast, bodySelect.index)) {
+				const colName = _colExprName(ast, exprIdx);
+				if (!colName) continue;
+				const colEntry: ColumnInfo = { name: colName, line: _colExprLine(ast, exprIdx) };
+				const colPos = _colExprCol(ast, exprIdx);
+				if (colPos !== undefined) colEntry.col = colPos;
+				columns.push(colEntry);
+			}
+		}
+
+		const entry: CteInfo = { name, line: startLine0, endLine, columns, isSubquery: true };
+		if (aliasPos) { entry.col = aliasPos.col; entry.endCol = aliasPos.endCol; }
 		result.push(entry);
 	}
 
@@ -320,7 +362,12 @@ export function extractFinalColumns(ast: AstPayload[]): ColumnInfo[] {
 	const result: ColumnInfo[] = [];
 	for (const { index: exprIdx } of expressionsOf(ast, sel.index)) {
 		const name = _colExprName(ast, exprIdx);
-		if (name) result.push({ name, line: _colExprLine(ast, exprIdx) });
+		if (name) {
+			const entry: ColumnInfo = { name, line: _colExprLine(ast, exprIdx) };
+			const colPos = _colExprCol(ast, exprIdx);
+			if (colPos !== undefined) entry.col = colPos;
+			result.push(entry);
+		}
 	}
 	return result;
 }
@@ -497,17 +544,30 @@ export function resolveTableRefs(tokens: TokenInfo[], ctes: CteInfo[]): void {
 		(t): t is TableRefToken => t.type === 'table_ref' && t.alias !== undefined,
 	);
 
+	// Helper: does a CTE scope contain a given line?
+	// For subqueries the upper bound is exclusive (the alias at endLine
+	// belongs to the *parent* scope), for regular CTEs it is inclusive.
+	const contains = (c: CteInfo, line: number) =>
+		c.line <= line && (c.isSubquery ? line < c.endLine : line <= c.endLine);
+
 	for (const tok of tokens) {
 		if (tok.type !== 'column_ref' || !tok.table) continue;
 
 		const qualifierLc = tok.table.toLowerCase();
 		const colLine = tok.line;
 
-		const containingCte = ctes.find(c => c.line <= colLine && colLine <= c.endLine);
+		// Find the innermost scope that contains the column.
+		let containingCte: CteInfo | undefined;
+		for (const c of ctes) {
+			if (!contains(c, colLine)) continue;
+			if (!containingCte || (c.endLine - c.line) < (containingCte.endLine - containingCte.line)) {
+				containingCte = c;
+			}
+		}
 
 		const scopeRefs: TableRefToken[] = containingCte
-			? aliasedRefs.filter(tr => containingCte.line <= tr.line && tr.line <= containingCte.endLine)
-			: aliasedRefs.filter(tr => ctes.every(c => tr.line < c.line || tr.line > c.endLine));
+			? aliasedRefs.filter(tr => contains(containingCte!, tr.line))
+			: aliasedRefs.filter(tr => ctes.every(c => !contains(c, tr.line)));
 
 		// Prefer latest alias definition at or before the column.
 		let best: TableRefToken | undefined;
@@ -516,9 +576,13 @@ export function resolveTableRefs(tokens: TokenInfo[], ctes: CteInfo[]): void {
 			if (tr.line > colLine) continue;
 			if (!best || tr.line > best.line) best = tr;
 		}
-		// Fallback: any alias match in scope (handles forward references).
+		// Fallback: latest alias match in scope (handles forward references
+		// and nested subqueries where the outermost alias is at the largest line).
 		if (!best) {
-			best = scopeRefs.find(tr => (tr.alias ?? '').toLowerCase() === qualifierLc);
+			for (const tr of scopeRefs) {
+				if ((tr.alias ?? '').toLowerCase() !== qualifierLc) continue;
+				if (!best || tr.line > best.line) best = tr;
+			}
 		}
 
 		if (best) tok.resolvedTableRef = best;
@@ -621,6 +685,31 @@ export function extractTokens(ast: AstPayload[], ctes: CteInfo[]): TokenInfo[] {
 			}
 		}
 
+		tokens.push(token);
+	}
+
+	// 5. Subquery nodes → table_ref (aliased derived tables)
+	for (const { index: sqIdx } of findAll(ast, 'Subquery')) {
+		const tableAlias = childOf(ast, sqIdx, 'alias');
+		if (!tableAlias || tableAlias.node.c !== 'TableAlias') continue;
+		const aliasId = childOf(ast, tableAlias.index, 'this');
+		if (aliasId?.node.c !== 'Identifier') continue;
+		const aName = identifierName(ast, aliasId.index);
+		if (!aName) continue;
+		const aPos = identifierPosition(aliasId.node, aName);
+		if (!aPos) continue;
+
+		const token: TableRefToken = {
+			type: 'table_ref',
+			name: aName,
+			alias: aName,
+			line: aPos.line,
+			col: aPos.col,
+			endCol: aPos.endCol,
+			aliasLine: aPos.line,
+			aliasCol: aPos.col,
+			aliasEndCol: aPos.endCol,
+		};
 		tokens.push(token);
 	}
 
@@ -881,9 +970,11 @@ export class FtlDocumentParser implements DocumentParser {
 		const dialect = mapAdapterToDialect(adapterType) ?? adapterType;
 		const result = await this._sqlParser.parse(sql, dialect, options?.schema);
 		const ctes = extractCtes(result.ast, sql, result.wildcardCtes);
+		const subqueries = extractSubqueries(result.ast);
+		const allCtes = [...ctes, ...subqueries];
 		const pivotVirtualColumns = extractPivotVirtualColumns(result.ast);
 		const tokens = extractTokens(result.ast, ctes);
-		resolveTableRefs(tokens, ctes);
+		resolveTableRefs(tokens, allCtes);
 		const refs = extractRefs(result.jinjaTags ?? []);
 		const sources = extractSources(result.jinjaTags ?? []);
 		// Cross-reference jinja tags ↔ table_ref tokens:
@@ -910,7 +1001,7 @@ export class FtlDocumentParser implements DocumentParser {
 		return {
 			refs,
 			sources,
-			ctes,
+			ctes: allCtes,
 			finalColumns: extractFinalColumns(result.ast),
 			finalSelect: extractFinalSelect(result.ast, sql),
 			tokens,

@@ -28,6 +28,8 @@ export interface CteInfo {
 	columns: ColumnInfo[];
 	/** SQL alias used in FROM/JOIN, e.g. `addr` in `FROM address_with_country addr` */
 	alias?: string;
+	/** True when this entry represents a subquery alias rather than a WITH-clause CTE */
+	isSubquery?: boolean;
 }
 
 export interface RefInfo {
@@ -443,6 +445,22 @@ export class ParseService {
 	}
 
 	/**
+	 * Find the CteInfo that a table_ref token refers to.
+	 * When multiple CTEs share the same name (e.g. nested subqueries that
+	 * reuse the same alias), the token's line position disambiguates:
+	 * pick the CteInfo whose body range [line, endLine] contains the token.
+	 */
+	static cteForRef(ref: TableRefToken, model: DocumentModel): CteInfo | undefined {
+		const nameLc = ref.name.toLowerCase();
+		const candidates = model.ctes.filter(c =>
+			c.name.toLowerCase() === nameLc || c.alias?.toLowerCase() === nameLc,
+		);
+		if (candidates.length <= 1) return candidates[0];
+		return candidates.find(c => ref.line >= c.line && ref.line <= c.endLine)
+			?? candidates[candidates.length - 1];
+	}
+
+	/**
 	 * Return the column list for the table that `ref` points to.
 	 * Checks CTE projections first, then manifest-enriched aliases.
 	 * Returns `undefined` when the table is not locally defined (e.g. an
@@ -450,7 +468,7 @@ export class ParseService {
 	 */
 	static columnsForRef(ref: TableRefToken, model: DocumentModel): string[] | undefined {
 		const nameLc = ref.name.toLowerCase();
-		const cte = model.ctes.find(c => c.name.toLowerCase() === nameLc);
+		const cte = ParseService.cteForRef(ref, model);
 		if (cte) {
 			const base = cte.columns.map(c => c.name);
 			const extras = model.pivotVirtualColumns?.[nameLc];

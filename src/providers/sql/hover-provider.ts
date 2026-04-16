@@ -224,21 +224,13 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		switch (resolved.kind) {
 			case 'table_ref': {
 				// Table name in FROM/JOIN — show CTE columns if it's a CTE
-				const name = resolved.token.name;
-				const cte = model.ctes.find(c =>
-					c.name.toLowerCase() === name.toLowerCase()
-					|| c.alias?.toLowerCase() === name.toLowerCase(),
-				);
+				const cte = ParseService.cteForRef(resolved.token, model);
 				if (cte) return this._buildCteHover(cte, resolved.token, model, docUri);
 				return null;
 			}
 			case 'table_alias': {
 				// Alias definition in FROM/JOIN (e.g. the `o` in `FROM orders o`)
-				const name = resolved.token.alias!;
-				const cte = model.ctes.find(c =>
-					c.name.toLowerCase() === resolved.token.name.toLowerCase()
-					|| c.alias?.toLowerCase() === name.toLowerCase(),
-				);
+				const cte = ParseService.cteForRef(resolved.token, model);
 				if (cte) return this._buildCteHover(cte, resolved.token, model, docUri);
 				return null;
 			}
@@ -250,7 +242,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 				const refTok = resolved.token.resolvedTableRef;
 				if (!refTok) return null;
 
-				const cte = model.ctes.find(c => c.name.toLowerCase() === refTok.name.toLowerCase());
+				const cte = ParseService.cteForRef(refTok, model);
 				if (cte) {
 					const inner = this._buildCteHover(cte, refTok, model, docUri);
 					return this._wrapWithAliasHeader(alias, cte.name, inner);

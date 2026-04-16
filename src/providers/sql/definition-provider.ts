@@ -4,7 +4,7 @@ import type { ManifestIndexer } from '../../indexing/manifest-indexer';
 import type { ManifestLoader } from '../../dbt/manifest-loader';
 import type { ILogger } from '../../types/logger';
 import { ParseService } from '../../services/parse-service';
-import type { CteInfo, DocumentModel, SourceInfo } from '../../services/parse-service';
+import type { CteInfo, DocumentModel, SourceInfo, TableRefToken } from '../../services/parse-service';
 import { isLinePositionInComment } from '../common/comment-utils';
 import { resolvePositionContext } from './position-context';
 
@@ -126,9 +126,8 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 
 		switch (resolved.kind) {
 			case 'table_ref': {
-				const name = resolved.token.name;
-				return this._jumpToCte(document, model, name)
-					?? this._resolveRef(name);
+				return this._jumpToCte(document, model, resolved.token)
+					?? this._resolveRef(resolved.token.name);
 			}
 			case 'table_alias':
 			case 'column_def': {
@@ -150,7 +149,7 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 					if (ref) return this._jumpToModelColumn(ref.model, colToken.name);
 					const src = model.sources.find(s => s.tableName.toLowerCase() === refTok.name.toLowerCase());
 					if (src) return this._jumpToSourceColumn(src, colToken.name);
-					const cte = model.ctes.find(c => c.name.toLowerCase() === refTok.name.toLowerCase());
+					const cte = ParseService.cteForRef(refTok, model);
 					if (cte) return this._jumpToCteColumn(document, model, cte, colToken.name);
 				}
 				this.logger.trace(`Definition: column '${resolved.token.name}' has no resolvedTableRef → undefined`);
@@ -168,14 +167,14 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 		const col = cte.columns.find(c => c.name.toLowerCase() === column.toLowerCase());
 		if (col) {
 			this.logger.trace(`Definition: '${column}' in CTE '${cte.name}' → line ${col.line + 1}`);
-			return new vscode.Location(document.uri, new vscode.Position(col.line, 0));
+			return new vscode.Location(document.uri, new vscode.Position(col.line, col.col ?? 0));
 		}
 
 		// Column not explicit — SELECT * means the column comes through unchanged; navigate to the *
 		const starCol = cte.columns.find(c => c.name === '*');
 		if (starCol) {
 			this.logger.trace(`Definition: '${column}' from SELECT * in CTE '${cte.name}' → * at line ${starCol.line + 1}`);
-			return new vscode.Location(document.uri, new vscode.Position(starCol.line, 0));
+			return new vscode.Location(document.uri, new vscode.Position(starCol.line, starCol.col ?? 0));
 		}
 
 		this.logger.trace(`Definition: '${column}' not resolved in CTE '${cte.name}' → CTE line ${cte.line + 1}`);
@@ -195,7 +194,7 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 				const col = targetModel.finalColumns.find(c => c.name.toLowerCase() === column.toLowerCase());
 				if (col) {
 					this.logger.trace(`Definition: '${column}' in ref '${modelName}' → line ${col.line + 1}`);
-					return new vscode.Location(uri, new vscode.Position(col.line, 0));
+					return new vscode.Location(uri, new vscode.Position(col.line, col.col ?? 0));
 				}
 			}
 		} catch {
@@ -216,18 +215,21 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 	private _jumpToCte(
 		document: vscode.TextDocument,
 		model: DocumentModel,
-		alias: string,
+		aliasOrToken: string | TableRefToken,
 		column?: string,
 	): vscode.Definition | undefined {
+		const alias = typeof aliasOrToken === 'string' ? aliasOrToken : aliasOrToken.name;
 		const lc = alias.toLowerCase();
 
-		const cte = model.ctes.find(c => c.name.toLowerCase() === lc || c.alias?.toLowerCase() === lc);
+		const cte = typeof aliasOrToken !== 'string'
+			? ParseService.cteForRef(aliasOrToken, model)
+			: model.ctes.find(c => c.name.toLowerCase() === lc || c.alias?.toLowerCase() === lc);
 		if (cte) {
 			if (column) {
 				const col = cte.columns.find(c => c.name.toLowerCase() === column.toLowerCase());
 				if (col) {
 					this.logger.trace(`Definition: column '${column}' in CTE '${alias}' → line ${col.line + 1}`);
-					return new vscode.Location(document.uri, new vscode.Position(col.line, 0));
+					return new vscode.Location(document.uri, new vscode.Position(col.line, col.col ?? 0));
 				}
 			}
 			this.logger.trace(`Definition: CTE '${alias}' → line ${cte.line + 1}`);

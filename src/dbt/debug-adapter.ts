@@ -534,7 +534,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			sql = args.sql;
 		} else if (category === 'model' || category === 'analysis' || category === 'snapshot') {
 			const sourceText = editor.document.getText();
-		const symbolResult = await this._compileWithSymbols(sourceText);
+			const symbolResult = await this._compileWithSymbols(sourceText);
 			if (!symbolResult) {
 				this._logger.warn('Debug adapter: compile failed');
 				this._output('Failed to compile. Check dbt output.\n');
@@ -2164,7 +2164,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	 *  Projection-only stages (select, order, limit, window, qualify) don't add rows —
 	 *  walk back to the nearest data-producing clause so the wrapped query stays valid. */
 	private _evalClauseSql(clauses: Array<{ stage: string; sql: string }>, idx: number): string {
-		const projectionStages = new Set(['select', 'order', 'limit', 'window', 'qualify']);
+		const projectionStages = new Set(['select', 'order', 'limit', 'window', 'qualify', 'sort', 'cluster', 'distribute', 'offset']);
 		let i = idx;
 		while (i > 0 && projectionStages.has(clauses[i].stage)) i--;
 		return clauses[i].sql;
