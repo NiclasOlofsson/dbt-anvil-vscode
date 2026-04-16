@@ -55,6 +55,7 @@ import {
 	findDescendants,
 	identifierName,
 	identifierPosition,
+	innermostScope,
 	leafValue,
 } from './ast-utils';
 
@@ -539,16 +540,10 @@ function _pivotColName(ast: AstPayload[], idx: number, className?: string): stri
 	return undefined;
 }
 
-export function resolveTableRefs(tokens: TokenInfo[], ctes: CteInfo[]): void {
+export function resolveTableRefs(tokens: TokenInfo[]): void {
 	const aliasedRefs = tokens.filter(
 		(t): t is TableRefToken => t.type === 'table_ref' && t.alias !== undefined,
 	);
-
-	// Helper: does a CTE scope contain a given line?
-	// For subqueries the upper bound is exclusive (the alias at endLine
-	// belongs to the *parent* scope), for regular CTEs it is inclusive.
-	const contains = (c: CteInfo, line: number) =>
-		c.line <= line && (c.isSubquery ? line < c.endLine : line <= c.endLine);
 
 	for (const tok of tokens) {
 		if (tok.type !== 'column_ref' || !tok.table) continue;
@@ -556,18 +551,8 @@ export function resolveTableRefs(tokens: TokenInfo[], ctes: CteInfo[]): void {
 		const qualifierLc = tok.table.toLowerCase();
 		const colLine = tok.line;
 
-		// Find the innermost scope that contains the column.
-		let containingCte: CteInfo | undefined;
-		for (const c of ctes) {
-			if (!contains(c, colLine)) continue;
-			if (!containingCte || (c.endLine - c.line) < (containingCte.endLine - containingCte.line)) {
-				containingCte = c;
-			}
-		}
-
-		const scopeRefs: TableRefToken[] = containingCte
-			? aliasedRefs.filter(tr => contains(containingCte!, tr.line))
-			: aliasedRefs.filter(tr => ctes.every(c => !contains(c, tr.line)));
+		// Match table_refs in the same AST scope (same Subquery/CTE ancestor).
+		const scopeRefs = aliasedRefs.filter(tr => tr.scopeId === tok.scopeId);
 
 		// Prefer latest alias definition at or before the column.
 		let best: TableRefToken | undefined;
@@ -624,6 +609,7 @@ export function extractTokens(ast: AstPayload[], ctes: CteInfo[]): TokenInfo[] {
 		if (!pos) continue;
 
 		const token: ColumnRefToken = { type: 'column_ref', name: colName, ...pos };
+		token.scopeId = innermostScope(ast, index);
 
 		const tblId = childOf(ast, index, 'table');
 		if (tblId?.node.c === 'Identifier') {
@@ -664,6 +650,7 @@ export function extractTokens(ast: AstPayload[], ctes: CteInfo[]): TokenInfo[] {
 		if (!pos) continue;
 
 		const token: TableRefToken = { type: 'table_ref', name: tblName, ...pos };
+		token.scopeId = innermostScope(ast, index);
 
 		const aliasNode = childOf(ast, index, 'alias');
 		if (aliasNode?.node.c === 'TableAlias') {
@@ -710,6 +697,8 @@ export function extractTokens(ast: AstPayload[], ctes: CteInfo[]): TokenInfo[] {
 			aliasCol: aPos.col,
 			aliasEndCol: aPos.endCol,
 		};
+		// The alias belongs to the parent scope (the scope that contains the subquery).
+		token.scopeId = innermostScope(ast, sqIdx);
 		tokens.push(token);
 	}
 
@@ -974,7 +963,7 @@ export class FtlDocumentParser implements DocumentParser {
 		const allCtes = [...ctes, ...subqueries];
 		const pivotVirtualColumns = extractPivotVirtualColumns(result.ast);
 		const tokens = extractTokens(result.ast, ctes);
-		resolveTableRefs(tokens, allCtes);
+		resolveTableRefs(tokens);
 		const refs = extractRefs(result.jinjaTags ?? []);
 		const sources = extractSources(result.jinjaTags ?? []);
 		// Cross-reference jinja tags ↔ table_ref tokens:

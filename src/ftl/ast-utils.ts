@@ -73,6 +73,24 @@ export function identifierName(ast: AstPayload[], identifierIdx: number): string
 }
 
 /**
+ * Walk up the parent-index chain (`AstPayload.i`) to find the nearest
+ * enclosing scope node.  Scope boundaries are:
+ *   - `Subquery`  — an inline derived table `(SELECT ...) AS alias`
+ *   - `CTE`       — a named WITH-clause body `name AS (SELECT ...)`
+ *
+ * Returns the AST index of that scope ancestor, or `undefined` when the
+ * node lives at the top level (outside all CTEs and subqueries).
+ */
+export function innermostScope(ast: AstPayload[], nodeIdx: number): number | undefined {
+    let cur = ast[nodeIdx]?.i;
+    while (cur !== undefined) {
+        if (ast[cur].c === 'Subquery' || ast[cur].c === 'CTE') return cur;
+        cur = ast[cur].i;
+    }
+    return undefined;
+}
+
+/**
  * Compute 0-based position for an Identifier node given its resolved name.
  * `m.col` is the 0-based exclusive end (sqlglot _col = chars consumed on current line).
  * start = endCol - name.length.
