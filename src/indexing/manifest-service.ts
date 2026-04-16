@@ -20,7 +20,7 @@ export class ManifestService implements vscode.Disposable, IManifestSuppressor {
 	private readonly watcher: ManifestWatcher;
 	private _projectChangedDisposable: vscode.Disposable | null = null;
 
-	readonly onIndexRebuild: vscode.Event<ManifestIndexer>;
+	readonly onIndexRebuild: vscode.Event<{ indexer: ManifestIndexer; pivots: vscode.Uri[] }>;
 	readonly onProjectConfigChanged: vscode.Event<void>;
 	readonly onParseRequested: vscode.Event<void>;
 	readonly onEnrichmentInvalidated: vscode.Event<Set<string>>;

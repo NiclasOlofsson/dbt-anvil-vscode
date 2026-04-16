@@ -24,7 +24,7 @@ interface DbtErrorLocation {
 	message: string;
 }
 
-export class DbtDiagnosticsProvider implements vscode.Disposable {
+export class EditorDiagnosticsProvider implements vscode.Disposable {
 	private readonly _parseCollection: vscode.DiagnosticCollection;
 	private readonly _refCollection: vscode.DiagnosticCollection;
 	private readonly _columnCollection: vscode.DiagnosticCollection;
@@ -60,7 +60,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		private readonly logger: ILogger,
 		private readonly parseService?: ParseService,
 		onAliasesReady?: vscode.Event<vscode.Uri>,
-		onIndexRebuild?: vscode.Event<ManifestIndexer>,
+		onIndexRebuild?: vscode.Event<{ indexer: ManifestIndexer; pivots: vscode.Uri[] }>,
 		onSqlglotWarnings?: vscode.Event<{ uri: vscode.Uri; warnings: SqlglotWarning[] }>,
 		startupReady = true,
 	) {
@@ -154,6 +154,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 					}
 				}
 				if (e.affectsConfiguration('dbt-studio.ninja')) {
+					this._cachedNinjaConfig = undefined;
 					// Re-run ninja on all open SQL documents when ninja settings change
 					for (const editor of vscode.window.visibleTextEditors) {
 						if (editor.document.languageId === 'jinja-sql') {
@@ -405,6 +406,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 	// ---- Ninja linting ----
 
 	private readonly _ninjaDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	private _cachedNinjaConfig: ReturnType<typeof loadConfig> | undefined;
 
 	private _runNinjaDirect(document: vscode.TextDocument): void {
 		if (!this._startupReady) return;
@@ -433,7 +435,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 
 	private async _runNinjaAsync(document: vscode.TextDocument): Promise<void> {
 		if (!this._startupReady) return;
-		const config = loadConfig();
+		const config = this._cachedNinjaConfig ??= loadConfig();
 		if (!config.enabled) {
 			this._ninjaCollection.delete(document.uri);
 			this._ninjaResults.delete(document.uri.toString());
@@ -444,6 +446,7 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 			this.parseService ? this.parseService.getDocumentModel(document) : Promise.resolve(null),
 			this.parseService ? this.parseService.getDialectSymbols() : Promise.resolve(undefined),
 		]);
+
 
 		// If we can't get a parse result, run layout rules only (no token rules)
 		const jinjaTokens = tokenize(document.getText());
@@ -491,61 +494,61 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		if (!this.parseService) return;
 
 		const key = document.uri.toString();
-		this._columnCtsSources.get(key)?.cancel();
-		const cts = new vscode.CancellationTokenSource();
-		this._columnCtsSources.set(key, cts);
-		const token = cts.token;
+		// this._columnCtsSources.get(key)?.cancel();
+		// const cts = new vscode.CancellationTokenSource();
+		// this._columnCtsSources.set(key, cts);
+		// const token = cts.token;
 
-		const model = await this.parseService.getDocumentModel(document);
-		const tokens = model?.tokens ?? [];
-		if (token.isCancellationRequested) return;
+		// const model = await this.parseService.getDocumentModel(document);
+		// const tokens = model?.tokens ?? [];
+		// if (token.isCancellationRequested) return;
 
-		if (!model) {
-			this._columnCollection.delete(document.uri);
-			this._updateStatusBar();
-			return;
-		}
+		// if (!model) {
+		// 	this._columnCollection.delete(document.uri);
+		// 	this._updateStatusBar();
+		// 	return;
+		// }
 
-		const diagnostics: vscode.Diagnostic[] = [];
-		let firstMiss: string | undefined;
-		const docLines = document.getText().split('\n');
+		// const diagnostics: vscode.Diagnostic[] = [];
+		// let firstMiss: string | undefined;
+		// const docLines = document.getText().split('\n');
 
-		for (const t of tokens) {
-			if (t.type !== 'column_ref' || !t.table) continue;
+		// for (const t of tokens) {
+		// 	if (t.type !== 'column_ref' || !t.table) continue;
 
-			// Skip column_ref tokens that originated inside a Jinja {{ }} expression.
-			// The blanker is length-preserving, so t.col maps to the same offset in
-			// the original source. If the original character at that position is '{'
-			// the identifier came from a macro call (e.g. {{ my_macro(...) }}) and
-			// is not a real column reference.
-			const origChar = (docLines[t.line] ?? '')[t.col];
-			if (origChar === '{') continue;
+		// 	// Skip column_ref tokens that originated inside a Jinja {{ }} expression.
+		// 	// The blanker is length-preserving, so t.col maps to the same offset in
+		// 	// the original source. If the original character at that position is '{'
+		// 	// the identifier came from a macro call (e.g. {{ my_macro(...) }}) and
+		// 	// is not a real column reference.
+		// 	const origChar = (docLines[t.line] ?? '')[t.col];
+		// 	if (origChar === '{') continue;
 
-			const cols = t.resolvedTableRef ? ParseService.columnsForRef(t.resolvedTableRef, model) : undefined;
-			// Skip if: alias unknown, no columns resolved, or list contains '*'
-			// (unresolved SELECT * — can't validate without knowing what * expands to)
-			if (!cols || cols.length === 0 || cols.includes('*')) continue;
+		// 	const cols = t.resolvedTableRef ? ParseService.columnsForRef(t.resolvedTableRef, model) : undefined;
+		// 	// Skip if: alias unknown, no columns resolved, or list contains '*'
+		// 	// (unresolved SELECT * — can't validate without knowing what * expands to)
+		// 	if (!cols || cols.length === 0 || cols.includes('*')) continue;
 
-			if (!cols.some(c => c.toLowerCase() === t.name.toLowerCase())) {
-				if (!firstMiss) firstMiss = `${t.table}.${t.name} (known: ${cols.slice(0, 3).join(', ')})`;
-				const range = new vscode.Range(
-					new vscode.Position(t.line, t.col),
-					new vscode.Position(t.line, t.endCol),
-				);
-				const diag = new vscode.Diagnostic(
-					range,
-					`Column '${t.name}' not found in '${t.table}' (known columns: ${cols.slice(0, 5).join(', ')}${cols.length > 5 ? ', ...' : ''})`,
-					vscode.DiagnosticSeverity.Error,
-				);
-				diag.source = 'dbt';
-				diag.code = 'unknown-column';
-				diagnostics.push(diag);
-			}
-		}
+		// 	if (!cols.some(c => c.toLowerCase() === t.name.toLowerCase())) {
+		// 		if (!firstMiss) firstMiss = `${t.table}.${t.name} (known: ${cols.slice(0, 3).join(', ')})`;
+		// 		const range = new vscode.Range(
+		// 			new vscode.Position(t.line, t.col),
+		// 			new vscode.Position(t.line, t.endCol),
+		// 		);
+		// 		const diag = new vscode.Diagnostic(
+		// 			range,
+		// 			`Column '${t.name}' not found in '${t.table}' (known columns: ${cols.slice(0, 5).join(', ')}${cols.length > 5 ? ', ...' : ''})`,
+		// 			vscode.DiagnosticSeverity.Error,
+		// 		);
+		// 		diag.source = 'dbt';
+		// 		diag.code = 'unknown-column';
+		// 		diagnostics.push(diag);
+		// 	}
+		// }
 
-		this._columnCollection.set(document.uri, diagnostics);
-		this.logger.trace(`[diagnostics] column validation: ${diagnostics.length} issues in ${path.basename(document.fileName)}`);
-		this._updateStatusBar();
+		// this._columnCollection.set(document.uri, diagnostics);
+		// this.logger.trace(`[diagnostics] column validation: ${diagnostics.length} issues in ${path.basename(document.fileName)}`);
+		// this._updateStatusBar();
 	}
 
 	private _handleParseOutput(output: string, success: boolean): void {
@@ -615,14 +618,14 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 	}
 
 	private _updateStatusBar(): void {
-		let parseCount = 0, refCount = 0, colCount = 0, sqlglotCount = 0, ninjaCount = 0;
-		this._parseCollection.forEach((_, diags) => { parseCount += diags.length; });
-		this._refCollection.forEach((_, diags) => { refCount += diags.length; });
-		this._columnCollection.forEach((_, diags) => { colCount += diags.length; });
-		this._sqlglotCollection.forEach((_, diags) => { sqlglotCount += diags.length; });
-		this._ninjaCollection.forEach((_, diags) => { ninjaCount += diags.length; });
-		const total = parseCount + refCount + colCount + sqlglotCount + ninjaCount;
-		this.logger.trace(`[diagnostics] counts — parse:${parseCount} refs:${refCount} columns:${colCount} sqlglot:${sqlglotCount} ninja:${ninjaCount} total:${total}`);
+		// let parseCount = 0, refCount = 0, colCount = 0, sqlglotCount = 0, ninjaCount = 0;
+		// this._parseCollection.forEach((_, diags) => { parseCount += diags.length; });
+		// this._refCollection.forEach((_, diags) => { refCount += diags.length; });
+		// this._columnCollection.forEach((_, diags) => { colCount += diags.length; });
+		// this._sqlglotCollection.forEach((_, diags) => { sqlglotCount += diags.length; });
+		// this._ninjaCollection.forEach((_, diags) => { ninjaCount += diags.length; });
+		// const total = parseCount + refCount + colCount + sqlglotCount + ninjaCount;
+		// this.logger.trace(`[diagnostics] counts — parse:${parseCount} refs:${refCount} columns:${colCount} sqlglot:${sqlglotCount} ninja:${ninjaCount} total:${total}`);
 	}
 
 	clearAll(): void {

@@ -64,9 +64,9 @@ interface WorkerState {
 }
 
 export interface PoolOptions {
-	/** Workers to spin up eagerly at construction. Default: 4. */
+	/** Workers to spin up eagerly at construction. Default: min(4, cpus-2). */
 	minWorkers?: number;
-	/** Maximum workers allowed. Default: os.cpus().length. */
+	/** Maximum workers allowed. Default: max(1, cpus-2) — reserves 2 cores for VS Code and other processes. */
 	maxWorkers?: number;
 	/** Optional logger — if provided, worker errors/timeouts are forwarded here instead of console.error. */
 	logger?: { warn(msg: string): void };
@@ -108,8 +108,9 @@ export class PyodideWorkerPool implements SqlParser {
 		this.#workerScript = fs.existsSync(inPlace)
 			? inPlace
 			: path.join(__dirname, '..', '..', 'dist', 'pyodide-worker.js');
-		this.#minWorkers = options?.minWorkers ?? 4;
-		this.#maxWorkers = options?.maxWorkers ?? os.cpus().length;
+		const defaultMax = Math.max(1, os.cpus().length - 1);
+		this.#maxWorkers = options?.maxWorkers ?? defaultMax;
+		this.#minWorkers = options?.minWorkers ?? Math.min(1, this.#maxWorkers);
 		this.#logger = options?.logger ?? { warn: (msg) => console.error(msg) };
 
 		// Spawn initial workers in parallel. allSettled so one crashed worker

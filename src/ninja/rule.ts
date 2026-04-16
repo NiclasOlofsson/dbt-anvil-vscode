@@ -6,8 +6,8 @@ import type { JinjaToken } from '../dbt/jinja-tokenizer';
 import type { NinjaConfig } from './config';
 import type { DialectSymbols } from '../ftl/sql-parser';
 
-/** Severity for a rule: 'error' | 'warning' | 'info' | 'off'. */
-export type NinjaSeverity = 'error' | 'warning' | 'info' | 'off';
+/** Severity for a rule: 'error' | 'warning' | 'info' | 'hint' | 'off'. */
+export type NinjaSeverity = 'error' | 'warning' | 'info' | 'hint' | 'off';
 
 /** Base fields shared by all rule types. */
 export interface NinjaRuleBase {

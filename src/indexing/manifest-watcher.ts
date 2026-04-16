@@ -31,7 +31,8 @@ export class ManifestWatcher {
 	private _suppressed = false;
 	private readonly _contentHashes = new Map<string, string>();
 	private readonly _nonWsHashes = new Map<string, string>();
-	private readonly _onIndexRebuild = new vscode.EventEmitter<ManifestIndexer>();
+	private readonly _onIndexRebuild = new vscode.EventEmitter<{ indexer: ManifestIndexer; pivots: vscode.Uri[] }>();
+	private readonly _pendingPivots = new Set<vscode.Uri>();
 	private readonly _onProjectConfigChanged = new vscode.EventEmitter<void>();
 	private readonly _onParseRequested = new vscode.EventEmitter<void>();
 	private readonly _onEnrichmentInvalidated = new vscode.EventEmitter<Set<string>>();
@@ -89,6 +90,8 @@ export class ManifestWatcher {
 			const uniqueId = this.indexer.findModelByFilePath(doc.fileName);
 			if (!uniqueId || uniqueId.startsWith('analysis.')) return; // not a project model — skip parse
 
+			this._pendingPivots.add(doc.uri);
+
 			const evicted = this.indexer.invalidateModel(uniqueId);
 			this._onCompileInvalidated.fire(uniqueId);
 			if (evicted.size > 0) {
@@ -140,7 +143,9 @@ export class ManifestWatcher {
 		this.logger.info(`Rebuilding manifest index (${reason})`);
 		try {
 			this.indexer.build(true);
-			this._onIndexRebuild.fire(this.indexer);
+			const pivots = [...this._pendingPivots];
+			this._pendingPivots.clear();
+			this._onIndexRebuild.fire({ indexer: this.indexer, pivots });
 			if (this._projectDir) this._populateHashesFromManifest(this._projectDir);
 		} catch (err) {
 			this.logger.warn(`Failed to rebuild manifest index: ${err}`);

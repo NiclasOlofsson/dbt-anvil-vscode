@@ -42,7 +42,7 @@ import { FtlDocumentParser } from './ftl/ftl-document-parser';
 import { DbtQueryService } from './services/dbt-query-service';
 import { StatusBarManager } from './views/status-bar';
 import { ExternalDbtMonitor } from './dbt/external-dbt-monitor';
-import { DbtDiagnosticsProvider } from './providers/diagnostics-provider';
+import { EditorDiagnosticsProvider } from './providers/editor-diagnostics-provider';
 import { VsTestController } from './views/vs-test-controller';
 import { CteTestRunner } from './dbt/cte-test-runner';
 import { ModelProfiler } from './dbt/model-profiler';
@@ -57,7 +57,7 @@ import { SqlDebugConfigProvider } from './dbt/debug-config-provider';
 import { DataPipelineProvider } from './dbt/debug-pipeline-provider';
 import { SymbolSqlProvider } from './providers/symbol-sql-provider';
 import { splitStatements } from './dbt/statement-splitter';
-import { NinjaWorkspaceScanner } from './ninja/workspace-scanner';
+import { WorkspaceDiagnosticsScanner } from './ninja/workspace-diagnostics-scanner';
 import * as path from 'node:path';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -414,7 +414,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	context.subscriptions.push(modelProfiler);
 
 	// -------- Diagnostics provider --------
-	const diagnosticsProvider = new DbtDiagnosticsProvider(executionService, manifestIndexer, statusBar, projectDir, logger, parseService, parseService.onAliasesReady, manifestWatcher.onIndexRebuild, parseService.onSqlglotWarnings, startupReady);
+	const diagnosticsProvider = new EditorDiagnosticsProvider(executionService, manifestIndexer, statusBar, projectDir, logger, parseService, parseService.onAliasesReady, manifestWatcher.onIndexRebuild, parseService.onSqlglotWarnings, startupReady);
 	context.subscriptions.push(diagnosticsProvider);
 
 	// -------- Set workspaceHasDBT context --------
@@ -1271,7 +1271,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	void ensureLaunchConfig(vscode.workspace.workspaceFolders?.[0]);
 
 	// -------- Ninja workspace scanner (last — needs everything else ready) --------
-	let workspaceScanner: NinjaWorkspaceScanner | undefined;
+	let workspaceScanner: WorkspaceDiagnosticsScanner | undefined;
 
 	const initWorkspaceScanner = (): void => {
 		workspaceScanner?.dispose();
@@ -1280,7 +1280,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			workspaceScanner = undefined;
 			return;
 		}
-		workspaceScanner = new NinjaWorkspaceScanner(manifestIndexer, pathResolver, logger, context);
+		workspaceScanner = new WorkspaceDiagnosticsScanner(parseService, manifestIndexer, pathResolver, logger);
 		context.subscriptions.push(workspaceScanner);
 		if (startupReady) {
 			void workspaceScanner.scanAll();
@@ -1290,7 +1290,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	initWorkspaceScanner();
 
 	context.subscriptions.push(
-		manifestWatcher.onIndexRebuild(() => { void workspaceScanner?.scanAll(); }),
+		manifestWatcher.onIndexRebuild(({ pivots }) => { void workspaceScanner?.scanAll(pivots); }),
 		vscode.workspace.onDidSaveTextDocument(doc => {
 			if (doc.languageId === 'jinja-sql') void workspaceScanner?.invalidate(doc.uri);
 		}),

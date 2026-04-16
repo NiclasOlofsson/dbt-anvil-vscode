@@ -21,6 +21,9 @@ export const unusedColumnsRule: TokenRule = {
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model } = ctx;
 		if (model.ctes.length === 0) return [];
+		// Pass 2 AST column numbers are in rendered-space and not remapped —
+		// building ranges from them causes negative-character errors.
+		if (model.isPass2) return [];
 
 		// Build a map of CTE name (lower) → set of referenced column names (lower)
 		const referencedColumns = buildReferencedColumnsMap(model.ctes, model.tokens);
@@ -37,7 +40,7 @@ export const unusedColumnsRule: TokenRule = {
 			for (const col of cte.columns) {
 				if (refSet?.has(col.name.toLowerCase())) continue;
 
-				const startCol = col.col ?? 0;
+				const startCol = Math.max(0, col.col ?? 0);
 				const range = new vscode.Range(col.line, startCol, col.line, startCol + col.name.length);
 				violations.push({
 					rule: 'ninja.structure.unused-columns',

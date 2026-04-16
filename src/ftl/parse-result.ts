@@ -106,4 +106,10 @@ export interface ParseResult {
 	jinjaTags?: JinjaTagSpan[];
 	/** CTEs whose body was `SELECT *` before qualify() expanded them. Line is 0-based. */
 	wildcardCtes?: Array<{ name: string; line: number; col?: number }>;
+	/**
+	 * True when this result was produced by the nunjucks-render pass (pass 2).
+	 * Line numbers are remapped to raw-source space but column numbers are not —
+	 * rules that build vscode.Range from AST column positions must skip this result.
+	 */
+	isPass2?: boolean;
 }

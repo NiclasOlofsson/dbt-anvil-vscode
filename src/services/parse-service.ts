@@ -243,6 +243,12 @@ export interface DocumentModel {
 	 * errors for virtual columns that don't exist in the source CTE's schema.
 	 */
 	pivotVirtualColumns?: Record<string, string[]>;
+	/**
+	 * True when this model was produced by the nunjucks-render pass (pass 2).
+	 * AST column numbers are in rendered-space and are not remapped — rules
+	 * that build vscode.Range from `col.col`/`col.endCol` must skip this model.
+	 */
+	isPass2?: boolean;
 }
 
 /**
@@ -813,6 +819,15 @@ export class ParseService {
 		this._onAliasesReady.fire(document.uri);
 
 		return model;
+	}
+
+	/**
+	 * Parse a raw SQL string for workspace-level diagnostics.
+	 * No caching, no enrichment, no variant expansion. Single bridge call.
+	 * Throws if the parse fails — callers should handle errors.
+	 */
+	async parseContent(_uri: vscode.Uri, content: string): Promise<DocumentModel> {
+		return this._parser.parse(content);
 	}
 
 	/**

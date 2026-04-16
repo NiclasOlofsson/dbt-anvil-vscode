@@ -110,6 +110,7 @@ function toVsSeverity(sev: NinjaSeverity): vscode.DiagnosticSeverity | undefined
 		case 'error': return 0; // DiagnosticSeverity.Error
 		case 'warning': return 1; // DiagnosticSeverity.Warning
 		case 'info': return 2; // DiagnosticSeverity.Information
+		case 'hint': return 3; // DiagnosticSeverity.Hint
 		case 'off': return undefined;
 	}
 }
@@ -149,10 +150,15 @@ export function runNinja(
 		if (vsSev === undefined) continue;
 
 		let ruleViolations: NinjaViolation[];
-		if (rule.type === 'token') {
-			ruleViolations = rule.check({ model, document, jinjaTokens, config, dialectSymbols });
-		} else {
-			ruleViolations = rule.check({ text, lines, jinjaTokens, document, config });
+		try {
+			if (rule.type === 'token') {
+				ruleViolations = rule.check({ model, document, jinjaTokens, config, dialectSymbols });
+			} else {
+				ruleViolations = rule.check({ text, lines, jinjaTokens, document, config });
+			}
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			throw new Error(`[rule:${rule.id}] ${msg}`);
 		}
 
 		// Filter suppressed violations
