@@ -1,7 +1,6 @@
 import * as crypto from 'node:crypto';
-import * as fs from 'node:fs';
 import * as fsPromises from 'node:fs/promises';
-import * as path from 'node:path';
+import * as os from 'node:os';
 import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
@@ -23,17 +22,12 @@ export class NinjaWorkspaceScanner implements vscode.Disposable {
 
 	private _scanning = false;
 
-	private readonly _hashFilePath: string;
-
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly pathResolver: DbtPathResolver,
 		private readonly logger: ILogger,
-		context: vscode.ExtensionContext,
+		_context: vscode.ExtensionContext,
 	) {
-		const storageDir = context.storageUri?.fsPath ?? context.globalStorageUri.fsPath;
-		this._hashFilePath = path.join(storageDir, 'ninja-scan-hashes.json');
-		this._loadHashes();
 
 		this._statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
 		this._statusBarItem.name = 'Ninja Workspace';
@@ -96,12 +90,10 @@ export class NinjaWorkspaceScanner implements vscode.Disposable {
 				}
 			}
 
-			this.logger.debug(`[workspace-scanner] found ${uris.length} SQL files in model/analysis dirs`);
+			const concurrency = Math.max(1, Math.min(4, os.cpus().length - 1));
+			this.logger.debug(`[workspace-scanner] found ${uris.length} SQL files in model/analysis dirs (concurrency: ${concurrency})`);
 
-			await Promise.all(uris.map(uri =>
-				this._scanFile(uri, abort.signal)
-					.catch(err => this.logger.debug(`[workspace-scanner] error scanning ${uri.fsPath}: ${String(err)}`)),
-			));
+			await this._scanWithConcurrency(uris, abort.signal, concurrency);
 
 			if (!abort.signal.aborted) {
 				this.logger.debug(`[workspace-scanner] scan complete in ${((Date.now() - start) / 1000).toFixed(1)}s`);
@@ -125,38 +117,26 @@ export class NinjaWorkspaceScanner implements vscode.Disposable {
 		}
 	}
 
-	/** Clears all cached hashes (memory + disk). */
+	/** Clears all cached hashes. */
 	clear(): void {
 		this._contentHashes.clear();
-		try { fs.unlinkSync(this._hashFilePath); } catch { /* absent is fine */ }
 	}
 
 	dispose(): void {
 		this._scanAbort?.abort();
-		this._saveHashes();
 		for (const d of this._disposables) d.dispose();
 	}
 
-	private _loadHashes(): void {
-		try {
-			if (!fs.existsSync(this._hashFilePath)) return;
-			const data = JSON.parse(fs.readFileSync(this._hashFilePath, 'utf8')) as Record<string, string>;
-			for (const [k, v] of Object.entries(data)) this._contentHashes.set(k, v);
-			this.logger.debug(`[workspace-scanner] restored ${this._contentHashes.size} hashes from disk`);
-		} catch (err) {
-			this.logger.warn(`[workspace-scanner] failed to restore hashes: ${err}`);
-		}
-	}
-
-	private _saveHashes(): void {
-		try {
-			if (this._contentHashes.size === 0) return;
-			fs.mkdirSync(path.dirname(this._hashFilePath), { recursive: true });
-			fs.writeFileSync(this._hashFilePath, JSON.stringify(Object.fromEntries(this._contentHashes)), 'utf8');
-			this.logger.debug(`[workspace-scanner] saved ${this._contentHashes.size} hashes to disk`);
-		} catch (err) {
-			this.logger.warn(`[workspace-scanner] failed to save hashes: ${err}`);
-		}
+	private async _scanWithConcurrency(uris: vscode.Uri[], signal: AbortSignal, concurrency: number): Promise<void> {
+		const queue = uris.slice();
+		const worker = async (): Promise<void> => {
+			while (queue.length > 0 && !signal.aborted) {
+				const uri = queue.shift()!;
+				await this._scanFile(uri, signal)
+					.catch(err => this.logger.debug(`[workspace-scanner] error scanning ${uri.fsPath}: ${String(err)}`));
+			}
+		};
+		await Promise.all(Array.from({ length: concurrency }, worker));
 	}
 
 	private async _scanFile(uri: vscode.Uri, signal: AbortSignal): Promise<void> {
@@ -182,4 +162,4 @@ export class NinjaWorkspaceScanner implements vscode.Disposable {
 		}
 		this._statusBarItem.backgroundColor = undefined;
 	}
-}
+}
