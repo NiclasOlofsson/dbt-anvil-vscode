@@ -11,7 +11,6 @@ export const implicitJoinRule: TokenRule = {
 	category: NinjaCategory.Ambiguity,
 	defaultSeverity: 'warning',
 	description: 'Use explicit JOIN qualifiers (INNER, LEFT, etc.) instead of bare JOIN.',
-	fixes: 'auto',
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document } = ctx;

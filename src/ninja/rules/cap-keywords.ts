@@ -51,7 +51,6 @@ export const keywordCapRule: TokenRule = {
 	category: NinjaCategory.Capitalisation,
 	defaultSeverity: 'warning',
 	description: 'SQL keywords should follow the configured capitalisation policy',
-	fixes: 'auto',
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const policy = ctx.config.capitalisation.keywords;

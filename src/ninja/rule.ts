@@ -9,9 +9,6 @@ import type { DialectSymbols } from '../ftl/sql-parser';
 /** Severity for a rule: 'error' | 'warning' | 'info' | 'hint' | 'off'. */
 export type NinjaSeverity = 'error' | 'warning' | 'info' | 'hint' | 'off';
 
-/** Describes the fix capabilities of a rule's violations. */
-export type NinjaFixCapability = 'auto' | 'codeActionOnly' | 'snippet' | 'none';
-
 /** Base fields shared by all rule types. */
 export interface NinjaRuleBase {
 	/** Unique rule ID, e.g. `ninja.cap.keywords`. */
@@ -21,8 +18,6 @@ export interface NinjaRuleBase {
 	defaultSeverity: NinjaSeverity;
 	/** Short human-readable description of what the rule checks. */
 	description: string;
-	/** What kind of automatic fix this rule can provide. Defaults to 'none' if omitted. */
-	fixes?: NinjaFixCapability;
 }
 
 /** Context passed to token-based rules. */

@@ -16,7 +16,6 @@ export const columnAsRule: TokenRule = {
 	category: NinjaCategory.Aliasing,
 	defaultSeverity: 'info',
 	description: 'Column aliases should use explicit AS keyword.',
-	fixes: 'auto',
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model } = ctx;

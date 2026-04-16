@@ -9,7 +9,6 @@ export const expressionNoAliasRule: TokenRule = {
 	category: NinjaCategory.Aliasing,
 	defaultSeverity: 'warning',
 	description: 'Expressions in the final SELECT should have an explicit alias.',
-	fixes: 'snippet',
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model } = ctx;

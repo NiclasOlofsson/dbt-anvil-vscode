@@ -1,6 +1,5 @@
 import type { EditorSnapshot, RuleState } from './editor-types';
 import type { NinjaCategory } from '../categories';
-import type { NinjaFixCapability } from '../rule';
 
 // ── Public API ──────────────────────────────────────────────────────
 
@@ -83,7 +82,6 @@ function ruleRow(rs: RuleState): string {
 	const modCls = rs.isModified ? ' modified' : '';
 	const sev = rs.scopeInfo.effectiveSeverity;
 	return `<div class="rule-row${modCls}" data-rule="${rs.rule.id}">
-	<div class="col-fix">${fixBadge(rs.rule.fixes)}</div>
 	<div class="col-id">
 		<span class="rule-id">${esc(rs.rule.id)}</span>
 	</div>
@@ -102,15 +100,6 @@ function ruleRow(rs: RuleState): string {
 		<button class="reset-btn${rs.isModified ? '' : ' hidden'}" data-rule="${rs.rule.id}" title="Reset to inherited value">↺</button>
 	</div>
 </div>`;
-}
-
-function fixBadge(fixes: NinjaFixCapability): string {
-	switch (fixes) {
-		case 'auto': return '<span class="fix-badge auto" title="Auto-fixable">fix</span>';
-		case 'codeActionOnly': return '<span class="fix-badge action" title="Code action available">action</span>';
-		case 'snippet': return '<span class="fix-badge snippet" title="Snippet fix">snippet</span>';
-		default: return '';
-	}
 }
 
 function sevOptions(current: string): string {
@@ -277,7 +266,7 @@ body {
 }
 .rule-row {
 	display: grid;
-	grid-template-columns: 60px 200px 1fr 90px 90px 28px;
+	grid-template-columns: 200px 1fr 90px 90px 28px;
 	align-items: center;
 	padding: 4px 12px;
 	border-left: 3px solid transparent;
@@ -289,10 +278,6 @@ body {
 }
 .rule-row.modified {
 	border-left-color: var(--vscode-focusBorder, #007fd4);
-}
-.col-fix {
-	display: flex;
-	align-items: center;
 }
 .col-id {
 	overflow: hidden;
@@ -329,26 +314,6 @@ body {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-}
-
-/* Fix badges */
-.fix-badge {
-	font-size: 10px;
-	padding: 1px 5px;
-	border-radius: 3px;
-	white-space: nowrap;
-}
-.fix-badge.auto {
-	background: var(--vscode-testing-iconPassed, #73c991);
-	color: #000;
-}
-.fix-badge.action {
-	background: var(--vscode-notificationsInfoIcon-foreground, #3794ff);
-	color: #fff;
-}
-.fix-badge.snippet {
-	background: var(--vscode-editorWarning-foreground, #cca700);
-	color: #000;
 }
 
 /* Severity dropdown */
