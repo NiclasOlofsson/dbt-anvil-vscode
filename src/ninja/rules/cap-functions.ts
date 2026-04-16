@@ -74,6 +74,7 @@ export const functionCapRule: TokenRule = {
 		const violations: NinjaViolation[] = [];
 		const consistentMap = new Map<string, string>();
 
+		const functions = ctx.dialectSymbols?.functions ?? SQL_FUNCTIONS;
 		const text = ctx.document.getText();
 		const lines = text.split('\n');
 
@@ -103,7 +104,7 @@ export const functionCapRule: TokenRule = {
 					// A function name is followed by '(' (possibly with whitespace)
 					let j = i;
 					while (j < line.length && (line[j] === ' ' || line[j] === '\t')) j++;
-					if (j < line.length && line[j] === '(' && SQL_FUNCTIONS.has(word.toLowerCase()) && !identifierPositions.has(`${lineIdx}:${start}`)) {
+					if (j < line.length && line[j] === '(' && functions.has(word.toLowerCase()) && !identifierPositions.has(`${lineIdx}:${start}`)) {
 						const fix = checkPolicy(word, policy, consistentMap);
 						if (fix !== undefined) {
 							const range = new vscode.Range(lineIdx, start, lineIdx, start + word.length);

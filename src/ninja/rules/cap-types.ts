@@ -58,6 +58,8 @@ export const typeCapRule: TokenRule = {
 			identifierPositions.add(`${token.line}:${token.col}`);
 		}
 
+		const types = ctx.dialectSymbols?.types ?? SQL_TYPES;
+
 		for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
 			const line = lines[lineIdx];
 			let i = 0;
@@ -75,7 +77,7 @@ export const typeCapRule: TokenRule = {
 						}
 					}
 					const word = line.slice(start, i);
-					if (SQL_TYPES.has(word.toLowerCase()) && !identifierPositions.has(`${lineIdx}:${start}`)) {
+					if (types.has(word.toLowerCase()) && !identifierPositions.has(`${lineIdx}:${start}`)) {
 						const fix = checkPolicy(word, policy, consistentMap);
 						if (fix !== undefined) {
 							const range = new vscode.Range(lineIdx, start, lineIdx, start + word.length);

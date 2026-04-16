@@ -63,7 +63,7 @@ export class StatusBarManager implements vscode.Disposable {
 		if (this._errorMessage) {
 			this._item.text = '$(error) dbt: Setup Required';
 			this._item.tooltip = this._errorMessage;
-			this._item.command = 'dbt-studio.showOutputChannel';
+			this._item.command = 'dbt-studio.statusBarMenu';
 			return;
 		}
 
@@ -75,8 +75,8 @@ export class StatusBarManager implements vscode.Disposable {
 		}
 
 		this._item.text = '$(check) dbt: Ready';
-		this._item.tooltip = 'dbt Studio — ready';
-		this._item.command = undefined;
+		this._item.tooltip = 'dbt Studio — click for options';
+		this._item.command = 'dbt-studio.statusBarMenu';
 	}
 
 	private _buildTooltip(): string {

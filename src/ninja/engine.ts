@@ -4,6 +4,7 @@ import type { NinjaViolation } from './violation';
 import type { NinjaConfig } from './config';
 import type { DocumentModel } from '../services/parse-service';
 import type { JinjaToken } from '../dbt/jinja-tokenizer';
+import type { DialectSymbols } from '../ftl/sql-parser';
 import { parseInlineSuppressions } from './config-loader';
 
 // -- Token rules --
@@ -129,6 +130,7 @@ export function runNinja(
 	model: DocumentModel,
 	jinjaTokens: JinjaToken[],
 	config: NinjaConfig,
+	dialectSymbols?: DialectSymbols,
 ): NinjaResult {
 	if (!config.enabled) return { violations: [], severityMap: new Map() };
 
@@ -148,7 +150,7 @@ export function runNinja(
 
 		let ruleViolations: NinjaViolation[];
 		if (rule.type === 'token') {
-			ruleViolations = rule.check({ model, document, jinjaTokens, config });
+			ruleViolations = rule.check({ model, document, jinjaTokens, config, dialectSymbols });
 		} else {
 			ruleViolations = rule.check({ text, lines, jinjaTokens, document, config });
 		}

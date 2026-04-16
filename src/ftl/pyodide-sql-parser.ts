@@ -4,7 +4,7 @@ import { renderForParse, renToRawLine } from './nunjucks-renderer';
 import type { LineMap } from './nunjucks-renderer';
 import type { AstPayload, ParseResult } from './parse-result';
 import { extractJinjaSpans } from './jinja-spans';
-import type { SqlParser } from './sql-parser';
+import type { DialectSymbols, SqlParser } from './sql-parser';
 
 /**
  * Wraps an error that escaped the Python/Pyodide boundary without being caught.
@@ -47,6 +47,7 @@ export class PyodideSqlParser implements SqlParser {
 	readonly #lineageFn: (compiledSql: string, columnName: string, schemaJson: string, dialect: string) => string;
 	readonly #lineageFnV2: (sql: string, columnName: string, schemaJson: string, dialect: string) => string;
 	readonly #decomposeFn: (compiledSql: string, dialect: string) => string;
+	readonly #symbolsFn: (dialect: string) => string;
 
 	private constructor(pyodide: PyodideInterface) {
 		this.#pyodide = pyodide;
@@ -56,6 +57,7 @@ export class PyodideSqlParser implements SqlParser {
 		this.#lineageFn = pyodide.globals.get('_trace_lineage') as (compiledSql: string, columnName: string, schemaJson: string, dialect: string) => string;
 		this.#lineageFnV2 = pyodide.globals.get('_trace_lineage_v2') as (sql: string, columnName: string, schemaJson: string, dialect: string) => string;
 		this.#decomposeFn = pyodide.globals.get('_decompose_query') as (compiledSql: string, dialect: string) => string;
+		this.#symbolsFn = pyodide.globals.get('_get_dialect_symbols') as (dialect: string) => string;
 	}
 
 	static create(pyodide: PyodideInterface): PyodideSqlParser {
@@ -79,6 +81,16 @@ export class PyodideSqlParser implements SqlParser {
 
 	decomposeQuery(compiledSql: string, dialect: string): string {
 		return callPython('_decompose_query', () => this.#decomposeFn(compiledSql, dialect));
+	}
+
+	getDialectSymbols(dialect: string): Promise<DialectSymbols> {
+		const raw = callPython('_get_dialect_symbols', () => this.#symbolsFn(dialect));
+		const payload = JSON.parse(raw) as { functions: string[]; keywordTokenTypes: string[]; types: string[] };
+		return Promise.resolve({
+			functions: new Set(payload.functions),
+			keywordTokenTypes: new Set(payload.keywordTokenTypes),
+			types: new Set(payload.types),
+		});
 	}
 
 	async parse(rawSql: string, dialect: string, schema?: Record<string, Record<string, string>>): Promise<ParseResult> {

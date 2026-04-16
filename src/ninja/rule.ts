@@ -4,6 +4,7 @@ import type { NinjaViolation } from './violation';
 import type { DocumentModel } from '../services/parse-service';
 import type { JinjaToken } from '../dbt/jinja-tokenizer';
 import type { NinjaConfig } from './config';
+import type { DialectSymbols } from '../ftl/sql-parser';
 
 /** Severity for a rule: 'error' | 'warning' | 'info' | 'off'. */
 export type NinjaSeverity = 'error' | 'warning' | 'info' | 'off';
@@ -26,6 +27,8 @@ export interface TokenRuleContext {
 	/** Jinja token positions for the document — omit or pass [] when not available. */
 	jinjaTokens?: JinjaToken[];
 	config: NinjaConfig;
+	/** Authoritative symbol lists from sqlglot for the active dialect. Absent when not yet loaded. */
+	dialectSymbols?: DialectSymbols;
 }
 
 /** Context passed to layout-based rules. */

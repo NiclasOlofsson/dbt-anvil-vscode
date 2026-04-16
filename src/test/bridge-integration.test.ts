@@ -506,3 +506,78 @@ describe('ftl parse_document – conditional branches', () => {
 		expect(tableRefs[0].endCol).toBe(69);
 	}, 30_000);
 });
+
+describe('ftl parse_document – PIVOT/UNPIVOT virtual columns', () => {
+	let parser: FtlDocumentParser;
+
+	beforeAll(async () => {
+		parser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR, ANSI_CONTEXT);
+		await parser.ready();
+	}, 60_000);
+
+	afterAll(() => {
+		parser.dispose();
+	});
+
+	function parseSql(sql: string) {
+		return parser.parse(sql);
+	}
+
+	it('UNPIVOT value and name columns are captured in pivotVirtualColumns', async () => {
+		const model = await parseSql(`with source_data as (
+    select country, revenue_2022, revenue_2023 from raw_sales
+)
+select country, revenue, year
+from source_data
+unpivot (revenue for year in (revenue_2022, revenue_2023))`);
+
+		expect(model.pivotVirtualColumns).toBeDefined();
+		const cols = model.pivotVirtualColumns!['source_data'];
+		expect(cols).toBeDefined();
+		expect(cols).toContain('revenue');
+		expect(cols).toContain('year');
+	}, 30_000);
+
+	it('columnsForRef includes UNPIVOT virtual columns alongside CTE columns', async () => {
+		const model = await parseSql(`with source_data as (
+    select country, revenue_2022, revenue_2023 from raw_sales
+)
+select country, revenue, year
+from source_data
+unpivot (revenue for year in (revenue_2022, revenue_2023))`);
+
+		// Find the table_ref for source_data used in the final select
+		const tblRef = model.tokens.find(t => t.type === 'table_ref' && t.name === 'source_data' && !('cteDefinition' in t));
+		expect(tblRef).toBeDefined();
+		const { ParseService } = await import('../services/parse-service.js');
+		const cols = ParseService.columnsForRef(tblRef as any, model);
+		expect(cols).toBeDefined();
+		// Original CTE columns
+		expect(cols).toContain('country');
+		// UNPIVOT virtual columns
+		expect(cols).toContain('revenue');
+		expect(cols).toContain('year');
+	}, 30_000);
+
+	it('plain PIVOT does not populate pivotVirtualColumns', async () => {
+		// A regular PIVOT should not pollute the virtual columns map
+		const model = await parseSql(`with data as (
+    select year, country, revenue from raw_sales
+),
+pivoted as (
+    select *
+    from data
+    pivot (sum(revenue) for year in (2022, 2023))
+)
+select * from pivoted`);
+
+		// pivotVirtualColumns may be populated for PIVOT aggregates; the point is
+		// that no entry should be keyed 'data' with value/name columns from UNPIVOT
+		const dataCols = model.pivotVirtualColumns?.['data'];
+		// PIVOT generates column names from the IN list values (2022, 2023), not
+		// value/name virtual columns — those should not appear as CTE column names.
+		// Simply assert no false positives: if there ARE entries they must not be
+		// the UNPIVOT-style pair ('revenue', 'year').
+		expect(dataCols?.includes('year')).toBeFalsy();
+	}, 30_000);
+});

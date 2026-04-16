@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { Worker } from 'node:worker_threads';
 import type { ParseResult } from './parse-result';
-import type { SqlParser } from './sql-parser';
+import type { DialectSymbols, SqlParser } from './sql-parser';
 
 interface PendingParseTask {
 	id: number;
@@ -46,7 +46,15 @@ interface PendingDecomposeTask {
 	reject: (err: Error) => void;
 }
 
-type PendingTask = PendingParseTask | PendingLineageTask | PendingLineageV2Task | PendingDecomposeTask;
+interface PendingSymbolsTask {
+	id: number;
+	kind: 'symbols';
+	dialect: string;
+	resolve: (result: DialectSymbols) => void;
+	reject: (err: Error) => void;
+}
+
+type PendingTask = PendingParseTask | PendingLineageTask | PendingLineageV2Task | PendingDecomposeTask | PendingSymbolsTask;
 
 interface WorkerState {
 	worker: Worker;
@@ -60,6 +68,8 @@ export interface PoolOptions {
 	minWorkers?: number;
 	/** Maximum workers allowed. Default: os.cpus().length. */
 	maxWorkers?: number;
+	/** Optional logger — if provided, worker errors/timeouts are forwarded here instead of console.error. */
+	logger?: { warn(msg: string): void };
 }
 
 /**
@@ -79,6 +89,7 @@ export class PyodideWorkerPool implements SqlParser {
 	readonly #workerScript: string;
 	readonly #minWorkers: number;
 	readonly #maxWorkers: number;
+	readonly #logger: { warn(msg: string): void };
 
 	#workers: WorkerState[] = [];
 	#queue: PendingTask[] = [];
@@ -99,11 +110,12 @@ export class PyodideWorkerPool implements SqlParser {
 			: path.join(__dirname, '..', '..', 'dist', 'pyodide-worker.js');
 		this.#minWorkers = options?.minWorkers ?? 4;
 		this.#maxWorkers = options?.maxWorkers ?? os.cpus().length;
+		this.#logger = options?.logger ?? { warn: (msg) => console.error(msg) };
 
 		// Spawn initial workers in parallel. allSettled so one crashed worker
 		// doesn't prevent ready() from resolving — surviving workers still serve requests.
 		const initialWorkers = Array.from({ length: this.#minWorkers }, () => this.#spawnWorker());
-		// Race each worker's ready promise against a 60s timeout so a worker that is
+		// Race each worker's ready promise against a 30s timeout so a worker that is
 		// stuck loading Pyodide (no error, no exit, just frozen) can't hang activation.
 		const workerReadyTimeout = 30_000;
 		const timedReady = initialWorkers.map(w =>
@@ -114,7 +126,18 @@ export class PyodideWorkerPool implements SqlParser {
 				),
 			]),
 		);
-		this.#initialReady = Promise.allSettled(timedReady).then(() => undefined);
+		this.#initialReady = Promise.allSettled(timedReady).then((results) => {
+			const failed = results.filter(r => r.status === 'rejected');
+			if (failed.length > 0) {
+				for (const r of failed) {
+					this.#logger.warn(`[PyodideWorkerPool] worker failed to init: ${(r as PromiseRejectedResult).reason}`);
+				}
+			}
+			if (this.#workers.length === 0) {
+				this.#logger.warn('[PyodideWorkerPool] all workers failed — draining pending queue with errors');
+				this.#rejectAll(new Error('All Pyodide workers failed to initialize'));
+			}
+		});
 	}
 
 	/** Resolves when all initial workers are loaded and ready to accept tasks. */
@@ -199,6 +222,23 @@ export class PyodideWorkerPool implements SqlParser {
 		});
 	}
 
+	getDialectSymbols(dialect: string): Promise<DialectSymbols> {
+		if (this.#disposed) {
+			throw new Error('PyodideWorkerPool has been disposed');
+		}
+		return new Promise<DialectSymbols>((resolve, reject) => {
+			const task: PendingSymbolsTask = {
+				id: this.#nextId++,
+				kind: 'symbols',
+				dialect,
+				resolve,
+				reject,
+			};
+			this.#queue.push(task);
+			this.#drain();
+		});
+	}
+
 	dispose(): void {
 		this.#disposed = true;
 		for (const state of this.#workers) {
@@ -263,6 +303,12 @@ export class PyodideWorkerPool implements SqlParser {
 				compiledSql: task.compiledSql,
 				dialect: task.dialect,
 			});
+		} else if (task.kind === 'symbols') {
+			state.worker.postMessage({
+				id: task.id,
+				type: 'symbols',
+				dialect: task.dialect,
+			});
 		} else {
 			state.worker.postMessage({
 				id: task.id,
@@ -272,7 +318,7 @@ export class PyodideWorkerPool implements SqlParser {
 			});
 		}
 
-		const onMessage = (msg: { id: number; result?: ParseResult; lineageResult?: string; decomposeResult?: string; error?: string }) => {
+		const onMessage = (msg: { id: number; result?: ParseResult; lineageResult?: string; decomposeResult?: string; symbolsResult?: string; error?: string }) => {
 			try {
 				if (msg.id !== task.id) return;
 				state.worker.off('message', onMessage);
@@ -291,6 +337,17 @@ export class PyodideWorkerPool implements SqlParser {
 						task.reject(new Error(`[PyodideWorkerPool] decompose worker returned no decomposeResult (msg keys: ${Object.keys(msg).join(',')})`));
 					} else {
 						(task as PendingDecomposeTask).resolve(msg.decomposeResult);
+					}
+				} else if (task.kind === 'symbols') {
+					if (msg.symbolsResult === undefined) {
+						task.reject(new Error(`[PyodideWorkerPool] symbols worker returned no symbolsResult (msg keys: ${Object.keys(msg).join(',')})`));
+					} else {
+						const payload = JSON.parse(msg.symbolsResult) as { functions: string[]; keywordTokenTypes: string[]; types: string[] };
+						(task as PendingSymbolsTask).resolve({
+							functions: new Set(payload.functions),
+							keywordTokenTypes: new Set(payload.keywordTokenTypes),
+							types: new Set(payload.types),
+						});
 					}
 				} else {
 					if (msg.result === undefined) {
@@ -341,7 +398,11 @@ export class PyodideWorkerPool implements SqlParser {
 			this.#workers = this.#workers.filter(w => w !== state);
 			rejectReady(err);
 			void worker.terminate();
-			console.error(`[PyodideWorkerPool] worker error: ${(err as Error).message}`);
+			this.#logger.warn(`[PyodideWorkerPool] worker error: ${err.message}`);
+			if (this.#workers.length === 0) {
+				this.#logger.warn('[PyodideWorkerPool] all workers gone — draining pending queue with errors');
+				this.#rejectAll(new Error('All Pyodide workers failed'));
+			}
 		});
 
 		worker.once('exit', (code: number) => {
@@ -349,9 +410,20 @@ export class PyodideWorkerPool implements SqlParser {
 			// If ready was already resolved this is a no-op (rejectReady is idempotent via Promise).
 			this.#workers = this.#workers.filter(w => w !== state);
 			rejectReady(new Error(`worker exited unexpectedly with code ${code}`));
+			if (this.#workers.length === 0 && this.#queue.length > 0) {
+				this.#logger.warn('[PyodideWorkerPool] last worker exited — draining pending queue with errors');
+				this.#rejectAll(new Error('All Pyodide workers exited'));
+			}
 		});
 
 		this.#workers.push(state);
 		return state;
+	}
+
+	#rejectAll(err: Error): void {
+		const pending = this.#queue.splice(0);
+		for (const task of pending) {
+			task.reject(err);
+		}
 	}
 }

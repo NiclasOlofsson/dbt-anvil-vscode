@@ -61,8 +61,10 @@ export const keywordCapRule: TokenRule = {
 
 		const text = ctx.document.getText();
 
+		const keywordTypes = ctx.dialectSymbols?.keywordTokenTypes ?? KEYWORD_TOKEN_TYPES;
+
 		for (const token of ctx.model.sqlTokens) {
-			if (!KEYWORD_TOKEN_TYPES.has(token.type.toLowerCase())) continue;
+			if (!keywordTypes.has(token.type.toLowerCase())) continue;
 
 			const word = tokenText(text, token);
 			const fix = checkPolicy(word, policy, consistentMap);

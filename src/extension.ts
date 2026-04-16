@@ -1,8 +1,7 @@
+import * as fs from 'node:fs';
 import * as vscode from 'vscode';
 import { VSCodeLogger } from './types/logger';
 import { ServiceContainer } from './types/service-container';
-import { ManifestLoader } from './dbt/manifest-loader';
-import { ManifestIndexer } from './indexing/manifest-indexer';
 import { ManifestService } from './indexing/manifest-service';
 import { detectPythonEnvironment, validatePythonEnvironment, dbtPackagesExist, checkEnvManagerAvailable, getBootstrapCommand, validateDbtInstalled } from './dbt/env-detector';
 import { writeShims } from './dbt/terminal-env';
@@ -142,7 +141,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 					logger.warn(`Bootstrap completed but Python environment still not working: ${pythonEnv.description}`);
 					initError = `Python environment setup failed (${pythonEnv.description}). Check the dbt Studio output channel for details.`;
 					void vscode.window.showErrorMessage(
-						`dbt Studio: Python environment setup failed. See the dbt Studio output channel for details.`,
+						'dbt Studio: Python environment setup failed. See the dbt Studio output channel for details.',
 						'Show Output',
 					).then((selection) => {
 						if (selection === 'Show Output') {
@@ -185,7 +184,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 					logger.warn(`dbt still not found after bootstrap: ${pythonEnv.description}`);
 					initError = `dbt is not installed in the Python environment (${pythonEnv.description}). Add dbt to your project dependencies and reload.`;
 					void vscode.window.showErrorMessage(
-						`dbt Studio: dbt is not installed in the Python environment. Add it to your project dependencies and reload the window.`,
+						'dbt Studio: dbt is not installed in the Python environment. Add it to your project dependencies and reload the window.',
 						'Reload Window',
 					).then((selection) => {
 						if (selection === 'Reload Window') {
@@ -196,7 +195,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			} else {
 				initError = `dbt is not installed in the Python environment (${pythonEnv.description}). Add dbt to your project dependencies and reload.`;
 				void vscode.window.showErrorMessage(
-					`dbt Studio: dbt is not installed in the Python environment. Add it to your project dependencies and reload the window.`,
+					'dbt Studio: dbt is not installed in the Python environment. Add it to your project dependencies and reload the window.',
 					'Reload Window',
 				).then((selection) => {
 					if (selection === 'Reload Window') {
@@ -365,6 +364,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const statusBar = new StatusBarManager(executionService, logger);
 	// If the manifest was already indexed on startup, we're ready immediately.
 	// Otherwise the status bar stays in "Initializing" until onIndexRebuild fires.
+	let startupReady = manifestLoader.manifestExists();
 	if (manifestLoader.manifestExists()) {
 		statusBar.setReady();
 	}
@@ -390,7 +390,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const pyodideDir = path.join(context.extensionPath, 'node_modules', 'pyodide');
 	const vendorDir = path.join(context.extensionPath, 'resources', 'ftl', 'vendor');
 	const scriptsDir = path.join(context.extensionPath, 'resources', 'ftl');
-	const ftlParser = FtlDocumentParser.create(pyodideDir, vendorDir, scriptsDir, manifestIndexer);
+	const ftlParser = FtlDocumentParser.create(pyodideDir, vendorDir, scriptsDir, manifestIndexer, { logger });
 	await ftlParser.ready();
 	logger.info('Parse service: FTL worker pool ready');
 	const parseService = new ParseService(ftlParser, logger, { describeCache, indexer: manifestIndexer });
@@ -414,7 +414,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	context.subscriptions.push(modelProfiler);
 
 	// -------- Diagnostics provider --------
-	const diagnosticsProvider = new DbtDiagnosticsProvider(executionService, manifestIndexer, statusBar, projectDir, logger, parseService, parseService.onAliasesReady, manifestWatcher.onIndexRebuild, parseService.onSqlglotWarnings);
+	const diagnosticsProvider = new DbtDiagnosticsProvider(executionService, manifestIndexer, statusBar, projectDir, logger, parseService, parseService.onAliasesReady, manifestWatcher.onIndexRebuild, parseService.onSqlglotWarnings, startupReady);
 	context.subscriptions.push(diagnosticsProvider);
 
 	// -------- Set workspaceHasDBT context --------
@@ -464,9 +464,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const vsTestController = new VsTestController(testExplorerProvider, executionService, logger, cteTestRunner);
 	context.subscriptions.push(vsTestController);
 
-	// Refresh views whenever the manifest index is rebuilt (e.g. after dbt parse on save)
+	// Refresh views whenever the manifest index is rebuilt (e.g. after dbt parse on save).
+	// Also evict cache entries that were parsed before the manifest was available so the
+	// diagnostics-provider's next re-validate call triggers a fresh enriched parse.
 	context.subscriptions.push(
 		manifestWatcher.onIndexRebuild(() => {
+			if (!startupReady) {
+				startupReady = true;
+				diagnosticsProvider.setStartupReady();
+			}
+			parseService.evictUnenrichedDocuments();
 			statusBar.setReady();
 			testExplorerProvider.refresh();
 			lineageGraphProvider.refreshGraph();
@@ -494,6 +501,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				}
 				try {
 					manifestIndexer.build(true);
+					if (!startupReady) {
+						startupReady = true;
+						diagnosticsProvider.setStartupReady();
+					}
+					statusBar.setReady();
 					const refreshedProvider = await createDatabaseProvider(projectService.activeConnection, projectDir, executionService, logger);
 					container.setDatabaseProvider(refreshedProvider);
 					describeCache.setProvider(refreshedProvider);
@@ -661,6 +673,53 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			await vscode.workspace.getConfiguration('dbt-studio').update('notifications.suppressFormatterWarning', true, vscode.ConfigurationTarget.Global);
 		}),
 		vscode.commands.registerCommand('dbt-studio.ninja.scanWorkspace', () => { void workspaceScanner?.scanAll(); }),
+		vscode.commands.registerCommand('dbt-studio.ninja.statusBarMenu', async () => {
+			const items: vscode.QuickPickItem[] = [
+				{ label: '$(search) Rescan all files', description: 'Run Ninja on every SQL file in the workspace' },
+				{ label: '$(warning) Open Problems panel', description: 'Show all Ninja diagnostics' },
+				{ label: '$(gear) Open Ninja settings', description: 'Configure dbt-studio.ninja options' },
+				{ label: '$(trash) Clear Ninja diagnostics', description: 'Remove all Ninja issues from the Problems panel' },
+			];
+			const pick = await vscode.window.showQuickPick(items, { placeHolder: 'Ninja workspace diagnostics' });
+			if (!pick) return;
+			if (pick.label.includes('Rescan')) {
+				void workspaceScanner?.scanAll();
+			} else if (pick.label.includes('Open Problems')) {
+				void vscode.commands.executeCommand('workbench.action.problems.focus');
+			} else if (pick.label.includes('settings')) {
+				void vscode.commands.executeCommand('workbench.action.openSettings', 'dbt-studio.ninja');
+			} else if (pick.label.includes('Clear')) {
+				workspaceScanner?.clear();
+			}
+		}),
+		vscode.commands.registerCommand('dbt-studio.statusBarMenu', async () => {
+			const items: vscode.QuickPickItem[] = [
+				{ label: '$(trash) Clear All Caches', description: 'Hard reset — wipes all cached data from memory and disk' },
+				{ label: '$(gear) Open Settings', description: 'Configure dbt Studio options' },
+				{ label: '$(output) Show Output Channel', description: 'Open the dbt Studio output log' },
+			];
+			const pick = await vscode.window.showQuickPick(items, { placeHolder: 'dbt Studio' });
+			if (!pick) return;
+			if (pick.label.includes('Clear All')) {
+				// Clear in-memory caches
+				compileCache.clearAll();
+				manifestIndexer.clearColumnStore();
+				describeCache.resetError();
+				modelProfiler.clearAll();
+				// Delete only the specific files we write to storage
+				const storageDir = context.storageUri?.fsPath;
+				if (storageDir) {
+					for (const file of ['compile-cache.json', 'column-store.json', 'content-hashes.json', 'profile-results.json', 'ninja-scan-hashes.json']) {
+						try { fs.unlinkSync(`${storageDir}/${file}`); } catch { /* ignore if absent */ }
+					}
+				}
+				void vscode.window.showInformationMessage('All caches cleared.');
+			} else if (pick.label.includes('Settings')) {
+				void vscode.commands.executeCommand('workbench.action.openSettings', 'dbt-studio');
+			} else if (pick.label.includes('Output')) {
+				void vscode.commands.executeCommand('dbt-studio.showOutputChannel');
+			}
+		}),
 		vscode.commands.registerCommand('dbt-studio.goToLine', async (args: { uri: string; line: number }) => {
 			const uri = vscode.Uri.parse(args.uri);
 			const pos = new vscode.Position(args.line, 0);
@@ -1221,9 +1280,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			workspaceScanner = undefined;
 			return;
 		}
-		workspaceScanner = new NinjaWorkspaceScanner(parseService, manifestIndexer, pathResolver, logger);
+		workspaceScanner = new NinjaWorkspaceScanner(manifestIndexer, pathResolver, logger, context);
 		context.subscriptions.push(workspaceScanner);
-		void workspaceScanner.scanAll();
+		if (startupReady) {
+			void workspaceScanner.scanAll();
+		}
 	};
 
 	initWorkspaceScanner();
@@ -1233,6 +1294,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.workspace.onDidSaveTextDocument(doc => {
 			if (doc.languageId === 'jinja-sql') void workspaceScanner?.invalidate(doc.uri);
 		}),
+		vscode.window.onDidChangeVisibleTextEditors(_editors => { /* scanner no longer owns a collection */ }),
 		vscode.workspace.onDidChangeConfiguration(e => {
 			if (e.affectsConfiguration('dbt-studio.ninja.workspaceDiagnostics')) initWorkspaceScanner();
 		}),
