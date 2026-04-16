@@ -999,6 +999,7 @@ export class FtlDocumentParser implements DocumentParser {
 			sqlTokens: result.sqlTokens,
 			jinjaTags: result.jinjaTags,
 			pivotVirtualColumns: Object.keys(pivotVirtualColumns).length > 0 ? pivotVirtualColumns : undefined,
+			isPass2: result.isPass2,
 		};
 	}
 }

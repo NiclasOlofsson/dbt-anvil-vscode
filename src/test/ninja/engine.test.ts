@@ -110,6 +110,11 @@ describe('engine', () => {
 		expect(r.severityMap.get('ninja.cap.keywords')).toBe(2); // DiagnosticSeverity.Information
 	});
 
+	it('respects hint severity override', () => {
+		const r = run('SELECT 1', { rules: { 'ninja.cap.keywords': 'hint' } });
+		expect(r.severityMap.get('ninja.cap.keywords')).toBe(3); // DiagnosticSeverity.Hint
+	});
+
 	it('returns violations from multiple rules', () => {
 		// SELECT (cap.keywords) + NULL (cap.literals) + no trailing newline
 		const r = run('SELECT NULL');

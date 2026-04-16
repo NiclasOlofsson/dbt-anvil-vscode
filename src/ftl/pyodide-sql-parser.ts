@@ -126,6 +126,14 @@ export class PyodideSqlParser implements SqlParser {
 			if (w.line !== undefined) w.line = renToRawLine(w.line, lineMap);
 		}
 		result2.jinjaTags = jinjaTags;
+		// Pass 2 sqlTokens are in rendered-space (nunjucks-compiled), not raw-source
+		// space. Pass 1 always uses length-preserving blanking, so its sqlTokens are
+		// always in raw-source space — even when the parser failed. Use them instead.
+		result2.sqlTokens = result1.sqlTokens;
+		// Column numbers from the pass 2 AST are in rendered-space and are NOT
+		// remapped — only line numbers are. Rules that build vscode.Range from AST
+		// column positions must skip this result to avoid negative-character errors.
+		result2.isPass2 = true;
 		return result2;
 	}
 }

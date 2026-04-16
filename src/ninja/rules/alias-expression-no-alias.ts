@@ -13,12 +13,17 @@ export const expressionNoAliasRule: TokenRule = {
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model } = ctx;
 		if (!model.finalSelect) return [];
-
+		// Pass 2 AST column numbers are in rendered-space and not remapped —
+		// building ranges from them causes negative-character errors.
+		if (model.isPass2) return [];
 		const violations: NinjaViolation[] = [];
 
 		for (const col of model.finalSelect.columns) {
 			if (!col.expression) continue;
 			if (col.aliasLine !== undefined) continue;
+			// Synthesized columns (e.g. from SELECT * expansion) may have negative
+			// col values when the anchor position is smaller than the name length.
+			if (col.col < 0 || col.endCol < 0) continue;
 
 			const insertPos = new vscode.Position(col.endLine, col.endCol);
 			const placeholder = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(col.name) ? col.name : 'alias';
