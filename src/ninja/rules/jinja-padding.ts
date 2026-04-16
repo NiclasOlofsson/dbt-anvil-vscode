@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
-import type { NinjaViolation } from '../violation';
+import { FixAction, type NinjaViolation } from '../violation';
 import type { LayoutRule, LayoutRuleContext } from '../rule';
 
 /**
@@ -47,7 +47,7 @@ export const jinjaPaddingRule: LayoutRule = {
 					rule: 'ninja.jinja.padding',
 					message: 'Expected single space after jinja opening delimiter',
 					range,
-					fix: [vscode.TextEdit.insert(pos, ' ')],
+					action: { type: FixAction.TYPE, edits: [vscode.TextEdit.insert(pos, ' ')], autoFix: true },
 				});
 			} else if (afterOpen === ' ' && raw[contentStart + 1] === ' ') {
 				// Multiple spaces — collapse to one
@@ -61,7 +61,7 @@ export const jinjaPaddingRule: LayoutRule = {
 						rule: 'ninja.jinja.padding',
 						message: 'Expected single space after jinja opening delimiter',
 						range,
-						fix: [vscode.TextEdit.delete(range)],
+						action: { type: FixAction.TYPE, edits: [vscode.TextEdit.delete(range)], autoFix: true },
 					});
 				}
 			}
@@ -75,7 +75,7 @@ export const jinjaPaddingRule: LayoutRule = {
 					rule: 'ninja.jinja.padding',
 					message: 'Expected single space before jinja closing delimiter',
 					range,
-					fix: [vscode.TextEdit.insert(pos, ' ')],
+					action: { type: FixAction.TYPE, edits: [vscode.TextEdit.insert(pos, ' ')], autoFix: true },
 				});
 			} else if (beforeClose === ' ' && raw[contentEnd - 2] === ' ') {
 				// Multiple spaces — collapse to one
@@ -89,7 +89,7 @@ export const jinjaPaddingRule: LayoutRule = {
 						rule: 'ninja.jinja.padding',
 						message: 'Expected single space before jinja closing delimiter',
 						range,
-						fix: [vscode.TextEdit.delete(range)],
+						action: { type: FixAction.TYPE, edits: [vscode.TextEdit.delete(range)], autoFix: true },
 					});
 				}
 			}

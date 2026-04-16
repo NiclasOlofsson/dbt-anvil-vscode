@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
-import type { NinjaViolation } from '../violation';
+import { FixAction, type NinjaViolation } from '../violation';
 import type { LayoutRule, LayoutRuleContext } from '../rule';
 
 // Common SQL aggregate/scalar/window functions (same set as cap-functions).
@@ -87,7 +87,7 @@ export const functionSpacingRule: LayoutRule = {
 								rule: 'ninja.layout.function_spacing',
 								message: `Unexpected space before '(' in function call '${word}'`,
 								range,
-								fix: [vscode.TextEdit.delete(range)],
+								action: { type: FixAction.TYPE, edits: [vscode.TextEdit.delete(range)], autoFix: true },
 							});
 						}
 					}

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mockDocument, cfg, model, sqlTok } from './helpers';
 import { notEqualRule } from '../../ninja/rules/convention-not-equal';
 import type { SqlToken } from '../../ftl/parse-result';
+import { FixAction } from '../../ninja/violation';
 import { DEFAULT_CONFIG } from '../../ninja/config';
 
 const RULE = 'ninja.convention.not-equal';
@@ -30,8 +31,8 @@ describe(RULE, () => {
 		const v = check(sql, tokens, '!=');
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('!=');
-		expect(v[0].fix).toBeDefined();
-		expect(v[0].fix![0].newText).toBe('!=');
+		expect(v[0].action).toBeDefined();
+		expect((v[0].action as FixAction).edits[0].newText).toBe('!=');
 	});
 
 	it('flags != when <> is preferred', () => {
@@ -39,7 +40,7 @@ describe(RULE, () => {
 		const tokens: SqlToken[] = [sqlTok('NEQ', 24, 25, 0, 26)];
 		const v = check(sql, tokens, '<>');
 		expect(v).toHaveLength(1);
-		expect(v[0].fix![0].newText).toBe('<>');
+		expect((v[0].action as FixAction).edits[0].newText).toBe('<>');
 	});
 
 	it('no violation when using preferred <> style', () => {

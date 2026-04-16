@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
-import type { NinjaViolation } from '../violation';
+import { FixAction, type NinjaViolation } from '../violation';
 
 export const isNullRule: TokenRule = {
 	id: 'ninja.convention.is-null',
@@ -31,10 +31,7 @@ export const isNullRule: TokenRule = {
 					rule: 'ninja.convention.is-null',
 					message: 'Use IS NULL instead of = NULL.',
 					range,
-					fix: [{
-						range,
-						newText: `IS ${raw}`,
-					}],
+					action: { type: FixAction.TYPE, edits: [{ range, newText: `IS ${raw}` }], autoFix: true },
 				});
 			} else if (op.type === 'NEQ') {
 				const lo = lineOffset(text, op.line);
@@ -44,10 +41,7 @@ export const isNullRule: TokenRule = {
 					rule: 'ninja.convention.is-null',
 					message: 'Use IS NOT NULL instead of != NULL.',
 					range,
-					fix: [{
-						range,
-						newText: `IS NOT ${raw}`,
-					}],
+					action: { type: FixAction.TYPE, edits: [{ range, newText: `IS NOT ${raw}` }], autoFix: true },
 				});
 			}
 		}

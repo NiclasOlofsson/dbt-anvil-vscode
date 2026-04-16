@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
-import type { NinjaViolation } from '../violation';
+import { FixAction, type NinjaViolation } from '../violation';
 
 export const bareUnionRule: TokenRule = {
 	id: 'ninja.ambiguity.bare-union',
@@ -34,10 +34,7 @@ export const bareUnionRule: TokenRule = {
 				rule: 'ninja.ambiguity.bare-union',
 				message: `Use UNION ${suffix} instead of bare UNION.`,
 				range,
-				fix: [{
-					range,
-					newText: `${raw} ${suffix}`,
-				}],
+				action: { type: FixAction.TYPE, edits: [{ range, newText: `${raw} ${suffix}` }], autoFix: true },
 			});
 		}
 

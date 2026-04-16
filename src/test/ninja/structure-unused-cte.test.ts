@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mockDocument, cfg, model, cte, tableRef, colRef, sqlTok } from './helpers';
 import { unusedCteRule } from '../../ninja/rules/structure-unused-cte';
 import type { NinjaConfig } from '../../ninja/config';
+import { FixAction } from '../../ninja/violation';
 
 const RULE = 'ninja.structure.unused-cte';
 
@@ -103,10 +104,10 @@ describe(RULE, () => {
 			sqlTokens: [sqlTok('WITH', 0, 3, 0, 4)],
 		});
 		const v = check(sql, m);
-		expect(v[0].fix).toBeDefined();
-		expect(v[0].fix).toHaveLength(1);
+		expect(v[0].action).toBeDefined();
+		expect((v[0].action as FixAction).edits).toHaveLength(1);
 		// Should delete from WITH through closing paren
-		const edit = v[0].fix![0];
+		const edit = (v[0].action as FixAction).edits[0];
 		expect(edit.range.start.line).toBe(0);
 		expect(edit.range.end.line).toBe(3); // next line after )
 	});
@@ -122,8 +123,8 @@ describe(RULE, () => {
 		});
 		const v = check(sql, m);
 		expect(v).toHaveLength(1);
-		expect(v[0].fix).toBeDefined();
-		const edit = v[0].fix![0];
+		expect(v[0].action).toBeDefined();
+		const edit = (v[0].action as FixAction).edits[0];
 		// Should delete from CTE name line through to start of next CTE
 		expect(edit.range.start.line).toBe(0);
 		expect(edit.range.end.line).toBe(3);
@@ -141,8 +142,8 @@ describe(RULE, () => {
 		});
 		const v = check(sql, m);
 		expect(v).toHaveLength(1);
-		expect(v[0].fix).toBeDefined();
-		const edit = v[0].fix![0];
+		expect(v[0].action).toBeDefined();
+		const edit = (v[0].action as FixAction).edits[0];
 		// Should start from end of previous CTE
 		expect(edit.range.start.line).toBe(2);
 		expect(edit.range.start.character).toBe(1); // endCol of prev CTE
@@ -157,7 +158,7 @@ describe(RULE, () => {
 			tokens: [],
 		});
 		const v = check(sql, m);
-		expect(v[0].fix).toBeUndefined();
+		expect(v[0].action).toBeUndefined();
 	});
 
 	// ── Rule can be turned off ──────────────────────────────────────────────

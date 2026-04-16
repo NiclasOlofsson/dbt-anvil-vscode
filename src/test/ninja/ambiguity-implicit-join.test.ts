@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mockDocument, cfg, model, sqlTok } from './helpers';
 import { implicitJoinRule } from '../../ninja/rules/ambiguity-implicit-join';
 import type { SqlToken } from '../../ftl/parse-result';
+import { FixAction } from '../../ninja/violation';
 
 const RULE = 'ninja.ambiguity.implicit-join';
 
@@ -23,8 +24,8 @@ describe(RULE, () => {
 		const v = check(sql, tokens);
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('INNER JOIN');
-		expect(v[0].fix).toBeDefined();
-		expect(v[0].fix![0].newText).toBe('INNER join');
+		expect(v[0].action).toBeDefined();
+		expect((v[0].action as FixAction).edits[0].newText).toBe('INNER join');
 	});
 
 	it('no violation for INNER JOIN', () => {

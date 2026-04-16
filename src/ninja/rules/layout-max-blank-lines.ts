@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
-import type { NinjaViolation } from '../violation';
+import { FixAction, type NinjaViolation } from '../violation';
 import type { LayoutRule, LayoutRuleContext } from '../rule';
 
 /** LT15: There should be at most N consecutive blank lines (configurable, default 2). */
@@ -30,7 +30,7 @@ export const maxBlankLinesRule: LayoutRule = {
 						rule: 'ninja.layout.max-blank-lines',
 						message: `${consecutiveBlanks} consecutive blank lines (max ${max})`,
 						range,
-						fix: [vscode.TextEdit.delete(range)],
+						action: { type: FixAction.TYPE, edits: [vscode.TextEdit.delete(range)], autoFix: true },
 					});
 				}
 				consecutiveBlanks = 0;

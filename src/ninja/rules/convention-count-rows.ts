@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
-import type { NinjaViolation } from '../violation';
+import { FixAction, type NinjaViolation } from '../violation';
 
 export const countRowsRule: TokenRule = {
 	id: 'ninja.convention.count-rows',
@@ -37,10 +37,7 @@ export const countRowsRule: TokenRule = {
 				rule: 'ninja.convention.count-rows',
 				message: 'Use COUNT(*) instead of COUNT(1).',
 				range,
-				fix: [{
-					range,
-					newText: '*',
-				}],
+				action: { type: FixAction.TYPE, edits: [{ range, newText: '*' }], autoFix: true },
 			});
 		}
 

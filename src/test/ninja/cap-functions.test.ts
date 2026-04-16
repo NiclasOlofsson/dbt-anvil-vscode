@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { run, violationsFor, capCfg, emptyModel } from './helpers';
+import { FixAction } from '../../ninja/violation';
 
 const RULE = 'ninja.cap.functions';
 
@@ -27,7 +28,7 @@ describe(RULE, () => {
 	it('flags lowercase function when policy is upper', () => {
 		const v = violationsFor(run('select count(*) from t', capCfg('functions', 'upper')), RULE);
 		expect(v.length).toBe(1);
-		expect(v[0].fix![0].newText).toBe('COUNT');
+		expect((v[0].action as FixAction).edits[0].newText).toBe('COUNT');
 	});
 
 	it('passes uppercase function when policy is upper', () => {
@@ -40,7 +41,7 @@ describe(RULE, () => {
 	it('flags inconsistent function casing', () => {
 		const v = violationsFor(run('select count(*), COUNT(*) from t', capCfg('functions', 'consistent')), RULE);
 		expect(v.length).toBe(1);
-		expect(v[0].fix![0].newText).toBe('count');
+		expect((v[0].action as FixAction).edits[0].newText).toBe('count');
 	});
 
 	it('passes consistent function casing', () => {
@@ -58,7 +59,7 @@ describe(RULE, () => {
 	it('detects function with space before paren', () => {
 		const v = violationsFor(run('select COUNT (*) from t', capCfg('functions', 'lower')), RULE);
 		expect(v.length).toBe(1);
-		expect(v[0].fix![0].newText).toBe('count');
+		expect((v[0].action as FixAction).edits[0].newText).toBe('count');
 	});
 
 	// ── Fix generation ─────────────────────────────────────────────────────
@@ -67,7 +68,7 @@ describe(RULE, () => {
 		const v = violationsFor(run('select COUNT(*) from t', capCfg('functions', 'lower')), RULE);
 		expect(v[0].range.start.character).toBe(7);
 		expect(v[0].range.end.character).toBe(12);
-		expect(v[0].fix![0].newText).toBe('count');
+		expect((v[0].action as FixAction).edits[0].newText).toBe('count');
 	});
 
 	// ── Identifier skipping ────────────────────────────────────────────────
@@ -96,6 +97,6 @@ describe(RULE, () => {
 	it('handles multi-word functions like date_trunc', () => {
 		const v = violationsFor(run('select DATE_TRUNC(\'day\', created_at) from t', capCfg('functions', 'lower')), RULE);
 		expect(v.length).toBe(1);
-		expect(v[0].fix![0].newText).toBe('date_trunc');
+		expect((v[0].action as FixAction).edits[0].newText).toBe('date_trunc');
 	});
 });

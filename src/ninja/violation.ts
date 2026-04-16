@@ -2,17 +2,23 @@ import * as vscode from 'vscode';
 
 /** Text edit fix — can be applied automatically or restricted to code actions only. */
 export interface FixAction {
-	type: 'fix';
+	type: typeof FixAction.TYPE;
 	edits: vscode.TextEdit[];
 	/** When false, excluded from bulk/auto-fix ("Fix all", source.fixAll.ninja). Use for destructive edits like deleting a CTE. */
 	autoFix: boolean;
 }
+export namespace FixAction {
+	export const TYPE = 'fix' as const;
+}
 
 /** Snippet fix — inserts a template at a position, placing the cursor at a tab stop. Requires user input. */
 export interface SnippetAction {
-	type: 'snippet';
+	type: typeof SnippetAction.TYPE;
 	position: vscode.Position;
 	snippet: string;
+}
+export namespace SnippetAction {
+	export const TYPE = 'snippet' as const;
 }
 
 /** Discriminated union of all action types a violation can carry. */
@@ -28,12 +34,4 @@ export interface NinjaViolation {
 	range: vscode.Range;
 	/** The action available for this violation, if any. */
 	action?: NinjaAction;
-
-	// Legacy flat fields — being migrated to `action`. Remove once all rules are updated.
-	/** @deprecated Use `action` instead. */
-	fix?: vscode.TextEdit[];
-	/** @deprecated Use `action` instead. */
-	noAutoFix?: true;
-	/** @deprecated Use `action` instead. */
-	snippetFix?: { position: vscode.Position; snippet: string };
 }

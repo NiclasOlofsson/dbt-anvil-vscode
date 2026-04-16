@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
-import type { NinjaViolation } from '../violation';
+import { FixAction, type NinjaViolation } from '../violation';
 import type { LayoutRule, LayoutRuleContext } from '../rule';
 
 /** LT13: Files should not start with blank/whitespace-only lines. */
@@ -26,7 +26,7 @@ export const leadingWhitespaceRule: LayoutRule = {
 				rule: 'ninja.layout.leading-whitespace',
 				message: 'File should not start with blank lines',
 				range,
-				fix: [vscode.TextEdit.delete(range)],
+				action: { type: FixAction.TYPE, edits: [vscode.TextEdit.delete(range)], autoFix: true },
 			});
 		}
 

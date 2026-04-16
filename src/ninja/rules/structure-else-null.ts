@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
-import type { NinjaViolation } from '../violation';
+import { FixAction, type NinjaViolation } from '../violation';
 
 function lineOffset(text: string, charOffset: number): { line: number; col: number } {
 	let line = 0;
@@ -41,10 +41,7 @@ export const elseNullRule: TokenRule = {
 				rule: 'ninja.structure.else-null',
 				message: 'Redundant ELSE NULL — CASE returns NULL by default.',
 				range: new vscode.Range(elseStart.line, elseStart.col, nullEnd.line, nullEnd.col),
-				fix: [{
-					range: new vscode.Range(elseStart.line, elseStart.col, endStart.line, endStart.col),
-					newText: '',
-				}],
+				action: { type: FixAction.TYPE, edits: [{ range: new vscode.Range(elseStart.line, elseStart.col, endStart.line, endStart.col), newText: '' }], autoFix: true },
 			});
 		}
 

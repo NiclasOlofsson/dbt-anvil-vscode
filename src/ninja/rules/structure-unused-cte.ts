@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
-import type { NinjaViolation } from '../violation';
+import { FixAction, type NinjaViolation } from '../violation';
 
 /**
  * Flags CTEs that are defined but never referenced in any FROM/JOIN.
@@ -41,12 +41,12 @@ export const unusedCteRule: TokenRule = {
 			const nameCol = cte.col ?? 0;
 			const range = new vscode.Range(cte.line, nameCol, cte.line, nameCol + cte.name.length);
 
+			const deleteEdits = buildDeleteFix(model.ctes, i, model.sqlTokens, document);
 			violations.push({
 				rule: 'ninja.structure.unused-cte',
 				message: `CTE '${cte.name}' is defined but never referenced.`,
 				range,
-				fix: buildDeleteFix(model.ctes, i, model.sqlTokens, document),
-				noAutoFix: true,
+				action: deleteEdits ? { type: FixAction.TYPE, edits: deleteEdits, autoFix: false } : undefined,
 			});
 		}
 

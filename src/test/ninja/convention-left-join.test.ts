@@ -21,7 +21,7 @@ describe(RULE, () => {
 		const v = check(sql, tokens);
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('LEFT JOIN');
-		expect(v[0].fix).toBeUndefined();
+		expect(v[0].action).toBeUndefined();
 	});
 
 	it('no violation for LEFT JOIN', () => {

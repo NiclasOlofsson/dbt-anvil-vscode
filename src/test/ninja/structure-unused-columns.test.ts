@@ -152,7 +152,7 @@ describe(RULE, () => {
 			tokens: [],
 		});
 		const v = check(sql, m);
-		expect(v[0].fix).toBeUndefined();
+		expect(v[0].action).toBeUndefined();
 	});
 
 	it('no violation when CTE columns are consumed via SELECT * that qualify() expands to column_refs', () => {

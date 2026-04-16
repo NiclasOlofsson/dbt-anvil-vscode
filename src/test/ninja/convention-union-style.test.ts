@@ -3,6 +3,7 @@ import { mockDocument, cfg, model, sqlTok } from './helpers';
 import { unionStyleRule } from '../../ninja/rules/convention-union-style';
 import { DEFAULT_CONFIG } from '../../ninja/config';
 import type { SqlToken } from '../../ftl/parse-result';
+import { FixAction } from '../../ninja/violation';
 
 const RULE = 'ninja.convention.union-style';
 
@@ -29,8 +30,8 @@ describe(RULE, () => {
 		const v = check(sql, tokens);
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('UNION ALL');
-		expect(v[0].fix).toBeDefined();
-		expect(v[0].fix![0].newText).toBe('ALL');
+		expect(v[0].action).toBeDefined();
+		expect((v[0].action as FixAction).edits[0].newText).toBe('ALL');
 	});
 
 	it('flags UNION ALL when style is distinct', () => {
@@ -46,7 +47,7 @@ describe(RULE, () => {
 		const v = check(sql, tokens, 'distinct');
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('UNION DISTINCT');
-		expect(v[0].fix![0].newText).toBe('DISTINCT');
+		expect((v[0].action as FixAction).edits[0].newText).toBe('DISTINCT');
 	});
 
 	it('no violation when style matches (all)', () => {

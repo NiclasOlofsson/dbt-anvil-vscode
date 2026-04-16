@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
-import type { NinjaViolation } from '../violation';
+import { FixAction, type NinjaViolation } from '../violation';
 import type { LayoutRule, LayoutRuleContext } from '../rule';
 
 /**
@@ -61,7 +61,7 @@ export const indentRule: LayoutRule = {
 					rule: 'ninja.layout.indent',
 					message: 'Mixed spaces and tabs in indentation',
 					range,
-					fix: [vscode.TextEdit.replace(range, expectedIndent)],
+					action: { type: FixAction.TYPE, edits: [vscode.TextEdit.replace(range, expectedIndent)], autoFix: true },
 				});
 				continue;
 			}
@@ -74,7 +74,7 @@ export const indentRule: LayoutRule = {
 					rule: 'ninja.layout.indent',
 					message: `Expected spaces for indentation, found tabs`,
 					range,
-					fix: [vscode.TextEdit.replace(range, replacement)],
+					action: { type: FixAction.TYPE, edits: [vscode.TextEdit.replace(range, replacement)], autoFix: true },
 				});
 				continue;
 			}
@@ -86,7 +86,7 @@ export const indentRule: LayoutRule = {
 					rule: 'ninja.layout.indent',
 					message: `Expected tabs for indentation, found spaces`,
 					range,
-					fix: [vscode.TextEdit.replace(range, replacement)],
+					action: { type: FixAction.TYPE, edits: [vscode.TextEdit.replace(range, replacement)], autoFix: true },
 				});
 				continue;
 			}
@@ -100,7 +100,7 @@ export const indentRule: LayoutRule = {
 					rule: 'ninja.layout.indent',
 					message: `Indentation is ${spaces} spaces (expected multiple of ${size})`,
 					range,
-					fix: [vscode.TextEdit.replace(range, replacement)],
+					action: { type: FixAction.TYPE, edits: [vscode.TextEdit.replace(range, replacement)], autoFix: true },
 				});
 			}
 		}

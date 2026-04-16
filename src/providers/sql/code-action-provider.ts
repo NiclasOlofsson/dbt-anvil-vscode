@@ -3,6 +3,7 @@ import type { ManifestIndexer } from '../../indexing/manifest-indexer';
 import type { DbtPathResolver } from '../../dbt/dbt-path-resolver';
 import type { ILogger } from '../../types/logger';
 import type { NinjaResult } from '../../ninja/engine';
+import { FixAction, SnippetAction } from '../../ninja/violation';
 
 /**
  * Quick-fix code actions for dbt SQL files.
@@ -167,20 +168,18 @@ export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 			for (const v of ninjaResult.violations) {
 				if (!v.range.intersection(range)) continue;
 
-				if (v.fix && v.fix.length > 0) {
+				if (v.action?.type === FixAction.TYPE) {
 					const action = new vscode.CodeAction(
 						`Fix: ${v.message}`,
 						vscode.CodeActionKind.QuickFix,
 					);
 					action.edit = new vscode.WorkspaceEdit();
-					for (const edit of v.fix) {
+					for (const edit of v.action.edits) {
 						action.edit.replace(document.uri, edit.range, edit.newText);
 					}
 					action.diagnostics = [new vscode.Diagnostic(v.range, v.message)];
 					actions.push(action);
-				} else if (v.snippetFix) {
-					// Snippet fix: insert a template at a position, placing the cursor at $1.
-					// Excluded from bulk/format actions — requires interactive user input.
+				} else if (v.action?.type === SnippetAction.TYPE) {
 					const action = new vscode.CodeAction(
 						`Fix: ${v.message}`,
 						vscode.CodeActionKind.QuickFix,
@@ -188,8 +187,8 @@ export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 					action.edit = new vscode.WorkspaceEdit();
 					action.edit.set(document.uri, [
 						vscode.SnippetTextEdit.insert(
-							v.snippetFix.position,
-							new vscode.SnippetString(v.snippetFix.snippet),
+							v.action.position,
+							new vscode.SnippetString(v.action.snippet),
 						),
 					]);
 					action.diagnostics = [new vscode.Diagnostic(v.range, v.message)];
@@ -198,8 +197,8 @@ export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 			}
 
 			// "Fix all ninja violations" action when there are fixable violations
-			// Exclude noAutoFix violations (e.g. delete-CTE) — those are code fixes only.
-			const fixable = ninjaResult.violations.filter(v => v.fix && v.fix.length > 0 && !v.noAutoFix);
+			// Exclude codeActionOnly violations (e.g. delete-CTE) — those are code fixes only.
+			const fixable = ninjaResult.violations.filter((v): v is typeof v & { action: FixAction } => v.action?.type === FixAction.TYPE && v.action.autoFix);
 			if (fixable.length > 1) {
 				const fixAll = new vscode.CodeAction(
 					`Fix all ${fixable.length} ninja violations`,
@@ -207,7 +206,7 @@ export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 				);
 				fixAll.edit = new vscode.WorkspaceEdit();
 				for (const v of fixable) {
-					for (const edit of v.fix!) {
+					for (const edit of (v.action as FixAction).edits) {
 						fixAll.edit.replace(document.uri, edit.range, edit.newText);
 					}
 				}
@@ -222,7 +221,7 @@ export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 				);
 				sourceFixAll.edit = new vscode.WorkspaceEdit();
 				for (const v of fixable) {
-					for (const edit of v.fix!) {
+					for (const edit of (v.action as FixAction).edits) {
 						sourceFixAll.edit.replace(document.uri, edit.range, edit.newText);
 					}
 				}
