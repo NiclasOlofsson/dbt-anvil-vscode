@@ -454,6 +454,10 @@ const TOKEN_ROLE_MAP: Record<string, string> = {
 	HAVING: 'having',
 	ORDER_BY: 'order',
 	LIMIT: 'limit',
+	SORT_BY: 'sort',
+	CLUSTER_BY: 'cluster',
+	DISTRIBUTE_BY: 'distribute',
+	OFFSET: 'offset',
 	WITH: 'cte',
 	STAR: 'star',
 };

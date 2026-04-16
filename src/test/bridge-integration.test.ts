@@ -14,8 +14,8 @@ import { BridgeRunner } from '../dbt/bridge-runner';
 import { detectPythonEnvironment, type PythonEnvironment } from '../dbt/env-detector';
 import { FtlDocumentParser } from '../ftl/ftl-document-parser';
 import type { AdapterContext } from '../ftl/ftl-document-parser';
-import { mergeModels } from '../services/parse-service';
-import type { DocumentModel } from '../services/parse-service';
+import { mergeModels, ParseService } from '../services/parse-service';
+import type { DocumentModel, TableRefToken, ColumnRefToken } from '../services/parse-service';
 import { createMockLogger } from './helpers';
 
 const PYODIDE_DIR = path.join(__dirname, '..', '..', 'node_modules', 'pyodide');
@@ -579,5 +579,58 @@ select * from pivoted`);
 		// Simply assert no false positives: if there ARE entries they must not be
 		// the UNPIVOT-style pair ('revenue', 'year').
 		expect(dataCols?.includes('year')).toBeFalsy();
+	}, 30_000);
+
+	it('column resolution through subquery alias', async () => {
+		const model = await parseSql('SELECT x.col FROM (SELECT col FROM raw_orders) AS x');
+		const colRef = model.tokens.find((t): t is ColumnRefToken =>
+			t.type === 'column_ref' && t.name === 'col' && 'table' in t && t.table === 'x',
+		);
+		expect(colRef).toBeDefined();
+		expect(colRef!.resolvedTableRef).toBeDefined();
+		const cols = ParseService.columnsForRef(colRef!.resolvedTableRef!, model);
+		expect(cols).toContain('col');
+	}, 30_000);
+
+	it('nested subquery with shadowed alias resolves keepone', async () => {
+		const model = await parseSql(`WITH cte AS (
+    SELECT ctc.keepone
+    FROM (
+        SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS keepone
+        FROM (SELECT id FROM raw_orders) AS ctc
+    ) AS ctc
+    WHERE ctc.keepone = 1
+)
+SELECT * FROM cte`);
+		// The column_ref ctc.keepone should resolve to the middle subquery (which has keepone)
+		const colRef = model.tokens.find((t): t is ColumnRefToken =>
+			t.type === 'column_ref' && t.name === 'keepone' && 'table' in t && t.table === 'ctc',
+		);
+		expect(colRef).toBeDefined();
+		if (colRef?.resolvedTableRef) {
+			const cols = ParseService.columnsForRef(colRef.resolvedTableRef, model);
+			expect(cols).toContain('keepone');
+		}
+	}, 30_000);
+
+	it('subquery entries appear in model.ctes', async () => {
+		const model = await parseSql('SELECT x.col FROM (SELECT col FROM raw_orders) AS x');
+		const subCte = model.ctes.find(c => c.name === 'x');
+		expect(subCte).toBeDefined();
+		expect(subCte!.columns.map(c => c.name)).toContain('col');
+	}, 30_000);
+
+	it('subquery table_ref token has correct alias position', async () => {
+		const sql = 'SELECT x.col\nFROM (\n    SELECT col FROM raw_orders\n) AS x';
+		const model = await parseSql(sql);
+		const tableRef = model.tokens.find((t): t is TableRefToken =>
+			t.type === 'table_ref' && 'alias' in t && t.alias === 'x',
+		);
+		expect(tableRef).toBeDefined();
+		// 'x' is on line 3 ("`) AS x`"), at a known position
+		expect(tableRef!.aliasLine).toBe(3);
+		expect(tableRef!.aliasCol).toBeDefined();
+		expect(tableRef!.aliasEndCol).toBeDefined();
+		expect(tableRef!.aliasEndCol! - tableRef!.aliasCol!).toBe(1); // 'x' is 1 char
 	}, 30_000);
 });

@@ -105,5 +105,5 @@ export interface ParseResult {
 	/** Jinja ref/source spans extracted from the raw SQL, always in raw-source space. */
 	jinjaTags?: JinjaTagSpan[];
 	/** CTEs whose body was `SELECT *` before qualify() expanded them. Line is 0-based. */
-	wildcardCtes?: Array<{ name: string; line: number }>;
+	wildcardCtes?: Array<{ name: string; line: number; col?: number }>;
 }

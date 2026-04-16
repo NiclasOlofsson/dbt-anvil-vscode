@@ -279,7 +279,11 @@ def _parse(sql, dialect, schema_json):
             star = body.expressions[0]
             m = getattr(star, 'meta', None) or {}
             line_1 = m.get('line', 1)
-            wildcard_ctes.append({'name': cte.alias, 'line': line_1 - 1})
+            col_1 = m.get("col")
+            entry = {"name": cte.alias, "line": line_1 - 1}
+            if col_1 is not None:
+                entry["col"] = col_1 - 1
+            wildcard_ctes.append(entry)
     # Build a schema supplement from CTE output columns so that qualify()'s
     # expand_stars() can expand SELECT * even when the external schema is absent
     # or when infer_schema can't determine a CTE's columns (e.g. GROUP BY ALL).
@@ -1024,6 +1028,10 @@ def _decompose_query(compiled_sql: str, dialect: str) -> str:
         "group": _TT.GROUP_BY,
         "having": _TT.HAVING,
         "order": _TT.ORDER_BY,
+        "sort": _TT.SORT_BY,
+        "cluster": _TT.CLUSTER_BY,
+        "distribute": _TT.DISTRIBUTE_BY,
+        "offset": _TT.OFFSET,
     }
 
     def token_clause_line(clause_key: str, after_offset: int) -> int | None:
@@ -1220,6 +1228,58 @@ def _decompose_query(compiled_sql: str, dialect: str) -> str:
                     if not select_sql.lstrip().upper().startswith("WITH")
                     else select_sql,
                     "line": find_clause_line(select_node, "limit"),
+                }
+            )
+
+        # ── OFFSET (standard SQL / Spark: skip first N rows, always follows LIMIT) ──
+        offset_node = select_node.args.get("offset")
+        if offset_node:
+            clauses.append(
+                {
+                    "stage": "offset",
+                    "sql": with_prefix(select_node.sql(dialect=sqlglot_dialect))
+                    if not select_sql.lstrip().upper().startswith("WITH")
+                    else select_sql,
+                    "line": find_clause_line(select_node, "offset"),
+                }
+            )
+
+        # ── SORT BY (Spark/Databricks: per-partition sort, alternative to ORDER BY) ──
+        sort_node = select_node.args.get("sort")
+        if sort_node and from_node:
+            clauses.append(
+                {
+                    "stage": "sort",
+                    "sql": with_prefix(select_node.sql(dialect=sqlglot_dialect))
+                    if not select_sql.lstrip().upper().startswith("WITH")
+                    else select_sql,
+                    "line": find_clause_line(select_node, "sort"),
+                }
+            )
+
+        # ── CLUSTER BY (Spark/Databricks: combined DISTRIBUTE BY + SORT BY) ──
+        cluster_node = select_node.args.get("cluster")
+        if cluster_node and from_node:
+            clauses.append(
+                {
+                    "stage": "cluster",
+                    "sql": with_prefix(select_node.sql(dialect=sqlglot_dialect))
+                    if not select_sql.lstrip().upper().startswith("WITH")
+                    else select_sql,
+                    "line": find_clause_line(select_node, "cluster"),
+                }
+            )
+
+        # ── DISTRIBUTE BY (Spark/Databricks: controls output file partitioning) ──
+        distribute_node = select_node.args.get("distribute")
+        if distribute_node and from_node:
+            clauses.append(
+                {
+                    "stage": "distribute",
+                    "sql": with_prefix(select_node.sql(dialect=sqlglot_dialect))
+                    if not select_sql.lstrip().upper().startswith("WITH")
+                    else select_sql,
+                    "line": find_clause_line(select_node, "distribute"),
                 }
             )
 

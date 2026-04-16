@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { AstPayload, ParseResult } from '../../ftl/parse-result';
 import type { JinjaTagSpan } from '../../ftl/parse-result';
 import type { SqlParser } from '../../ftl/sql-parser';
-import { extractRefs, extractSources, mapWarnings, extractCtes, extractFinalColumns, extractFinalSelect, extractTokens, resolveTableRefs, FtlDocumentParser } from '../../ftl/ftl-document-parser';
+import { extractRefs, extractSources, mapWarnings, extractCtes, extractSubqueries, extractFinalColumns, extractFinalSelect, extractTokens, resolveTableRefs, FtlDocumentParser } from '../../ftl/ftl-document-parser';
 import type { CteInfo, TableRefToken, ColumnRefToken } from '../../services/parse-service';
 
 describe('extractRefs', () => {
@@ -396,8 +396,8 @@ describe('extractFinalColumns', () => {
 	it('extracts column names and lines from a plain SELECT', () => {
 		const result = extractFinalColumns(plainSelectAst);
 		expect(result).toHaveLength(2);
-		expect(result[0]).toEqual({ name: 'id', line: 0 });
-		expect(result[1]).toEqual({ name: 'name', line: 0 });
+		expect(result[0]).toMatchObject({ name: 'id', line: 0 });
+		expect(result[1]).toMatchObject({ name: 'name', line: 0 });
 	});
 
 	it('extracts final SELECT columns from a WITH query (not CTE columns)', () => {
@@ -890,5 +890,105 @@ describe('FtlDocumentParser', () => {
 		expect(model.sqlglotWarnings![0].message).toBe('oops');
 
 		expect(model.timing).toEqual({ parseMs: 1, totalMs: 2 });
+	});
+});
+
+describe('extractSubqueries', () => {
+	it('extracts a simple subquery with alias and columns', () => {
+		// SELECT x.col FROM (SELECT col FROM t) AS x
+		const ast: AstPayload[] = [
+			{ c: 'Select' },                                                    // 0
+			{ c: 'Subquery', i: 0, k: 'from', m: { line: 1, col: 19 } },       // 1
+			{ c: 'Select', i: 1, k: 'this' },                                   // 2
+			{ c: 'Alias', i: 2, k: 'expressions', a: true },                    // 3
+			{ c: 'Column', i: 3, k: 'this' },                                   // 4
+			{ c: 'Identifier', i: 4, k: 'this', m: { line: 1, col: 14 } },      // 5: "col"
+			{ i: 5, k: 'this', v: 'col' },                                      // 6
+			{ c: 'Identifier', i: 3, k: 'alias' },                              // 7: synth alias
+			{ i: 7, k: 'this', v: 'col' },                                      // 8
+			{ c: 'TableAlias', i: 1, k: 'alias' },                              // 9
+			{ c: 'Identifier', i: 9, k: 'this', m: { line: 1, col: 42 } },      // 10: "x"
+			{ i: 10, k: 'this', v: 'x' },                                       // 11
+		];
+
+		const result = extractSubqueries(ast);
+		expect(result).toHaveLength(1);
+		expect(result[0].name).toBe('x');
+		expect(result[0].columns).toHaveLength(1);
+		expect(result[0].columns[0].name).toBe('col');
+	});
+
+	it('extracts ROW_NUMBER alias column from subquery', () => {
+		// (SELECT id, ROW_NUMBER() OVER (...) AS rn FROM t) AS x
+		const ast: AstPayload[] = [
+			{ c: 'Select' },                                                    // 0
+			{ c: 'Subquery', i: 0, k: 'from', m: { line: 1, col: 1 } },        // 1
+			{ c: 'Select', i: 1, k: 'this' },                                   // 2
+			// First column: id (synth alias)
+			{ c: 'Alias', i: 2, k: 'expressions', a: true },                    // 3
+			{ c: 'Column', i: 3, k: 'this' },                                   // 4
+			{ c: 'Identifier', i: 4, k: 'this', m: { line: 1, col: 10 } },      // 5
+			{ i: 5, k: 'this', v: 'id' },                                       // 6
+			{ c: 'Identifier', i: 3, k: 'alias' },                              // 7
+			{ i: 7, k: 'this', v: 'id' },                                       // 8
+			// Second column: ROW_NUMBER() AS rn
+			{ c: 'Alias', i: 2, k: 'expressions', a: true },                    // 9
+			{ c: 'Identifier', i: 9, k: 'alias', m: { line: 1, col: 45 } },     // 10: "rn"
+			{ i: 10, k: 'this', v: 'rn' },                                      // 11
+			// TableAlias
+			{ c: 'TableAlias', i: 1, k: 'alias' },                              // 12
+			{ c: 'Identifier', i: 12, k: 'this', m: { line: 1, col: 55 } },     // 13: "x"
+			{ i: 13, k: 'this', v: 'x' },                                       // 14
+		];
+
+		const result = extractSubqueries(ast);
+		expect(result).toHaveLength(1);
+		const cols = result[0].columns.map(c => c.name);
+		expect(cols).toContain('id');
+		expect(cols).toContain('rn');
+	});
+
+	it('skips anonymous subquery (no alias)', () => {
+		// WHERE id IN (SELECT id FROM u)
+		const ast: AstPayload[] = [
+			{ c: 'Select' },                                                    // 0
+			{ c: 'Subquery', i: 0, k: 'this', m: { line: 1, col: 1 } },        // 1
+			{ c: 'Select', i: 1, k: 'this' },                                   // 2
+			// No TableAlias child
+		];
+
+		const result = extractSubqueries(ast);
+		expect(result).toHaveLength(0);
+	});
+
+	it('extracts leftmost branch columns from UNION ALL subquery', () => {
+		// (SELECT a, b FROM t1 UNION ALL SELECT c, d FROM t2) AS x
+		const ast: AstPayload[] = [
+			{ c: 'Select' },                                                    // 0
+			{ c: 'Subquery', i: 0, k: 'from', m: { line: 1, col: 1 } },        // 1
+			{ c: 'Union', i: 1, k: 'this' },                                    // 2
+			{ c: 'Select', i: 2, k: 'this' },                                   // 3: leftmost
+			{ c: 'Alias', i: 3, k: 'expressions', a: true },                    // 4
+			{ c: 'Column', i: 4, k: 'this' },                                   // 5
+			{ c: 'Identifier', i: 5, k: 'this', m: { line: 1, col: 9 } },       // 6
+			{ i: 6, k: 'this', v: 'a' },                                        // 7
+			{ c: 'Identifier', i: 4, k: 'alias' },                              // 8
+			{ i: 8, k: 'this', v: 'a' },                                        // 9
+			{ c: 'Alias', i: 3, k: 'expressions', a: true },                    // 10
+			{ c: 'Column', i: 10, k: 'this' },                                  // 11
+			{ c: 'Identifier', i: 11, k: 'this', m: { line: 1, col: 12 } },     // 12
+			{ i: 12, k: 'this', v: 'b' },                                       // 13
+			{ c: 'Identifier', i: 10, k: 'alias' },                             // 14
+			{ i: 14, k: 'this', v: 'b' },                                       // 15
+			// TableAlias
+			{ c: 'TableAlias', i: 1, k: 'alias' },                              // 16
+			{ c: 'Identifier', i: 16, k: 'this', m: { line: 1, col: 60 } },     // 17
+			{ i: 17, k: 'this', v: 'x' },                                       // 18
+		];
+
+		const result = extractSubqueries(ast);
+		expect(result).toHaveLength(1);
+		const cols = result[0].columns.map(c => c.name);
+		expect(cols).toEqual(['a', 'b']);
 	});
 });
