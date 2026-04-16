@@ -510,17 +510,6 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 		let firstMiss: string | undefined;
 		const docLines = document.getText().split('\n');
 
-		// Count alias occurrences — shadowed aliases (same alias at multiple
-		// nesting levels) resolve ambiguously, so we suppress column diagnostics
-		// for them rather than risk false positives.
-		const aliasCount = new Map<string, number>();
-		for (const tok of tokens) {
-			if (tok.type === 'table_ref' && 'alias' in tok && tok.alias) {
-				const key = tok.alias.toLowerCase();
-				aliasCount.set(key, (aliasCount.get(key) ?? 0) + 1);
-			}
-		}
-
 		for (const t of tokens) {
 			if (t.type !== 'column_ref' || !t.table) continue;
 
@@ -538,11 +527,6 @@ export class DbtDiagnosticsProvider implements vscode.Disposable {
 			if (!cols || cols.length === 0 || cols.includes('*')) continue;
 
 			if (!cols.some(c => c.toLowerCase() === t.name.toLowerCase())) {
-				// Shadowed alias — same name used at multiple nesting levels.
-				// resolveTableRefs picks the deepest table_ref but the column may
-				// come from a wrapping subquery (e.g. ROW_NUMBER() alias).  Skip.
-				if ((aliasCount.get(t.table.toLowerCase()) ?? 0) > 1) continue;
-
 				if (!firstMiss) firstMiss = `${t.table}.${t.name} (known: ${cols.slice(0, 3).join(', ')})`;
 				const range = new vscode.Range(
 					new vscode.Position(t.line, t.col),
