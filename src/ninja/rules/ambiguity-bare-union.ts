@@ -9,6 +9,7 @@ export const bareUnionRule: TokenRule = {
 	category: NinjaCategory.Ambiguity,
 	defaultSeverity: 'warning',
 	description: 'Use UNION ALL or UNION DISTINCT explicitly — bare UNION is ambiguous.',
+	fixes: 'auto',
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document, config } = ctx;

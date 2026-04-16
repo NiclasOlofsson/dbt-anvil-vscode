@@ -18,6 +18,7 @@ export const elseNullRule: TokenRule = {
 	category: NinjaCategory.Structure,
 	defaultSeverity: 'info',
 	description: 'Redundant ELSE NULL — CASE already returns NULL by default.',
+	fixes: 'auto',
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document } = ctx;

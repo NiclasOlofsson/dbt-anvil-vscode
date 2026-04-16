@@ -16,6 +16,7 @@ export const jinjaPaddingRule: LayoutRule = {
 	category: NinjaCategory.Jinja,
 	defaultSeverity: 'warning',
 	description: 'Jinja tags should have single-space padding inside delimiters',
+	fixes: 'auto',
 
 	check(ctx: LayoutRuleContext): NinjaViolation[] {
 		const violations: NinjaViolation[] = [];

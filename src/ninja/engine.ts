@@ -6,6 +6,7 @@ import type { DocumentModel } from '../services/parse-service';
 import type { JinjaToken } from '../dbt/jinja-tokenizer';
 import type { DialectSymbols } from '../ftl/sql-parser';
 import { parseInlineSuppressions } from './config-loader';
+import type { RuleViewModel } from './editor/editor-types';
 
 // -- Token rules --
 import { keywordCapRule } from './rules/cap-keywords';
@@ -172,4 +173,16 @@ export function runNinja(
 	}
 
 	return { violations, severityMap };
+}
+
+/** Return metadata for every registered rule (no check execution). */
+export function getAllRuleMetadata(): RuleViewModel[] {
+	return ALL_RULES.map(r => ({
+		id: r.id,
+		category: r.category,
+		description: r.description,
+		defaultSeverity: r.defaultSeverity,
+		fixes: r.fixes ?? 'none',
+		type: r.type,
+	}));
 }

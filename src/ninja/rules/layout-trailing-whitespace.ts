@@ -10,6 +10,7 @@ export const trailingWhitespaceRule: LayoutRule = {
 	category: NinjaCategory.Layout,
 	defaultSeverity: 'warning',
 	description: 'Lines should not have trailing whitespace',
+	fixes: 'auto',
 
 	check(ctx: LayoutRuleContext): NinjaViolation[] {
 		const violations: NinjaViolation[] = [];

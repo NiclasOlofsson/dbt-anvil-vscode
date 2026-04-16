@@ -55,6 +55,7 @@ export const functionSpacingRule: LayoutRule = {
 	category: NinjaCategory.Layout,
 	defaultSeverity: 'warning',
 	description: 'No space between function name and opening parenthesis',
+	fixes: 'auto',
 
 	check(ctx: LayoutRuleContext): NinjaViolation[] {
 		const violations: NinjaViolation[] = [];

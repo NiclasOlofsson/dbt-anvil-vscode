@@ -2,6 +2,8 @@ import * as vscode from 'vscode';
 import type { NinjaConfig, CapitalisationPolicy, CommaPosition, OperatorPosition, NotEqualStyle, UnionStyle } from './config';
 import { DEFAULT_CONFIG } from './config';
 import type { NinjaSeverity } from './rule';
+import type { InspectedRuleConfig } from './editor/editor-model';
+import type { ConfigScope } from './editor/editor-types';
 
 /**
  * Build a NinjaConfig by reading VS Code settings (`dbt-studio.ninja.*`).
@@ -56,4 +58,46 @@ export function parseInlineSuppressions(text: string): Map<number, Set<string> |
 		}
 	}
 	return suppressions;
+}
+
+/**
+ * Inspect `dbt-studio.ninja.rules` at each scope and return per-rule
+ * user / workspace severity values.
+ */
+export function inspectRuleSeverities(): InspectedRuleConfig[] {
+	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
+	const inspection = cfg.inspect<Record<string, NinjaSeverity>>('rules');
+	const global = inspection?.globalValue ?? {};
+	const workspace = inspection?.workspaceValue ?? {};
+
+	const allIds = new Set([...Object.keys(global), ...Object.keys(workspace)]);
+	const result: InspectedRuleConfig[] = [];
+	for (const ruleId of allIds) {
+		result.push({
+			ruleId,
+			userSeverity: global[ruleId],
+			workspaceSeverity: workspace[ruleId],
+		});
+	}
+	return result;
+}
+
+/** Persist a single rule severity override at the given scope. */
+export async function saveRuleSeverity(ruleId: string, severity: NinjaSeverity, scope: ConfigScope): Promise<void> {
+	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
+	const target = scope === 'user' ? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Workspace;
+	const inspection = cfg.inspect<Record<string, NinjaSeverity>>('rules');
+	const current = (scope === 'user' ? inspection?.globalValue : inspection?.workspaceValue) ?? {};
+	await cfg.update('rules', { ...current, [ruleId]: severity }, target);
+}
+
+/** Remove a single rule override at the given scope (for Reset). */
+export async function removeRuleSeverity(ruleId: string, scope: ConfigScope): Promise<void> {
+	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
+	const target = scope === 'user' ? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Workspace;
+	const inspection = cfg.inspect<Record<string, NinjaSeverity>>('rules');
+	const current = { ...((scope === 'user' ? inspection?.globalValue : inspection?.workspaceValue) ?? {}) };
+	delete current[ruleId];
+	const value = Object.keys(current).length > 0 ? current : undefined;
+	await cfg.update('rules', value, target);
 }
