@@ -18,6 +18,7 @@ export const selectStarRule: TokenRule = {
 	category: NinjaCategory.Structure,
 	defaultSeverity: 'info',
 	description: 'Avoid SELECT * inside CTEs — use explicit column lists.',
+	configOptions: [{ settingPath: 'structure.allowStarInCte', label: 'Allow in CTE', type: 'bool' }],
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, config } = ctx;

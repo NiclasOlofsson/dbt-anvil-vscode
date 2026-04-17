@@ -14,6 +14,7 @@ export const longLinesRule: LayoutRule = {
 	category: NinjaCategory.Layout,
 	defaultSeverity: 'info',
 	description: 'Lines should not exceed the configured maximum length',
+	configOptions: [{ settingPath: 'maxLineLength', label: 'Max length', type: 'number', min: 40, max: 500 }],
 
 	check(ctx: LayoutRuleContext): NinjaViolation[] {
 		const violations: NinjaViolation[] = [];

@@ -130,6 +130,12 @@ export interface TableRefToken {
 	 * flagged by aliasing rules that apply to FROM/JOIN table references.
 	 */
 	cteDefinition?: true;
+	/**
+	 * True when this token was emitted for a subquery alias (`(SELECT ...) AS x`).
+	 * The token's `name` and `alias` are both the alias identifier — there is no
+	 * underlying table name being renamed, so self-alias checks must not fire.
+	 */
+	isSubquery?: true;
 }
 
 export interface ColumnDefToken {
@@ -376,8 +382,18 @@ export function mergeModels(models: DocumentModel[]): DocumentModel {
 		}
 	}
 
+	// sqlTokens / jinjaTags: all variants are parsed from the same raw source (generateVariants
+	// is length-preserving), so every variant's sqlTokens carries the same positions. Take the
+	// first model that has them. Dropping them here causes comment-span masking in layout rules
+	// to silently stop working for any file that contains Jinja conditionals.
+	const sqlTokens = models.find(m => m.sqlTokens)?.sqlTokens;
+	const jinjaTags = models.find(m => m.jinjaTags)?.jinjaTags;
+
 	return { ctes: [...cteMap.values()], refs, sources, finalColumns, finalSelect, tokens, timing, sqlglotWarnings, aliases,
-		pivotVirtualColumns: Object.keys(pivotVirtualColumns).length > 0 ? pivotVirtualColumns : undefined };
+		pivotVirtualColumns: Object.keys(pivotVirtualColumns).length > 0 ? pivotVirtualColumns : undefined,
+		sqlTokens,
+		jinjaTags,
+	};
 }
 
 /**

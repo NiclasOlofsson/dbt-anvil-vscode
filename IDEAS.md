@@ -156,3 +156,7 @@ Last step, make it a service that can be deployed. As an example, to azure funct
 ## Lineage bands
 
 Color the background of lineage graph so that level-1, -2 etc have different vertical bands so we can see what models belong to which depth. Will help identify stuff...
+
+## Whitespace commit support
+
+Since we provide a formatter and autofixing as part of Ninja, it is probably good if we can think about how to handle whitespace commits. We should consider if we should use some git best practice around this and help the users with it. As an example, if the user chooses to format a model, and want to separate that from actual logical changes, maybe help them by doing a commit for it. Could be that we create a commit for whitespace in the beginning, with basically nothing (empty) and then we keep amending that witch whitespace commits to help the users. Or something like that. So basically, if we format, we check vs git somehow .. and if there is mixed logic and whitespace we detect that, take the origin out, format that, commits that in our whitespace commit (ammend) and then apply the logic on the fomrmatted version. Or something like that. Can be different strateiges, but it usually helps with reviews. SQL formatting can be brutal when you apply it so it is a bit unusual situation compared to some code (the community is less aware).

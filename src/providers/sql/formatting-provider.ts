@@ -23,7 +23,9 @@ export class NinjaFormattingProvider implements vscode.DocumentFormattingEditPro
 		_token: vscode.CancellationToken,
 	): Promise<vscode.TextEdit[]> {
 		const config = loadConfig();
-		if (!config.enabled) return [];
+		// applyOnFormat gates the document-format path \u2014 applies all autoFix edits automatically
+		// without any explicit user selection. Individual quick-fixes are always offered regardless.
+		if (!config.enabled || !config.autoFix.applyOnFormat) return [];
 
 		const [model, dialectSymbols] = await Promise.all([
 			this.parseService.getDocumentModel(document),
@@ -35,7 +37,10 @@ export class NinjaFormattingProvider implements vscode.DocumentFormattingEditPro
 
 		const edits: vscode.TextEdit[] = [];
 		for (const v of result.violations) {
-			if (v.action?.type === FixAction.TYPE && v.action.autoFix) edits.push(...v.action.edits);
+			if (v.action?.type !== FixAction.TYPE) continue;
+			// Per-rule override takes precedence; fall back to the rule's built-in autoFix flag.
+			const autoFix = v.rule in config.autoFix.rules ? config.autoFix.rules[v.rule] : v.action.autoFix;
+			if (autoFix) edits.push(...v.action.edits);
 		}
 		return edits;
 	}

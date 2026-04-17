@@ -14,10 +14,13 @@ export const unusedAliasRule: TokenRule = {
 		const { model } = ctx;
 		const violations: NinjaViolation[] = [];
 
-		// Collect all table aliases
+		// Collect user-authored table aliases only.
+		// qualify() can synthesize aliases for ref/source tables that have no alias in source SQL.
+		// Those must never be linted as "unused alias".
 		const aliased: { name: string; alias: string; line: number; col: number; endCol: number }[] = [];
 		for (const tok of model.tokens) {
 			if (tok.type !== 'table_ref' || !tok.alias) continue;
+			if (tok.synthesized) continue;
 			aliased.push({
 				name: tok.name,
 				alias: tok.alias,

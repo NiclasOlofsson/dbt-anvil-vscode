@@ -10,6 +10,8 @@ export const trailingNewlineRule: LayoutRule = {
 	category: NinjaCategory.Layout,
 	defaultSeverity: 'warning',
 	description: 'Files should end with a single trailing newline',
+	actionKinds: ['fix'],
+	autoFixable: true,
 
 	check(ctx: LayoutRuleContext): NinjaViolation[] {
 		const text = ctx.text;

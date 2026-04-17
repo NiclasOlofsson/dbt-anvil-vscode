@@ -33,9 +33,14 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 	/** Lets a new scanAll() cancel an already-running scan. */
 	private _scanAbort: AbortController | null = null;
 	private _scanning = false;
+	private _countsUpdateTimer: ReturnType<typeof setTimeout> | undefined;
 
 	private readonly _onDidComplete = new vscode.EventEmitter<ScanSummary>();
 	readonly onDidComplete = this._onDidComplete.event;
+	private readonly _onDidCountsChange = new vscode.EventEmitter<Map<string, number>>();
+	readonly onDidCountsChange = this._onDidCountsChange.event;
+	private readonly _onDidScanningChange = new vscode.EventEmitter<boolean>();
+	readonly onDidScanningChange = this._onDidScanningChange.event;
 
 	constructor(
 		private readonly parseService: ParseService,
@@ -53,7 +58,14 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 		this._updateStatusBar();
 		this._statusBarItem.show();
 
-		this._disposables.push(this._ninjaCollection, this._contractsCollection, this._statusBarItem, this._onDidComplete);
+		this._disposables.push(
+			this._ninjaCollection,
+			this._contractsCollection,
+			this._statusBarItem,
+			this._onDidComplete,
+			this._onDidCountsChange,
+			this._onDidScanningChange,
+		);
 	}
 
 	/**
@@ -68,6 +80,7 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 		this._scanAbort = abort;
 
 		this._scanning = true;
+		this._onDidScanningChange.fire(true);
 		this._updateStatusBar();
 		const start = Date.now();
 
@@ -120,6 +133,7 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 
 			if (!abort.signal.aborted) {
 				this._runCrossModelChecks();
+				this._emitCountsChange();
 				const durationMs = Date.now() - start;
 				this.logger.debug(`[workspace-scanner] scan complete in ${(durationMs / 1000).toFixed(1)}s`);
 				this._onDidComplete.fire({
@@ -130,6 +144,7 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 			}
 		} finally {
 			this._scanning = false;
+			this._onDidScanningChange.fire(false);
 			this._updateStatusBar();
 		}
 	}
@@ -143,16 +158,27 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 		await this.scanAll([uri]);
 	}
 
+	/**
+	 * Invalidates all scan-time caches so the next full scan reprocesses every file.
+	 * Use this when configuration changes may affect diagnostics without changing file content.
+	 */
+	invalidateAllCaches(): void {
+		this._contentHashes.clear();
+		this._parsedModelCache.clear();
+	}
+
 	/** Clears all cached hashes, model cache, and diagnostic entries. */
 	clear(): void {
 		this._contentHashes.clear();
 		this._parsedModelCache.clear();
 		this._ninjaCollection.clear();
 		this._contractsCollection.clear();
+		this._emitCountsChange();
 	}
 
 	dispose(): void {
 		this._scanAbort?.abort();
+		if (this._countsUpdateTimer) clearTimeout(this._countsUpdateTimer);
 		for (const d of this._disposables) d.dispose();
 	}
 
@@ -218,48 +244,7 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 			return diag;
 		});
 		this._ninjaCollection.set(uri, diagnostics);
-	}
-
-	/**
-	 * Runs the given config against all SQL files in the model/analysis directories.
-	 * Returns per-rule violation counts. No side effects — does not touch DiagnosticCollections.
-	 */
-	async scan(config: ReturnType<typeof loadConfig>): Promise<Map<string, number>> {
-		const dirs = [
-			...this.pathResolver.paths.model,
-			...this.pathResolver.paths.analysis,
-		];
-		const uriSets = await Promise.all(
-			dirs.map(dir => vscode.workspace.findFiles(
-				new vscode.RelativePattern(vscode.Uri.file(dir), '**/*.sql'),
-			)),
-		);
-		const seen = new Set<string>();
-		const uris: vscode.Uri[] = [];
-		for (const set of uriSets) {
-			for (const uri of set) {
-				if (!seen.has(uri.toString())) {
-					seen.add(uri.toString());
-					uris.push(uri);
-				}
-			}
-		}
-		const dialectSymbols = await this.parseService.getDialectSymbols().catch(() => undefined);
-		const counts = new Map<string, number>();
-		for (const uri of uris) {
-			const raw = await fsPromises.readFile(uri.fsPath, 'utf8').catch(() => undefined);
-			if (!raw) continue;
-			const content = raw.includes('\r') ? raw.replace(/\r\n/g, '\n') : raw;
-			const model = await this.parseService.parseContent(uri, content).catch(() => undefined);
-			const parsedModel: DocumentModel = model ?? { ctes: [], refs: [], sources: [], tokens: [], finalColumns: [], timing: { parseMs: 0, totalMs: 0 } };
-			const shim = new TextDocumentShim(uri, content);
-			const jinjaTokens = tokenize(content);
-			const result = runNinja(shim, parsedModel, jinjaTokens, config, dialectSymbols ?? undefined);
-			for (const v of result.violations) {
-				counts.set(v.rule, (counts.get(v.rule) ?? 0) + 1);
-			}
-		}
-		return counts;
+		this._scheduleCountsChange();
 	}
 
 	private _runCrossModelChecks(): void {
@@ -341,6 +326,15 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 		}
 	}
 
+	/** Current per-rule violation counts from the already-scanned diagnostic collection. */
+	get currentRuleCounts(): Map<string, number> {
+		return this._aggregateRuleCounts();
+	}
+
+	get isScanning(): boolean {
+		return this._scanning;
+	}
+
 	/** Aggregate per-rule violation counts from the current ninja diagnostic collection. */
 	private _aggregateRuleCounts(): Map<string, number> {
 		const counts = new Map<string, number>();
@@ -352,6 +346,22 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 			}
 		});
 		return counts;
+	}
+
+	private _scheduleCountsChange(): void {
+		if (this._countsUpdateTimer) return;
+		this._countsUpdateTimer = setTimeout(() => {
+			this._countsUpdateTimer = undefined;
+			this._emitCountsChange();
+		}, 250);
+	}
+
+	private _emitCountsChange(): void {
+		if (this._countsUpdateTimer) {
+			clearTimeout(this._countsUpdateTimer);
+			this._countsUpdateTimer = undefined;
+		}
+		this._onDidCountsChange.fire(this._aggregateRuleCounts());
 	}
 
 	private _updateStatusBar(): void {

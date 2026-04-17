@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
+import { lastContentTokenOnLine, firstContentTokenOnLine, tokenStartCol } from '../fix-utils';
 
 /**
  * Enforces consistent boolean operator placement (trailing or leading).
@@ -17,6 +18,9 @@ export const operatorPositionRule: TokenRule = {
 	category: NinjaCategory.Convention,
 	defaultSeverity: 'warning',
 	description: 'Enforce consistent boolean operator placement (trailing or leading).',
+	actionKinds: ['fix'],
+	autoFixable: true,
+	configOptions: [{ settingPath: 'layout.operatorPosition', label: 'Position', type: 'enum', choices: ['trailing', 'leading'] }],
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document, config } = ctx;
@@ -44,14 +48,22 @@ export const operatorPositionRule: TokenRule = {
 				if (beforeOp === '' && line > 0) {
 					const range = new vscode.Range(line, opStart, line, opStart + opLen);
 					const opText = lineText.slice(opStart, opStart + opLen).trim();
-					const prevLineText = lines[line - 1];
 					const trailingSpace = lineText[opStart + opLen] === ' ' ? 1 : 0;
+					// Scan backward to find the last line that has SQL tokens (skip pure comment lines)
+					let prevSqlLine = line - 1;
+					if (model.sqlTokens) {
+						while (prevSqlLine > 0 && !lastContentTokenOnLine(model.sqlTokens, prevSqlLine)) {
+							prevSqlLine--;
+						}
+					}
+					const prevAnchor = model.sqlTokens ? lastContentTokenOnLine(model.sqlTokens, prevSqlLine) : undefined;
+					const insertCol = prevAnchor?.col ?? lines[prevSqlLine].length;
 					violations.push({
 						rule: 'ninja.convention.operator-position',
 						message: `'${opText}' should be at the end of the previous line (trailing), not at the start.`,
 						range,
 						action: { type: FixAction.TYPE, edits: [
-							vscode.TextEdit.insert(new vscode.Position(line - 1, prevLineText.length), ` ${opText}`),
+							vscode.TextEdit.insert(new vscode.Position(prevSqlLine, insertCol), ` ${opText}`),
 							vscode.TextEdit.delete(new vscode.Range(line, opStart, line, opStart + opLen + trailingSpace)),
 						], autoFix: true },
 					});
@@ -64,16 +76,17 @@ export const operatorPositionRule: TokenRule = {
 						const range = new vscode.Range(line, opStart, line, opStart + opLen);
 						const opText = lineText.slice(opStart, opStart + opLen).trim();
 						const nextLineText = lines[line + 1];
-						const nextIndent = nextLineText.length - nextLineText.trimStart().length;
 						const spaceBefore = opStart > 0 && lineText[opStart - 1] === ' ' ? 1 : 0;
+						const nextAnchor = firstContentTokenOnLine(model.sqlTokens, line + 1);
+						const insertCol = nextAnchor ? tokenStartCol(nextAnchor) : (nextLineText.length - nextLineText.trimStart().length);
 						violations.push({
 							rule: 'ninja.convention.operator-position',
 							message: `'${opText}' should be at the start of the next line (leading), not at the end.`,
 							range,
-								action: { type: FixAction.TYPE, edits: [
-									vscode.TextEdit.delete(new vscode.Range(line, opStart - spaceBefore, line, opStart + opLen)),
-									vscode.TextEdit.insert(new vscode.Position(line + 1, nextIndent), `${opText} `),
-								], autoFix: true },
+							action: { type: FixAction.TYPE, edits: [
+								vscode.TextEdit.delete(new vscode.Range(line, opStart - spaceBefore, line, opStart + opLen)),
+								vscode.TextEdit.insert(new vscode.Position(line + 1, insertCol), `${opText} `),
+							], autoFix: true },
 						});
 					}
 				}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mockDocument, cfg, model, sqlTok } from './helpers';
+import { mockDocument, cfg, model, sqlTok, applyEditsToText } from './helpers';
 import { columnAsRule } from '../../ninja/rules/alias-column-as';
 import type { FinalSelectInfo, FinalSelectColumnInfo } from '../../services/parse-service';
 import type { SqlToken } from '../../ftl/parse-result';
@@ -108,5 +108,19 @@ describe(RULE, () => {
 		};
 		const tokens: SqlToken[] = [sqlTok('SELECT', 0, 5, 0, 6)];
 		expect(check(sql, fs, tokens)).toHaveLength(2);
+	});
+
+	// ── Outcome assertions (applyEditsToText) ────────────────────────────────
+
+	it('applying fix yields correct SQL', () => {
+		const sql = 'select id user_id from t';
+		const fs: FinalSelectInfo = {
+			line: 0, col: 0, endLine: 0, endCol: 18,
+			columns: [finalCol('user_id', 0, 7, 18, { expression: 'id', aliasLine: 0, aliasCol: 10, aliasEndCol: 17 })],
+		};
+		const tokens: SqlToken[] = [sqlTok('SELECT', 0, 5, 0, 6)];
+		const v = check(sql, fs, tokens);
+		const result = applyEditsToText(sql, (v[0].action as FixAction).edits);
+		expect(result).toBe('select id AS user_id from t');
 	});
 });

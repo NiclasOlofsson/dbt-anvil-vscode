@@ -3,6 +3,7 @@ import type { ManifestIndexer } from '../../indexing/manifest-indexer';
 import type { DbtPathResolver } from '../../dbt/dbt-path-resolver';
 import type { ILogger } from '../../types/logger';
 import type { NinjaResult } from '../../ninja/engine';
+import { loadConfig } from '../../ninja/config-loader';
 import { FixAction, SnippetAction } from '../../ninja/violation';
 
 /**
@@ -165,6 +166,9 @@ export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 		// Ninja quick-fixes
 		const ninjaResult = this._getNinjaResult?.(document.uri);
 		if (ninjaResult) {
+			const ninjaConfig = loadConfig();
+			// Individual per-violation quick-fixes are always offered — the user explicitly
+			// invoked the action, so autoFix policy does not apply here.
 			for (const v of ninjaResult.violations) {
 				if (!v.range.intersection(range)) continue;
 
@@ -196,9 +200,15 @@ export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 				}
 			}
 
-			// "Fix all ninja violations" action when there are fixable violations
+			// Explicit "Fix all N" — always offered when there are fixable violations; the user
+			// consciously chose this action so autoFix policy does not apply.
 			// Exclude codeActionOnly violations (e.g. delete-CTE) — those are code fixes only.
-			const fixable = ninjaResult.violations.filter((v): v is typeof v & { action: FixAction } => v.action?.type === FixAction.TYPE && v.action.autoFix);
+			// Per-rule autoFix.rules overrides take precedence over each violation's built-in autoFix flag.
+			const fixable = ninjaResult.violations.filter((v): v is typeof v & { action: FixAction } => {
+				if (v.action?.type !== FixAction.TYPE) return false;
+				const autoFix = v.rule in ninjaConfig.autoFix.rules ? ninjaConfig.autoFix.rules[v.rule] : v.action.autoFix;
+				return autoFix;
+			});
 			if (fixable.length > 1) {
 				const fixAll = new vscode.CodeAction(
 					`Fix all ${fixable.length} ninja violations`,
@@ -213,8 +223,9 @@ export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 				actions.push(fixAll);
 			}
 
-			// source.fixAll.ninja — used by VS Code's "Fix All" command and on-save
-			if (fixable.length > 0) {
+			// source.fixAll.ninja — triggered automatically by VS Code on save (outside user control).
+			// Gated by applyOnFixAll so the user can disable silent background fixes.
+			if (ninjaConfig.autoFix.applyOnFixAll && fixable.length > 0) {
 				const sourceFixAll = new vscode.CodeAction(
 					'Fix all ninja violations',
 					vscode.CodeActionKind.SourceFixAll.append('ninja'),

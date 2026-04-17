@@ -148,18 +148,19 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 					if (!enabled) {
 						this.clearAll();
 					} else {
-						for (const editor of vscode.window.visibleTextEditors) {
-							this._validateDocument(editor.document);
+						for (const doc of vscode.workspace.textDocuments) {
+							if (doc.languageId !== 'jinja-sql') continue;
+							this._validateDocument(doc);
+							this._runNinjaDirect(doc);
 						}
 					}
 				}
 				if (e.affectsConfiguration('dbt-studio.ninja')) {
 					this._cachedNinjaConfig = undefined;
 					// Re-run ninja on all open SQL documents when ninja settings change
-					for (const editor of vscode.window.visibleTextEditors) {
-						if (editor.document.languageId === 'jinja-sql') {
-							this._runNinjaDebounced(editor.document);
-						}
+					for (const doc of vscode.workspace.textDocuments) {
+						if (doc.languageId !== 'jinja-sql') continue;
+						this._runNinjaDebounced(doc);
 					}
 				}
 			}),
@@ -269,6 +270,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		for (const editor of vscode.window.visibleTextEditors) {
 			if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) break;
 			this._validateDocument(editor.document);
+			this._runNinjaDirect(editor.document);
 		}
 	}
 
@@ -280,6 +282,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) return;
 		for (const editor of vscode.window.visibleTextEditors) {
 			this._validateDocument(editor.document);
+			this._runNinjaDirect(editor.document);
 		}
 	}
 
@@ -435,6 +438,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 
 	private async _runNinjaAsync(document: vscode.TextDocument): Promise<void> {
 		if (!this._startupReady) return;
+		if (document.languageId !== 'jinja-sql') return;
 		const config = this._cachedNinjaConfig ??= loadConfig();
 		if (!config.enabled) {
 			this._ninjaCollection.delete(document.uri);

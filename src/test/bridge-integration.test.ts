@@ -405,6 +405,21 @@ describe('ftl parse_document – conditional branches', () => {
 		return mergeModels(models);
 	}
 
+	it('mergeModels preserves sqlTokens (regression: comment masking broken for Jinja conditional files)', async () => {
+		// When a file has {% if %} blocks, generateVariants produces multiple variants and
+		// mergeModels is called. The original mergeModels dropped sqlTokens, so layout rules
+		// had no comment spans to mask — causing false-positive violations inside -- comments.
+		const source = [
+			'select',
+			'    {% if is_incremental() %}count (*){% else %}coalesce(id, 0){% endif %}  -- count (comment)',
+			'from raw_table',
+		].join('\n');
+		const model = await parseWithBranches(source);
+		expect(model.sqlTokens, 'mergeModels must carry sqlTokens from the first variant').toBeDefined();
+		expect(Array.isArray(model.sqlTokens)).toBe(true);
+		expect(model.sqlTokens!.length).toBeGreaterThan(0);
+	}, 30_000);
+
 	it('refs from both if/else arms are captured in the merged model', async () => {
 		const source = [
 			'with src as (',

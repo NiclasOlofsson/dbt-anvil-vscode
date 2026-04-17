@@ -15,6 +15,7 @@ export const unusedCteRule: TokenRule = {
 	category: NinjaCategory.Structure,
 	defaultSeverity: 'info',
 	description: 'CTE is defined but never referenced.',
+	actionKinds: ['fix'],
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document } = ctx;

@@ -19,6 +19,7 @@ export const commaPositionRule: TokenRule = {
 	category: NinjaCategory.Convention,
 	defaultSeverity: 'warning',
 	description: 'Enforce consistent comma placement (trailing or leading).',
+	configOptions: [{ settingPath: 'layout.commaPosition', label: 'Position', type: 'enum', choices: ['trailing', 'leading'] }],
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document, config } = ctx;

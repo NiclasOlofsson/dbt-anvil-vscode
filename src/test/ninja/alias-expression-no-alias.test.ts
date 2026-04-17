@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { model, run, violationsFor } from './helpers';
+import { model, run, violationsFor, sqlTok } from './helpers';
 import type { NinjaViolation } from '../../ninja/violation';
 import { SnippetAction } from '../../ninja/violation';
 import type { FinalSelectInfo } from '../../services/parse-service';
@@ -63,5 +63,18 @@ describe(RULE, () => {
 		expect((v[0].action as SnippetAction).snippet).toBe(' as ${1:alias}');
 		expect((v[0].action as SnippetAction).position.line).toBe(0);
 		expect((v[0].action as SnippetAction).position.character).toBe(15);
+	});
+
+	it('insert position uses last SQL token col when sqlTokens extend beyond endCol', () => {
+		// Simulates count(*) where endCol=15 but the R_PAREN token ends at col 16
+		const m = model({
+			finalSelect: fs([{ name: 'count(*)', line: 0, col: 7, endLine: 0, endCol: 15, expression: 'count(*)' }]),
+			sqlTokens: [sqlTok('R_PAREN', 14, 14, 0, 16)], // col=16 > endCol=15
+		});
+		const result = run('select count(*)', {}, m);
+		const v = violationsFor(result, RULE);
+		expect(v).toHaveLength(1);
+		// Insert should be at col 16 (from token), not col 15 (from endCol)
+		expect((v[0].action as SnippetAction).position.character).toBe(16);
 	});
 });

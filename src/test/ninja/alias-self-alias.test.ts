@@ -45,4 +45,19 @@ describe(RULE, () => {
 		};
 		expect(check([tok])).toHaveLength(0);
 	});
+
+	it('ignores subquery alias — (...) AS po has name=alias but isSubquery=true', () => {
+		// A Subquery token has name=alias (both are the alias identifier).
+		// The isSubquery flag tells the rule there is no underlying table being renamed.
+		const tok: import('../../services/parse-service').TableRefToken = {
+			type: 'table_ref',
+			name: 'po',
+			line: 5,
+			col: 5,
+			endCol: 7,
+			alias: 'po',
+			isSubquery: true,
+		};
+		expect(check([tok])).toHaveLength(0);
+	});
 });

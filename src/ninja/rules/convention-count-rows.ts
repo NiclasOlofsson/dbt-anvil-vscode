@@ -9,6 +9,8 @@ export const countRowsRule: TokenRule = {
 	category: NinjaCategory.Convention,
 	defaultSeverity: 'warning',
 	description: 'Use COUNT(*) instead of COUNT(1) for row counts.',
+	actionKinds: ['fix'],
+	autoFixable: true,
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document } = ctx;

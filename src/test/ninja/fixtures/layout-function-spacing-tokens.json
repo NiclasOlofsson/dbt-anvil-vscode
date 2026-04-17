@@ -1,0 +1,310 @@
+{
+	"comment_with_count": {
+		"sql": "when is_display_pallet then qty  -- Display qty IS pallet count (conversion used later)\n",
+		"sqlTokens": [
+			{
+				"type": "WHEN",
+				"start": 0,
+				"end": 3,
+				"line": 0,
+				"col": 4,
+				"comments": []
+			},
+			{
+				"type": "VAR",
+				"start": 5,
+				"end": 21,
+				"line": 0,
+				"col": 22,
+				"comments": []
+			},
+			{
+				"type": "THEN",
+				"start": 23,
+				"end": 26,
+				"line": 0,
+				"col": 27,
+				"comments": []
+			},
+			{
+				"type": "VAR",
+				"start": 28,
+				"end": 30,
+				"line": 0,
+				"col": 31,
+				"comments": [
+					{
+						"start": 33,
+						"end": 87,
+						"text": " Display qty IS pallet count (conversion used later)"
+					}
+				]
+			}
+		]
+	},
+	"real_violation": {
+		"sql": "select count (*) from t\n",
+		"sqlTokens": [
+			{
+				"type": "SELECT",
+				"start": 0,
+				"end": 5,
+				"line": 0,
+				"col": 6,
+				"comments": []
+			},
+			{
+				"type": "VAR",
+				"start": 7,
+				"end": 11,
+				"line": 0,
+				"col": 12,
+				"comments": []
+			},
+			{
+				"type": "L_PAREN",
+				"start": 13,
+				"end": 13,
+				"line": 0,
+				"col": 14,
+				"comments": []
+			},
+			{
+				"type": "STAR",
+				"start": 14,
+				"end": 14,
+				"line": 0,
+				"col": 15,
+				"comments": []
+			},
+			{
+				"type": "R_PAREN",
+				"start": 15,
+				"end": 15,
+				"line": 0,
+				"col": 16,
+				"comments": []
+			},
+			{
+				"type": "FROM",
+				"start": 17,
+				"end": 20,
+				"line": 0,
+				"col": 21,
+				"comments": []
+			},
+			{
+				"type": "VAR",
+				"start": 22,
+				"end": 22,
+				"line": 0,
+				"col": 23,
+				"comments": []
+			}
+		]
+	},
+	"comment_only": {
+		"sql": "select x  -- count (foo)\n",
+		"sqlTokens": [
+			{
+				"type": "SELECT",
+				"start": 0,
+				"end": 5,
+				"line": 0,
+				"col": 6,
+				"comments": []
+			},
+			{
+				"type": "VAR",
+				"start": 7,
+				"end": 7,
+				"line": 0,
+				"col": 8,
+				"comments": [
+					{
+						"start": 10,
+						"end": 24,
+						"text": " count (foo)"
+					}
+				]
+			}
+		]
+	},
+	"violation_plus_comment": {
+		"sql": "select count (*) from t -- count is a function\n",
+		"sqlTokens": [
+			{
+				"type": "SELECT",
+				"start": 0,
+				"end": 5,
+				"line": 0,
+				"col": 6,
+				"comments": []
+			},
+			{
+				"type": "VAR",
+				"start": 7,
+				"end": 11,
+				"line": 0,
+				"col": 12,
+				"comments": []
+			},
+			{
+				"type": "L_PAREN",
+				"start": 13,
+				"end": 13,
+				"line": 0,
+				"col": 14,
+				"comments": []
+			},
+			{
+				"type": "STAR",
+				"start": 14,
+				"end": 14,
+				"line": 0,
+				"col": 15,
+				"comments": []
+			},
+			{
+				"type": "R_PAREN",
+				"start": 15,
+				"end": 15,
+				"line": 0,
+				"col": 16,
+				"comments": []
+			},
+			{
+				"type": "FROM",
+				"start": 17,
+				"end": 20,
+				"line": 0,
+				"col": 21,
+				"comments": []
+			},
+			{
+				"type": "VAR",
+				"start": 22,
+				"end": 22,
+				"line": 0,
+				"col": 23,
+				"comments": [
+					{
+						"start": 24,
+						"end": 46,
+						"text": " count is a function"
+					}
+				]
+			}
+		]
+	},
+	"block_comment": {
+		"sql": "select x /* count (foo) */ from t\n",
+		"sqlTokens": [
+			{
+				"type": "SELECT",
+				"start": 0,
+				"end": 5,
+				"line": 0,
+				"col": 6,
+				"comments": []
+			},
+			{
+				"type": "VAR",
+				"start": 7,
+				"end": 7,
+				"line": 0,
+				"col": 8,
+				"comments": []
+			},
+			{
+				"type": "FROM",
+				"start": 27,
+				"end": 30,
+				"line": 0,
+				"col": 31,
+				"comments": [
+					{
+						"start": 9,
+						"end": 26,
+						"text": "/* count (foo) */"
+					}
+				]
+			},
+			{
+				"type": "VAR",
+				"start": 32,
+				"end": 32,
+				"line": 0,
+				"col": 33,
+				"comments": []
+			}
+		]
+	},
+	"string_with_comment": {
+		"sql": "select '-- not a comment', avg (x) -- count (x)\n",
+		"sqlTokens": [
+			{
+				"type": "SELECT",
+				"start": 0,
+				"end": 5,
+				"line": 0,
+				"col": 6,
+				"comments": []
+			},
+			{
+				"type": "STRING",
+				"start": 7,
+				"end": 24,
+				"line": 0,
+				"col": 25,
+				"comments": []
+			},
+			{
+				"type": "COMMA",
+				"start": 25,
+				"end": 25,
+				"line": 0,
+				"col": 26,
+				"comments": []
+			},
+			{
+				"type": "VAR",
+				"start": 27,
+				"end": 29,
+				"line": 0,
+				"col": 30,
+				"comments": []
+			},
+			{
+				"type": "L_PAREN",
+				"start": 31,
+				"end": 31,
+				"line": 0,
+				"col": 32,
+				"comments": []
+			},
+			{
+				"type": "VAR",
+				"start": 32,
+				"end": 32,
+				"line": 0,
+				"col": 33,
+				"comments": []
+			},
+			{
+				"type": "R_PAREN",
+				"start": 33,
+				"end": 33,
+				"line": 0,
+				"col": 34,
+				"comments": [
+					{
+						"start": 35,
+						"end": 47,
+						"text": " count (x)"
+					}
+				]
+			}
+		]
+	}
+}

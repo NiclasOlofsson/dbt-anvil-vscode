@@ -33,6 +33,9 @@ export const literalCapRule: TokenRule = {
 	category: NinjaCategory.Capitalisation,
 	defaultSeverity: 'warning',
 	description: 'SQL literals (NULL, TRUE, FALSE) should follow the configured capitalisation policy',
+	actionKinds: ['fix'],
+	autoFixable: true,
+	configOptions: [{ settingPath: 'capitalisation.literals', label: 'Style', type: 'enum', choices: ['upper', 'lower', 'consistent'] }],
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const policy = ctx.config.capitalisation.literals;
