@@ -909,12 +909,12 @@
 					},
 					"dbt-studio.ninja.autoFix.applyOnFormat": {
 						"type": "boolean",
-						"default": true,
+						"default": false,
 						"markdownDescription": "Enable auto-fix when formatting a document. Which rules auto-fix is controlled by `#dbt-studio.ninja.autoFix.rules#`."
 					},
 					"dbt-studio.ninja.autoFix.applyOnFixAll": {
 						"type": "boolean",
-						"default": true,
+						"default": false,
 						"markdownDescription": "Enable auto-fix on save. Which rules auto-fix is controlled by `#dbt-studio.ninja.autoFix.rules#`."
 					},
 					"dbt-studio.ninja.autoFix.rules": {

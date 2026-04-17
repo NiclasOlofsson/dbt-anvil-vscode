@@ -45,8 +45,8 @@ export const DEFAULT_CONFIG: NinjaConfig = {
 	enabled: true,
 	rules: {},
 	autoFix: {
-		applyOnFormat: true,
-		applyOnFixAll: true,
+		applyOnFormat: false,
+		applyOnFixAll: false,
 		rules: {},
 	},
 	capitalisation: {

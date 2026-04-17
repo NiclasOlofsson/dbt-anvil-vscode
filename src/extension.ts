@@ -1303,6 +1303,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.workspace.onDidSaveTextDocument(doc => {
 			if (doc.languageId === 'jinja-sql') void workspaceScanner?.invalidate(doc.uri);
 		}),
+		vscode.workspace.onDidCloseTextDocument(doc => {
+			// When a document is closed, EditorDiagnosticsProvider no longer covers it.
+			// Re-scan so the workspace scanner picks it up and shows diagnostics in the gutter.
+			if (doc.languageId === 'jinja-sql') void workspaceScanner?.invalidate(doc.uri);
+		}),
 		vscode.window.onDidChangeVisibleTextEditors(_editors => { /* scanner no longer owns a collection */ }),
 		vscode.workspace.onDidChangeConfiguration(e => {
 			if (e.affectsConfiguration('dbt-studio.ninja.workspaceDiagnostics')) initWorkspaceScanner();
