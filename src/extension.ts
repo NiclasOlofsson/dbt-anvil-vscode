@@ -1307,6 +1307,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.workspace.onDidChangeConfiguration(e => {
 			if (e.affectsConfiguration('dbt-studio.ninja.workspaceDiagnostics')) initWorkspaceScanner();
 			if (e.affectsConfiguration('dbt-studio.ninja') && workspaceScanner) {
+				workspaceScanner.invalidateAllCaches();
 				void workspaceScanner.scanAll();
 			}
 		}),

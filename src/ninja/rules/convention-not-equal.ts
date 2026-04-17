@@ -9,6 +9,9 @@ export const notEqualRule: TokenRule = {
 	category: NinjaCategory.Convention,
 	defaultSeverity: 'warning',
 	description: 'Enforce consistent not-equal operator style (!= or <>).',
+	actionKinds: ['fix'],
+	autoFixable: true,
+	configOptions: [{ settingPath: 'convention.notEqual', label: 'Style', type: 'enum', choices: ['!=', '<>'] }],
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document, config } = ctx;

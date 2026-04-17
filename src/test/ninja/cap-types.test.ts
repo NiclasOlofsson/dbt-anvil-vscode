@@ -78,6 +78,44 @@ describe(RULE, () => {
 		expect(v.length).toBe(1);
 	});
 
+	it('does not flag type inside -- line comment when sqlTokens include comment span', () => {
+		const sql = '-- Date should be lower\nselect 1';
+		const start = sql.indexOf('Date');
+		const end = start + 'Date'.length;
+		const modelWithCommentSpan = {
+			...emptyModel,
+			sqlTokens: [{
+				type: 'SELECT',
+				start: sql.indexOf('select'),
+				end: sql.indexOf('select') + 'select'.length - 1,
+				line: 1,
+				col: 'select'.length,
+				comments: [{ start, end, text: '-- Date should be lower' }],
+			}],
+		};
+		const v = violationsFor(run(sql, capCfg('types', 'lower'), modelWithCommentSpan), RULE);
+		expect(v.length).toBe(0);
+	});
+
+	it('does not flag type inside /* */ block comment when sqlTokens include comment span', () => {
+		const sql = 'select 1 /* Date */';
+		const start = sql.indexOf('Date');
+		const end = start + 'Date'.length;
+		const modelWithCommentSpan = {
+			...emptyModel,
+			sqlTokens: [{
+				type: 'SELECT',
+				start: 0,
+				end: 5,
+				line: 0,
+				col: 6,
+				comments: [{ start, end, text: '/* Date */' }],
+			}],
+		};
+		const v = violationsFor(run(sql, capCfg('types', 'lower'), modelWithCommentSpan), RULE);
+		expect(v.length).toBe(0);
+	});
+
 	// ── Fix generation ─────────────────────────────────────────────────────
 
 	it('fix targets the type keyword range', () => {

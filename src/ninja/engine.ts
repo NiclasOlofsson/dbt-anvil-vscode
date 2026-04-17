@@ -155,7 +155,7 @@ export function runNinja(
 			if (rule.type === 'token') {
 				ruleViolations = rule.check({ model, document, jinjaTokens, config, dialectSymbols });
 			} else {
-				ruleViolations = rule.check({ text, lines, jinjaTokens, document, config });
+				ruleViolations = rule.check({ text, lines, jinjaTokens, document, config, model });
 			}
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
@@ -183,5 +183,9 @@ export function getAllRuleMetadata(): RuleViewModel[] {
 		description: r.description,
 		defaultSeverity: r.defaultSeverity,
 		type: r.type,
+		actionKinds: r.actionKinds,
+		autoFixable: r.autoFixable,
+		fixable: !!r.actionKinds?.includes('fix'),
+		configOptions: r.configOptions,
 	}));
 }

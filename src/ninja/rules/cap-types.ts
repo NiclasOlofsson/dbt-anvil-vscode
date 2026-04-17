@@ -43,14 +43,19 @@ export const typeCapRule: TokenRule = {
 	category: NinjaCategory.Capitalisation,
 	defaultSeverity: 'warning',
 	description: 'SQL datatype keywords should follow the configured capitalisation policy',
+	actionKinds: ['fix'],
+	autoFixable: true,
+	configOptions: [{ settingPath: 'capitalisation.types', label: 'Style', type: 'enum', choices: ['upper', 'lower', 'consistent'] }],
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const policy = ctx.config.capitalisation.types;
 		const violations: NinjaViolation[] = [];
 		const consistentMap = new Map<string, string>();
+		const commentSpans = (ctx.model.sqlTokens ?? []).flatMap(t => t.comments ?? []);
 
 		const text = ctx.document.getText();
 		const lines = text.split('\n');
+		let absOffset = 0; // running byte offset into text (matches sqlTokens coordinate space)
 
 		// Build identifier positions to skip
 		const identifierPositions = new Set<string>();
@@ -63,6 +68,7 @@ export const typeCapRule: TokenRule = {
 		for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
 			const line = lines[lineIdx];
 			let i = 0;
+			const lineStart = absOffset;
 			while (i < line.length) {
 				const ch = line.charCodeAt(i);
 				if ((ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch === 95) {
@@ -77,7 +83,9 @@ export const typeCapRule: TokenRule = {
 						}
 					}
 					const word = line.slice(start, i);
-					if (types.has(word.toLowerCase()) && !identifierPositions.has(`${lineIdx}:${start}`)) {
+					const absWordStart = lineStart + start;
+					const inComment = commentSpans.some(s => absWordStart >= s.start && absWordStart < s.end);
+					if (!inComment && types.has(word.toLowerCase()) && !identifierPositions.has(`${lineIdx}:${start}`)) {
 						const fix = checkPolicy(word, policy, consistentMap);
 						if (fix !== undefined) {
 							const range = new vscode.Range(lineIdx, start, lineIdx, start + word.length);
@@ -93,6 +101,7 @@ export const typeCapRule: TokenRule = {
 					i++;
 				}
 			}
+			absOffset += line.length + 1; // +1 for the '\n' consumed by split
 		}
 
 		return violations;

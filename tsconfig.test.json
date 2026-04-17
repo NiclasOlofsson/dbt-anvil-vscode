@@ -2,7 +2,9 @@
 	"compilerOptions": {
 		"module": "Node16",
 		"target": "ES2022",
-		"lib": ["ES2022"],
+		"lib": [
+			"ES2022"
+		],
 		"sourceMap": true,
 		"rootDir": "src",
 		"strict": true,
@@ -10,7 +12,10 @@
 		"noFallthroughCasesInSwitch": true,
 		"noUnusedParameters": false,
 		"skipLibCheck": true,
-		"types": ["node"],
+		"resolveJsonModule": true,
+		"types": [
+			"node"
+		],
 		"outDir": "out/test"
 	},
 	"include": [

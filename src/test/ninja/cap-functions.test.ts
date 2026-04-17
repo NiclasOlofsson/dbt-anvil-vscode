@@ -62,6 +62,44 @@ describe(RULE, () => {
 		expect((v[0].action as FixAction).edits[0].newText).toBe('count');
 	});
 
+	it('does not flag function inside -- line comment when sqlTokens include comment span', () => {
+		const sql = '-- COUNT(*)\nselect 1';
+		const start = sql.indexOf('COUNT');
+		const end = start + 'COUNT(*)'.length;
+		const modelWithCommentSpan = {
+			...emptyModel,
+			sqlTokens: [{
+				type: 'SELECT',
+				start: sql.indexOf('select'),
+				end: sql.indexOf('select') + 'select'.length - 1,
+				line: 1,
+				col: 'select'.length,
+				comments: [{ start, end, text: '-- COUNT(*)' }],
+			}],
+		};
+		const v = violationsFor(run(sql, capCfg('functions', 'lower'), modelWithCommentSpan), RULE);
+		expect(v.length).toBe(0);
+	});
+
+	it('does not flag function inside /* */ block comment when sqlTokens include comment span', () => {
+		const sql = 'select 1 /* COUNT(*) */';
+		const start = sql.indexOf('COUNT');
+		const end = start + 'COUNT(*)'.length;
+		const modelWithCommentSpan = {
+			...emptyModel,
+			sqlTokens: [{
+				type: 'SELECT',
+				start: 0,
+				end: 5,
+				line: 0,
+				col: 6,
+				comments: [{ start, end, text: '/* COUNT(*) */' }],
+			}],
+		};
+		const v = violationsFor(run(sql, capCfg('functions', 'lower'), modelWithCommentSpan), RULE);
+		expect(v.length).toBe(0);
+	});
+
 	// ── Fix generation ─────────────────────────────────────────────────────
 
 	it('fix targets the function name only', () => {

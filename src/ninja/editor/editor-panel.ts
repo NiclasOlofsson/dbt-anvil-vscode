@@ -2,27 +2,48 @@ import * as vscode from 'vscode';
 import { EditorModel } from './editor-model';
 import { renderEditor } from './editor-html';
 import { getAllRuleMetadata } from '../engine';
-import { inspectRuleSeverities, saveRuleSeverity, removeRuleSeverity } from '../config-loader';
-import { DEFAULT_CONFIG } from '../config';
+import { inspectRuleSeverities, saveRuleSeverity, removeRuleSeverity, inspectAutoFixRules, saveAutoFixRule, removeAutoFixRule, saveConfigOption, inspectConfigOptions, removeConfigOption, getOverriddenOptionPaths } from '../config-loader';
 import type { WorkspaceDiagnosticsScanner } from '../workspace-diagnostics-scanner';
-import type { InboundMessage, ConfigScope } from './editor-types';
+import type { InboundMessage, ConfigScope, RuleOptionValue } from './editor-types';
 import type { NinjaSeverity } from '../rule';
 import type { NinjaCategory } from '../categories';
 
 export class NinjaEditorPanel implements vscode.Disposable {
 	static readonly viewType = 'dbt-studio.ninjaRuleEditor';
 	private static _instance: NinjaEditorPanel | undefined;
+	private static readonly DEFER_SAVE_MS = 5000;
 
 	private _panel: vscode.WebviewPanel | undefined;
 	private readonly _model: EditorModel;
 	private readonly _disposables: vscode.Disposable[] = [];
 	private _scanner: WorkspaceDiagnosticsScanner | undefined;
 	private _lastRuleCounts: Map<string, number> | undefined;
-	private _lastBaselineCounts: Map<string, number> | undefined;
+	private _writingConfig = false;
+	private _saveDebounceTimer: ReturnType<typeof setTimeout> | undefined;
+	private _flushingDeferredWrites = false;
+	private readonly _pendingSeverityWrites = new Map<string, { scope: ConfigScope; ruleId: string; severity: NinjaSeverity }>();
+	private readonly _pendingAutoFixWrites = new Map<string, { scope: ConfigScope; ruleId: string; enabled: boolean }>();
+	private readonly _pendingOptionWrites = new Map<string, { scope: ConfigScope; settingPath: string; value: RuleOptionValue }>();
 
 	private constructor() {
 		this._model = new EditorModel(getAllRuleMetadata());
 		this._model.applyInspectedConfig(inspectRuleSeverities());
+		this._model.applyAutoFixConfig(inspectAutoFixRules());
+		this._model.applyOptionValues(inspectConfigOptions(this._allOptionPaths()));
+		this._model.applyOptionOverrides(getOverriddenOptionPaths(this._allOptionPaths(), this._model.activeScope));
+		// Refresh view when the user edits settings.json directly
+		this._disposables.push(
+			vscode.workspace.onDidChangeConfiguration(e => {
+				if (this._writingConfig) return;
+				if (e.affectsConfiguration('dbt-studio.ninja')) {
+					this._model.applyInspectedConfig(inspectRuleSeverities());
+					this._model.applyAutoFixConfig(inspectAutoFixRules());
+					this._model.applyOptionValues(inspectConfigOptions(this._allOptionPaths()));
+					this._model.applyOptionOverrides(getOverriddenOptionPaths(this._allOptionPaths(), this._model.activeScope));
+					this._pushSnapshot();
+				}
+			}),
+		);
 	}
 
 	static getInstance(): NinjaEditorPanel {
@@ -35,10 +56,26 @@ export class NinjaEditorPanel implements vscode.Disposable {
 	setScanner(scanner: WorkspaceDiagnosticsScanner | undefined): void {
 		this._scanner = scanner;
 		if (scanner) {
+			this._model.setScanning(scanner.isScanning);
+			// Apply any counts the scanner already has (from a scan before the panel was opened)
+			const existing = scanner.currentRuleCounts;
+			if (existing.size > 0) {
+				this._lastRuleCounts = existing;
+				this._model.applyViolationCounts(existing);
+			}
 			this._disposables.push(
+				scanner.onDidCountsChange(ruleCounts => {
+					this._lastRuleCounts = ruleCounts;
+					this._model.applyViolationCounts(ruleCounts);
+					this._pushSnapshot();
+				}),
+				scanner.onDidScanningChange(scanning => {
+					this._model.setScanning(scanning);
+					this._pushSnapshot();
+				}),
 				scanner.onDidComplete(summary => {
 					this._lastRuleCounts = summary.ruleCounts;
-					this._model.applyConfiguredCounts(summary.ruleCounts);
+					this._model.applyViolationCounts(summary.ruleCounts);
 					this._pushSnapshot();
 				}),
 			);
@@ -68,17 +105,21 @@ export class NinjaEditorPanel implements vscode.Disposable {
 			this._disposables,
 		);
 
-		// Apply the last completed scan immediately — no new scan triggered on open.
+		// Apply the last completed scan immediately.
 		if (this._lastRuleCounts) {
-			this._model.applyConfiguredCounts(this._lastRuleCounts);
-		}
-		if (this._lastBaselineCounts) {
-			this._model.applyBaselineCounts(this._lastBaselineCounts);
+			this._model.applyViolationCounts(this._lastRuleCounts);
 		}
 		this._pushSnapshot();
+
+		// If no counts are available yet, kick off a scan so the editor populates.
+		if (!this._lastRuleCounts || this._lastRuleCounts.size === 0) {
+			void this._scanner?.scanAll();
+		}
 	}
 
 	dispose(): void {
+		if (this._saveDebounceTimer) clearTimeout(this._saveDebounceTimer);
+		void this._flushDeferredWrites();
 		this._panel?.dispose();
 		for (const d of this._disposables) d.dispose();
 		this._disposables.length = 0;
@@ -91,14 +132,17 @@ export class NinjaEditorPanel implements vscode.Disposable {
 		switch (msg.type) {
 			case 'switchScope':
 				this._model.switchScope(msg.scope as ConfigScope);
+				this._model.applyOptionOverrides(getOverriddenOptionPaths(this._allOptionPaths(), this._model.activeScope));
 				this._pushSnapshot();
 				break;
 			case 'setSeverity':
 				this._model.setSeverity(msg.ruleId, msg.severity as NinjaSeverity);
-				void this._persistAndRefresh(msg.ruleId, msg.severity as NinjaSeverity);
+				this._queueSeveritySave(msg.ruleId, msg.severity as NinjaSeverity);
+				this._pushSnapshot();
 				break;
 			case 'resetRule':
 				this._model.resetRule(msg.ruleId);
+				this._dropPendingRuleWrites(msg.ruleId, this._model.activeScope);
 				void this._persistReset(msg.ruleId);
 				break;
 			case 'resetAll':
@@ -107,11 +151,6 @@ export class NinjaEditorPanel implements vscode.Disposable {
 				break;
 			case 'scan':
 				void this._scanner?.scanAll();
-				void this._scanner?.scan({ ...DEFAULT_CONFIG, enabled: true, rules: {} }).then(counts => {
-					this._lastBaselineCounts = counts;
-					this._model.applyBaselineCounts(counts);
-					this._pushSnapshot();
-				});
 				break;
 			case 'setCategory':
 				this._model.setCategory(msg.category as NinjaCategory | 'all');
@@ -121,24 +160,134 @@ export class NinjaEditorPanel implements vscode.Disposable {
 				this._model.setSearch(msg.query);
 				this._pushSnapshot();
 				break;
+			case 'setAutoFix':
+				this._model.setAutoFix(msg.ruleId, msg.enabled);
+				this._queueAutoFixSave(msg.ruleId, msg.enabled);
+				this._pushSnapshot();
+				break;
+			case 'setSort':
+				this._model.setSort(msg.column, msg.dir);
+				this._pushSnapshot();
+				break;
+			case 'setRuleOption':
+				this._model.applyOptionValues({ [msg.settingPath]: msg.value });
+				this._queueOptionSave(msg.settingPath, msg.value);
+				this._pushSnapshot();
+				break;
 		}
 	}
 
 	// ── Persistence ───────────────────────────────────────────
 
-	private async _persistAndRefresh(ruleId: string, severity: NinjaSeverity): Promise<void> {
-		await saveRuleSeverity(ruleId, severity, this._model.activeScope);
-		this._model.applyInspectedConfig(inspectRuleSeverities());
-		this._pushSnapshot();
+	private _queueSeveritySave(ruleId: string, severity: NinjaSeverity): void {
+		const scope = this._model.activeScope;
+		this._pendingSeverityWrites.set(`${scope}:${ruleId}`, { scope, ruleId, severity });
+		this._scheduleDeferredSave();
+	}
+
+	private _queueAutoFixSave(ruleId: string, enabled: boolean): void {
+		const scope = this._model.activeScope;
+		this._pendingAutoFixWrites.set(`${scope}:${ruleId}`, { scope, ruleId, enabled });
+		this._scheduleDeferredSave();
+	}
+
+	private _queueOptionSave(settingPath: string, value: RuleOptionValue): void {
+		const scope = this._model.activeScope;
+		this._pendingOptionWrites.set(`${scope}:${settingPath}`, { scope, settingPath, value });
+		this._scheduleDeferredSave();
+	}
+
+	private _scheduleDeferredSave(): void {
+		if (this._saveDebounceTimer) clearTimeout(this._saveDebounceTimer);
+		this._saveDebounceTimer = setTimeout(() => {
+			this._saveDebounceTimer = undefined;
+			void this._flushDeferredWrites();
+		}, NinjaEditorPanel.DEFER_SAVE_MS);
+	}
+
+	private _hasPendingWrites(): boolean {
+		return this._pendingSeverityWrites.size > 0
+			|| this._pendingAutoFixWrites.size > 0
+			|| this._pendingOptionWrites.size > 0;
+	}
+
+	private async _flushDeferredWrites(): Promise<void> {
+		if (this._flushingDeferredWrites) return;
+		this._flushingDeferredWrites = true;
+		try {
+			while (this._hasPendingWrites()) {
+				const severityWrites = [...this._pendingSeverityWrites.values()];
+				const autoFixWrites = [...this._pendingAutoFixWrites.values()];
+				const optionWrites = [...this._pendingOptionWrites.values()];
+				this._pendingSeverityWrites.clear();
+				this._pendingAutoFixWrites.clear();
+				this._pendingOptionWrites.clear();
+
+				this._writingConfig = true;
+				try {
+					for (const write of severityWrites) {
+						await saveRuleSeverity(write.ruleId, write.severity, write.scope);
+					}
+					for (const write of autoFixWrites) {
+						await saveAutoFixRule(write.ruleId, write.enabled, write.scope);
+					}
+					for (const write of optionWrites) {
+						await saveConfigOption(write.settingPath, write.value, write.scope);
+					}
+				} finally {
+					this._writingConfig = false;
+				}
+			}
+
+			this._model.applyInspectedConfig(inspectRuleSeverities());
+			this._model.applyAutoFixConfig(inspectAutoFixRules());
+			this._model.applyOptionValues(inspectConfigOptions(this._allOptionPaths()));
+			this._model.applyOptionOverrides(getOverriddenOptionPaths(this._allOptionPaths(), this._model.activeScope));
+			this._pushSnapshot();
+		} finally {
+			this._flushingDeferredWrites = false;
+		}
+	}
+
+	private _dropPendingRuleWrites(ruleId: string, scope: ConfigScope): void {
+		this._pendingSeverityWrites.delete(`${scope}:${ruleId}`);
+		this._pendingAutoFixWrites.delete(`${scope}:${ruleId}`);
+		const rule = getAllRuleMetadata().find(r => r.id === ruleId);
+		for (const opt of rule?.configOptions ?? []) {
+			this._pendingOptionWrites.delete(`${scope}:${opt.settingPath}`);
+		}
 	}
 
 	private async _persistReset(ruleId: string): Promise<void> {
-		await removeRuleSeverity(ruleId, this._model.activeScope);
+		this._writingConfig = true;
+		try {
+			await removeRuleSeverity(ruleId, this._model.activeScope);
+			await removeAutoFixRule(ruleId, this._model.activeScope);
+			const rule = getAllRuleMetadata().find(r => r.id === ruleId);
+			for (const opt of rule?.configOptions ?? []) {
+				await removeConfigOption(opt.settingPath, this._model.activeScope);
+			}
+		} finally {
+			this._writingConfig = false;
+		}
 		this._model.applyInspectedConfig(inspectRuleSeverities());
+		this._model.applyAutoFixConfig(inspectAutoFixRules());
+		this._model.applyOptionValues(inspectConfigOptions(this._allOptionPaths()));
+		this._model.applyOptionOverrides(getOverriddenOptionPaths(this._allOptionPaths(), this._model.activeScope));
 		this._pushSnapshot();
 	}
 
 	// ── Render ────────────────────────────────────────────────
+
+	private _allOptionPaths(): string[] {
+		const paths = new Set<string>();
+		for (const rule of getAllRuleMetadata()) {
+			for (const opt of rule.configOptions ?? []) {
+				paths.add(opt.settingPath);
+			}
+		}
+		return [...paths];
+	}
 
 	private _pushSnapshot(): void {
 		if (!this._panel) return;

@@ -179,12 +179,10 @@ describe('EditorModel', () => {
 	// ── Counts ────────────────────────────────────────────────
 
 	it('includes violation counts in snapshot', () => {
-		model.applyBaselineCounts(new Map([['cap-keywords', 5], ['alias-column-as', 3]]));
-		model.applyConfiguredCounts(new Map([['cap-keywords', 2]]));
+		model.applyViolationCounts(new Map([['cap-keywords', 5], ['alias-column-as', 3]]));
 		const snap = model.snapshot();
 		const kw = snap.rules.find(r => r.rule.id === 'cap-keywords')!;
-		expect(kw.baselineCount).toBe(5);
-		expect(kw.configuredCount).toBe(2);
+		expect(kw.violationCount).toBe(5);
 	});
 
 	// ── Summary ───────────────────────────────────────────────
@@ -197,11 +195,9 @@ describe('EditorModel', () => {
 	});
 
 	it('summary aggregates violation counts', () => {
-		model.applyBaselineCounts(new Map([['cap-keywords', 10], ['cap-functions', 5]]));
-		model.applyConfiguredCounts(new Map([['cap-keywords', 3]]));
+		model.applyViolationCounts(new Map([['cap-keywords', 10], ['cap-functions', 5]]));
 		const snap = model.snapshot();
-		expect(snap.summary.baselineViolations).toBe(15);
-		expect(snap.summary.configuredViolations).toBe(3);
+		expect(snap.summary.violations).toBe(15);
 	});
 
 	// ── markClean ─────────────────────────────────────────────

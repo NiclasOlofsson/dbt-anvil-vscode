@@ -52,6 +52,14 @@ export interface SqlToken {
 	line: number;
 	/** 1-based end column (= 0-based exclusive end col), matching sqlglot's token convention */
 	col: number;
+	/**
+	 * Comment spans attached to this token by the sqlglot tokenizer.
+	 * sqlglot never emits standalone COMMENT tokens — instead it attaches comment
+	 * text to the adjacent SQL token: trailing comments (same line) go to the
+	 * preceding token; leading comments go to the succeeding token.
+	 * start is inclusive, end is exclusive (points to the char after the comment).
+	 */
+	comments?: Array<{ start: number; end: number; text: string }>;
 }
 
 export interface JinjaRefSpan {

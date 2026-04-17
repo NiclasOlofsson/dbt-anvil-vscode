@@ -32,21 +32,113 @@ from sqlglot.tokens import Tokenizer as _Tokenizer
 _SQL_STUB = '__jinja__'
 
 
+def _comment_positions(sql, tokens):
+    """Post-process a token list to compute absolute positions for attached comments.
+
+    sqlglot never emits standalone COMMENT tokens.  Instead it accumulates comment
+    text in an internal list and attaches it to an adjacent Token object:
+      - Comments before the first real token or between two tokens → attached to the
+        *following* token (via _add() receiving comments=self._comments).
+      - Comments that appear after the last token in the stream → attached to the
+        *preceding* token (via the end-of-scan cleanup).
+
+    IMPORTANT: sqlglot silently *strips* block comments (/* ... */) from the token
+    stream without attaching them to any token.  To catch those, we scan every
+    inter-token gap for comment markers regardless of whether sqlglot attached any
+    comment text to that token.
+
+    Returns a list (one entry per token) of lists of dicts: {start, end, text}.
+    start is inclusive, end is exclusive (points to char *after* the comment).
+    """
+    n = len(tokens)
+    result = []
+    for idx, t in enumerate(tokens):
+        if idx == n - 1:
+            gap_start = t.end + 1
+            gap_end = len(sql)
+        else:
+            gap_start = (tokens[idx - 1].end + 1) if idx > 0 else 0
+            gap_end = t.start
+
+        comments_with_pos = []
+        # Build a lookup of comment texts attached by sqlglot so we can match them
+        # to positions as we scan the gap.  For block comments sqlglot stripped,
+        # t.comments will be empty and we still need to scan the gap.
+        remaining_texts = list(t.comments) if t.comments else []
+        pos = gap_start
+        text_idx = 0
+        while pos < gap_end:
+            while pos < gap_end and sql[pos] in " \t\r\n":
+                pos += 1
+            if pos >= gap_end:
+                break
+            two = sql[pos : pos + 2]
+            if two == "--":
+                c_start = pos
+                nl = sql.find("\n", pos)
+                c_end = nl if nl != -1 else len(sql)
+                comment_text = (
+                    remaining_texts[text_idx]
+                    if text_idx < len(remaining_texts)
+                    else sql[c_start:c_end]
+                )
+                text_idx += 1
+                comments_with_pos.append(
+                    {"start": c_start, "end": c_end, "text": comment_text}
+                )
+                pos = c_end
+            elif two == "/*":
+                c_start = pos
+                close = sql.find("*/", pos + 2)
+                c_end = (close + 2) if close != -1 else len(sql)
+                comment_text = (
+                    remaining_texts[text_idx]
+                    if text_idx < len(remaining_texts)
+                    else sql[c_start:c_end]
+                )
+                text_idx += 1
+                comments_with_pos.append(
+                    {"start": c_start, "end": c_end, "text": comment_text}
+                )
+                pos = c_end
+            elif sql[pos : pos + 2] == "{#":
+                c_start = pos
+                close = sql.find("#}", pos + 2)
+                c_end = (close + 2) if close != -1 else len(sql)
+                comment_text = (
+                    remaining_texts[text_idx]
+                    if text_idx < len(remaining_texts)
+                    else sql[c_start:c_end]
+                )
+                text_idx += 1
+                comments_with_pos.append(
+                    {"start": c_start, "end": c_end, "text": comment_text}
+                )
+                pos = c_end
+            else:
+                break
+        result.append(comments_with_pos)
+    return result
+
+
 def _tokenize(sql, dialect):
     try:
         if not dialect:
             raise ValueError(f"dialect is required, got {dialect!r}")
         d = None if dialect == "ansi" else dialect
         tok = _Dialect.get_or_raise(d).tokenizer_class() if d else _Tokenizer()
+        tokens = list(tok.tokenize(sql))
+        comment_pos = _comment_positions(sql, tokens)
         return [
             {
-                'type': t.token_type.name,
-                'start': t.start,
-                'end': t.end,
-                'line': t.line - 1,
-                'col': t.col,
+                "type": t.token_type.name,
+                "start": t.start,
+                "end": t.end,
+                "line": t.line - 1,
+                "col": t.col,
+                "comments": comment_pos[i],
             }
-            for t in tok.tokenize(sql)
+            for i, t in enumerate(tokens)
         ]
     except Exception:
         return []

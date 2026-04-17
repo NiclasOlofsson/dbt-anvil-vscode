@@ -55,9 +55,14 @@ export const functionSpacingRule: LayoutRule = {
 	category: NinjaCategory.Layout,
 	defaultSeverity: 'warning',
 	description: 'No space between function name and opening parenthesis',
+	actionKinds: ['fix'],
+	autoFixable: true,
 
 	check(ctx: LayoutRuleContext): NinjaViolation[] {
 		const violations: NinjaViolation[] = [];
+		const commentSpans = (ctx.model?.sqlTokens ?? []).flatMap(t => t.comments ?? []);
+
+		let absOffset = 0; // running byte offset into ctx.text (matches sqlTokens coordinate space)
 
 		for (let lineIdx = 0; lineIdx < ctx.lines.length; lineIdx++) {
 			const line = ctx.lines[lineIdx];
@@ -76,25 +81,29 @@ export const functionSpacingRule: LayoutRule = {
 						}
 					}
 					const word = line.slice(start, i);
-					// Check if this is a known function followed by space(s) then '('
 					if (SQL_FUNCTIONS.has(word.toLowerCase())) {
-						let j = i;
-						const spaceStart = j;
-						while (j < line.length && (line[j] === ' ' || line[j] === '\t')) j++;
-						if (j > spaceStart && j < line.length && line[j] === '(') {
-							const range = new vscode.Range(lineIdx, spaceStart, lineIdx, j);
-							violations.push({
-								rule: 'ninja.layout.function_spacing',
-								message: `Unexpected space before '(' in function call '${word}'`,
-								range,
-								action: { type: FixAction.TYPE, edits: [vscode.TextEdit.delete(range)], autoFix: true },
-							});
+						const absWordStart = absOffset + start;
+						const inComment = commentSpans.some(s => absWordStart >= s.start && absWordStart < s.end);
+						if (!inComment) {
+							let j = i;
+							const spaceStart = j;
+							while (j < line.length && (line[j] === ' ' || line[j] === '\t')) j++;
+							if (j > spaceStart && j < line.length && line[j] === '(') {
+								const range = new vscode.Range(lineIdx, spaceStart, lineIdx, j);
+								violations.push({
+									rule: 'ninja.layout.function_spacing',
+									message: `Unexpected space before '(' in function call '${word}'`,
+									range,
+									action: { type: FixAction.TYPE, edits: [vscode.TextEdit.delete(range)], autoFix: true },
+								});
+							}
 						}
 					}
 				} else {
 					i++;
 				}
 			}
+			absOffset += line.length + 1; // +1 for the '\n' consumed by split
 		}
 
 		return violations;

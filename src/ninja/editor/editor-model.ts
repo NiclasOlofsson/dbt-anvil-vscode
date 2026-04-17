@@ -1,5 +1,5 @@
 import type { NinjaCategory } from '../categories';
-import type { NinjaSeverity } from '../rule';
+import type { NinjaSeverity, RuleOptionValue } from '../rule';
 import type {
 	ConfigScope,
 	EditorSnapshot,
@@ -7,6 +7,7 @@ import type {
 	RuleState,
 	RuleScopeInfo,
 	RuleViewModel,
+	SortColumn,
 } from './editor-types';
 
 // ── Inspected config input ──────────────────────────────────────────
@@ -26,14 +27,24 @@ export class EditorModel {
 	private _searchQuery = '';
 	private _isDirty = false;
 	private _isScanning = false;
+	private _sortColumn: SortColumn | null = null;
+	private _sortDir: 'asc' | 'desc' = 'asc';
 
 	// Per-scope draft overrides: ruleId -> severity
 	private _userOverrides = new Map<string, NinjaSeverity>();
 	private _workspaceOverrides = new Map<string, NinjaSeverity>();
 
+	// Per-rule auto-fix overrides (merged from all scopes, workspace wins)
+	private _autoFixRules = new Map<string, boolean>();
+
 	// Violation counts
-	private _baselineCounts = new Map<string, number>();
-	private _configuredCounts = new Map<string, number>();
+	private _violationCounts = new Map<string, number>();
+
+	// Global config option values keyed by settingPath
+	private _optionValues = new Map<string, RuleOptionValue>();
+
+	// Paths that have an explicit override at the active scope
+	private _overriddenOptionPaths = new Set<string>();
 
 	constructor(rules: RuleViewModel[]) {
 		this._rules = rules;
@@ -49,6 +60,24 @@ export class EditorModel {
 
 	// ── Config data ingestion ─────────────────────────────────────
 
+	applyAutoFixConfig(rules: Record<string, boolean>): void {
+		this._autoFixRules = new Map(Object.entries(rules));
+	}
+
+	applyOptionValues(values: Record<string, RuleOptionValue>): void {
+		for (const [k, v] of Object.entries(values)) {
+			this._optionValues.set(k, v);
+		}
+	}
+
+	applyOptionOverrides(paths: Set<string>): void {
+		this._overriddenOptionPaths = new Set(paths);
+	}
+
+	setAutoFix(ruleId: string, enabled: boolean): void {
+		this._autoFixRules.set(ruleId, enabled);
+	}
+
 	applyInspectedConfig(configs: InspectedRuleConfig[]): void {
 		this._userOverrides.clear();
 		this._workspaceOverrides.clear();
@@ -61,12 +90,8 @@ export class EditorModel {
 
 	// ── Counts ────────────────────────────────────────────────────
 
-	applyBaselineCounts(counts: Map<string, number>): void {
-		this._baselineCounts = counts;
-	}
-
-	applyConfiguredCounts(counts: Map<string, number>): void {
-		this._configuredCounts = counts;
+	applyViolationCounts(counts: Map<string, number>): void {
+		this._violationCounts = counts;
 	}
 
 	// ── Severity mutations ────────────────────────────────────────
@@ -78,6 +103,7 @@ export class EditorModel {
 
 	resetRule(ruleId: string): void {
 		this._overridesForActiveScope().delete(ruleId);
+		this._autoFixRules.delete(ruleId);
 		this._isDirty = true;
 	}
 
@@ -94,6 +120,11 @@ export class EditorModel {
 
 	setSearch(query: string): void {
 		this._searchQuery = query;
+	}
+
+	setSort(column: SortColumn | null, dir: 'asc' | 'desc'): void {
+		this._sortColumn = column;
+		this._sortDir = dir;
 	}
 
 	setScanning(scanning: boolean): void {
@@ -122,7 +153,11 @@ export class EditorModel {
 	}
 
 	isModified(ruleId: string): boolean {
-		return this._overridesForActiveScope().has(ruleId);
+		const rule = this._rules.find(r => r.id === ruleId);
+		const hasOptionOverride = rule?.configOptions?.some(o => this._overriddenOptionPaths.has(o.settingPath)) ?? false;
+		return this._overridesForActiveScope().has(ruleId)
+			|| (this._autoFixRules.get(ruleId) ?? true) !== true
+			|| hasOptionOverride;
 	}
 
 	// ── Dirty overrides for persistence ───────────────────────────
@@ -146,23 +181,39 @@ export class EditorModel {
 	// ── Snapshot ──────────────────────────────────────────────────
 
 	snapshot(): EditorSnapshot {
-		const filtered = this._filteredRules();
-		const rules: RuleState[] = filtered.map(rule => ({
-			rule,
-			scopeInfo: this.scopeInfo(rule.id),
-			baselineCount: this._baselineCounts.get(rule.id) ?? 0,
-			configuredCount: this._configuredCounts.get(rule.id) ?? 0,
-			isModified: this.isModified(rule.id),
-		}));
+		const sorted = this._sortedRules(this._filteredRules());
+		const rules: RuleState[] = sorted.map(rule => {
+			const configOptionValues: Record<string, RuleOptionValue> = {};
+			for (const opt of rule.configOptions ?? []) {
+				const val = this._optionValues.get(opt.settingPath);
+				if (val !== undefined) configOptionValues[opt.settingPath] = val;
+			}
+			return {
+				rule,
+				scopeInfo: this.scopeInfo(rule.id),
+				violationCount: this._violationCounts.get(rule.id) ?? 0,
+				isModified: this.isModified(rule.id),
+				autoFixEnabled: this._autoFixRules.get(rule.id) ?? true,
+				configOptionValues,
+			};
+		});
+
+		const allCategoryCounts = new Map<NinjaCategory, number>();
+		for (const rule of this._rules) {
+			allCategoryCounts.set(rule.category, (allCategoryCounts.get(rule.category) ?? 0) + 1);
+		}
 
 		return {
 			activeScope: this._activeScope,
 			rules,
+			allCategoryCounts,
 			activeCategory: this._activeCategory,
 			searchQuery: this._searchQuery,
 			isDirty: this._isDirty,
 			isScanning: this._isScanning,
 			summary: this._summary(),
+			sortColumn: this._sortColumn,
+			sortDir: this._sortDir,
 		};
 	}
 
@@ -186,20 +237,35 @@ export class EditorModel {
 		return rules;
 	}
 
+	private _sortedRules(rules: RuleViewModel[]): RuleViewModel[] {
+		if (!this._sortColumn) return rules;
+		const dir = this._sortDir === 'asc' ? 1 : -1;
+		const col = this._sortColumn;
+		return [...rules].sort((a, b) => {
+			if (col === 'id') return dir * a.id.localeCompare(b.id);
+			if (col === 'description') return dir * a.description.localeCompare(b.description);
+			if (col === 'counts') {
+				const aC = this._violationCounts.get(a.id) ?? 0;
+				const bC = this._violationCounts.get(b.id) ?? 0;
+				return dir * (aC - bC);
+			}
+			// 'severity'
+			const order: NinjaSeverity[] = ['error', 'warning', 'info', 'hint', 'off'];
+			return dir * (order.indexOf(this.effectiveSeverity(a.id)) - order.indexOf(this.effectiveSeverity(b.id)));
+		});
+	}
+
 	private _summary(): EditorSummary {
 		let activeRules = 0;
-		let configuredViolations = 0;
-		let baselineViolations = 0;
+		let violations = 0;
 		for (const rule of this._rules) {
 			if (this.effectiveSeverity(rule.id) !== 'off') activeRules++;
-			configuredViolations += this._configuredCounts.get(rule.id) ?? 0;
-			baselineViolations += this._baselineCounts.get(rule.id) ?? 0;
+			violations += this._violationCounts.get(rule.id) ?? 0;
 		}
 		return {
 			totalRules: this._rules.length,
 			activeRules,
-			configuredViolations,
-			baselineViolations,
+			violations,
 		};
 	}
 }

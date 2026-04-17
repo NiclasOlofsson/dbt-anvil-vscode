@@ -9,6 +9,9 @@ export const unionStyleRule: TokenRule = {
 	category: NinjaCategory.Convention,
 	defaultSeverity: 'warning',
 	description: 'Enforce consistent UNION qualifier style (ALL vs DISTINCT).',
+	actionKinds: ['fix'],
+	autoFixable: true,
+	configOptions: [{ settingPath: 'convention.unionStyle', label: 'Preferred', type: 'enum', choices: ['all', 'distinct'] }],
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document, config } = ctx;

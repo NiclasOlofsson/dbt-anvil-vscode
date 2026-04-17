@@ -77,6 +77,22 @@ export function capCfg(key: 'keywords' | 'functions' | 'literals' | 'types', pol
 	return { capitalisation: { ...DEFAULT_CONFIG.capitalisation, [key]: policy } };
 }
 
+/**
+ * Apply a list of TextEdits to a string, returning the result.
+ * Edits are applied end-to-start (by offset) so earlier edits don't shift later ones.
+ */
+export function applyEditsToText(text: string, edits: vscode.TextEdit[]): string {
+	const doc = mockDocument(text);
+	const sorted = [...edits].sort((a, b) => doc.offsetAt(b.range.start) - doc.offsetAt(a.range.start));
+	let result = text;
+	for (const edit of sorted) {
+		const start = doc.offsetAt(edit.range.start);
+		const end = doc.offsetAt(edit.range.end);
+		result = result.slice(0, start) + edit.newText + result.slice(end);
+	}
+	return result;
+}
+
 // ── Model-building helpers for semantic rules ──────────────────────────
 
 /** Build a CteInfo stub. */

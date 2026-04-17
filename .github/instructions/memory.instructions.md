@@ -29,4 +29,16 @@ Use the edit tools (replace_string_in_file, multi_replace_string_in_file, create
 
 Follow the ESLint/Stylistic configuration in `eslint.config.mjs`: single quotes, template literals only when interpolation is needed.
 
+## HARD NO: String-scanning for insert positions
+
+Never compute insert/edit positions by measuring raw line strings (e.g. `prevLineText.length`, `nextIndent = line.length - line.trimStart().length`). These counts include trailing comments and whitespace that produce wrong positions.
+
+Always derive positions from `model.sqlTokens` using the utilities in `src/ninja/fix-utils.ts`:
+- `lastContentTokenOnLine(tokens, line)` — last non-comment token on a line; `.col` is the insertion column
+- `firstContentTokenOnLine(tokens, line)` — first non-comment token; use `tokenStartCol(t)` for its column
+- `tokenStartCol(token)` — converts exclusive end col → 0-based start col
+- `findExpressionEndCol(tokens, line, col, fallback)` — tracks paren depth to find true expression end
+
+Always fall back gracefully to the AST value when `model.sqlTokens` is undefined.
+
 ## Notes

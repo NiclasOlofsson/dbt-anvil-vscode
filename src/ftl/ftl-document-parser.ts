@@ -215,6 +215,13 @@ function _finalSelectNode(ast: AstPayload[]): AstNode | undefined {
 // As a fallback, plain-string leaf values (rare) are also handled.
 function _colExprName(ast: AstPayload[], exprIdx: number): string | undefined {
 	if (ast[exprIdx]?.c === 'Star') return undefined;
+	// Qualified wildcard like `cp.*` — Column whose 'this' child is Star (not bare identifier).
+	// Return '*' so extractCtes marks the CTE as wildcard-containing, which suppresses
+	// false-positive unused-column violations for the table qualifier name 'cp'.
+	if (ast[exprIdx]?.c === 'Column') {
+		const thisChild = childOf(ast, exprIdx, 'this');
+		if (thisChild?.node.c === 'Star') return '*';
+	}
 	if (ast[exprIdx]?.c === 'Alias') {
 		// Case 1: alias stored as a plain string leaf (rare)
 		const leaf = leafValue(ast, exprIdx, 'alias');
@@ -696,6 +703,7 @@ export function extractTokens(ast: AstPayload[], ctes: CteInfo[]): TokenInfo[] {
 			aliasLine: aPos.line,
 			aliasCol: aPos.col,
 			aliasEndCol: aPos.endCol,
+			isSubquery: true,
 		};
 		// The alias belongs to the parent scope (the scope that contains the subquery).
 		token.scopeId = innermostScope(ast, sqIdx);

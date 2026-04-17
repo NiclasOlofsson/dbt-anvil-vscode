@@ -10,6 +10,9 @@ export const maxBlankLinesRule: LayoutRule = {
 	category: NinjaCategory.Layout,
 	defaultSeverity: 'warning',
 	description: 'There should be at most N consecutive blank lines',
+	actionKinds: ['fix'],
+	autoFixable: true,
+	configOptions: [{ settingPath: 'maxBlankLines', label: 'Max lines', type: 'number', min: 1, max: 10 }],
 
 	check(ctx: LayoutRuleContext): NinjaViolation[] {
 		const violations: NinjaViolation[] = [];

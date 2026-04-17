@@ -907,6 +907,65 @@
 							]
 						}
 					},
+					"dbt-studio.ninja.autoFix.applyOnFormat": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "Enable auto-fix when formatting a document. Which rules auto-fix is controlled by `#dbt-studio.ninja.autoFix.rules#`."
+					},
+					"dbt-studio.ninja.autoFix.applyOnFixAll": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "Enable auto-fix on save. Which rules auto-fix is controlled by `#dbt-studio.ninja.autoFix.rules#`."
+					},
+					"dbt-studio.ninja.autoFix.rules": {
+						"type": "object",
+						"default": {},
+						"markdownDescription": "Per-rule auto-fix overrides. Only applies when `#dbt-studio.ninja.autoFix.applyOnFormat#` or `#dbt-studio.ninja.autoFix.applyOnFixAll#` is enabled.",
+						"propertyNames": {
+							"enum": [
+								"ninja.aliasing.column-as",
+								"ninja.aliasing.expression-no-alias",
+								"ninja.aliasing.require-table-alias",
+								"ninja.aliasing.self-alias",
+								"ninja.aliasing.unique-table",
+								"ninja.aliasing.unused-alias",
+								"ninja.ambiguity.bare-union",
+								"ninja.ambiguity.distinct-groupby",
+								"ninja.ambiguity.implicit-join",
+								"ninja.ambiguity.qualified-columns",
+								"ninja.cap.functions",
+								"ninja.cap.keywords",
+								"ninja.cap.literals",
+								"ninja.cap.types",
+								"ninja.convention.coalesce",
+								"ninja.convention.comma-position",
+								"ninja.convention.count-rows",
+								"ninja.convention.is-null",
+								"ninja.convention.left-join",
+								"ninja.convention.not-equal",
+								"ninja.convention.operator-position",
+								"ninja.convention.union-style",
+								"ninja.jinja.padding",
+								"ninja.layout.function_spacing",
+								"ninja.layout.indent",
+								"ninja.layout.leading-whitespace",
+								"ninja.layout.long-lines",
+								"ninja.layout.max-blank-lines",
+								"ninja.layout.trailing-newline",
+								"ninja.layout.trailing-whitespace",
+								"ninja.structure.distinct-parens",
+								"ninja.structure.else-null",
+								"ninja.structure.select-star",
+								"ninja.structure.simple-case",
+								"ninja.structure.unused-columns",
+								"ninja.structure.unused-cte",
+								"ninja.structure.unused-join"
+							]
+						},
+						"additionalProperties": {
+							"type": "boolean"
+						}
+					},
 					"dbt-studio.ninja.capitalisation.keywords": {
 						"type": "string",
 						"default": "lower",

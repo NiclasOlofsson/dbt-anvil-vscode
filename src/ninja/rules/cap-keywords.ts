@@ -5,6 +5,8 @@ import type { TokenRule, TokenRuleContext } from '../rule';
 import type { CapitalisationPolicy } from '../config';
 import { tokenText, tokenRange } from '../token-utils';
 
+const RULE_ID = 'ninja.cap.keywords';
+
 // sqlglot TokenType names that represent SQL keywords.
 // All stored lowercase for comparison against token.type.toLowerCase().
 const KEYWORD_TOKEN_TYPES = new Set([
@@ -46,11 +48,14 @@ function checkPolicy(word: string, policy: CapitalisationPolicy, expected: Map<s
 }
 
 export const keywordCapRule: TokenRule = {
-	id: 'ninja.cap.keywords',
+	id: RULE_ID,
 	type: 'token',
 	category: NinjaCategory.Capitalisation,
 	defaultSeverity: 'warning',
 	description: 'SQL keywords should follow the configured capitalisation policy',
+	actionKinds: ['fix'],
+	autoFixable: true,
+	configOptions: [{ settingPath: 'capitalisation.keywords', label: 'Style', type: 'enum', choices: ['upper', 'lower', 'consistent'] }],
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const policy = ctx.config.capitalisation.keywords;
@@ -71,7 +76,7 @@ export const keywordCapRule: TokenRule = {
 			if (fix !== undefined) {
 				const range = tokenRange(text, token);
 				violations.push({
-					rule: 'ninja.cap.keywords',
+					rule: RULE_ID,
 					message: `Expected keyword '${word}' to be '${fix}'`,
 					range,
 					action: { type: FixAction.TYPE, edits: [vscode.TextEdit.replace(range, fix)], autoFix: true },

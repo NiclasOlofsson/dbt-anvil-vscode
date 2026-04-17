@@ -325,6 +325,31 @@ describe('extractCtes', () => {
 		expect(result[0].columns.map(c => c.name)).toEqual(['x']);
 		expect(result[1].columns.map(c => c.name)).toEqual(['y']);
 	});
+
+	it('qualified wildcard cp.* produces a * column entry (not cp)', () => {
+		// WITH t AS (SELECT cp.* FROM src AS cp)  SELECT * FROM t
+		// cp.* is Column(this=Star, table=Identifier('cp'))
+		// Must produce columns: [{ name: '*', ... }] to suppress false-positive unused-column violations.
+		const sql = 'WITH t AS (\nSELECT cp.*\n)\nSELECT * FROM t';
+		const ast: AstPayload[] = [
+			{ c: 'With' },                                                         // [0]
+			{ c: 'CTE', i: 0, k: 'expressions', a: true },                        // [1]
+			{ c: 'Select', i: 1, k: 'this' },                                      // [2]
+			{ c: 'Column', i: 2, k: 'expressions', a: true },                     // [3] cp.*
+			{ c: 'Star', i: 3, k: 'this' },                                        // [4] the *
+			{ c: 'Identifier', i: 3, k: 'table', m: { line: 2, col: 10 } },       // [5] 'cp' qualifier
+			{ i: 5, k: 'this', v: 'cp' },                                         // [6]
+			{ c: 'TableAlias', i: 1, k: 'alias' },                                // [7]
+			{ c: 'Identifier', i: 7, k: 'this', m: { line: 1, col: 6 } },         // [8] CTE name 't'
+			{ i: 8, k: 'this', v: 't' },                                          // [9]
+			{ c: 'Select', i: 0, k: 'this' },                                     // [10]
+		];
+		const result = extractCtes(ast, sql);
+		expect(result).toHaveLength(1);
+		expect(result[0].name).toBe('t');
+		expect(result[0].columns).toHaveLength(1);
+		expect(result[0].columns[0].name).toBe('*');
+	});
 });
 
 // ---------------------------------------------------------------------------

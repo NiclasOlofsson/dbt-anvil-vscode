@@ -10,6 +10,12 @@ export interface NinjaConfig {
 	enabled: boolean;
 	/** Per-rule severity overrides. Key = rule ID, value = severity or 'off'. */
 	rules: Record<string, NinjaSeverity>;
+	autoFix: {
+		applyOnFormat: boolean;
+		applyOnFixAll: boolean;
+		/** Per-rule auto-fix overrides. Key = rule ID, value = true/false. Absent = use rule's built-in autoFix flag. */
+		rules: Record<string, boolean>;
+	};
 	capitalisation: {
 		keywords: CapitalisationPolicy;
 		functions: CapitalisationPolicy;
@@ -38,6 +44,11 @@ export interface NinjaConfig {
 export const DEFAULT_CONFIG: NinjaConfig = {
 	enabled: true,
 	rules: {},
+	autoFix: {
+		applyOnFormat: true,
+		applyOnFixAll: true,
+		rules: {},
+	},
 	capitalisation: {
 		keywords: 'lower',
 		functions: 'lower',

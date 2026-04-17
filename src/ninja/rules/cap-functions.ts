@@ -68,15 +68,20 @@ export const functionCapRule: TokenRule = {
 	category: NinjaCategory.Capitalisation,
 	defaultSeverity: 'warning',
 	description: 'SQL function names should follow the configured capitalisation policy',
+	actionKinds: ['fix'],
+	autoFixable: true,
+	configOptions: [{ settingPath: 'capitalisation.functions', label: 'Style', type: 'enum', choices: ['upper', 'lower', 'consistent'] }],
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const policy = ctx.config.capitalisation.functions;
 		const violations: NinjaViolation[] = [];
 		const consistentMap = new Map<string, string>();
+		const commentSpans = (ctx.model.sqlTokens ?? []).flatMap(t => t.comments ?? []);
 
 		const functions = ctx.dialectSymbols?.functions ?? SQL_FUNCTIONS;
 		const text = ctx.document.getText();
 		const lines = text.split('\n');
+		let absOffset = 0; // running byte offset into text (matches sqlTokens coordinate space)
 
 		// Build identifier positions to skip
 		const identifierPositions = new Set<string>();
@@ -87,6 +92,7 @@ export const functionCapRule: TokenRule = {
 		for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
 			const line = lines[lineIdx];
 			let i = 0;
+			const lineStart = absOffset;
 			while (i < line.length) {
 				const ch = line.charCodeAt(i);
 				if ((ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch === 95) {
@@ -101,6 +107,11 @@ export const functionCapRule: TokenRule = {
 						}
 					}
 					const word = line.slice(start, i);
+					const absWordStart = lineStart + start;
+					const inComment = commentSpans.some(s => absWordStart >= s.start && absWordStart < s.end);
+					if (inComment) {
+						continue;
+					}
 					// A function name is followed by '(' (possibly with whitespace)
 					let j = i;
 					while (j < line.length && (line[j] === ' ' || line[j] === '\t')) j++;
@@ -112,7 +123,7 @@ export const functionCapRule: TokenRule = {
 								rule: 'ninja.cap.functions',
 								message: `Expected function '${word}' to be '${fix}'`,
 								range,
-									action: { type: FixAction.TYPE, edits: [vscode.TextEdit.replace(range, fix)], autoFix: true },
+								action: { type: FixAction.TYPE, edits: [vscode.TextEdit.replace(range, fix)], autoFix: true },
 							});
 						}
 					}
@@ -120,6 +131,7 @@ export const functionCapRule: TokenRule = {
 					i++;
 				}
 			}
+			absOffset += line.length + 1; // +1 for the '\n' consumed by split
 		}
 
 		return violations;

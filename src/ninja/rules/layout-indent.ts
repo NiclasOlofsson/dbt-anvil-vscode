@@ -15,6 +15,12 @@ export const indentRule: LayoutRule = {
 	category: NinjaCategory.Layout,
 	defaultSeverity: 'warning',
 	description: 'Indentation should use the configured style',
+	actionKinds: ['fix'],
+	autoFixable: true,
+	configOptions: [
+		{ settingPath: 'indentation.unit', label: 'Unit', type: 'enum', choices: ['space', 'tab'] },
+		{ settingPath: 'indentation.size', label: 'Size', type: 'number', min: 1, max: 8 },
+	],
 
 	check(ctx: LayoutRuleContext): NinjaViolation[] {
 		const violations: NinjaViolation[] = [];
@@ -72,7 +78,7 @@ export const indentRule: LayoutRule = {
 				const replacement = ' '.repeat(tabs * size);
 				violations.push({
 					rule: 'ninja.layout.indent',
-					message: `Expected spaces for indentation, found tabs`,
+					message: 'Expected spaces for indentation, found tabs',
 					range,
 					action: { type: FixAction.TYPE, edits: [vscode.TextEdit.replace(range, replacement)], autoFix: true },
 				});
@@ -84,7 +90,7 @@ export const indentRule: LayoutRule = {
 				const replacement = '\t'.repeat(Math.ceil(spaces / size));
 				violations.push({
 					rule: 'ninja.layout.indent',
-					message: `Expected tabs for indentation, found spaces`,
+					message: 'Expected tabs for indentation, found spaces',
 					range,
 					action: { type: FixAction.TYPE, edits: [vscode.TextEdit.replace(range, replacement)], autoFix: true },
 				});

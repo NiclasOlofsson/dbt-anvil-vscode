@@ -9,6 +9,8 @@ export const selfAliasRule: TokenRule = {
 	category: NinjaCategory.Aliasing,
 	defaultSeverity: 'warning',
 	description: 'Do not alias a table to its own name.',
+	actionKinds: ['fix'],
+	autoFixable: true,
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model } = ctx;
@@ -18,6 +20,7 @@ export const selfAliasRule: TokenRule = {
 			if (tok.type !== 'table_ref') continue;
 			if (!tok.alias) continue;
 			if (tok.synthesized) continue;
+			if (tok.isSubquery) continue;
 			if (tok.name.toLowerCase() !== tok.alias.toLowerCase()) continue;
 
 			const aliasLine = tok.aliasLine ?? tok.line;
