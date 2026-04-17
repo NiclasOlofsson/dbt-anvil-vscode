@@ -207,6 +207,14 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 	): Promise<void> {
 		if (signal.aborted) return;
 
+		// If the file is currently open in an editor, EditorDiagnosticsProvider owns its Ninja
+		// diagnostics. Clear any stale workspace-scanner entry and skip to avoid duplicates.
+		const key = uri.toString();
+		if (vscode.workspace.textDocuments.some(d => d.uri.toString() === key)) {
+			this._ninjaCollection.delete(uri);
+			return;
+		}
+
 		const content = await fsPromises.readFile(uri.fsPath, 'utf8');
 		// Normalize CRLF → LF so byte offsets from the Python bridge (which normalises
 		// internally) align with the offsets computed by lineOffset() in token-utils.ts.
@@ -216,7 +224,6 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 		if (signal.aborted) return;
 
 		const hash = crypto.createHash('sha256').update(normalizedContent).digest('hex');
-		const key = uri.toString();
 		if (this._contentHashes.get(key) === hash) return;
 
 		const model = await this.parseService.parseContent(uri, normalizedContent).catch(() => undefined);
