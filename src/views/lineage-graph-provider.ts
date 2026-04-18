@@ -40,13 +40,18 @@ const DEFAULT_LAYOUT_CONFIG = {
 		edgesep: 0,
 		align: 'none',
 		ranker: 'tight-tree',
+		marginx: 20,
+		marginy: 10,
 	},
 	node: {
 		width: 140,
+		heightPadding: 0,
 	},
 	edge: {
 		minlen: 1,
 		weight: 1,
+		strokeWidth: 0.25,
+		opacity: 0.45,
 	},
 };
 
@@ -67,13 +72,18 @@ function normalizeLayoutConfig(config: unknown): typeof DEFAULT_LAYOUT_CONFIG {
 			edgesep: typeof graph.edgesep === 'number' ? graph.edgesep : DEFAULT_LAYOUT_CONFIG.graph.edgesep,
 			align: typeof graph.align === 'string' ? graph.align : DEFAULT_LAYOUT_CONFIG.graph.align,
 			ranker: typeof graph.ranker === 'string' ? graph.ranker : DEFAULT_LAYOUT_CONFIG.graph.ranker,
+			marginx: typeof graph.marginx === 'number' ? graph.marginx : DEFAULT_LAYOUT_CONFIG.graph.marginx,
+			marginy: typeof graph.marginy === 'number' ? graph.marginy : DEFAULT_LAYOUT_CONFIG.graph.marginy,
 		},
 		node: {
 			width: typeof node.width === 'number' ? node.width : DEFAULT_LAYOUT_CONFIG.node.width,
+			heightPadding: typeof node.heightPadding === 'number' ? node.heightPadding : DEFAULT_LAYOUT_CONFIG.node.heightPadding,
 		},
 		edge: {
 			minlen: typeof edge.minlen === 'number' ? edge.minlen : DEFAULT_LAYOUT_CONFIG.edge.minlen,
 			weight: typeof edge.weight === 'number' ? edge.weight : DEFAULT_LAYOUT_CONFIG.edge.weight,
+			strokeWidth: typeof edge.strokeWidth === 'number' ? edge.strokeWidth : DEFAULT_LAYOUT_CONFIG.edge.strokeWidth,
+			opacity: typeof edge.opacity === 'number' ? edge.opacity : DEFAULT_LAYOUT_CONFIG.edge.opacity,
 		},
 	};
 }
@@ -234,20 +244,8 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 				});
 			}
 			if (msg['command'] === 'copyLayoutConfig') {
-				const cfg = msg['config'] as Record<string, unknown>;
-				const graph = cfg?.graph as Record<string, unknown> | undefined;
-				const node = cfg?.node as Record<string, unknown> | undefined;
-				const edge = cfg?.edge as Record<string, unknown> | undefined;
-				const rankdir = typeof graph?.rankdir === 'string' ? graph.rankdir : this._layoutConfig.graph.rankdir;
-				const ranksep = typeof graph?.ranksep === 'number' ? graph.ranksep : this._layoutConfig.graph.ranksep;
-				const nodesep = typeof graph?.nodesep === 'number' ? graph.nodesep : this._layoutConfig.graph.nodesep;
-				const edgesep = typeof graph?.edgesep === 'number' ? graph.edgesep : this._layoutConfig.graph.edgesep;
-				const align = typeof graph?.align === 'string' ? graph.align : this._layoutConfig.graph.align;
-				const ranker = typeof graph?.ranker === 'string' ? graph.ranker : this._layoutConfig.graph.ranker;
-				const width = typeof node?.width === 'number' ? node.width : this._layoutConfig.node.width;
-				const minlen = typeof edge?.minlen === 'number' ? edge.minlen : this._layoutConfig.edge.minlen;
-				const weight = typeof edge?.weight === 'number' ? edge.weight : this._layoutConfig.edge.weight;
-				const text = `{ graph: { rankdir: '${rankdir}', ranksep: ${ranksep}, nodesep: ${nodesep}, edgesep: ${edgesep}, align: '${align}', ranker: '${ranker}' }, node: { width: ${width} }, edge: { minlen: ${minlen}, weight: ${weight} } }`;
+				const cfg = normalizeLayoutConfig(msg['config']);
+				const text = `{ graph: { rankdir: '${cfg.graph.rankdir}', ranksep: ${cfg.graph.ranksep}, nodesep: ${cfg.graph.nodesep}, edgesep: ${cfg.graph.edgesep}, align: '${cfg.graph.align}', ranker: '${cfg.graph.ranker}', marginx: ${cfg.graph.marginx}, marginy: ${cfg.graph.marginy} }, node: { width: ${cfg.node.width}, heightPadding: ${cfg.node.heightPadding} }, edge: { minlen: ${cfg.edge.minlen}, weight: ${cfg.edge.weight}, strokeWidth: ${cfg.edge.strokeWidth}, opacity: ${cfg.edge.opacity} } }`;
 				void vscode.env.clipboard.writeText(text);
 				void this._view?.webview.postMessage({
 					command: 'layoutConfigCopied',
@@ -656,8 +654,8 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 			nodesep: this._layoutConfig.graph.nodesep,
 			edgesep: this._layoutConfig.graph.edgesep,
 			ranksep: this._layoutConfig.graph.ranksep,
-			marginx: 20,
-			marginy: 10,
+			marginx: this._layoutConfig.graph.marginx,
+			marginy: this._layoutConfig.graph.marginy,
 		};
 		if (this._layoutConfig.graph.align && this._layoutConfig.graph.align !== 'none') {
 			graphOpts.align = this._layoutConfig.graph.align as dagre.GraphLabel['align'];
@@ -665,11 +663,12 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 		if (this._layoutConfig.graph.ranker && this._layoutConfig.graph.ranker !== 'network-simplex') {
 			graphOpts.ranker = this._layoutConfig.graph.ranker as 'network-simplex' | 'tight-tree' | 'longest-path';
 		}
+
 		g.setGraph(graphOpts);
 		g.setDefaultEdgeLabel(() => ({}));
 
 		for (const node of nodes) {
-			g.setNode(node.id, { width: node.width, height: node.height });
+			g.setNode(node.id, { width: node.width, height: node.height + this._layoutConfig.node.heightPadding });
 		}
 		for (const edge of edges) {
 			g.setEdge(edge.source, edge.target, { minlen: this._layoutConfig.edge.minlen, weight: this._layoutConfig.edge.weight });
@@ -702,6 +701,7 @@ body {
 	font-size: var(--vscode-font-size);
 	color: var(--vscode-foreground);
 	background: var(--vscode-editor-background);
+	--layout-panel-width: 272px;
 }
 .controls {
 	display: flex; gap: 8px; padding: 6px 8px;
@@ -738,6 +738,10 @@ body {
 #canvas-wrap {
 	position: relative; width: 100%; height: calc(100% - 36px);
 	overflow: hidden; cursor: grab;
+	transition: width 180ms ease;
+}
+body.layout-panel-open #canvas-wrap {
+	width: calc(100% - var(--layout-panel-width));
 }
 #canvas-wrap.dragging { cursor: grabbing; }
 #canvas {
@@ -764,15 +768,16 @@ svg.edges {
 }
 svg.edges path {
 	fill: none;
-	stroke: var(--vscode-editorWidget-border, var(--vscode-panel-border));
-	stroke-width: 1.5;
+	stroke: var(--vscode-foreground);
+	stroke-width: var(--edge-stroke-width, 0.25);
+	stroke-opacity: var(--edge-opacity, 0.45);
 }
 svg.edges path.col-edge {
-	stroke-width: 1;
-	opacity: 0.8;
+	stroke-opacity: calc(var(--edge-opacity, 0.45) * 0.7);
 }
 svg.edges polygon {
-	fill: var(--vscode-editorWidget-border, var(--vscode-panel-border));
+	fill: var(--vscode-foreground);
+	opacity: var(--edge-opacity, 0.45);
 }
 #edges-fg {
 	z-index: 3;
@@ -896,8 +901,13 @@ svg.edges polygon {
 .empty-state {
 	display: flex; justify-content: center; align-items: center;
 	height: calc(100% - 36px);
+	width: 100%;
 	color: var(--vscode-descriptionForeground);
 	font-size: 13px; text-align: center; padding: 16px;
+	transition: width 180ms ease;
+}
+body.layout-panel-open .empty-state {
+	width: calc(100% - var(--layout-panel-width));
 }
 #status-bar {
 	display: none;
@@ -912,19 +922,31 @@ svg.edges polygon {
 	color: var(--vscode-errorForeground, #f44);
 }
 .layout-panel {
-	position: fixed; top: 44px; right: 8px;
-	width: 200px;
+	position: fixed;
+	top: 36px;
+	right: 0;
+	bottom: 0;
+	width: var(--layout-panel-width);
 	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
-	border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
-	border-radius: 4px;
-	box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+	border-left: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+	box-shadow: -6px 0 14px rgba(0,0,0,0.16);
 	z-index: 20;
 	font-size: 11px;
-	overflow: hidden;
+	display: flex;
+	flex-direction: column;
+	transform: translateX(100%);
+	transition: transform 180ms ease;
 }
-.layout-panel.hidden { display: none; }
+.layout-panel.hidden {
+	transform: translateX(100%);
+	pointer-events: none;
+}
+body.layout-panel-open .layout-panel {
+	transform: translateX(0);
+	pointer-events: auto;
+}
 .layout-panel-title {
-	padding: 5px 8px;
+	padding: 7px 10px;
 	font-weight: 600;
 	font-size: 11px;
 	border-bottom: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
@@ -936,11 +958,18 @@ svg.edges polygon {
 	color: var(--vscode-foreground); opacity: 0.6; font-size: 13px; line-height: 1; padding: 0;
 }
 .layout-panel-close:hover { opacity: 1; }
-.layout-panel-body { padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.layout-panel-body {
+	padding: 10px;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	flex: 1;
+	overflow-y: auto;
+}
 .layout-section {
 	display: flex;
 	flex-direction: column;
-	gap: 6px;
+	gap: 8px;
 }
 .layout-section-title {
 	font-size: 10px;
@@ -949,7 +978,7 @@ svg.edges polygon {
 	letter-spacing: 0.04em;
 	color: var(--vscode-descriptionForeground);
 }
-.layout-row { display: flex; flex-direction: column; gap: 2px; }
+.layout-row { display: flex; flex-direction: column; gap: 4px; }
 .layout-label {
 	display: flex; justify-content: space-between; align-items: baseline;
 	color: var(--vscode-foreground);
@@ -957,8 +986,41 @@ svg.edges polygon {
 .layout-label-text { font-size: 10px; font-weight: 600; }
 .layout-value { font-size: 10px; font-family: monospace; color: var(--vscode-descriptionForeground); }
 .layout-slider {
-	width: 100%; height: 4px; cursor: pointer;
-	accent-color: var(--vscode-focusBorder, #007fd4);
+	-webkit-appearance: none;
+	appearance: none;
+	width: 100%;
+	height: 6px;
+	border-radius: 2px;
+	background: var(--vscode-scrollbarSlider-background, rgba(121, 121, 121, 0.25));
+	cursor: pointer;
+}
+.layout-slider::-webkit-slider-runnable-track {
+	height: 6px;
+	border-radius: 2px;
+	background: var(--vscode-scrollbarSlider-background, rgba(121, 121, 121, 0.25));
+}
+.layout-slider::-webkit-slider-thumb {
+	-webkit-appearance: none;
+	appearance: none;
+	margin-top: -2px;
+	width: 10px;
+	height: 10px;
+	border-radius: 3px;
+	border: 1px solid var(--vscode-focusBorder, #007fd4);
+	background: var(--vscode-button-background, var(--vscode-input-background));
+}
+.layout-slider::-moz-range-track {
+	height: 6px;
+	border-radius: 2px;
+	border: none;
+	background: var(--vscode-scrollbarSlider-background, rgba(121, 121, 121, 0.25));
+}
+.layout-slider::-moz-range-thumb {
+	width: 10px;
+	height: 10px;
+	border-radius: 3px;
+	border: 1px solid var(--vscode-focusBorder, #007fd4);
+	background: var(--vscode-button-background, var(--vscode-input-background));
 }
 .layout-select {
 	width: 100%;
@@ -969,7 +1031,7 @@ svg.edges polygon {
 	font-size: 10px;
 	padding: 2px 4px;
 }
-.layout-divider { height: 1px; background: var(--vscode-editorWidget-border, var(--vscode-panel-border)); margin: 2px 0; }
+.layout-divider { height: 1px; background: var(--vscode-editorWidget-border, var(--vscode-panel-border)); margin: 4px 0; }
 .layout-reset-btn {
 	background: var(--vscode-button-secondaryBackground, var(--vscode-input-background));
 	color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
@@ -1081,6 +1143,20 @@ svg.edges polygon {
 					<option value="longest-path">Longest path</option>
 				</select>
 			</div>
+			<div class="layout-row">
+				<div class="layout-label">
+					<span class="layout-label-text">Margin X</span>
+					<span class="layout-value" id="marginx-val">20</span>
+				</div>
+				<input type="range" class="layout-slider" id="marginx" min="0" max="100" step="5" value="20">
+			</div>
+			<div class="layout-row">
+				<div class="layout-label">
+					<span class="layout-label-text">Margin Y</span>
+					<span class="layout-value" id="marginy-val">10</span>
+				</div>
+				<input type="range" class="layout-slider" id="marginy" min="0" max="100" step="5" value="10">
+			</div>
 		</div>
 		<div class="layout-divider"></div>
 		<div class="layout-section">
@@ -1092,10 +1168,31 @@ svg.edges polygon {
 				</div>
 				<input type="range" class="layout-slider" id="node-width" min="140" max="260" step="10" value="140">
 			</div>
+			<div class="layout-row">
+				<div class="layout-label">
+					<span class="layout-label-text">Vertical padding</span>
+					<span class="layout-value" id="node-height-padding-val">0</span>
+				</div>
+				<input type="range" class="layout-slider" id="node-height-padding" min="0" max="80" step="4" value="0">
+			</div>
 		</div>
 		<div class="layout-divider"></div>
 		<div class="layout-section">
 			<div class="layout-section-title">Edge</div>
+			<div class="layout-row">
+				<div class="layout-label">
+					<span class="layout-label-text">Line width</span>
+					<span class="layout-value" id="edge-stroke-width-val">0.25</span>
+				</div>
+				<input type="range" class="layout-slider" id="edge-stroke-width" min="0.25" max="5" step="0.25" value="0.25">
+			</div>
+			<div class="layout-row">
+				<div class="layout-label">
+					<span class="layout-label-text">Opacity</span>
+					<span class="layout-value" id="edge-opacity-val">0.45</span>
+				</div>
+				<input type="range" class="layout-slider" id="edge-opacity" min="0.05" max="1" step="0.05" value="0.45">
+			</div>
 			<div class="layout-row">
 				<div class="layout-label">
 					<span class="layout-label-text">Minimum rank span</span>
@@ -1156,9 +1253,9 @@ svg.edges polygon {
 	const savedStates = new Map();
 	const persistedWebviewState = vscode.getState() || {};
 	const layoutDefaults = {
-		graph: { rankdir: 'LR', ranksep: 105, nodesep: 5, edgesep: 0, align: 'none', ranker: 'tight-tree' },
-		node: { width: 140 },
-		edge: { minlen: 1, weight: 1 },
+		graph: { rankdir: 'LR', ranksep: 105, nodesep: 5, edgesep: 0, align: 'none', ranker: 'tight-tree', marginx: 20, marginy: 10 },
+		node: { width: 140, heightPadding: 0 },
+		edge: { minlen: 1, weight: 1, strokeWidth: 0.25, opacity: 0.45 },
 	};
 	let storedLayoutConfig = null;
 	let layoutConfig = JSON.parse(JSON.stringify(layoutDefaults));
@@ -1253,8 +1350,20 @@ svg.edges polygon {
 		document.getElementById('edgesep-val').textContent = String(layoutConfig.graph.edgesep);
 		document.getElementById('align').value = layoutConfig.graph.align;
 		document.getElementById('ranker').value = layoutConfig.graph.ranker;
+		document.getElementById('marginx').value = String(layoutConfig.graph.marginx);
+		document.getElementById('marginx-val').textContent = String(layoutConfig.graph.marginx);
+		document.getElementById('marginy').value = String(layoutConfig.graph.marginy);
+		document.getElementById('marginy-val').textContent = String(layoutConfig.graph.marginy);
 		document.getElementById('node-width').value = String(layoutConfig.node.width);
 		document.getElementById('node-width-val').textContent = String(layoutConfig.node.width);
+		document.getElementById('node-height-padding').value = String(layoutConfig.node.heightPadding);
+		document.getElementById('node-height-padding-val').textContent = String(layoutConfig.node.heightPadding);
+		document.getElementById('edge-stroke-width').value = String(layoutConfig.edge.strokeWidth);
+		document.getElementById('edge-stroke-width-val').textContent = String(layoutConfig.edge.strokeWidth);
+		document.documentElement.style.setProperty('--edge-stroke-width', String(layoutConfig.edge.strokeWidth));
+		document.getElementById('edge-opacity').value = String(layoutConfig.edge.opacity);
+		document.getElementById('edge-opacity-val').textContent = String(layoutConfig.edge.opacity);
+		document.documentElement.style.setProperty('--edge-opacity', String(layoutConfig.edge.opacity));
 		document.getElementById('edge-minlen').value = String(layoutConfig.edge.minlen);
 		document.getElementById('edge-minlen-val').textContent = String(layoutConfig.edge.minlen);
 		document.getElementById('edge-weight').value = String(layoutConfig.edge.weight);
@@ -1715,6 +1824,12 @@ svg.edges polygon {
 
 	/* ── Layout Settings Panel ── */
 	const layoutPanel = document.getElementById('layout-panel');
+	const bodyEl = document.body;
+
+	function setLayoutPanelOpen(isOpen) {
+		layoutPanel.classList.toggle('hidden', !isOpen);
+		bodyEl.classList.toggle('layout-panel-open', isOpen);
+	}
 
 	function postLayoutConfig() {
 		vscode.postMessage({ command: 'setLayoutConfig', config: layoutConfig });
@@ -1729,10 +1844,10 @@ svg.edges polygon {
 	}
 
 	document.getElementById('layout-toggle').addEventListener('click', function() {
-		layoutPanel.classList.toggle('hidden');
+		setLayoutPanelOpen(layoutPanel.classList.contains('hidden'));
 	});
 	document.getElementById('layout-panel-close').addEventListener('click', function() {
-		layoutPanel.classList.add('hidden');
+		setLayoutPanelOpen(false);
 	});
 
 	document.getElementById('ranksep').addEventListener('input', function() {
@@ -1776,12 +1891,59 @@ svg.edges polygon {
 		postLayoutConfig();
 	});
 
+	document.getElementById('marginx').addEventListener('input', function() {
+		const v = parseInt(this.value, 10);
+		layoutConfig.graph.marginx = v;
+		document.getElementById('marginx-val').textContent = String(v);
+	});
+	document.getElementById('marginx').addEventListener('change', function() {
+		postLayoutConfig();
+	});
+
+	document.getElementById('marginy').addEventListener('input', function() {
+		const v = parseInt(this.value, 10);
+		layoutConfig.graph.marginy = v;
+		document.getElementById('marginy-val').textContent = String(v);
+	});
+	document.getElementById('marginy').addEventListener('change', function() {
+		postLayoutConfig();
+	});
+
 	document.getElementById('node-width').addEventListener('input', function() {
 		const v = parseInt(this.value, 10);
 		layoutConfig.node.width = v;
 		document.getElementById('node-width-val').textContent = String(v);
 	});
 	document.getElementById('node-width').addEventListener('change', function() {
+		postLayoutConfig();
+	});
+
+	document.getElementById('node-height-padding').addEventListener('input', function() {
+		const v = parseInt(this.value, 10);
+		layoutConfig.node.heightPadding = v;
+		document.getElementById('node-height-padding-val').textContent = String(v);
+	});
+	document.getElementById('node-height-padding').addEventListener('change', function() {
+		postLayoutConfig();
+	});
+
+	document.getElementById('edge-stroke-width').addEventListener('input', function() {
+		const v = parseFloat(this.value);
+		layoutConfig.edge.strokeWidth = v;
+		document.getElementById('edge-stroke-width-val').textContent = String(v);
+		document.documentElement.style.setProperty('--edge-stroke-width', String(v));
+	});
+	document.getElementById('edge-stroke-width').addEventListener('change', function() {
+		postLayoutConfig();
+	});
+
+	document.getElementById('edge-opacity').addEventListener('input', function() {
+		const v = parseFloat(this.value);
+		layoutConfig.edge.opacity = v;
+		document.getElementById('edge-opacity-val').textContent = String(v);
+		document.documentElement.style.setProperty('--edge-opacity', String(v));
+	});
+	document.getElementById('edge-opacity').addEventListener('change', function() {
 		postLayoutConfig();
 	});
 
