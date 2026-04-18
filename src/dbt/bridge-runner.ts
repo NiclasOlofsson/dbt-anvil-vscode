@@ -109,7 +109,7 @@ export class BridgeRunner {
 			const lines = this._stderrBuffer.split('\n');
 			this._stderrBuffer = lines.pop() ?? '';
 			for (const line of lines) {
-				if (line) {
+				if (line && line.trim()) {
 					this.logger.trace(`[bridge stderr] ${line}`);
 					this._stderrLines.push(line);
 				}

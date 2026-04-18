@@ -80,6 +80,8 @@ def run_command(
     # compile never needs warehouse introspection — skip the metastore scan.
     # --no-populate-cache is a global flag (before subcommand).
     # --no-introspect is a compile-specific flag (after subcommand).
+    # --quiet suppresses the verbose progress/SQL dump output — the compiled result
+    # is returned via the bridge JSON protocol, not from stdout log lines.
     if "compile" in args:
         compile_idx = args.index("compile")
         if "--no-populate-cache" not in args:
@@ -91,6 +93,8 @@ def run_command(
                 "--no-introspect",
                 *args[compile_idx + 1 :],
             ]
+        if "--quiet" not in args and "-q" not in args:
+            args = [*args, "--quiet"]
 
     try:
         print(f"[bridge] Running: {' '.join(args)}", file=sys.stderr, flush=True)

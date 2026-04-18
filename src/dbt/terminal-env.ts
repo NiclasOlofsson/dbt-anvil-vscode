@@ -16,12 +16,13 @@ export function writeShims(shimsDir: string, pythonEnv: PythonEnvironment): stri
 	if (fs.existsSync(shimsDir)) {
 		fs.rmSync(shimsDir, { recursive: true, force: true });
 	}
-	
+
 	// Create the shims directory (and parent directories if needed)
 	fs.mkdirSync(shimsDir, { recursive: true });
 
 	if (process.platform === 'win32') {
 		writeWindowsShim(shimsDir, pythonEnv);
+		writeWindowsGitBashShim(shimsDir, pythonEnv);
 	} else {
 		writeUnixShim(shimsDir, pythonEnv);
 	}
@@ -52,6 +53,31 @@ function writeWindowsShim(shimsDir: string, pythonEnv: PythonEnvironment): void 
 		// uv, poetry, conda: delegate to wrapper command
 		const prefix = pythonEnv.wrapperPrefix.join(' ');
 		shimContent = `@${prefix} dbt %*\n`;
+	}
+
+	fs.writeFileSync(shimPath, shimContent, 'utf-8');
+}
+
+/**
+ * Write a Unix-style shim for Git Bash on Windows.
+ * Git Bash ignores .cmd files — it needs a plain `dbt` executable script.
+ * Paths must use forward slashes (Git Bash translates them).
+ */
+function writeWindowsGitBashShim(shimsDir: string, pythonEnv: PythonEnvironment): void {
+	const shimPath = path.join(shimsDir, 'dbt');
+	let shimContent: string;
+
+	if (pythonEnv.venvBinDir) {
+		// venv: call dbt.exe directly via its Windows path (forward slashes for bash)
+		const dbtExe = path.join(pythonEnv.venvBinDir, 'dbt.exe').replace(/\\/g, '/');
+		shimContent = `#!/bin/sh\nexec "${dbtExe}" "$@"\n`;
+	} else if (pythonEnv.description.startsWith('pipenv')) {
+		const prefix = pythonEnv.wrapperPrefix.join(' ');
+		shimContent = `#!/bin/sh\nexport PIPENV_IGNORE_VIRTUALENVS=1\nexec ${prefix} dbt "$@"\n`;
+	} else {
+		// uv, poetry, conda: delegate to wrapper command
+		const prefix = pythonEnv.wrapperPrefix.join(' ');
+		shimContent = `#!/bin/sh\nexec ${prefix} dbt "$@"\n`;
 	}
 
 	fs.writeFileSync(shimPath, shimContent, 'utf-8');
