@@ -491,9 +491,13 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 
 		const manifestCols = Object.keys(rawNode.columns ?? {});
 
-		// _ensureCompiled: free if compiled_code already in manifest, compiles if missing
-		const compiledCode = await this._ensureCompiled(uniqueId);
-		if (!compiledCode) return manifestCols;
+		// Use original source SQL (not compiled) so table references match schema mapping keys.
+		// Compiled SQL has fully qualified names (catalog.schema.table) while schema mapping
+		// uses unqualified model names — qualify() can only expand select * with matching keys.
+		const sourceSql = rawNode.original_file_path
+			? fs.readFileSync(path.join(this.indexer.projectDir, rawNode.original_file_path), 'utf8')
+			: undefined;
+		if (!sourceSql) return manifestCols;
 
 		const upstreamLineage = this.indexer.getLineage(uniqueId, 5, 0);
 		const schemaMapping = await this._buildSchemaMapping(upstreamLineage.upstream.map(n => n.uniqueId));
@@ -501,7 +505,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		const { columns } = await this._resolveOutputColumns(
 			rawNode.resource_type,
 			rawNode,
-			compiledCode,
+			sourceSql,
 			schemaMapping,
 		);
 

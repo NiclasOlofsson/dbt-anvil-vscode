@@ -1023,6 +1023,13 @@ def _dump_lineage_node(node: _Any) -> dict[str, _Any]:
     }
 
 
+def _has_placeholder_leaf(node: dict) -> bool:
+    """Return True if any leaf of the lineage tree is a Placeholder (unresolved column)."""
+    if not node.get("downstream"):
+        return (node.get("source") or {}).get("type") == "Placeholder"
+    return any(_has_placeholder_leaf(c) for c in node["downstream"])
+
+
 def _trace_lineage_v2(sql: str, column_name: str, schema_json: str, dialect: str) -> str:
     """New lineage entry point: parse once, strip static branches, return raw lineage tree."""
     try:
@@ -1031,27 +1038,40 @@ def _trace_lineage_v2(sql: str, column_name: str, schema_json: str, dialect: str
         schema: dict[str, _Any] = _json.loads(schema_json) if schema_json else {}
         d = None if dialect == "ansi" else dialect
 
-        ast = _parse_one(sql, dialect=d, error_level=None)
-        ast = _deep_strip_static_unions(ast)
-        ast = _wrap_final_select_from_ast(ast, column_name, d)
+        def _run(s: dict) -> dict | None:
+            a = _parse_one(sql, dialect=d, error_level=None)
+            a = _deep_strip_static_unions(a)
+            a = _wrap_final_select_from_ast(a, column_name, d)
+            try:
+                a = _qualify(
+                    a,
+                    dialect=d,
+                    schema=s,
+                    infer_schema=True,
+                    qualify_columns=True,
+                    validate_qualify_columns=False,
+                )
+            except Exception:
+                pass
+            scope = _build_scope(a)
+            if scope is None:
+                return None
+            result = _to_node(column_name, scope=scope, dialect=d)
+            return _dump_lineage_node(result)
 
-        try:
-            ast = _qualify(
-                ast,
-                dialect=d,
-                schema=schema,
-                infer_schema=True,
-                qualify_columns=True,
-                validate_qualify_columns=False,
-            )
-        except Exception:
-            pass
-        scope = _build_scope(ast)
-        if scope is None:
+        tree = _run(schema)
+        if tree is None:
             return _json.dumps({'success': False, 'error': 'Failed to build scope'})
 
-        result = _to_node(column_name, scope=scope, dialect=d)
-        return _json.dumps({'success': True, 'tree': _dump_lineage_node(result)})
+        # A partial schema can confuse qualify() on UNION ALL queries: columns from
+        # tables not fully represented in the schema become Placeholder leaves.
+        # Retry with an empty schema so sqlglot infers column provenance from the SQL.
+        if schema and _has_placeholder_leaf(tree):
+            fallback = _run({})
+            if fallback is not None and not _has_placeholder_leaf(fallback):
+                tree = fallback
+
+        return _json.dumps({"success": True, "tree": tree})
 
     except Exception as exc:
         return _json.dumps({'success': False, 'error': f'{type(exc).__name__}: {exc}', 'traceback': _traceback.format_exc()})
