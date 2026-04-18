@@ -5,6 +5,8 @@
  * events which carry the per-test name and status.
  */
 
+import type { DbtLogEvent } from './bridge-runner';
+
 export type TestResultStatus = 'pass' | 'fail' | 'error' | 'skip' | 'warn';
 
 export interface ParsedTestResult {
@@ -19,12 +21,54 @@ export interface ParsedTestResult {
 	executionTime?: number;
 }
 
-interface DbtLogEvent {
-	data?: Record<string, unknown>;
-	info?: {
-		name?: string;
-		msg?: string;
-	};
+/**
+ * Parse dbt test JSON log events and return results keyed by the dbt unique_id.
+ *
+ * Pass `result.events` from a test command.
+ */
+export function parseDbtTestEvents(events: DbtLogEvent[]): Map<string, ParsedTestResult> {
+	const results = new Map<string, ParsedTestResult>();
+
+	for (const event of events) {
+		if (event.info?.name !== 'LogTestResult') {
+			continue;
+		}
+
+		const data = event.data ?? {};
+		const name = data['name'] as string | undefined;
+		const rawStatus = data['status'] as string | undefined;
+		const nodeInfo = data['node_info'] as Record<string, unknown> | undefined;
+		const uniqueId = typeof nodeInfo?.['unique_id'] === 'string'
+			? nodeInfo['unique_id'] as string
+			: name;
+
+		if (!uniqueId || !rawStatus) {
+			continue;
+		}
+
+		const status = mapStatus(rawStatus);
+		const failures = typeof data['failures'] === 'number'
+			? data['failures']
+			: typeof data['num_failures'] === 'number'
+				? data['num_failures'] as number
+				: undefined;
+
+		const executionTime = typeof data['execution_time'] === 'number'
+			? data['execution_time'] as number
+			: typeof data['elapsed_time'] === 'number'
+				? data['elapsed_time'] as number
+				: undefined;
+
+		results.set(uniqueId, {
+			name: name ?? uniqueId,
+			status,
+			message: event.info.msg,
+			failures,
+			executionTime,
+		});
+	}
+
+	return results;
 }
 
 /**
@@ -32,6 +76,7 @@ interface DbtLogEvent {
  * (e.g. "test.jaffle_shop.not_null_customers_customer_id.5c9bf9911d").
  *
  * Pass `result.stdout` from a test command submitted with `--log-format json`.
+ * @deprecated Prefer parseDbtTestEvents(result.events) — stdout is now plain text.
  */
 export function parseDbtTestOutput(stdout: string): Map<string, ParsedTestResult> {
 	const results = new Map<string, ParsedTestResult>();

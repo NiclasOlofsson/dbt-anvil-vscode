@@ -239,7 +239,10 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 			// Skip only if columns are already live (describe/SQL-parsed) — not manifest-only.
 			// Manifest-only columns are just the YAML-documented subset; the actual table
 			// may have many more columns that SQL parsing or describe will surface.
-			if (node.columns.length > 0 && !this.indexer.isManifestOnly(node.id)) continue;
+			// NOTE: check the indexer's live column store, NOT node.columns — node.columns
+			// is populated from YAML manifest columns and is unrelated to the live store.
+			const storedCols = this.indexer.getColumns(node.id);
+			if (storedCols && storedCols.length > 0 && !this.indexer.isManifestOnly(node.id)) continue;
 			try {
 				const cols = await this._columnLineageTool.resolveColumnsForNode(node.id);
 				if (gen !== this._enrichGeneration) return;

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { parseDbtTestOutput } from '../dbt/test-result-parser';
+import { parseDbtTestEvents } from '../dbt/test-result-parser';
 import { DbtExecutionService, Priority } from '../dbt/execution-service';
 import type { CteTestRunner } from '../dbt/cte-test-runner';
 import type { TestExplorerProvider, TestGroupItem, TestNodeItem } from './test-explorer-provider';
@@ -184,7 +184,7 @@ export class VsTestController implements vscode.Disposable {
 
 		if (token.isCancellationRequested) return;
 
-		const parsed = parseDbtTestOutput(result.stdout);
+		const parsed = parseDbtTestEvents(result.events ?? []);
 
 		for (const [item, node] of leaves) {
 			const shortName = node.label as string;

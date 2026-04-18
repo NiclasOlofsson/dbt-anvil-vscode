@@ -1,10 +1,15 @@
 import * as vscode from 'vscode';
-import type { BridgeRunner, DbtCommandResult } from './bridge-runner';
+import type { BridgeRunner, DbtCommandResult, DbtLogEvent } from './bridge-runner';
 import type { IManifestSuppressor } from '../indexing/manifest-watcher';
 import type { ManifestLoader } from './manifest-loader';
 import type { ILogger } from '../types/logger';
 
 export type { DbtCommandResult } from './bridge-runner';
+
+export type DbtExecutionEvent =
+	| { type: 'start';    job: DbtJobInfo }
+	| { type: 'progress'; job: DbtJobInfo; event: DbtLogEvent }
+	| { type: 'end';      job: DbtJobInfo; success: boolean };
 
 export type DbtJobType =
 	| 'parse' | 'compile' | 'compile_inline' | 'run' | 'test' | 'build'
@@ -83,11 +88,13 @@ export class DbtExecutionService implements vscode.Disposable {
 	private readonly _onJobCompleted = new vscode.EventEmitter<{ job: DbtJobInfo; result: DbtCommandResult }>();
 	private readonly _onJobFailed = new vscode.EventEmitter<{ job: DbtJobInfo; error: Error }>();
 	private readonly _onQueueChanged = new vscode.EventEmitter<number>();
+	private readonly _onExecutionEvent = new vscode.EventEmitter<DbtExecutionEvent>();
 
 	readonly onJobStarted = this._onJobStarted.event;
 	readonly onJobCompleted = this._onJobCompleted.event;
 	readonly onJobFailed = this._onJobFailed.event;
 	readonly onQueueChanged = this._onQueueChanged.event;
+	readonly onExecutionEvent = this._onExecutionEvent.event;
 
 	constructor(
 		private readonly bridge: BridgeRunner,
@@ -233,12 +240,18 @@ export class DbtExecutionService implements vscode.Disposable {
 
 	private async _executeJob(job: DbtJob): Promise<void> {
 		this.logger.info(`Job started: [${job.id}] ${job.label}`);
-		this._onJobStarted.fire(this._toJobInfo(job));
+		const jobInfo = this._toJobInfo(job);
+		this._onJobStarted.fire(jobInfo);
+		this._onExecutionEvent.fire({ type: 'start', job: jobInfo });
 
 		const shouldSuppressWatcher = SUPPRESS_WATCHER_TYPES.has(job.type);
 		if (shouldSuppressWatcher) {
 			this.watcher.suppress();
 		}
+
+		const progressSub = this.bridge.onCommandEvent(event => {
+			this._onExecutionEvent.fire({ type: 'progress', job: jobInfo, event });
+		});
 
 		try {
 			let result: DbtCommandResult;
@@ -259,13 +272,16 @@ export class DbtExecutionService implements vscode.Disposable {
 				await this.bridge.saveRunState();
 			}
 
-			this._onJobCompleted.fire({ job: this._toJobInfo(job), result });
+			this._onExecutionEvent.fire({ type: 'end', job: jobInfo, success: result.success });
+			this._onJobCompleted.fire({ job: jobInfo, result });
 			job.resolve(result);
 		} catch (err) {
 			const error = err instanceof Error ? err : new Error(String(err));
-			this._onJobFailed.fire({ job: this._toJobInfo(job), error });
+			this._onExecutionEvent.fire({ type: 'end', job: jobInfo, success: false });
+			this._onJobFailed.fire({ job: jobInfo, error });
 			job.reject(error);
 		} finally {
+			progressSub.dispose();
 			if (shouldSuppressWatcher) {
 				this.watcher.resume();
 			}
@@ -284,6 +300,7 @@ export class DbtExecutionService implements vscode.Disposable {
 		this._onJobCompleted.dispose();
 		this._onJobFailed.dispose();
 		this._onQueueChanged.dispose();
+		this._onExecutionEvent.dispose();
 	}
 
 	/**

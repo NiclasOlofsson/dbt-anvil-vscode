@@ -12,7 +12,7 @@ Protocol:
   Request:  reads {"command": ["run", "--select", "my_model"]} from stdin
                         or    {"describe_table": true, "name": "my_model"}
                         or    {"compile_inline": "SELECT * FROM {{ ref('my_model') }}"}
-  Response: prints dbt output lines, then {"success": true/false, ...} on its own line
+  Response: prints dbt JSON log lines during execution, then {"__bridge__": true, "success": true/false, ...} as the completion marker
   Shutdown: reads {"shutdown": true} from stdin → exits cleanly
 """
 
@@ -67,21 +67,23 @@ def resolve_profiles_dir(project_dir: str) -> str:
 
 def run_command(
     dbt, args: list, project_dir: str, profiles_dir: str, extension_target_path: str
-) -> bool:
+) -> dict:
     """
-    Invoke a dbt command. dbt output goes directly to stdout (print statements).
-    Returns True if successful, False otherwise.
+    Invoke a dbt command. dbt log lines stream to stdout as JSON (--log-format json).
+    Returns a __bridge__ sentinel dict so bridge-runner can distinguish the completion
+    marker from the dbt log lines.
     """
-    # Always inject --profiles-dir and --log-format unless caller provided them
+    # Always inject --target-path unless caller provided it
     if "--target-path" not in args and (len(args) == 0 or args[0] not in ("deps",)):
         args = [*args, "--target-path", extension_target_path]
-    if "--log-format" not in args and len(args) > 0 and args[0] not in ("deps",):
-        args = [*args, "--log-format", "text"]
+    # Use JSON log format for all commands except deps (which doesn't support --log-format)
+    if "--log-format" not in args:
+        subcommand = args[0] if args else ""
+        if subcommand != "deps":
+            args = [*args, "--log-format", "json"]
     # compile never needs warehouse introspection — skip the metastore scan.
     # --no-populate-cache is a global flag (before subcommand).
     # --no-introspect is a compile-specific flag (after subcommand).
-    # --quiet suppresses the verbose progress/SQL dump output — the compiled result
-    # is returned via the bridge JSON protocol, not from stdout log lines.
     if "compile" in args:
         compile_idx = args.index("compile")
         if "--no-populate-cache" not in args:
@@ -93,19 +95,17 @@ def run_command(
                 "--no-introspect",
                 *args[compile_idx + 1 :],
             ]
-        if "--quiet" not in args and "-q" not in args:
-            args = [*args, "--quiet"]
 
     try:
         print(f"[bridge] Running: {' '.join(args)}", file=sys.stderr, flush=True)
         result = dbt.invoke(args)
         sys.stdout.flush()
         sys.stderr.flush()
-        return bool(result.success)
+        return {"__bridge__": True, "success": bool(result.success)}
     except Exception as exc:
         print(f"[bridge] Error: {exc}", file=sys.stderr, flush=True)
         sys.stdout.flush()
-        return False
+        return {"__bridge__": True, "success": False, "error": str(exc)}
 
 
 def handle_compile_inline(
@@ -123,7 +123,13 @@ def handle_compile_inline(
     sql: str = request.get("compile_inline", "")
     if not sql:
         print(
-            json.dumps({"success": False, "error": "compile_inline sql is required"}),
+            json.dumps(
+                {
+                    "__bridge__": True,
+                    "success": False,
+                    "error": "compile_inline sql is required",
+                }
+            ),
             flush=True,
         )
         return
@@ -156,7 +162,10 @@ def handle_compile_inline(
         sys.stdout.flush()
         sys.stderr.flush()
     except Exception as exc:
-        print(json.dumps({"success": False, "error": str(exc)}), flush=True)
+        print(
+            json.dumps({"__bridge__": True, "success": False, "error": str(exc)}),
+            flush=True,
+        )
         return
 
     compiled_sql: str | None = None
@@ -174,12 +183,21 @@ def handle_compile_inline(
 
     if compiled_sql is None:
         print(
-            json.dumps({"success": False, "error": "Could not extract compiled SQL"}),
+            json.dumps(
+                {
+                    "__bridge__": True,
+                    "success": False,
+                    "error": "Could not extract compiled SQL",
+                }
+            ),
             flush=True,
         )
         return
 
-    print(json.dumps({"success": True, "compiled_sql": compiled_sql}), flush=True)
+    print(
+        json.dumps({"__bridge__": True, "success": True, "compiled_sql": compiled_sql}),
+        flush=True,
+    )
 
 
 def handle_describe_table(
@@ -199,7 +217,12 @@ def handle_describe_table(
     source_name: str | None = request.get("source_name")
 
     if not name:
-        print(json.dumps({"success": False, "error": "name is required"}), flush=True)
+        print(
+            json.dumps(
+                {"__bridge__": True, "success": False, "error": "name is required"}
+            ),
+            flush=True,
+        )
         return
 
     if source_name:
@@ -232,7 +255,10 @@ def handle_describe_table(
         sys.stdout.flush()
         sys.stderr.flush()
     except Exception as exc:
-        print(json.dumps({"success": False, "error": str(exc)}), flush=True)
+        print(
+            json.dumps({"__bridge__": True, "success": False, "error": str(exc)}),
+            flush=True,
+        )
         return
 
     # DESCRIBE returns one row per column: {column_name, column_type, null, key, default, extra}
@@ -262,7 +288,12 @@ def handle_describe_table(
         if not columns and not result.success:
             print(
                 json.dumps(
-                    {"success": False, "error": "dbt show failed", "columns": []}
+                    {
+                        "__bridge__": True,
+                        "success": False,
+                        "error": "dbt show failed",
+                        "columns": [],
+                    }
                 ),
                 flush=True,
             )
@@ -272,7 +303,10 @@ def handle_describe_table(
             f"[bridge] describe_table parse error: {exc}", file=sys.stderr, flush=True
         )
 
-    print(json.dumps({"success": True, "columns": columns}), flush=True)
+    print(
+        json.dumps({"__bridge__": True, "success": True, "columns": columns}),
+        flush=True,
+    )
 
 
 def main() -> None:
@@ -415,7 +449,13 @@ def main() -> None:
             d = get_dbt()
             if d is None:
                 print(
-                    json.dumps({"success": False, "error": "dbt not available"}),
+                    json.dumps(
+                        {
+                            "__bridge__": True,
+                            "success": False,
+                            "error": "dbt not available",
+                        }
+                    ),
                     flush=True,
                 )
                 continue
@@ -426,7 +466,13 @@ def main() -> None:
             d = get_compile_runner()
             if d is None:
                 print(
-                    json.dumps({"success": False, "error": "dbt not available"}),
+                    json.dumps(
+                        {
+                            "__bridge__": True,
+                            "success": False,
+                            "error": "dbt not available",
+                        }
+                    ),
                     flush=True,
                 )
                 continue
@@ -435,32 +481,47 @@ def main() -> None:
             )
         elif request.get('invalidate_manifest'):
             invalidate_manifest_cache()
-            print(json.dumps({"success": True}), flush=True)
+            print(json.dumps({"__bridge__": True, "success": True}), flush=True)
         elif "command" in request:
             command_args: list = request["command"]
             if not command_args:
                 print(
-                    json.dumps({"success": False, "error": "Empty command"}), flush=True
+                    json.dumps(
+                        {"__bridge__": True, "success": False, "error": "Empty command"}
+                    ),
+                    flush=True,
                 )
                 continue
             d = get_dbt()
             if d is None:
                 print(
-                    json.dumps({"success": False, "error": "dbt not available"}),
+                    json.dumps(
+                        {
+                            "__bridge__": True,
+                            "success": False,
+                            "error": "dbt not available",
+                        }
+                    ),
                     flush=True,
                 )
                 continue
-            success = run_command(
+            result_data = run_command(
                 d,
                 list(command_args),
                 project_dir,
                 profiles_dir,
                 extension_target_path,
             )
-            print(json.dumps({"success": success}), flush=True)
+            print(json.dumps(result_data), flush=True)
         else:
             print(
-                json.dumps({"success": False, "error": "Unknown request type"}),
+                json.dumps(
+                    {
+                        "__bridge__": True,
+                        "success": False,
+                        "error": "Unknown request type",
+                    }
+                ),
                 flush=True,
             )
 
