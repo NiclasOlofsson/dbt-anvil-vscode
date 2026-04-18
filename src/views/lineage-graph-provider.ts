@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import * as dagre from 'dagre';
+import * as dagre from '@dagrejs/dagre';
 import type { ManifestIndexer, ManifestIndex } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
 import type { GetColumnLineageTool } from '../tools/get-column-lineage';
@@ -30,8 +30,53 @@ interface GraphEdge {
 	target: string;
 }
 
-const CARD_WIDTH = 180;
 const HEADER_HEIGHT = 44;
+const LAYOUT_STORAGE_KEY = 'dbt-studio.lineageLayoutConfig';
+const DEFAULT_LAYOUT_CONFIG = {
+	graph: {
+		rankdir: 'LR',
+		ranksep: 105,
+		nodesep: 5,
+		edgesep: 0,
+		align: 'none',
+		ranker: 'tight-tree',
+	},
+	node: {
+		width: 140,
+	},
+	edge: {
+		minlen: 1,
+		weight: 1,
+	},
+};
+
+function cloneLayoutConfig<T>(config: T): T {
+	return JSON.parse(JSON.stringify(config)) as T;
+}
+
+function normalizeLayoutConfig(config: unknown): typeof DEFAULT_LAYOUT_CONFIG {
+	const value = (config ?? {}) as Record<string, unknown>;
+	const graph = (value.graph ?? {}) as Record<string, unknown>;
+	const node = (value.node ?? {}) as Record<string, unknown>;
+	const edge = (value.edge ?? {}) as Record<string, unknown>;
+	return {
+		graph: {
+			rankdir: typeof graph.rankdir === 'string' ? graph.rankdir : DEFAULT_LAYOUT_CONFIG.graph.rankdir,
+			ranksep: typeof graph.ranksep === 'number' ? graph.ranksep : DEFAULT_LAYOUT_CONFIG.graph.ranksep,
+			nodesep: typeof graph.nodesep === 'number' ? graph.nodesep : DEFAULT_LAYOUT_CONFIG.graph.nodesep,
+			edgesep: typeof graph.edgesep === 'number' ? graph.edgesep : DEFAULT_LAYOUT_CONFIG.graph.edgesep,
+			align: typeof graph.align === 'string' ? graph.align : DEFAULT_LAYOUT_CONFIG.graph.align,
+			ranker: typeof graph.ranker === 'string' ? graph.ranker : DEFAULT_LAYOUT_CONFIG.graph.ranker,
+		},
+		node: {
+			width: typeof node.width === 'number' ? node.width : DEFAULT_LAYOUT_CONFIG.node.width,
+		},
+		edge: {
+			minlen: typeof edge.minlen === 'number' ? edge.minlen : DEFAULT_LAYOUT_CONFIG.edge.minlen,
+			weight: typeof edge.weight === 'number' ? edge.weight : DEFAULT_LAYOUT_CONFIG.edge.weight,
+		},
+	};
+}
 
 export class LineageGraphProvider implements vscode.WebviewViewProvider {
 	public static readonly viewId = 'dbt-studio.lineageGraph';
@@ -47,13 +92,21 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 	private _showTests: boolean;
 	private _columnLineageTool?: GetColumnLineageTool;
 	private _executionService?: DbtExecutionService;
+	private _layoutConfig = cloneLayoutConfig(DEFAULT_LAYOUT_CONFIG);
+	private _savedLayoutConfig?: typeof DEFAULT_LAYOUT_CONFIG;
 
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
 		private readonly globalState: vscode.Memento,
+		private readonly workspaceState: vscode.Memento,
 	) {
 		this._followActive = globalState.get<boolean>('dbt-studio.lineageFollowActive', true);
+		const storedLayout = workspaceState.get<unknown>(LAYOUT_STORAGE_KEY);
+		if (storedLayout !== undefined) {
+			this._savedLayoutConfig = normalizeLayoutConfig(storedLayout);
+			this._layoutConfig = cloneLayoutConfig(this._savedLayoutConfig);
+		}
 		this._showTests = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('lineage.showTests', true);
 		vscode.workspace.onDidChangeConfiguration(e => {
 			if (e.affectsConfiguration('dbt-studio.lineage.showTests')) {
@@ -165,6 +218,42 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 					this._updateGraph();
 				}
 			}
+			if (msg['command'] === 'setLayoutConfig') {
+				this._layoutConfig = normalizeLayoutConfig(msg['config']);
+				this._updateGraph();
+			}
+			if (msg['command'] === 'saveLayoutConfig') {
+				const cfg = normalizeLayoutConfig(msg['config']);
+				this._savedLayoutConfig = cloneLayoutConfig(cfg);
+				this._layoutConfig = cloneLayoutConfig(cfg);
+				void this.workspaceState.update(LAYOUT_STORAGE_KEY, this._savedLayoutConfig);
+				void this._view?.webview.postMessage({
+					command: 'layoutConfigSaved',
+					message: 'Saved layout config',
+					storedLayoutConfig: this._savedLayoutConfig,
+				});
+			}
+			if (msg['command'] === 'copyLayoutConfig') {
+				const cfg = msg['config'] as Record<string, unknown>;
+				const graph = cfg?.graph as Record<string, unknown> | undefined;
+				const node = cfg?.node as Record<string, unknown> | undefined;
+				const edge = cfg?.edge as Record<string, unknown> | undefined;
+				const rankdir = typeof graph?.rankdir === 'string' ? graph.rankdir : this._layoutConfig.graph.rankdir;
+				const ranksep = typeof graph?.ranksep === 'number' ? graph.ranksep : this._layoutConfig.graph.ranksep;
+				const nodesep = typeof graph?.nodesep === 'number' ? graph.nodesep : this._layoutConfig.graph.nodesep;
+				const edgesep = typeof graph?.edgesep === 'number' ? graph.edgesep : this._layoutConfig.graph.edgesep;
+				const align = typeof graph?.align === 'string' ? graph.align : this._layoutConfig.graph.align;
+				const ranker = typeof graph?.ranker === 'string' ? graph.ranker : this._layoutConfig.graph.ranker;
+				const width = typeof node?.width === 'number' ? node.width : this._layoutConfig.node.width;
+				const minlen = typeof edge?.minlen === 'number' ? edge.minlen : this._layoutConfig.edge.minlen;
+				const weight = typeof edge?.weight === 'number' ? edge.weight : this._layoutConfig.edge.weight;
+				const text = `{ graph: { rankdir: '${rankdir}', ranksep: ${ranksep}, nodesep: ${nodesep}, edgesep: ${edgesep}, align: '${align}', ranker: '${ranker}' }, node: { width: ${width} }, edge: { minlen: ${minlen}, weight: ${weight} } }`;
+				void vscode.env.clipboard.writeText(text);
+				void this._view?.webview.postMessage({
+					command: 'layoutConfigCopied',
+					message: 'Copied layout config',
+				});
+			}
 		});
 
 		/* Re-sync when the panel becomes visible after being hidden.
@@ -209,6 +298,9 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 			command: 'setGraph',
 			nodes,
 			edges,
+			layoutConfig: this._layoutConfig,
+			storedLayoutConfig: this._savedLayoutConfig,
+			defaultLayoutConfig: DEFAULT_LAYOUT_CONFIG,
 			focusId: this._focusModel,
 			upstreamDepth: this._upstreamDepth,
 			downstreamDepth: this._downstreamDepth,
@@ -461,7 +553,7 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 					isFocus: id === focusId,
 					columns,
 					x: 0, y: 0,
-					width: CARD_WIDTH,
+					width: this._layoutConfig.node.width,
 					height,
 					depthLevel: 0,
 				});
@@ -474,7 +566,7 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 					isFocus: id === focusId,
 					columns,
 					x: 0, y: 0,
-					width: CARD_WIDTH,
+					width: this._layoutConfig.node.width,
 					height,
 					depthLevel: 0,
 				});
@@ -489,7 +581,7 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 					isFocus: id === focusId,
 					columns,
 					x: 0, y: 0,
-					width: CARD_WIDTH,
+					width: this._layoutConfig.node.width,
 					height,
 					depthLevel: 0,
 				});
@@ -559,14 +651,28 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 		if (nodes.length === 0) return;
 
 		const g = new dagre.graphlib.Graph();
-		g.setGraph({ rankdir: 'LR', nodesep: 20, ranksep: 100, marginx: 20, marginy: 10 });
+		const graphOpts: dagre.GraphLabel = {
+			rankdir: this._layoutConfig.graph.rankdir as dagre.GraphLabel['rankdir'],
+			nodesep: this._layoutConfig.graph.nodesep,
+			edgesep: this._layoutConfig.graph.edgesep,
+			ranksep: this._layoutConfig.graph.ranksep,
+			marginx: 20,
+			marginy: 10,
+		};
+		if (this._layoutConfig.graph.align && this._layoutConfig.graph.align !== 'none') {
+			graphOpts.align = this._layoutConfig.graph.align as dagre.GraphLabel['align'];
+		}
+		if (this._layoutConfig.graph.ranker && this._layoutConfig.graph.ranker !== 'network-simplex') {
+			graphOpts.ranker = this._layoutConfig.graph.ranker as 'network-simplex' | 'tight-tree' | 'longest-path';
+		}
+		g.setGraph(graphOpts);
 		g.setDefaultEdgeLabel(() => ({}));
 
 		for (const node of nodes) {
 			g.setNode(node.id, { width: node.width, height: node.height });
 		}
 		for (const edge of edges) {
-			g.setEdge(edge.source, edge.target);
+			g.setEdge(edge.source, edge.target, { minlen: this._layoutConfig.edge.minlen, weight: this._layoutConfig.edge.weight });
 		}
 
 		dagre.layout(g);
@@ -749,6 +855,9 @@ svg.edges polygon {
 	background: rgba(0, 0, 0, 0.2);
 	color: var(--vscode-foreground);
 }
+.open-file-trigger {
+	cursor: pointer;
+}
 .col-list {
 	max-height: 200px; overflow-y: auto;
 }
@@ -802,6 +911,88 @@ svg.edges polygon {
 #status-bar.status-error {
 	color: var(--vscode-errorForeground, #f44);
 }
+.layout-panel {
+	position: fixed; top: 44px; right: 8px;
+	width: 200px;
+	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+	border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+	border-radius: 4px;
+	box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+	z-index: 20;
+	font-size: 11px;
+	overflow: hidden;
+}
+.layout-panel.hidden { display: none; }
+.layout-panel-title {
+	padding: 5px 8px;
+	font-weight: 600;
+	font-size: 11px;
+	border-bottom: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+	background: var(--vscode-sideBar-background);
+	display: flex; align-items: center; justify-content: space-between;
+}
+.layout-panel-close {
+	background: none; border: none; cursor: pointer;
+	color: var(--vscode-foreground); opacity: 0.6; font-size: 13px; line-height: 1; padding: 0;
+}
+.layout-panel-close:hover { opacity: 1; }
+.layout-panel-body { padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.layout-section {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.layout-section-title {
+	font-size: 10px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--vscode-descriptionForeground);
+}
+.layout-row { display: flex; flex-direction: column; gap: 2px; }
+.layout-label {
+	display: flex; justify-content: space-between; align-items: baseline;
+	color: var(--vscode-foreground);
+}
+.layout-label-text { font-size: 10px; font-weight: 600; }
+.layout-value { font-size: 10px; font-family: monospace; color: var(--vscode-descriptionForeground); }
+.layout-slider {
+	width: 100%; height: 4px; cursor: pointer;
+	accent-color: var(--vscode-focusBorder, #007fd4);
+}
+.layout-select {
+	width: 100%;
+	background: var(--vscode-input-background);
+	color: var(--vscode-input-foreground);
+	border: 1px solid var(--vscode-input-border, transparent);
+	border-radius: 2px;
+	font-size: 10px;
+	padding: 2px 4px;
+}
+.layout-divider { height: 1px; background: var(--vscode-editorWidget-border, var(--vscode-panel-border)); margin: 2px 0; }
+.layout-reset-btn {
+	background: var(--vscode-button-secondaryBackground, var(--vscode-input-background));
+	color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+	border: 1px solid var(--vscode-input-border, transparent);
+	border-radius: 3px; cursor: pointer; font-size: 10px;
+	padding: 3px 8px; width: 100%; text-align: center;
+}
+.layout-reset-btn:hover { background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground)); }
+.layout-copy-btn {
+	background: var(--vscode-button-background, var(--vscode-button-secondaryBackground, var(--vscode-input-background)));
+	color: var(--vscode-button-foreground, var(--vscode-button-secondaryForeground, var(--vscode-foreground)));
+	border: 1px solid var(--vscode-button-border, var(--vscode-input-border, transparent));
+	border-radius: 3px; cursor: pointer; font-size: 10px;
+	padding: 3px 8px; width: 100%; text-align: center;
+}
+.layout-copy-btn:hover { background: var(--vscode-button-hoverBackground, var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground))); }
+.settings-btn {
+	background: var(--vscode-button-secondaryBackground, var(--vscode-input-background));
+	color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+	border: 1px solid var(--vscode-input-border, transparent);
+	padding: 2px 7px; font-size: 12px; border-radius: 3px; cursor: pointer;
+}
+.settings-btn:hover { background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground)); }
 </style>
 </head>
 <body>
@@ -826,12 +1017,106 @@ svg.edges polygon {
 		<span class="legend-item"><span class="swatch" style="background:var(--vscode-charts-purple, #C77DBA)"></span>Test</span>
 		<span class="legend-item"><span class="swatch" style="background:#A97FBE"></span>Unit Test</span>
 	</div>
+	<button class="settings-btn" id="layout-toggle" title="Layout settings">⚙</button>
 </div>
 <div id="canvas-wrap" style="display:none">
 	<div id="bands"></div>
 	<svg class="edges" id="edges"></svg>
 	<div id="canvas"></div>
 	<svg class="edges" id="edges-fg"></svg>
+</div>
+<div class="layout-panel hidden" id="layout-panel">
+	<div class="layout-panel-title">
+		<span>Layout Settings</span>
+		<button class="layout-panel-close" id="layout-panel-close">✕</button>
+	</div>
+	<div class="layout-panel-body">
+		<div class="layout-section">
+			<div class="layout-section-title">Graph</div>
+			<div class="layout-row">
+				<div class="layout-label"><span class="layout-label-text">Flow direction</span></div>
+				<select class="layout-select" id="rankdir">
+					<option value="TB">TB (top-bottom)</option>
+					<option value="BT">BT (bottom-top)</option>
+					<option value="LR" selected>LR (left-right)</option>
+					<option value="RL">RL (right-left)</option>
+				</select>
+			</div>
+			<div class="layout-row">
+				<div class="layout-label">
+					<span class="layout-label-text">Rank separation</span>
+					<span class="layout-value" id="ranksep-val">105</span>
+				</div>
+				<input type="range" class="layout-slider" id="ranksep" min="10" max="200" step="5" value="105">
+			</div>
+			<div class="layout-row">
+				<div class="layout-label">
+					<span class="layout-label-text">Node separation</span>
+					<span class="layout-value" id="nodesep-val">5</span>
+				</div>
+				<input type="range" class="layout-slider" id="nodesep" min="5" max="80" step="5" value="5">
+			</div>
+			<div class="layout-row">
+				<div class="layout-label">
+					<span class="layout-label-text">Edge separation</span>
+					<span class="layout-value" id="edgesep-val">0</span>
+				</div>
+				<input type="range" class="layout-slider" id="edgesep" min="0" max="40" step="2" value="0">
+			</div>
+			<div class="layout-row">
+				<div class="layout-label"><span class="layout-label-text">Alignment</span></div>
+				<select class="layout-select" id="align">
+					<option value="UL">UL (upper-left)</option>
+					<option value="UR">UR (upper-right)</option>
+					<option value="DL">DL (down-left)</option>
+					<option value="DR">DR (down-right)</option>
+					<option value="none" selected>none (centered)</option>
+				</select>
+			</div>
+			<div class="layout-row">
+				<div class="layout-label"><span class="layout-label-text">Ranking algorithm</span></div>
+				<select class="layout-select" id="ranker">
+					<option value="network-simplex">Network simplex</option>
+					<option value="tight-tree" selected>Tight tree</option>
+					<option value="longest-path">Longest path</option>
+				</select>
+			</div>
+		</div>
+		<div class="layout-divider"></div>
+		<div class="layout-section">
+			<div class="layout-section-title">Node</div>
+			<div class="layout-row">
+				<div class="layout-label">
+					<span class="layout-label-text">Width</span>
+					<span class="layout-value" id="node-width-val">140</span>
+				</div>
+				<input type="range" class="layout-slider" id="node-width" min="140" max="260" step="10" value="140">
+			</div>
+		</div>
+		<div class="layout-divider"></div>
+		<div class="layout-section">
+			<div class="layout-section-title">Edge</div>
+			<div class="layout-row">
+				<div class="layout-label">
+					<span class="layout-label-text">Minimum rank span</span>
+					<span class="layout-label-text">minlen</span>
+					<span class="layout-value" id="edge-minlen-val">1</span>
+				</div>
+				<input type="range" class="layout-slider" id="edge-minlen" min="1" max="5" step="1" value="1">
+			</div>
+			<div class="layout-row">
+				<div class="layout-label">
+					<span class="layout-label-text">Edge weight</span>
+					<span class="layout-value" id="edge-weight-val">1</span>
+				</div>
+				<input type="range" class="layout-slider" id="edge-weight" min="1" max="10" step="1" value="1">
+			</div>
+		</div>
+		<div class="layout-divider"></div>
+		<button class="layout-copy-btn" id="layout-copy">Copy settings</button>
+		<button class="layout-copy-btn" id="layout-save">Save settings</button>
+		<button class="layout-reset-btn" id="layout-reset">Reset defaults</button>
+	</div>
 </div>
 <div id="empty" class="empty-state">Open a dbt model to see its lineage graph</div>
 
@@ -863,106 +1148,117 @@ svg.edges polygon {
 	let graphData = null;
 	let lastFocusId = null;
 	let lastHighlightMsg = null;
-	let CARD_W = 180;
-	let RANKSEP = 100;
+	let CARD_W = 140;
+	let RANKSEP = 105;
 	const expandedCards = new Set();
-	const nodeInitialTops = new Map();
 	const relayoutColsCountByNode = new Map();
-	const disablePostLayoutRearrangement = true;
 	/* Per-model saved state: expanded cards, column trace, pan/zoom */
 	const savedStates = new Map();
+	const persistedWebviewState = vscode.getState() || {};
+	const layoutDefaults = {
+		graph: { rankdir: 'LR', ranksep: 105, nodesep: 5, edgesep: 0, align: 'none', ranker: 'tight-tree' },
+		node: { width: 140 },
+		edge: { minlen: 1, weight: 1 },
+	};
+	let storedLayoutConfig = null;
+	let layoutConfig = JSON.parse(JSON.stringify(layoutDefaults));
 
-	/* ── Column Wrapping + Relaxation ──
-	 * Splits tall dagre columns into sub-columns and re-centres columns
-	 * around their parents' Y centroid. maxPerCol is derived from the
-	 * available viewport height so the graph fills the panel efficiently.
-	 * Always reads from node._origX/_origY so it is safe to call repeatedly
-	 * (e.g. on resize). */
-	function applyColumnWrapping(nodes, edges) {
-		const HEADER_H = 44;
-		const SUBCOL_GAP = 16;
-		const NODE_VSEP = 20;
-		const availableH = wrapEl.clientHeight - 40;
-		const maxPerCol = Math.max(2, Math.min(20, Math.floor(availableH / (HEADER_H + NODE_VSEP))));
-
-		// Reset to original dagre positions before re-wrapping
-		for (var i = 0; i < nodes.length; i++) {
-			nodes[i].x = nodes[i]._origX;
-			nodes[i].y = nodes[i]._origY;
+	if (persistedWebviewState.savedStates && typeof persistedWebviewState.savedStates === 'object') {
+		for (const [focusId, rawState] of Object.entries(persistedWebviewState.savedStates)) {
+			if (!rawState || typeof rawState !== 'object') continue;
+			const expanded = Array.isArray(rawState.expandedCards)
+				? rawState.expandedCards.filter(function(v) { return typeof v === 'string'; })
+				: [];
+			const rawScrolls = Array.isArray(rawState.colScrollPositions) ? rawState.colScrollPositions : [];
+			const colScrollPositions = new Map();
+			for (const pair of rawScrolls) {
+				if (!Array.isArray(pair) || pair.length !== 2) continue;
+				if (typeof pair[0] !== 'string' || typeof pair[1] !== 'number') continue;
+				colScrollPositions.set(pair[0], pair[1]);
+			}
+			savedStates.set(focusId, {
+				expandedCards: new Set(expanded),
+				lastHighlightMsg: rawState.lastHighlightMsg || null,
+				colScrollPositions: colScrollPositions,
+				panX: typeof rawState.panX === 'number' ? rawState.panX : 0,
+				panY: typeof rawState.panY === 'number' ? rawState.panY : 0,
+				scale: typeof rawState.scale === 'number' ? rawState.scale : 1,
+			});
 		}
+	}
 
-		// Parent lookup for relaxation
-		var parentsOfW = new Map();
-		for (var ei = 0; ei < edges.length; ei++) {
-			var e = edges[ei];
-			if (!parentsOfW.has(e.target)) parentsOfW.set(e.target, []);
-			parentsOfW.get(e.target).push(e.source);
-		}
-		var nodeByIdW = new Map();
-		for (var ni = 0; ni < nodes.length; ni++) nodeByIdW.set(nodes[ni].id, nodes[ni]);
-
-		// Group by rank (rounded origX)
-		var rankMapW = new Map();
-		for (var ri = 0; ri < nodes.length; ri++) {
-			var rx = Math.round(nodes[ri]._origX);
-			if (!rankMapW.has(rx)) rankMapW.set(rx, []);
-			rankMapW.get(rx).push(nodes[ri]);
-		}
-
-		var sortedRanksW = Array.from(rankMapW.keys()).sort(function(a, b) { return a - b; });
-		var extraX = 0;
-
-		for (var si = 0; si < sortedRanksW.length; si++) {
-			var rankX = sortedRanksW[si];
-			var col = rankMapW.get(rankX);
-			var baseX = rankX + extraX;
-
-			for (var ci = 0; ci < col.length; ci++) col[ci].x = baseX;
-
-			if (col.length > maxPerCol) {
-				col.sort(function(a, b) { return a._origY - b._origY; });
-				var numSubcols = Math.ceil(col.length / maxPerCol);
-				var minY = col[0]._origY - HEADER_H / 2;
-				var maxYv = col[col.length - 1]._origY + HEADER_H / 2;
-				var colCenterY = (minY + maxYv) / 2;
-
-				for (var sc = 0; sc < numSubcols; sc++) {
-					var start = sc * maxPerCol;
-					var subNodes = col.slice(start, Math.min(start + maxPerCol, col.length));
-					var n = subNodes.length;
-					var totalH = n * HEADER_H + (n - 1) * NODE_VSEP;
-					var firstCY = colCenterY - totalH / 2 + HEADER_H / 2;
-					var subX = baseX + sc * (CARD_W + SUBCOL_GAP);
-					for (var sni = 0; sni < n; sni++) {
-						subNodes[sni].x = subX;
-						subNodes[sni].y = firstCY + sni * (HEADER_H + NODE_VSEP);
-					}
-				}
-				extraX += (numSubcols - 1) * (CARD_W + SUBCOL_GAP);
-			} else {
-				// Relaxation: re-centre around the centroid of parents' Y positions
-				var parentYsW = [];
-				for (var pci = 0; pci < col.length; pci++) {
-					var pids = parentsOfW.get(col[pci].id) || [];
-					for (var pii = 0; pii < pids.length; pii++) {
-						var p = nodeByIdW.get(pids[pii]);
-						if (p) parentYsW.push(p.y);
-					}
-				}
-				if (parentYsW.length > 0) {
-					var sumY = 0;
-					for (var pyi = 0; pyi < parentYsW.length; pyi++) sumY += parentYsW[pyi];
-					var centerYr = sumY / parentYsW.length;
-					col.sort(function(a, b) { return a._origY - b._origY; });
-					var nr = col.length;
-					var totalHr = nr * HEADER_H + (nr - 1) * NODE_VSEP;
-					var firstCYr = centerYr - totalHr / 2 + HEADER_H / 2;
-					for (var rni = 0; rni < nr; rni++) {
-						col[rni].y = firstCYr + rni * (HEADER_H + NODE_VSEP);
-					}
-				}
+	function captureCurrentModelState() {
+		if (!lastFocusId) return;
+		const colScrollPositions = new Map();
+		for (const nodeId of expandedCards) {
+			const colList = canvas.querySelector('[data-cols="' + CSS.escape(nodeId) + '"]');
+			if (colList) {
+				colScrollPositions.set(nodeId, colList.scrollTop);
 			}
 		}
+		savedStates.set(lastFocusId, {
+			expandedCards: new Set(expandedCards),
+			lastHighlightMsg: lastHighlightMsg,
+			colScrollPositions: colScrollPositions,
+			panX: panX,
+			panY: panY,
+			scale: scale,
+		});
+	}
+
+	function persistWebviewState() {
+		captureCurrentModelState();
+		const serializedSavedStates = {};
+		for (const [focusId, state] of savedStates.entries()) {
+			serializedSavedStates[focusId] = {
+				expandedCards: Array.from(state.expandedCards || []),
+				lastHighlightMsg: state.lastHighlightMsg || null,
+				colScrollPositions: Array.from((state.colScrollPositions || new Map()).entries()),
+				panX: typeof state.panX === 'number' ? state.panX : 0,
+				panY: typeof state.panY === 'number' ? state.panY : 0,
+				scale: typeof state.scale === 'number' ? state.scale : 1,
+			};
+		}
+		vscode.setState({
+			savedStates: serializedSavedStates,
+			lastFocusId: lastFocusId,
+		});
+	}
+
+	let persistQueued = false;
+	function schedulePersistState() {
+		if (persistQueued) return;
+		persistQueued = true;
+		requestAnimationFrame(function() {
+			persistQueued = false;
+			persistWebviewState();
+		});
+	}
+
+	function cloneLayoutConfig(cfg) {
+		return JSON.parse(JSON.stringify(cfg));
+	}
+
+	function getResetLayoutConfig() {
+		return storedLayoutConfig ? cloneLayoutConfig(storedLayoutConfig) : cloneLayoutConfig(layoutDefaults);
+	}
+
+	function syncLayoutControls() {
+		document.getElementById('rankdir').value = layoutConfig.graph.rankdir;
+		document.getElementById('ranksep').value = String(layoutConfig.graph.ranksep);
+		document.getElementById('ranksep-val').textContent = String(layoutConfig.graph.ranksep);
+		document.getElementById('nodesep').value = String(layoutConfig.graph.nodesep);
+		document.getElementById('nodesep-val').textContent = String(layoutConfig.graph.nodesep);
+		document.getElementById('edgesep').value = String(layoutConfig.graph.edgesep);
+		document.getElementById('edgesep-val').textContent = String(layoutConfig.graph.edgesep);
+		document.getElementById('align').value = layoutConfig.graph.align;
+		document.getElementById('ranker').value = layoutConfig.graph.ranker;
+		document.getElementById('node-width').value = String(layoutConfig.node.width);
+		document.getElementById('node-width-val').textContent = String(layoutConfig.node.width);
+		document.getElementById('edge-minlen').value = String(layoutConfig.edge.minlen);
+		document.getElementById('edge-minlen-val').textContent = String(layoutConfig.edge.minlen);
+		document.getElementById('edge-weight').value = String(layoutConfig.edge.weight);
+		document.getElementById('edge-weight-val').textContent = String(layoutConfig.edge.weight);
 	}
 
 	/* ── Pan & Zoom ── */
@@ -971,6 +1267,7 @@ svg.edges polygon {
 		canvas.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + scale + ')';
 		edgesSvg.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + scale + ')';
 		edgesFgSvg.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + scale + ')';
+		schedulePersistState();
 	}
 
 	function depthBandColor(depth) {
@@ -1090,23 +1387,21 @@ svg.edges polygon {
 
 	/* ── Render Graph ── */
 	function setGraph(data) {
+		if (data.defaultLayoutConfig) {
+			Object.assign(layoutDefaults.graph, data.defaultLayoutConfig.graph || {});
+			Object.assign(layoutDefaults.node, data.defaultLayoutConfig.node || {});
+			Object.assign(layoutDefaults.edge, data.defaultLayoutConfig.edge || {});
+		}
+		storedLayoutConfig = data.storedLayoutConfig ? cloneLayoutConfig(data.storedLayoutConfig) : null;
+		if (data.layoutConfig) {
+			layoutConfig = cloneLayoutConfig(data.layoutConfig);
+			syncLayoutControls();
+		}
 		const focusChanged = data.focusId !== lastFocusId;
 
 		if (focusChanged && lastFocusId) {
 			/* Save view state for the model we're navigating away from */
-			const colScrollPositions = new Map();
-			for (const nodeId of expandedCards) {
-				const colList = canvas.querySelector('[data-cols="' + CSS.escape(nodeId) + '"]');
-				if (colList) {
-					colScrollPositions.set(nodeId, colList.scrollTop);
-				}
-			}
-			savedStates.set(lastFocusId, {
-				expandedCards: new Set(expandedCards),
-				lastHighlightMsg: lastHighlightMsg,
-				colScrollPositions: colScrollPositions,
-				panX: panX, panY: panY, scale: scale,
-			});
+			captureCurrentModelState();
 		}
 
 		const restoredState = focusChanged ? savedStates.get(data.focusId) : null;
@@ -1134,35 +1429,18 @@ svg.edges polygon {
 
 		graphData = data;
 
-		/* Store original dagre positions so applyColumnWrapping can reset and re-wrap. */
+		/* Store original dagre positions. */
 		for (var wni = 0; wni < data.nodes.length; wni++) {
 			data.nodes[wni]._origX = data.nodes[wni].x;
 			data.nodes[wni]._origY = data.nodes[wni].y;
 		}
 
-		if (disablePostLayoutRearrangement) {
-			CARD_W = 180;
-			RANKSEP = 100;
-			for (var sxi = 0; sxi < data.nodes.length; sxi++) {
-				data.nodes[sxi].x = data.nodes[sxi]._origX;
-				data.nodes[sxi].y = data.nodes[sxi]._origY;
-				data.nodes[sxi].width = CARD_W;
-			}
-		} else {
-			/* Calculate responsive sizing based on viewport width */
-			const vpWidth = wrapEl.clientWidth;
-			const CARD_W_BASE = 180;
-			CARD_W = Math.min(220, Math.max(140, Math.floor(vpWidth / 8)));
-			RANKSEP = Math.max(60, Math.floor(vpWidth / 12));
-			const scale_factor = CARD_W / CARD_W_BASE;
-
-			/* Scale x positions for responsive width */
-			for (var sxi = 0; sxi < data.nodes.length; sxi++) {
-				data.nodes[sxi].x = data.nodes[sxi]._origX * scale_factor;
-				data.nodes[sxi].width = CARD_W;
-			}
-
-			applyColumnWrapping(data.nodes, data.edges);
+		CARD_W = layoutConfig.node.width;
+		RANKSEP = layoutConfig.graph.ranksep;
+		for (var sxi = 0; sxi < data.nodes.length; sxi++) {
+			data.nodes[sxi].x = data.nodes[sxi]._origX;
+			data.nodes[sxi].y = data.nodes[sxi]._origY;
+			data.nodes[sxi].width = CARD_W;
 		}
 
 		emptyEl.style.display = 'none';
@@ -1193,13 +1471,13 @@ svg.edges polygon {
 					'<div class="card-text-wrapper">' +
 						'<div class="card-title-row">' +
 							'<span class="card-title" title="' + escHtml(node.label) + '">' +
-								'<span class="type-badge open-file-trigger" style="background:' + color + '; color: white;">' + escHtml(typeBadge) + '</span>' +
+								'<span class="type-badge open-file-trigger" title="Open model" style="background:' + color + '; color: white;">' + escHtml(typeBadge) + '</span>' +
 								(node.depthLevel !== 0 ? '<span class="depth-label">' + (node.depthLevel > 0 ? '+' + node.depthLevel : '' + node.depthLevel) + '</span>' : '') +
 								escHtml(node.label) +
 							'</span>' +
 						'</div>' +
 						'<div class="card-subtitle-row">' +
-							'<span class="card-subtitle open-file-trigger">' + escHtml(subtitle) + '</span>' +
+							'<span class="card-subtitle">' + escHtml(subtitle) + '</span>' +
 							(colCount > 0 ? '<button class="col-toggle" data-node="' + escHtml(node.id) + '">' + colCount + ' cols ▸</button>' : '') +
 						'</div>' +
 					'</div>' +
@@ -1267,11 +1545,7 @@ svg.edges polygon {
 		upDepthEl.textContent = data.upstreamDepth;
 		dnDepthEl.textContent = data.downstreamDepth;
 
-		/* Record initial card top positions (collapsed state) for re-layout after expand/collapse */
-		nodeInitialTops.clear();
-		for (const node of data.nodes) {
-			nodeInitialTops.set(node.id, node.y - node.height / 2);
-		}
+		schedulePersistState();
 	}
 
 	/* ── Edges ── */
@@ -1332,38 +1606,6 @@ svg.edges polygon {
 		panX = (ww - gw * scale) / 2 - minX * scale;
 		panY = (wh - gh * scale) / 2 - minY * scale;
 		applyTransform();
-	}
-
-	/* ── Re-layout after column expand/collapse ── */
-	function relayoutAfterToggle() {
-		if (!graphData) return;
-		const GAP = 16;
-
-		const rankMap = new Map();
-		for (const node of graphData.nodes) {
-			if (!rankMap.has(node.x)) rankMap.set(node.x, []);
-			rankMap.get(node.x).push(node);
-		}
-
-		for (const nodes of rankMap.values()) {
-			if (nodes.length <= 1) continue;
-			nodes.sort(function(a, b) {
-				return (nodeInitialTops.get(a.id) ?? a.y) - (nodeInitialTops.get(b.id) ?? b.y);
-			});
-			var top = nodeInitialTops.has(nodes[0].id)
-				? nodeInitialTops.get(nodes[0].id)
-				: nodes[0].y - nodes[0].height / 2;
-			for (var i = 0; i < nodes.length; i++) {
-				var node = nodes[i];
-				var card = canvas.querySelector('[data-id="' + CSS.escape(node.id) + '"]');
-				var h = card ? card.offsetHeight : node.height;
-				node.y = top + h / 2;			node.height = h;				if (card) card.style.top = top + 'px';
-				top += h + GAP;
-			}
-		}
-		drawEdges(graphData);
-		/* Defer column edge redraw one frame so browser reflows card heights first */
-		requestAnimationFrame(redrawColumnEdges);
 	}
 
 	function requestDagreRelayout() {
@@ -1428,42 +1670,9 @@ svg.edges polygon {
 		}
 	});
 
-	/* Re-wrap on resize so maxPerCol stays proportional to the available height. */
+	/* Keep card positions/sizes in sync on resize. */
 	new ResizeObserver(function() {
 		if (!graphData) return;
-		if (disablePostLayoutRearrangement) {
-			drawDepthBands(graphData);
-			for (var rwi = 0; rwi < graphData.nodes.length; rwi++) {
-				var rn = graphData.nodes[rwi];
-				var rc = canvas.querySelector('[data-id="' + CSS.escape(rn.id) + '"]');
-				if (rc) {
-					rc.style.left = (rn.x - CARD_W / 2) + 'px';
-					rc.style.top = (rn.y - rn.height / 2) + 'px';
-					rc.style.width = CARD_W + 'px';
-				}
-			}
-			drawEdges(graphData);
-			requestAnimationFrame(redrawColumnEdges);
-			return;
-		}
-		/* Recalculate responsive sizing on viewport change */
-		const vpWidth = wrapEl.clientWidth;
-		const CARD_W_BASE = 180;
-		const newCardW = Math.min(220, Math.max(140, Math.floor(vpWidth / 8)));
-		const newRanksep = Math.max(60, Math.floor(vpWidth / 12));
-		const widthChanged = newCardW !== CARD_W;
-		CARD_W = newCardW;
-		RANKSEP = newRanksep;
-
-		/* If width changed, scale x positions and re-wrap columns */
-		if (widthChanged) {
-			const scale_factor = CARD_W / CARD_W_BASE;
-			for (var rwsi = 0; rwsi < graphData.nodes.length; rwsi++) {
-				graphData.nodes[rwsi].x = graphData.nodes[rwsi]._origX * scale_factor;
-				graphData.nodes[rwsi].width = CARD_W;
-			}
-			applyColumnWrapping(graphData.nodes, graphData.edges);
-		}
 		drawDepthBands(graphData);
 
 		for (var rwi = 0; rwi < graphData.nodes.length; rwi++) {
@@ -1472,13 +1681,8 @@ svg.edges polygon {
 			if (rc) {
 				rc.style.left = (rn.x - CARD_W / 2) + 'px';
 				rc.style.top = (rn.y - rn.height / 2) + 'px';
-				if (widthChanged) rc.style.width = CARD_W + 'px';
+				rc.style.width = CARD_W + 'px';
 			}
-		}
-		nodeInitialTops.clear();
-		for (var rwj = 0; rwj < graphData.nodes.length; rwj++) {
-			var rnj = graphData.nodes[rwj];
-			nodeInitialTops.set(rnj.id, rnj.y - rnj.height / 2);
 		}
 		drawEdges(graphData);
 		requestAnimationFrame(redrawColumnEdges);
@@ -1509,13 +1713,125 @@ svg.edges polygon {
 		if (graphData) fitToView(graphData);
 	});
 
+	/* ── Layout Settings Panel ── */
+	const layoutPanel = document.getElementById('layout-panel');
+
+	function postLayoutConfig() {
+		vscode.postMessage({ command: 'setLayoutConfig', config: layoutConfig });
+	}
+
+	function copyLayoutConfig() {
+		vscode.postMessage({ command: 'copyLayoutConfig', config: layoutConfig });
+	}
+
+	function saveLayoutConfig() {
+		vscode.postMessage({ command: 'saveLayoutConfig', config: layoutConfig });
+	}
+
+	document.getElementById('layout-toggle').addEventListener('click', function() {
+		layoutPanel.classList.toggle('hidden');
+	});
+	document.getElementById('layout-panel-close').addEventListener('click', function() {
+		layoutPanel.classList.add('hidden');
+	});
+
+	document.getElementById('ranksep').addEventListener('input', function() {
+		const v = parseInt(this.value, 10);
+		layoutConfig.graph.ranksep = v;
+		document.getElementById('ranksep-val').textContent = String(v);
+	});
+	document.getElementById('rankdir').addEventListener('change', function() {
+		layoutConfig.graph.rankdir = this.value;
+		postLayoutConfig();
+	});
+	document.getElementById('ranksep').addEventListener('change', function() {
+		postLayoutConfig();
+	});
+
+	document.getElementById('nodesep').addEventListener('input', function() {
+		const v = parseInt(this.value, 10);
+		layoutConfig.graph.nodesep = v;
+		document.getElementById('nodesep-val').textContent = String(v);
+	});
+	document.getElementById('nodesep').addEventListener('change', function() {
+		postLayoutConfig();
+	});
+
+	document.getElementById('edgesep').addEventListener('input', function() {
+		const v = parseInt(this.value, 10);
+		layoutConfig.graph.edgesep = v;
+		document.getElementById('edgesep-val').textContent = String(v);
+	});
+	document.getElementById('edgesep').addEventListener('change', function() {
+		postLayoutConfig();
+	});
+
+	document.getElementById('align').addEventListener('change', function() {
+		layoutConfig.graph.align = this.value;
+		postLayoutConfig();
+	});
+
+	document.getElementById('ranker').addEventListener('change', function() {
+		layoutConfig.graph.ranker = this.value;
+		postLayoutConfig();
+	});
+
+	document.getElementById('node-width').addEventListener('input', function() {
+		const v = parseInt(this.value, 10);
+		layoutConfig.node.width = v;
+		document.getElementById('node-width-val').textContent = String(v);
+	});
+	document.getElementById('node-width').addEventListener('change', function() {
+		postLayoutConfig();
+	});
+
+	document.getElementById('edge-minlen').addEventListener('input', function() {
+		const v = parseInt(this.value, 10);
+		layoutConfig.edge.minlen = v;
+		document.getElementById('edge-minlen-val').textContent = String(v);
+	});
+	document.getElementById('edge-minlen').addEventListener('change', function() {
+		postLayoutConfig();
+	});
+
+	document.getElementById('edge-weight').addEventListener('input', function() {
+		const v = parseInt(this.value, 10);
+		layoutConfig.edge.weight = v;
+		document.getElementById('edge-weight-val').textContent = String(v);
+	});
+	document.getElementById('edge-weight').addEventListener('change', function() {
+		postLayoutConfig();
+	});
+
+	document.getElementById('layout-reset').addEventListener('click', function() {
+		layoutConfig = getResetLayoutConfig();
+		syncLayoutControls();
+		postLayoutConfig();
+	});
+
+	document.getElementById('layout-copy').addEventListener('click', function() {
+		copyLayoutConfig();
+	});
+
+	document.getElementById('layout-save').addEventListener('click', function() {
+		saveLayoutConfig();
+	});
+
 	window.addEventListener('message', function(event) {
 		const msg = event.data;
 		if (msg.command === 'setGraph') setGraph(msg);
 		if (msg.command === 'highlightColumns') highlightColumns(msg);
 		if (msg.command === 'updateColumns') updateColumns(msg);
 		if (msg.command === 'columnLineageStatus') showStatus(msg);
-		if (msg.command === 'clearFileState') savedStates.delete(msg.focusId);
+		if (msg.command === 'layoutConfigCopied') showStatus({ status: 'loading', message: msg.message || 'Copied' });
+		if (msg.command === 'layoutConfigSaved') {
+			storedLayoutConfig = msg.storedLayoutConfig ? cloneLayoutConfig(msg.storedLayoutConfig) : cloneLayoutConfig(layoutConfig);
+			showStatus({ status: 'loading', message: msg.message || 'Saved' });
+		}
+		if (msg.command === 'clearFileState') {
+			savedStates.delete(msg.focusId);
+			schedulePersistState();
+		}
 	});
 
 	function showStatus(msg) {
@@ -1529,6 +1845,9 @@ svg.edges polygon {
 			el.textContent = msg.message || 'Loading...';
 			el.style.display = 'block';
 			el.className = 'status-loading';
+			if (msg.message === 'Copied layout config' || msg.message === 'Saved layout config') {
+				setTimeout(function() { el.style.display = 'none'; }, 1500);
+			}
 		} else if (msg.status === 'error') {
 			el.textContent = msg.message || 'Error';
 			el.style.display = 'block';

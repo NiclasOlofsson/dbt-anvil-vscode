@@ -71,7 +71,7 @@ function createTestIndex(): ManifestIndex {
 	};
 }
 
-function createMockIndexer(index: ManifestIndex, rawNode?: Record<string, unknown>): ManifestIndexer {
+function createMockIndexer(index: ManifestIndex, rawNode?: Record<string, unknown>, rawNodesByUid?: Record<string, Record<string, unknown>>): ManifestIndexer {
 	const columnStore = new Map<string, string[]>();
 	return {
 		index,
@@ -102,7 +102,7 @@ function createMockIndexer(index: ManifestIndex, rawNode?: Record<string, unknow
 		}),
 		findByTag: vi.fn(),
 		projectDir: '/project',
-		getRawNode: vi.fn().mockReturnValue(rawNode ?? {
+		getRawNode: vi.fn((uniqueId: string) => rawNodesByUid?.[uniqueId] ?? rawNode ?? {
 			unique_id: 'model.p.customers',
 			name: 'customers',
 			resource_type: 'model',
@@ -340,3 +340,104 @@ describe('GetColumnLineageTool error paths', () => {
 		expect(parsed.error).toMatch(/customer_id|first_name/);
 	});
 });
+
+describe('GetColumnLineageTool relation disambiguation', () => {
+	it('prefers model when ambiguous bare table matches both direct model and source parents', async () => {
+		const models = new Map<string, IndexedModel>([
+			['model.p.customers', {
+				uniqueId: 'model.p.customers',
+				name: 'customers',
+				packageName: 'p',
+				path: '/project/models/customers.sql',
+				schema: 'norm',
+				tags: [],
+				materialisation: 'view',
+			}],
+			['model.p.transfer', {
+				uniqueId: 'model.p.transfer',
+				name: 'transfer',
+				packageName: 'p',
+				path: '/project/models/transfer.sql',
+				schema: 'norm',
+				tags: [],
+				materialisation: 'view',
+			}],
+		]);
+
+		const sources = new Map<string, IndexedSource>([
+			['source.p.raw.transfer', {
+				uniqueId: 'source.p.raw.transfer',
+				name: 'transfer',
+				sourceName: 'raw',
+				schema: 'raw',
+				database: 'dev',
+				tags: [],
+			}],
+		]);
+
+		const index: ManifestIndex = {
+			models,
+			sources,
+			macros: new Map(),
+			nodesByName: new Map([
+				['customers', ['model.p.customers']],
+				['transfer', ['model.p.transfer']],
+				['raw.transfer', ['source.p.raw.transfer']],
+			]),
+			parentMap: new Map([
+				['model.p.customers', ['model.p.transfer', 'source.p.raw.transfer']],
+			]),
+			childMap: new Map(),
+			dbtVersion: '1.8.0',
+			adapterType: 'databricks',
+			buildTime: new Date(),
+		};
+
+		const rawNodesByUid: Record<string, Record<string, unknown>> = {
+			'model.p.customers': {
+				unique_id: 'model.p.customers',
+				name: 'customers',
+				resource_type: 'model',
+				schema: 'norm',
+				database: 'dev',
+				original_file_path: 'models/customers.sql',
+				columns: {},
+			},
+			'model.p.transfer': {
+				unique_id: 'model.p.transfer',
+				name: 'transfer',
+				resource_type: 'model',
+				schema: 'norm',
+				database: 'dev',
+				alias: 'transfer',
+				original_file_path: 'models/transfer.sql',
+				columns: { transferid: { data_type: 'int' } },
+			},
+			'source.p.raw.transfer': {
+				unique_id: 'source.p.raw.transfer',
+				name: 'transfer',
+				resource_type: 'source',
+				source_name: 'raw',
+				identifier: 'transfer',
+				schema: 'raw',
+				database: 'dev',
+				columns: { transferid: { data_type: 'int' } },
+			},
+		};
+
+		const indexer = createMockIndexer(index, undefined, rawNodesByUid);
+		const ftlParser = makeFtlParser(['transferid'], {
+			dependencies: [{ table: 'transfer', column: 'transferid' }],
+			via_ctes: [],
+			transformations: [],
+		});
+
+		const tool = new GetColumnLineageTool(indexer, mockLogger, mockCompileCache, mockDescribeCache, ftlParser);
+		const result = await tool.traceColumnDirect('model.p.customers', 'transferid', 'upstream');
+
+		expect(result.error).toBeUndefined();
+		expect(result.dependencies.some(d => d.dbt_resource === 'model.p.transfer')).toBe(true);
+		expect(result.dependencies.some(d => d.dbt_resource === 'source.p.raw.transfer')).toBe(false);
+	});
+});
+

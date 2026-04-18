@@ -1703,7 +1703,6 @@
 		"@databricks/sql": "^1.13.0",
 		"@resvg/resvg-js": "^2.6.2",
 		"@stylistic/eslint-plugin": "^5.10.0",
-		"@types/dagre": "^0.7.54",
 		"@types/js-yaml": "^4.0.9",
 		"@types/node": "^25.6.0",
 		"@types/vscode": "^1.115.0",
@@ -1728,9 +1727,9 @@
 		"vitest": "^4.1.4"
 	},
 	"dependencies": {
+		"@dagrejs/dagre": "^3.0.0",
 		"@duckdb/node-api": "^1.5.1-r.1",
 		"@types/nunjucks": "^3.2.6",
-		"dagre": "^0.8.5",
 		"hive-driver": "^1.0.0",
 		"js-yaml": "^4.1.1",
 		"node-sql-parser": "^5.3.6",
