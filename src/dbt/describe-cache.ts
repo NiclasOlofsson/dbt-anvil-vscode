@@ -99,7 +99,7 @@ export class DescribeCache {
 		externalLocation?: string,
 	): Promise<string[] | undefined> {
 		const cached = this.indexer.getColumns(uniqueId);
-		if (cached && !this.indexer.isManifestOnly(uniqueId)) {
+		if (cached) {
 			this.logger.trace(`DescribeCache: hit for ${uniqueId}`);
 			return cached;
 		}
@@ -133,7 +133,7 @@ export class DescribeCache {
 				const defs = await this._provider.describe(name, { isSource: !!sourceName, sourceName, qualifiedName, externalLocation });
 				const cols = defs.map(d => d.name).filter(Boolean);
 				if (cols.length > 0) {
-					this.indexer.setColumns(uniqueId, cols);
+					this.indexer.setColumns(uniqueId, cols, 'describe');
 					this.logger.trace(`DescribeCache: stored ${cols.length} columns for ${uniqueId} (via provider)`);
 					return cols;
 				}
@@ -152,7 +152,7 @@ export class DescribeCache {
 			});
 			const cols = (result.data as Record<string, unknown> | undefined)?.columns as string[] | undefined;
 			if (cols && cols.length > 0) {
-				this.indexer.setColumns(uniqueId, cols);
+				this.indexer.setColumns(uniqueId, cols, 'describe');
 				this.logger.trace(`DescribeCache: stored ${cols.length} columns for ${uniqueId}`);
 				return cols;
 			}

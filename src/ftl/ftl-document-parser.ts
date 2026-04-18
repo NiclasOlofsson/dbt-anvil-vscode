@@ -207,7 +207,22 @@ export function extractSubqueries(ast: AstPayload[]): CteInfo[] {
 function _finalSelectNode(ast: AstPayload[]): AstNode | undefined {
 	if (ast.length === 0) return undefined;
 	if (ast[0].c === 'Select') return { node: ast[0], index: 0 };
-	if (ast[0].c === 'With') return childOf(ast, 0, 'this');
+	// Bare UNION / UNION ALL at root (no CTEs) — unwrap to the leftmost Select branch.
+	if (ast[0].c === 'Union') {
+		let node: AstNode | undefined = { node: ast[0], index: 0 };
+		while (node && node.node.c !== 'Select') {
+			node = childOf(ast, node.index, 'this') ?? undefined;
+		}
+		return node;
+	}
+	if (ast[0].c === 'With') {
+		// WITH ... SELECT ... UNION ALL ... — the 'this' child may be a Union; unwrap it.
+		let node = childOf(ast, 0, 'this');
+		while (node && node.node.c !== 'Select') {
+			node = childOf(ast, node.index, 'this') ?? undefined;
+		}
+		return node;
+	}
 	return undefined;
 }
 

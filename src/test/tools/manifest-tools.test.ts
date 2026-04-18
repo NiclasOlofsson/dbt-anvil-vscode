@@ -72,6 +72,7 @@ function createTestIndex(): ManifestIndex {
 }
 
 function createMockIndexer(index: ManifestIndex | null): ManifestIndexer {
+	const columnStore = new Map<string, string[]>();
 	return {
 		index,
 		build: vi.fn().mockReturnValue(index),
@@ -95,6 +96,10 @@ function createMockIndexer(index: ManifestIndex | null): ManifestIndexer {
 			if (!index) return [];
 			const matches = [...index.models.values()].filter(m => m.name === name);
 			return matches.map(m => ({ uniqueId: m.uniqueId, name: m.name, type: 'model' }));
+		}),
+		getColumns: vi.fn((uniqueId: string) => columnStore.get(uniqueId)),
+		setColumns: vi.fn((uniqueId: string, columns: string[]) => {
+			columnStore.set(uniqueId, columns);
 		}),
 		adapterType: index?.adapterType,
 	} as unknown as ManifestIndexer;

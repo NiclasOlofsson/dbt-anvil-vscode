@@ -70,6 +70,13 @@ export interface ManifestIndex {
 	buildTime: Date;
 }
 
+export type ColumnCacheOrigin = 'describe' | 'parse' | 'database_columns' | 'persisted' | 'unknown';
+
+interface ColumnCacheEntry {
+	columns: string[];
+	origin: ColumnCacheOrigin;
+}
+
 /**
  * Builds an in-memory index from the dbt manifest for fast lookups.
  */
@@ -81,14 +88,7 @@ export class ManifestIndexer {
 	 * Populated lazily by the completion provider via setColumns().
 	 * Cleared selectively when a model changes (model + all downstream dependents).
 	 */
-	private _columnStore = new Map<string, string[]>();
-
-	/**
-	 * Tracks column store entries that were pre-populated from manifest YAML only
-	 * (partial documentation, not from a live describe). DescribeCache bypasses
-	 * these entries to trigger a live describe, ensuring validations use real data.
-	 */
-	private _manifestOnlyIds = new Set<string>();
+	private _columnStore = new Map<string, ColumnCacheEntry>();
 
 	/** Checksums from the previous manifest build, used to diff on rebuild. */
 	private _nodeChecksums = new Map<string, string>();
@@ -454,17 +454,11 @@ export class ManifestIndexer {
 	// -----------------------------------------------------------------------
 
 	getColumns(uniqueId: string): string[] | undefined {
-		return this._columnStore.get(uniqueId);
+		return this._columnStore.get(uniqueId)?.columns;
 	}
 
-	/** Returns true if the stored column list came from manifest YAML only (not a live describe). */
-	isManifestOnly(uniqueId: string): boolean {
-		return this._manifestOnlyIds.has(uniqueId);
-	}
-
-	setColumns(uniqueId: string, columns: string[]): void {
-		this._columnStore.set(uniqueId, columns);
-		this._manifestOnlyIds.delete(uniqueId);
+	setColumns(uniqueId: string, columns: string[], origin: ColumnCacheOrigin = 'unknown'): void {
+		this._columnStore.set(uniqueId, { columns, origin });
 	}
 
 	/**
@@ -475,7 +469,7 @@ export class ManifestIndexer {
 	 */
 	seedFromCache(data: { columns: Record<string, string[]>; checksums: Record<string, string> }): void {
 		for (const [uid, cols] of Object.entries(data.columns)) {
-			this._columnStore.set(uid, cols);
+			this._columnStore.set(uid, { columns: cols, origin: 'persisted' });
 		}
 		for (const [uid, checksum] of Object.entries(data.checksums)) {
 			this._nodeChecksums.set(uid, checksum);
@@ -487,11 +481,9 @@ export class ManifestIndexer {
 	 * Export the current column store and node checksums for persistence.
 	 */
 	exportForCache(): { columns: Record<string, string[]>; checksums: Record<string, string> } {
-		// Exclude manifest-only entries — they contain partial YAML-documented columns,
-		// not authoritative live-describe results. Persisting them would cause stale
-		// partial column lists to survive restarts and block the live describe.
 		const columns = Object.fromEntries(
-			[...this._columnStore].filter(([uid]) => !this._manifestOnlyIds.has(uid)),
+			[...this._columnStore]
+				.map(([uid, entry]) => [uid, entry.columns]),
 		);
 		return {
 			columns,
@@ -531,7 +523,7 @@ export class ManifestIndexer {
 
 		// First build — no previous state to compare against
 		if (oldChecksums.size === 0) {
-			this.clearColumnStore(manifest);
+			this.clearColumnStore();
 			return;
 		}
 
@@ -559,22 +551,16 @@ export class ManifestIndexer {
 		for (const uid of changed) {
 			this.invalidateModel(uid);
 		}
-
-		// Pre-populate column store from manifest columns for evicted nodes
-		this._prePopulateColumns(manifest);
 	}
 
-	/** Clear the entire column store (e.g. on full manifest rebuild), then pre-populate from manifest. */
+	/** Clear the entire column store (e.g. on full manifest rebuild). */
 	clearColumnStore(manifest?: DbtManifest): void {
 		const size = this._columnStore.size;
 		this._columnStore.clear();
-		this._manifestOnlyIds.clear();
 		if (size > 0) {
 			this.logger.debug(`Column store: cleared all ${size} entries`);
 		}
-		if (manifest) {
-			this._prePopulateColumns(manifest);
-		}
+		void manifest;
 	}
 
 	/**
@@ -593,45 +579,10 @@ export class ManifestIndexer {
 		return undefined;
 	}
 
-	/**
-	 * Pre-populate the column store from manifest column definitions.
-	 * Nodes with schema.yml-defined columns get fresh column data immediately
-	 * after a manifest rebuild — only nodes WITHOUT schema.yml columns need
-	 * a bridge describe call.
-	 */
-	private _prePopulateColumns(manifest: DbtManifest): void {
-		let count = 0;
-		for (const [uid, node] of Object.entries(manifest.nodes)) {
-			if (!isIndexableNode(node.resource_type)) continue;
-			if (this._columnStore.has(uid)) continue;
-			if (!node.columns) continue;
-			const colNames = Object.keys(node.columns);
-			if (colNames.length > 0) {
-				this._columnStore.set(uid, colNames);
-				this._manifestOnlyIds.add(uid);
-				count++;
-			}
-		}
-		for (const [uid, source] of Object.entries(manifest.sources)) {
-			if (this._columnStore.has(uid)) continue;
-			if (!source.columns) continue;
-			const colNames = Object.keys(source.columns);
-			if (colNames.length > 0) {
-				this._columnStore.set(uid, colNames);
-				this._manifestOnlyIds.add(uid);
-				count++;
-			}
-		}
-		if (count > 0) {
-			this.logger.info(`Column store: pre-populated ${count} entries from manifest`);
-		}
-	}
-
 	private _evictDownstream(uniqueId: string, visited: Set<string>, evicted: Set<string>): void {
 		if (visited.has(uniqueId)) return;
 		visited.add(uniqueId);
 		const hadColumns = this._columnStore.delete(uniqueId);
-		this._manifestOnlyIds.delete(uniqueId);
 		if (hadColumns) {
 			evicted.add(uniqueId);
 		}

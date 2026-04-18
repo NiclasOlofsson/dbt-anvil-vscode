@@ -22,6 +22,7 @@ interface PositionedNode {
 	y: number;
 	width: number;
 	height: number;
+	depthLevel: number;
 }
 
 interface GraphEdge {
@@ -42,6 +43,7 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 	private _downstreamDepth = 1;
 	private _enrichGeneration = 0;
 	private readonly _depthPerModel = new Map<string, { upstream: number; downstream: number }>();
+	private readonly _expandedNodesPerModel = new Map<string, Set<string>>();
 	private _showTests: boolean;
 	private _columnLineageTool?: GetColumnLineageTool;
 	private _executionService?: DbtExecutionService;
@@ -150,6 +152,19 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 			if (msg['command'] === 'traceColumn' && typeof msg['model'] === 'string' && typeof msg['column'] === 'string') {
 				void this._handleTraceColumn(msg['model'] as string, msg['column'] as string);
 			}
+			if (msg['command'] === 'setExpandedNodes' && Array.isArray(msg['nodeIds'])) {
+				if (!this._focusModel) return;
+				const nodeIds = (msg['nodeIds'] as unknown[]).filter((x): x is string => typeof x === 'string');
+				const next = new Set(nodeIds);
+				const prev = this._expandedNodesPerModel.get(this._focusModel);
+				const same = prev !== undefined
+					&& prev.size === next.size
+					&& [...next].every(id => prev.has(id));
+				if (!same) {
+					this._expandedNodesPerModel.set(this._focusModel, next);
+					this._updateGraph();
+				}
+			}
 		});
 
 		/* Re-sync when the panel becomes visible after being hidden.
@@ -234,15 +249,55 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 	private async _enrichColumns(nodes: PositionedNode[], gen: number): Promise<void> {
 		if (!this._view || !this._columnLineageTool) return;
 
+		// Topological sort (Kahn's algorithm) using the manifest parentMap so that
+		// upstream nodes are always enriched before their dependents. This ensures
+		// _buildSchemaMapping finds already-resolved columns for upstream nodes.
+		const index = this.indexer.index;
+		const nodeIds = new Set(nodes.map(n => n.id));
+		// Build in-degree and adjacency restricted to the visible node set
+		const inDegree = new Map<string, number>();
+		const children = new Map<string, string[]>();
 		for (const node of nodes) {
+			inDegree.set(node.id, 0);
+			children.set(node.id, []);
+		}
+		for (const node of nodes) {
+			const parents = index?.parentMap.get(node.id) ?? [];
+			for (const parent of parents) {
+				if (!nodeIds.has(parent)) continue;
+				inDegree.set(node.id, (inDegree.get(node.id) ?? 0) + 1);
+				children.get(parent)!.push(node.id);
+			}
+		}
+		const queue: string[] = [];
+		for (const [id, deg] of inDegree) {
+			if (deg === 0) queue.push(id);
+		}
+		const ordered: string[] = [];
+		while (queue.length > 0) {
+			const id = queue.shift()!;
+			ordered.push(id);
+			for (const child of children.get(id) ?? []) {
+				const deg = (inDegree.get(child) ?? 1) - 1;
+				inDegree.set(child, deg);
+				if (deg === 0) queue.push(child);
+			}
+		}
+		// Any nodes not reached (cycle) fall through at the end
+		for (const node of nodes) {
+			if (!ordered.includes(node.id)) ordered.push(node.id);
+		}
+		const nodeById = new Map(nodes.map(n => [n.id, n]));
+
+		for (const id of ordered) {
+			const node = nodeById.get(id);
+			if (!node) continue;
 			if (gen !== this._enrichGeneration) return;
-			// Skip only if columns are already live (describe/SQL-parsed) — not manifest-only.
-			// Manifest-only columns are just the YAML-documented subset; the actual table
-			// may have many more columns that SQL parsing or describe will surface.
+			// Skip if columns are already in the live store.
 			// NOTE: check the indexer's live column store, NOT node.columns — node.columns
 			// is populated from YAML manifest columns and is unrelated to the live store.
 			const storedCols = this.indexer.getColumns(node.id);
-			if (storedCols && storedCols.length > 0 && !this.indexer.isManifestOnly(node.id)) continue;
+			if (storedCols && storedCols.length > 0) continue;
 			try {
 				const cols = await this._columnLineageTool.resolveColumnsForNode(node.id);
 				if (gen !== this._enrichGeneration) return;
@@ -352,6 +407,18 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 		focusId: string,
 		showTests = true,
 	): { nodes: PositionedNode[]; edges: GraphEdge[] } {
+		const expandedNodes = this._expandedNodesPerModel.get(focusId) ?? new Set<string>();
+		const computeNodeHeight = (id: string, type: string, colCount: number): number => {
+			if (!expandedNodes.has(id)) return HEADER_HEIGHT;
+			if (colCount > 0) {
+				const rowHeight = 16;
+				const listHeight = Math.min(200, colCount * rowHeight);
+				return HEADER_HEIGHT + listHeight;
+			}
+			if (type === 'model' || type === 'source') return HEADER_HEIGHT + 22;
+			return HEADER_HEIGHT;
+		};
+
 		const allIds = new Set<string>();
 		allIds.add(focusId);
 		for (const node of lineage.upstream) allIds.add(node.uniqueId);
@@ -369,7 +436,13 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 		for (const id of allIds) {
 			const rawNode = this.indexer.getRawNode(id);
 			const columns: ColumnData[] = [];
-			if (rawNode && 'columns' in rawNode) {
+			// Prefer live columns from the store; fall back to YAML manifest
+			const liveColumns = this.indexer.getColumns(id);
+			if (liveColumns && liveColumns.length > 0) {
+				for (const col of liveColumns) {
+					columns.push({ name: col });
+				}
+			} else if (rawNode && 'columns' in rawNode) {
 				for (const col of Object.values(rawNode.columns)) {
 					columns.push({ name: col.name, type: col.data_type });
 				}
@@ -378,6 +451,7 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 			const model = index.models.get(id);
 			const source = index.sources.get(id);
 			if (model) {
+				const height = computeNodeHeight(id, 'model', columns.length);
 				nodes.push({
 					id,
 					label: model.name,
@@ -388,9 +462,11 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 					columns,
 					x: 0, y: 0,
 					width: CARD_WIDTH,
-					height: HEADER_HEIGHT,
+					height,
+					depthLevel: 0,
 				});
 			} else if (source) {
+				const height = computeNodeHeight(id, 'source', columns.length);
 				nodes.push({
 					id,
 					label: source.name,
@@ -399,11 +475,13 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 					columns,
 					x: 0, y: 0,
 					width: CARD_WIDTH,
-					height: HEADER_HEIGHT,
+					height,
+					depthLevel: 0,
 				});
 			} else {
 				const kind = id.split('.')[0];
 				const name = id.split('.').pop() ?? id;
+				const height = computeNodeHeight(id, kind, columns.length);
 				nodes.push({
 					id,
 					label: name,
@@ -412,8 +490,55 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 					columns,
 					x: 0, y: 0,
 					width: CARD_WIDTH,
-					height: HEADER_HEIGHT,
+					height,
+					depthLevel: 0,
 				});
+			}
+		}
+
+		// Compute depth level with independent traversals:
+		// focus=0, upstream=+N (via parentMap), downstream=-N (via childMap)
+		const upstreamDist = new Map<string, number>();
+		const downstreamDist = new Map<string, number>();
+
+		const upQueue: Array<{ id: string; d: number }> = [{ id: focusId, d: 0 }];
+		upstreamDist.set(focusId, 0);
+		while (upQueue.length > 0) {
+			const { id, d } = upQueue.shift()!;
+			for (const parent of (index.parentMap.get(id) ?? [])) {
+				if (!allIds.has(parent) || upstreamDist.has(parent)) continue;
+				const nd = d + 1;
+				upstreamDist.set(parent, nd);
+				upQueue.push({ id: parent, d: nd });
+			}
+		}
+
+		const dnQueue: Array<{ id: string; d: number }> = [{ id: focusId, d: 0 }];
+		downstreamDist.set(focusId, 0);
+		while (dnQueue.length > 0) {
+			const { id, d } = dnQueue.shift()!;
+			for (const child of (index.childMap.get(id) ?? [])) {
+				if (!allIds.has(child) || downstreamDist.has(child)) continue;
+				const nd = d + 1;
+				downstreamDist.set(child, nd);
+				dnQueue.push({ id: child, d: nd });
+			}
+		}
+
+		// Assign depth levels to nodes
+		for (const node of nodes) {
+			if (node.id === focusId) {
+				node.depthLevel = 0;
+				continue;
+			}
+			const up = upstreamDist.get(node.id);
+			const dn = downstreamDist.get(node.id);
+			if (up !== undefined && up > 0 && (dn === undefined || up <= dn)) {
+				node.depthLevel = up;
+			} else if (dn !== undefined && dn > 0) {
+				node.depthLevel = -dn;
+			} else {
+				node.depthLevel = 0;
 			}
 		}
 
@@ -512,11 +637,24 @@ body {
 #canvas {
 	position: absolute; top: 0; left: 0;
 	transform-origin: 0 0;
+	z-index: 2;
+}
+#bands {
+	position: absolute; top: 0; left: 0;
+	transform-origin: 0 0;
+	pointer-events: none;
+	z-index: 0;
+}
+.depth-band {
+	position: absolute;
+	border-radius: 6px;
+	pointer-events: none;
 }
 svg.edges {
 	position: absolute; top: 0; left: 0;
 	transform-origin: 0 0;
 	pointer-events: none; overflow: visible;
+	z-index: 1;
 }
 svg.edges path {
 	fill: none;
@@ -530,6 +668,9 @@ svg.edges path.col-edge {
 svg.edges polygon {
 	fill: var(--vscode-editorWidget-border, var(--vscode-panel-border));
 }
+#edges-fg {
+	z-index: 3;
+}
 
 .card {
 	position: absolute;
@@ -542,12 +683,13 @@ svg.edges polygon {
 }
 .card.focus {
 	border-color: var(--vscode-focusBorder);
+	border-left: 3px solid var(--vscode-focusBorder);
 	box-shadow: 0 0 0 1px var(--vscode-focusBorder);
 }
 .card-header {
-	display: flex; align-items: center; gap: 6px;
+	display: flex; align-items: flex-start; gap: 6px;
 	padding: 6px 8px;
-	background: var(--vscode-sideBarSectionHeader-background, var(--vscode-sideBar-background));
+	background: transparent;
 	border-bottom: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
 	cursor: pointer;
 	min-height: 32px;
@@ -564,22 +706,56 @@ svg.edges polygon {
 	flex: 1;
 	color: var(--vscode-foreground);
 }
+.depth-label {
+	font-size: 9px; font-weight: 400; font-family: monospace;
+	color: var(--vscode-descriptionForeground);
+	margin-right: 3px;
+	flex-shrink: 0;
+}
 .card-subtitle {
 	font-size: 9px;
 	color: var(--vscode-descriptionForeground);
+	flex: 1;
 }
 .col-toggle {
 	font-size: 9px; cursor: pointer; flex-shrink: 0;
 	color: var(--vscode-descriptionForeground);
-	background: none; border: none; padding: 2px;
+	background: none; border: none; padding: 0;
+	line-height: 1;
+	align-self: baseline;
 }
 .col-toggle:hover { color: var(--vscode-foreground); }
+.card-text-wrapper {
+	display: flex; flex-direction: column; gap: 1px; flex: 1;
+	overflow: hidden;
+}
+.card-title-row {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	min-height: 14px;
+}
+.card-subtitle-row {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	min-height: 12px;
+}
+.type-badge {
+	display: inline-block;
+	font-size: 8px; font-weight: 700; line-height: 1;
+	padding: 2px 3px; border-radius: 2px;
+	flex-shrink: 0; margin-right: 4px;
+	background: rgba(0, 0, 0, 0.2);
+	color: var(--vscode-foreground);
+}
 .col-list {
 	max-height: 200px; overflow-y: auto;
 }
 .col-item {
 	display: flex; align-items: center; gap: 4px;
-	padding: 2px 8px 2px 17px;
+	position: relative;
+	padding: 2px 8px 2px 38px;
 	font-size: 10px; cursor: pointer;
 	color: var(--vscode-foreground);
 }
@@ -597,11 +773,13 @@ svg.edges polygon {
 	white-space: nowrap;
 }
 .col-dot {
+	position: absolute;
+	left: 28px;
 	width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
 	background: var(--vscode-descriptionForeground);
 }
 .no-columns {
-	padding: 4px 8px 6px 17px;
+	padding: 4px 8px 6px 38px;
 	font-size: 10px; font-style: italic;
 	color: var(--vscode-descriptionForeground);
 }
@@ -644,11 +822,13 @@ svg.edges polygon {
 	<div class="legend">
 		<span class="legend-item"><span class="swatch" style="background:var(--vscode-charts-blue, #5B8DEF)"></span>Model</span>
 		<span class="legend-item"><span class="swatch" style="background:var(--vscode-charts-green, #43A686)"></span>Source</span>
-		<span class="legend-item"><span class="swatch" style="background:var(--vscode-charts-purple, #C77DBA)"></span>Tests</span>
-		<span class="legend-item"><span class="swatch" style="background:var(--vscode-charts-orange, #E8963E)"></span>Exposure</span>
+		<span class="legend-item"><span class="swatch" style="background:#D4A516"></span>Seed</span>
+		<span class="legend-item"><span class="swatch" style="background:var(--vscode-charts-purple, #C77DBA)"></span>Test</span>
+		<span class="legend-item"><span class="swatch" style="background:#A97FBE"></span>Unit Test</span>
 	</div>
 </div>
 <div id="canvas-wrap" style="display:none">
+	<div id="bands"></div>
 	<svg class="edges" id="edges"></svg>
 	<div id="canvas"></div>
 	<svg class="edges" id="edges-fg"></svg>
@@ -659,6 +839,7 @@ svg.edges polygon {
 (function() {
 	const vscode = acquireVsCodeApi();
 	const canvas = document.getElementById('canvas');
+	const bandsEl = document.getElementById('bands');
 	const edgesSvg = document.getElementById('edges');
 	const edgesFgSvg = document.getElementById('edges-fg');
 	const wrapEl = document.getElementById('canvas-wrap');
@@ -670,11 +851,11 @@ svg.edges polygon {
 		model:     'var(--vscode-charts-blue, #5B8DEF)',
 		source:    'var(--vscode-charts-green, #43A686)',
 		test:      'var(--vscode-charts-purple, #C77DBA)',
-		unit_test: 'var(--vscode-charts-purple, #C77DBA)',
+		unit_test: 'var(--vscode-charts-purple, #A97FBE)',
 		exposure:  'var(--vscode-charts-orange, #E8963E)',
 		metric:    'var(--vscode-charts-orange, #E8963E)',
-		seed:      'var(--vscode-charts-yellow, #8B7355)',
-		snapshot:  'var(--vscode-descriptionForeground)',
+		seed:      '#D4A516',
+		snapshot:  'var(--vscode-descriptionForeground, #888)',
 	};
 
 	let panX = 0, panY = 0, scale = 1;
@@ -682,8 +863,12 @@ svg.edges polygon {
 	let graphData = null;
 	let lastFocusId = null;
 	let lastHighlightMsg = null;
+	let CARD_W = 180;
+	let RANKSEP = 100;
 	const expandedCards = new Set();
 	const nodeInitialTops = new Map();
+	const relayoutColsCountByNode = new Map();
+	const disablePostLayoutRearrangement = true;
 	/* Per-model saved state: expanded cards, column trace, pan/zoom */
 	const savedStates = new Map();
 
@@ -697,7 +882,6 @@ svg.edges polygon {
 		const HEADER_H = 44;
 		const SUBCOL_GAP = 16;
 		const NODE_VSEP = 20;
-		const CARD_W = 180;
 		const availableH = wrapEl.clientHeight - 40;
 		const maxPerCol = Math.max(2, Math.min(20, Math.floor(availableH / (HEADER_H + NODE_VSEP))));
 
@@ -783,9 +967,69 @@ svg.edges polygon {
 
 	/* ── Pan & Zoom ── */
 	function applyTransform() {
+		bandsEl.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + scale + ')';
 		canvas.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + scale + ')';
 		edgesSvg.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + scale + ')';
 		edgesFgSvg.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + scale + ')';
+	}
+
+	function depthBandColor(depth) {
+		if (depth === 0) {
+			return 'linear-gradient(to right, rgba(212, 165, 22, 0.015) 0%, rgba(212, 165, 22, 0.05) 50%, rgba(212, 165, 22, 0.09) 100%)';
+		}
+		const level = Math.min(Math.abs(depth), 6);
+		const maxAlpha = Math.max(0.04, 0.12 - (level - 1) * 0.015);
+		const midAlpha = Math.max(0.02, maxAlpha * 0.55);
+		const minAlpha = Math.max(0.008, maxAlpha * 0.15);
+		const rgb = depth > 0 ? '91, 141, 239' : '232, 150, 62';
+		return 'linear-gradient(to right, rgba(' + rgb + ', ' + minAlpha.toFixed(3) + ') 0%, rgba(' + rgb + ', ' + midAlpha.toFixed(3) + ') 50%, rgba(' + rgb + ', ' + maxAlpha.toFixed(3) + ') 100%)';
+	}
+
+	function drawDepthBands(data) {
+		if (!data || !data.nodes || data.nodes.length === 0) {
+			bandsEl.innerHTML = '';
+			return;
+		}
+		bandsEl.innerHTML = '';
+		const depthNodes = new Map();
+		for (const node of data.nodes) {
+			const depth = node.depthLevel ?? 0;
+			if (!depthNodes.has(depth)) depthNodes.set(depth, []);
+			depthNodes.get(depth).push(node);
+		}
+		const laneDepths = Array.from(depthNodes.keys()).sort(function(a, b) { return a - b; });
+		if (laneDepths.length === 0) return;
+
+		const pad = 14;
+		const focusNode = data.nodes.find(function(n) { return n.isFocus; })
+			|| depthNodes.get(0)?.[0]
+			|| data.nodes[0];
+		const focusX = focusNode.x;
+		const depthStep = Math.max(RANKSEP, CARD_W + 24);
+
+		for (let i = 0; i < laneDepths.length; i++) {
+			const depth = laneDepths[i];
+			const nodes = depthNodes.get(depth);
+			const center = focusX - (depth * depthStep);
+
+			let maxDeviation = 0;
+			for (const n of nodes) {
+				const d = Math.abs(n.x - center);
+				if (d > maxDeviation) maxDeviation = d;
+			}
+
+			const halfWidth = Math.max((CARD_W / 2) + 20, maxDeviation + (CARD_W / 2) + pad);
+			const left = center - halfWidth;
+			const width = halfWidth * 2;
+			const band = document.createElement('div');
+			band.className = 'depth-band';
+			band.style.left = left + 'px';
+			band.style.width = width + 'px';
+			band.style.top = '-10000px';
+			band.style.height = '20000px';
+			band.style.background = depthBandColor(depth);
+			bandsEl.appendChild(band);
+		}
 	}
 
 	wrapEl.addEventListener('pointerdown', function(e) {
@@ -850,9 +1094,17 @@ svg.edges polygon {
 
 		if (focusChanged && lastFocusId) {
 			/* Save view state for the model we're navigating away from */
+			const colScrollPositions = new Map();
+			for (const nodeId of expandedCards) {
+				const colList = canvas.querySelector('[data-cols="' + CSS.escape(nodeId) + '"]');
+				if (colList) {
+					colScrollPositions.set(nodeId, colList.scrollTop);
+				}
+			}
 			savedStates.set(lastFocusId, {
 				expandedCards: new Set(expandedCards),
 				lastHighlightMsg: lastHighlightMsg,
+				colScrollPositions: colScrollPositions,
 				panX: panX, panY: panY, scale: scale,
 			});
 		}
@@ -861,6 +1113,7 @@ svg.edges polygon {
 		if (focusChanged) {
 			expandedCards.clear();
 			lastHighlightMsg = null;
+			relayoutColsCountByNode.clear();
 			if (restoredState) {
 				for (const id of restoredState.expandedCards) expandedCards.add(id);
 				lastHighlightMsg = restoredState.lastHighlightMsg;
@@ -886,15 +1139,38 @@ svg.edges polygon {
 			data.nodes[wni]._origX = data.nodes[wni].x;
 			data.nodes[wni]._origY = data.nodes[wni].y;
 		}
-		applyColumnWrapping(data.nodes, data.edges);
+
+		if (disablePostLayoutRearrangement) {
+			CARD_W = 180;
+			RANKSEP = 100;
+			for (var sxi = 0; sxi < data.nodes.length; sxi++) {
+				data.nodes[sxi].x = data.nodes[sxi]._origX;
+				data.nodes[sxi].y = data.nodes[sxi]._origY;
+				data.nodes[sxi].width = CARD_W;
+			}
+		} else {
+			/* Calculate responsive sizing based on viewport width */
+			const vpWidth = wrapEl.clientWidth;
+			const CARD_W_BASE = 180;
+			CARD_W = Math.min(220, Math.max(140, Math.floor(vpWidth / 8)));
+			RANKSEP = Math.max(60, Math.floor(vpWidth / 12));
+			const scale_factor = CARD_W / CARD_W_BASE;
+
+			/* Scale x positions for responsive width */
+			for (var sxi = 0; sxi < data.nodes.length; sxi++) {
+				data.nodes[sxi].x = data.nodes[sxi]._origX * scale_factor;
+				data.nodes[sxi].width = CARD_W;
+			}
+
+			applyColumnWrapping(data.nodes, data.edges);
+		}
 
 		emptyEl.style.display = 'none';
 		wrapEl.style.display = 'block';
+		bandsEl.innerHTML = '';
 		canvas.innerHTML = '';
 		edgesSvg.innerHTML = '';
 		edgesFgSvg.innerHTML = '';
-
-		const CARD_W = 180;
 
 		for (const node of data.nodes) {
 			const card = document.createElement('div');
@@ -903,17 +1179,30 @@ svg.edges polygon {
 			card.style.left = (node.x - CARD_W / 2) + 'px';
 			card.style.top = (node.y - node.height / 2) + 'px';
 
-			const color = TYPE_COLORS[node.type] || 'var(--vscode-descriptionForeground)';
 			const mat = node.materialisation;
+			const isSeed = node.type === 'seed' || mat === 'seed';
+			const effectiveType = isSeed ? 'seed' : node.type;
+			const color = TYPE_COLORS[effectiveType] || 'var(--vscode-descriptionForeground)';
 			const subtitle = mat ? mat : node.type;
 			const colCount = node.columns ? node.columns.length : 0;
+			const typeBadge = effectiveType === 'model' ? 'M' : effectiveType === 'source' ? 'S' : effectiveType === 'seed' ? 'Sd' : effectiveType === 'test' ? 'T' : effectiveType === 'unit_test' ? 'U' : effectiveType.slice(0, 2).toUpperCase();
 
 			card.innerHTML =
 				'<div class="card-header" data-file="' + escHtml(node.filePath || '') + '">' +
 					'<span class="type-stripe" style="background:' + color + '"></span>' +
-					'<span class="card-title" title="' + escHtml(node.id) + '">' + escHtml(node.label) + '</span>' +
-					'<span class="card-subtitle">' + escHtml(subtitle) + '</span>' +
-					(colCount > 0 ? '<button class="col-toggle" data-node="' + escHtml(node.id) + '">' + colCount + ' cols ▸</button>' : '') +
+					'<div class="card-text-wrapper">' +
+						'<div class="card-title-row">' +
+							'<span class="card-title" title="' + escHtml(node.label) + '">' +
+								'<span class="type-badge open-file-trigger" style="background:' + color + '; color: white;">' + escHtml(typeBadge) + '</span>' +
+								(node.depthLevel !== 0 ? '<span class="depth-label">' + (node.depthLevel > 0 ? '+' + node.depthLevel : '' + node.depthLevel) + '</span>' : '') +
+								escHtml(node.label) +
+							'</span>' +
+						'</div>' +
+						'<div class="card-subtitle-row">' +
+							'<span class="card-subtitle open-file-trigger">' + escHtml(subtitle) + '</span>' +
+							(colCount > 0 ? '<button class="col-toggle" data-node="' + escHtml(node.id) + '">' + colCount + ' cols ▸</button>' : '') +
+						'</div>' +
+					'</div>' +
 				'</div>';
 
 			if (colCount > 0) {
@@ -941,8 +1230,14 @@ svg.edges polygon {
 			if (colList) {
 				colList.style.display = '';
 				if (toggle) toggle.textContent = toggle.textContent.replace('▸', '▾');
+				/* Restore scroll position for this column list */
+				if (restoredState && restoredState.colScrollPositions && restoredState.colScrollPositions.has(nodeId)) {
+					colList.scrollTop = restoredState.colScrollPositions.get(nodeId);
+				}
 			}
 		}
+
+		drawDepthBands(data);
 
 		drawEdges(data);
 
@@ -957,7 +1252,7 @@ svg.edges polygon {
 				panY = restoredState.panY;
 				scale = restoredState.scale;
 				applyTransform();
-				requestAnimationFrame(function() { relayoutAfterToggle(); });
+				requestAnimationFrame(function() { requestDagreRelayout(); });
 			} else {
 				fitToView(data);
 			}
@@ -985,7 +1280,6 @@ svg.edges polygon {
 		const nodeMap = {};
 		for (const n of data.nodes) nodeMap[n.id] = n;
 
-		const CARD_W = 180;
 		const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
 		defs.innerHTML = '<marker id="arrow" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="8" markerHeight="6" orient="auto-start-reverse"><polygon points="0,0 10,3 0,6"/></marker>';
 		edgesSvg.appendChild(defs);
@@ -1016,7 +1310,6 @@ svg.edges polygon {
 	/* ── Fit ── */
 	function fitToView(data) {
 		if (!data.nodes.length) return;
-		const CARD_W = 180;
 		let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 		for (const n of data.nodes) {
 			const left = n.x - CARD_W / 2;
@@ -1073,9 +1366,14 @@ svg.edges polygon {
 		requestAnimationFrame(redrawColumnEdges);
 	}
 
+	function requestDagreRelayout() {
+		vscode.postMessage({ command: 'setExpandedNodes', nodeIds: Array.from(expandedCards) });
+	}
+
 	/* ── Event Delegation ── */
 	canvas.addEventListener('click', function(e) {
-		const header = e.target.closest('.card-header');
+		const card = e.target.closest('.card');
+		const openFileEl = e.target.closest('.open-file-trigger');
 		const toggleBtn = e.target.closest('.col-toggle');
 		const colItem = e.target.closest('.col-item');
 
@@ -1087,8 +1385,13 @@ svg.edges polygon {
 			const show = colList.style.display === 'none';
 			colList.style.display = show ? '' : 'none';
 			toggleBtn.textContent = toggleBtn.textContent.replace(show ? '▸' : '▾', show ? '▾' : '▸');
-			if (show) expandedCards.add(nodeId); else expandedCards.delete(nodeId);
-			relayoutAfterToggle();
+			if (show) {
+				expandedCards.add(nodeId);
+			} else {
+				expandedCards.delete(nodeId);
+				relayoutColsCountByNode.delete(nodeId);
+			}
+			requestDagreRelayout();
 			return;
 		}
 
@@ -1099,23 +1402,77 @@ svg.edges polygon {
 			return;
 		}
 
-		if (header) {
+		if (openFileEl) {
+			const header = openFileEl.closest('.card-header');
 			const fp = header.dataset.file;
 			if (fp) vscode.postMessage({ command: 'openFile', filePath: fp });
+			return;
+		}
+
+		if (card) {
+			const nodeId = card.dataset.id;
+			if (!nodeId) return;
+			const colList = card.querySelector('[data-cols="' + CSS.escape(nodeId) + '"]');
+			if (!colList) return;
+			const show = colList.style.display === 'none';
+			colList.style.display = show ? '' : 'none';
+			const toggle = card.querySelector('.col-toggle');
+			if (toggle) toggle.textContent = toggle.textContent.replace(show ? '▸' : '▾', show ? '▾' : '▸');
+			if (show) {
+				expandedCards.add(nodeId);
+			} else {
+				expandedCards.delete(nodeId);
+				relayoutColsCountByNode.delete(nodeId);
+			}
+			requestDagreRelayout();
 		}
 	});
 
 	/* Re-wrap on resize so maxPerCol stays proportional to the available height. */
 	new ResizeObserver(function() {
 		if (!graphData) return;
-		applyColumnWrapping(graphData.nodes, graphData.edges);
-		const CARD_W = 180;
+		if (disablePostLayoutRearrangement) {
+			drawDepthBands(graphData);
+			for (var rwi = 0; rwi < graphData.nodes.length; rwi++) {
+				var rn = graphData.nodes[rwi];
+				var rc = canvas.querySelector('[data-id="' + CSS.escape(rn.id) + '"]');
+				if (rc) {
+					rc.style.left = (rn.x - CARD_W / 2) + 'px';
+					rc.style.top = (rn.y - rn.height / 2) + 'px';
+					rc.style.width = CARD_W + 'px';
+				}
+			}
+			drawEdges(graphData);
+			requestAnimationFrame(redrawColumnEdges);
+			return;
+		}
+		/* Recalculate responsive sizing on viewport change */
+		const vpWidth = wrapEl.clientWidth;
+		const CARD_W_BASE = 180;
+		const newCardW = Math.min(220, Math.max(140, Math.floor(vpWidth / 8)));
+		const newRanksep = Math.max(60, Math.floor(vpWidth / 12));
+		const widthChanged = newCardW !== CARD_W;
+		CARD_W = newCardW;
+		RANKSEP = newRanksep;
+
+		/* If width changed, scale x positions and re-wrap columns */
+		if (widthChanged) {
+			const scale_factor = CARD_W / CARD_W_BASE;
+			for (var rwsi = 0; rwsi < graphData.nodes.length; rwsi++) {
+				graphData.nodes[rwsi].x = graphData.nodes[rwsi]._origX * scale_factor;
+				graphData.nodes[rwsi].width = CARD_W;
+			}
+			applyColumnWrapping(graphData.nodes, graphData.edges);
+		}
+		drawDepthBands(graphData);
+
 		for (var rwi = 0; rwi < graphData.nodes.length; rwi++) {
 			var rn = graphData.nodes[rwi];
 			var rc = canvas.querySelector('[data-id="' + CSS.escape(rn.id) + '"]');
 			if (rc) {
 				rc.style.left = (rn.x - CARD_W / 2) + 'px';
 				rc.style.top = (rn.y - rn.height / 2) + 'px';
+				if (widthChanged) rc.style.width = CARD_W + 'px';
 			}
 		}
 		nodeInitialTops.clear();
@@ -1199,13 +1556,13 @@ svg.edges polygon {
 
 		/* Update or create toggle button */
 		var toggle = card.querySelector('.col-toggle');
-		var header = card.querySelector('.card-header');
-		if (!toggle && header && msg.columns.length > 0) {
+		var subtitleRow = card.querySelector('.card-subtitle-row');
+		if (!toggle && subtitleRow && msg.columns.length > 0) {
 			toggle = document.createElement('button');
 			toggle.className = 'col-toggle';
 			toggle.dataset.node = msg.nodeId;
 			toggle.textContent = msg.columns.length + ' cols ▸';
-			header.appendChild(toggle);
+			subtitleRow.appendChild(toggle);
 		} else if (toggle) {
 			toggle.textContent = msg.columns.length + ' cols ' + (expandedCards.has(msg.nodeId) ? '▾' : '▸');
 		}
@@ -1230,9 +1587,15 @@ svg.edges polygon {
 			'</div>';
 		}
 		colList.innerHTML = colHtml;
-		/* If this card is already expanded its height just changed — re-stack sibling cards */
+		/* If this card is already expanded and column count actually changed,
+		 * request one dagre refresh; dedupe identical counts to avoid refresh loops. */
 		if (expandedCards.has(msg.nodeId)) {
-			relayoutAfterToggle();
+			const nextCount = Array.isArray(msg.columns) ? msg.columns.length : 0;
+			const prevRequestedCount = relayoutColsCountByNode.get(msg.nodeId);
+			if (prevRequestedCount !== nextCount) {
+				relayoutColsCountByNode.set(msg.nodeId, nextCount);
+				requestDagreRelayout();
+			}
 		}
 		redrawColumnEdges();
 	}
@@ -1279,15 +1642,10 @@ svg.edges polygon {
 		}
 
 		if (graphData) {
-			/* Defer everything one frame so the browser reflows expanded col-lists first.
-			 * Reading card.offsetHeight before reflow returns stale collapsed heights
-			 * causing relayoutAfterToggle to stack cards at wrong positions. */
+			/* Defer one frame so expanded col-list DOM updates are applied,
+			 * then request a fresh dagre pass from the extension host. */
 			requestAnimationFrame(function() {
-				relayoutAfterToggle();
-				/* relayoutAfterToggle itself defers redrawColumnEdges via rAF — that will
-				 * pick up lastHighlightMsg.  But we also need a second frame here to let
-				 * relayoutAfterToggle's own DOM writes (card.style.top) settle before
-				 * we sample positions for the column edges. */
+				requestDagreRelayout();
 				requestAnimationFrame(function() {
 					drawEdges(graphData);
 					drawColumnEdges(highlightedEls, msg.columnEdges || []);
@@ -1299,7 +1657,6 @@ svg.edges polygon {
 	function drawColumnEdges(highlightedEls, columnEdges) {
 		if (highlightedEls.length < 2 || !graphData || !columnEdges.length) return;
 
-		const CARD_W = 180;
 		const elByKey = {};
 		for (const h of highlightedEls) {
 			elByKey[h.model + '\x00' + h.column] = h;

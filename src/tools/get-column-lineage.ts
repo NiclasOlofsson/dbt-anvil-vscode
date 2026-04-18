@@ -19,6 +19,8 @@ interface GetColumnLineageInput {
 type SchemaMapping = Record<string, Record<string, Record<string, Record<string, string>>>>;
 
 export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnLineageInput> {
+	private readonly _manifestFallbackWarned = new Set<string>();
+
 	constructor(
 		private readonly indexer: ManifestIndexer,
 		private readonly logger: ILogger,
@@ -27,13 +29,33 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		private readonly ftlParser: FtlDocumentParser,
 	) {}
 
+	private _isResolvedColumns(columns: string[] | undefined): columns is string[] {
+		return Boolean(columns && columns.length > 0 && !columns.includes('*'));
+	}
+
+	private _rawDatabaseColumns(raw: ReturnType<ManifestIndexer['getRawNode']>): string[] {
+		if (!raw) return [];
+		type RawRecord = Record<string, unknown>;
+		const r = raw as unknown as RawRecord;
+		const dbCols = r['database_columns'];
+		if (!Array.isArray(dbCols) || dbCols.length === 0) return [];
+		return (dbCols as Array<{ col_name?: string }>)
+			.filter(c => c.col_name)
+			.map(c => c.col_name as string);
+	}
+
 	/**
 	 * Build sqlglot schema mapping from upstream nodes.
 	 * Tries database_columns (list from warehouse) first, then manifest columns dict.
 	 * Format: {database: {schema: {table: {column: type}}}}
 	 * Ported from dbt-core-mcp get_column_lineage._build_schema_mapping.
 	 */
-	private async _buildSchemaMapping(upstreamIds: string[]): Promise<SchemaMapping> {
+	private async _buildSchemaMapping(
+		upstreamIds: string[],
+		memo: Map<string, string[]>,
+		resolving: Set<string>,
+	): Promise<SchemaMapping> {
+		this.logger.trace(`[columns] build schema mapping for ${upstreamIds.length} upstream nodes`);
 		const mapping: SchemaMapping = {};
 		for (const uid of upstreamIds) {
 			const raw = this.indexer.getRawNode(uid);
@@ -50,22 +72,22 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 
 			let columnMap: Record<string, string> | undefined;
 
-			// Prefer live warehouse columns via DescribeCache (describes on miss, cached on hit)
-			const describedCols = await this.describeCache.columns(uid);
-			if (describedCols && describedCols.length > 0) {
-				columnMap = Object.fromEntries(describedCols.map(c => [c.toLowerCase(), 'unknown']));
+			// Parse-first recursive resolution for upstream nodes. This walks further
+			// upstream when needed (e.g. chains of select *), then memoizes per run.
+			const resolvedCols = await this._resolveColumnsForNodeRecursive(uid, memo, resolving);
+			if (this._isResolvedColumns(resolvedCols)) {
+				this.logger.trace(`[columns] schema mapping: ${uid} resolved recursively (${resolvedCols.length} cols)`);
+				columnMap = Object.fromEntries(resolvedCols.map(c => [c.toLowerCase(), 'unknown']));
 			}
 
 			// Fall back to database_columns on raw node (list format: [{col_name, type}])
 			if (!columnMap || Object.keys(columnMap).length === 0) {
-				const dbCols = r['database_columns'];
-				if (Array.isArray(dbCols) && dbCols.length > 0) {
+				const dbCols = this._rawDatabaseColumns(raw);
+				if (dbCols.length > 0) {
+					this.logger.trace(`[columns] schema mapping: ${uid} using database_columns fallback (${dbCols.length} cols)`);
 					columnMap = {};
 					for (const col of dbCols) {
-						if (col !== null && col !== undefined && typeof col === 'object' && 'col_name' in col) {
-							const c = col as { col_name: string; type?: string };
-							columnMap[c.col_name.toLowerCase()] = (c.type ?? 'unknown').toLowerCase();
-						}
+						columnMap[col.toLowerCase()] = 'unknown';
 					}
 				}
 			}
@@ -74,6 +96,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 			if (!columnMap || Object.keys(columnMap).length === 0) {
 				const columns = raw.columns ?? {};
 				if (Object.keys(columns).length > 0) {
+					this.logger.trace(`[columns] schema mapping: ${uid} using manifest fallback (${Object.keys(columns).length} cols)`);
 					columnMap = Object.fromEntries(
 						Object.entries(columns).map(([col, info]) => [col.toLowerCase(), (info.data_type ?? 'unknown').toLowerCase()]),
 					);
@@ -87,6 +110,85 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 			mapping[db][schema][table] = columnMap;
 		}
 		return mapping;
+	}
+
+	private async _resolveColumnsForNodeRecursive(
+		uniqueId: string,
+		memo: Map<string, string[]>,
+		resolving: Set<string>,
+	): Promise<string[]> {
+		this.logger.trace(`[columns] resolve start: ${uniqueId}`);
+		const memoized = memo.get(uniqueId);
+		if (memoized) {
+			this.logger.trace(`[columns] resolve hit memo: ${uniqueId} (${memoized.length} cols)`);
+			return memoized;
+		}
+
+		const rawNode = this.indexer.getRawNode(uniqueId);
+		if (!rawNode) return [];
+
+		const cached = this.indexer.getColumns(uniqueId);
+		if (cached && cached.length > 0) {
+			this.logger.trace(`[columns] resolve hit cache: ${uniqueId} (${cached.length} cols)`);
+			memo.set(uniqueId, cached);
+			return cached;
+		}
+
+		const manifestCols = Object.keys(rawNode.columns ?? {});
+		if (resolving.has(uniqueId)) {
+			this.logger.trace(`[columns] resolve cycle guard: ${uniqueId} -> manifest (${manifestCols.length} cols)`);
+			memo.set(uniqueId, manifestCols);
+			return manifestCols;
+		}
+		resolving.add(uniqueId);
+
+		try {
+			if (rawNode.resource_type === 'model' && rawNode.original_file_path) {
+				this.logger.trace(`[columns] resolve parse-first: ${uniqueId}`);
+				const sourceSql = fs.readFileSync(path.join(this.indexer.projectDir, rawNode.original_file_path), 'utf8');
+				const parentIds = this.indexer.index?.parentMap.get(uniqueId) ?? [];
+				this.logger.trace(`[columns] resolve ${uniqueId} parent count: ${parentIds.length}`);
+				const schemaMapping = await this._buildSchemaMapping(parentIds, memo, resolving);
+				const { columns } = await this._resolveOutputColumns(
+					rawNode.resource_type,
+					rawNode,
+					sourceSql,
+					schemaMapping,
+				);
+				this.logger.trace(`[columns] resolve parse result: ${uniqueId} (${columns.length} cols${columns.includes('*') ? ', has *' : ''})`);
+				if (this._isResolvedColumns(columns)) {
+					this.logger.trace(`[columns] resolve winner=parse: ${uniqueId} (${columns.length} cols)`);
+					this.indexer.setColumns(uniqueId, columns, 'parse');
+					memo.set(uniqueId, columns);
+					return columns;
+				}
+			}
+
+			const describedCols = await this.describeCache.columns(uniqueId);
+			if (this._isResolvedColumns(describedCols)) {
+				this.logger.trace(`[columns] resolve winner=describe: ${uniqueId} (${describedCols.length} cols)`);
+				memo.set(uniqueId, describedCols);
+				return describedCols;
+			}
+
+			const dbCols = this._rawDatabaseColumns(rawNode);
+			if (this._isResolvedColumns(dbCols)) {
+				this.logger.trace(`[columns] resolve winner=database_columns: ${uniqueId} (${dbCols.length} cols)`);
+				this.indexer.setColumns(uniqueId, dbCols, 'database_columns');
+				memo.set(uniqueId, dbCols);
+				return dbCols;
+			}
+
+			this.logger.trace(`[columns] resolve winner=manifest: ${uniqueId} (${manifestCols.length} cols)`);
+			if (!this._manifestFallbackWarned.has(uniqueId)) {
+				this._manifestFallbackWarned.add(uniqueId);
+				this.logger.warn(`[columns] using manifest/YAML fallback for ${uniqueId} (${manifestCols.length} cols). This may be incomplete versus database/parsed columns.`);
+			}
+			memo.set(uniqueId, manifestCols);
+			return manifestCols;
+		} finally {
+			resolving.delete(uniqueId);
+		}
 	}
 
 	/**
@@ -272,7 +374,11 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		const sql = fs.readFileSync(path.join(this.indexer.projectDir, raw.original_file_path), 'utf8');
 
 		const lineage = this.indexer.getLineage(modelUniqueId, 5, 0);
-		const schemaMapping = await this._buildSchemaMapping(lineage.upstream.map(n => n.uniqueId));
+		const schemaMapping = await this._buildSchemaMapping(
+			lineage.upstream.map(n => n.uniqueId),
+			new Map<string, string[]>(),
+			new Set<string>(),
+		);
 
 		try {
 			const schemaJson = JSON.stringify(schemaMapping);
@@ -486,31 +592,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 	 * Falls back to manifest columns if compiled SQL is unavailable.
 	 */
 	async resolveColumnsForNode(uniqueId: string): Promise<string[]> {
-		const rawNode = this.indexer.getRawNode(uniqueId);
-		if (!rawNode) return [];
-
-		const manifestCols = Object.keys(rawNode.columns ?? {});
-
-		// Use original source SQL (not compiled) so table references match schema mapping keys.
-		// Compiled SQL has fully qualified names (catalog.schema.table) while schema mapping
-		// uses unqualified model names — qualify() can only expand select * with matching keys.
-		const sourceSql = rawNode.original_file_path
-			? fs.readFileSync(path.join(this.indexer.projectDir, rawNode.original_file_path), 'utf8')
-			: undefined;
-		if (!sourceSql) return manifestCols;
-
-		const upstreamLineage = this.indexer.getLineage(uniqueId, 5, 0);
-		const schemaMapping = await this._buildSchemaMapping(upstreamLineage.upstream.map(n => n.uniqueId));
-
-		const { columns } = await this._resolveOutputColumns(
-			rawNode.resource_type,
-			rawNode,
-			sourceSql,
-			schemaMapping,
-		);
-
-		if (columns.length > 0 && !columns.includes('*')) return columns;
-		return manifestCols.length > 0 ? manifestCols : columns;
+		return this._resolveColumnsForNodeRecursive(uniqueId, new Map<string, string[]>(), new Set<string>());
 	}
 
 	/**
@@ -538,7 +620,11 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		const rawSql = fs.readFileSync(path.join(this.indexer.projectDir, rawNode.original_file_path), 'utf8');
 
 		const upstreamLineage = this.indexer.getLineage(uniqueId, 5, 0);
-		const schemaMapping = await this._buildSchemaMapping(upstreamLineage.upstream.map(n => n.uniqueId));
+		const schemaMapping = await this._buildSchemaMapping(
+			upstreamLineage.upstream.map(n => n.uniqueId),
+			new Map<string, string[]>(),
+			new Set<string>(),
+		);
 		const { columns: outputColumns } = await this._resolveOutputColumns(
 			rawNode.resource_type,
 			rawNode,
