@@ -298,12 +298,17 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 			}
 
 			// Ensure columns are loaded in the DOM for every node in the trace result
-			// before highlighting — progressive enrichment may not have reached them yet
+			// before highlighting — progressive enrichment may not have reached them yet.
+			// If resolveColumnsForNode returns nothing (e.g. select * with no manifest docs),
+			// inject the specific columns from the trace so their col-items exist in the DOM.
 			if (this._columnLineageTool) {
 				const uniqueNodes = [...new Set(columns.map(c => c.model))];
 				for (const nodeId of uniqueNodes) {
 					try {
-						const cols = await this._columnLineageTool.resolveColumnsForNode(nodeId);
+						let cols = await this._columnLineageTool.resolveColumnsForNode(nodeId);
+						if (cols.length === 0) {
+							cols = columns.filter(c => c.model === nodeId).map(c => c.column);
+						}
 						if (cols.length > 0 && this._view) {
 							void this._view.webview.postMessage({
 								command: 'updateColumns',

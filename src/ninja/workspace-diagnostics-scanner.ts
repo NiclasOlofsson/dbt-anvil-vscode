@@ -241,7 +241,7 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 		const result = runNinja(shim, parsedModel, jinjaTokens, config, dialectSymbols ?? undefined);
 		const ninjaMs = Date.now() - ninjaStart;
 		const fileName = uri.fsPath.replace(/\\/g, '/').split('/').pop() ?? uri.fsPath;
-		this.logger.debug(`[workspace-scanner] ${fileName}  parse=${parsedModel.timing.parseMs}ms  ninja=${ninjaMs}ms`);
+		this.logger.trace(`[workspace-scanner] ${fileName}  parse=${parsedModel.timing.parseMs}ms  ninja=${ninjaMs}ms`);
 
 		const diagnostics: vscode.Diagnostic[] = result.violations.map(v => {
 			const sev = result.severityMap.get(v.rule) ?? vscode.DiagnosticSeverity.Warning;
