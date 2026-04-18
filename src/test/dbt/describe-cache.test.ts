@@ -20,7 +20,6 @@ function createMockIndexer(storedColumns?: string[]): ManifestIndexer {
 	return {
 		getColumns: vi.fn((uid: string) => store.get(uid) ?? undefined),
 		setColumns: vi.fn((uid: string, cols: string[]) => { store.set(uid, cols); }),
-		isManifestOnly: vi.fn(() => false),
 	} as unknown as ManifestIndexer;
 }
 
@@ -52,7 +51,7 @@ describe('DescribeCache', () => {
 
 		expect(result).toEqual(['id', 'status', 'total']);
 		expect(service.submit).toHaveBeenCalledOnce();
-		expect(indexer.setColumns).toHaveBeenCalledWith(UID, ['id', 'status', 'total']);
+		expect(indexer.setColumns).toHaveBeenCalledWith(UID, ['id', 'status', 'total'], 'describe');
 	});
 
 	it('passes source_name for source nodes', async () => {
