@@ -720,6 +720,11 @@
 							"error"
 						],
 						"description": "Log level for dbt Studio output channel."
+					},
+					"dbt-studio.ensureLaunchConfig": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "Automatically add dbt Studio debug configurations to `.vscode/launch.json` when a dbt project is opened. Disable if you manage `launch.json` manually or do not want dbt Studio to modify your workspace files."
 					}
 				}
 			},

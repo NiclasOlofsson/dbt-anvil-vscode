@@ -7,7 +7,7 @@
 			"request": "launch",
 			"internalConsoleOptions": "neverOpen",
 			"args": [
-				"c:/Development/oatly/dbt_oatanalytics",
+				"c:/Development/oatly/worktrees/dbt-studio-testing",
 				"--extensionDevelopmentPath=${workspaceFolder}"
 			],
 			"outFiles": [

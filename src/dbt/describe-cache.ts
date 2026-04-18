@@ -26,8 +26,8 @@ export class DescribeCache {
 	private readonly _inflight = new Map<string, Promise<string[] | undefined>>();
 	private _describeFailed = false;
 
-	private readonly _onDescribeError = new vscode.EventEmitter<void>();
-	/** Fired once when a describe operation fails for the first time. */
+	private readonly _onDescribeError = new vscode.EventEmitter<string>();
+	/** Fired once when a describe operation fails for the first time. The value is the uniqueId that failed. */
 	readonly onDescribeError = this._onDescribeError.event;
 
 	constructor(
@@ -160,7 +160,7 @@ export class DescribeCache {
 			this.logger.warn(`DescribeCache: error describing ${uniqueId}: ${err}`);
 			if (!this._describeFailed) {
 				this._describeFailed = true;
-				this._onDescribeError.fire();
+				this._onDescribeError.fire(uniqueId);
 			}
 		}
 		return undefined;
