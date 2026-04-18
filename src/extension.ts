@@ -58,6 +58,7 @@ import { DataPipelineProvider } from './dbt/debug-pipeline-provider';
 import { SymbolSqlProvider } from './providers/symbol-sql-provider';
 import { splitStatements } from './dbt/statement-splitter';
 import { WorkspaceDiagnosticsScanner } from './ninja/workspace-diagnostics-scanner';
+import { WorkspaceDiagnosticsPersistence } from './ninja/workspace-diagnostics-persistence';
 import { NinjaEditorPanel } from './ninja/editor';
 import * as path from 'node:path';
 
@@ -464,7 +465,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	// -------- Register tree views --------
 	const modelExplorerProvider = new ModelExplorerProvider(manifestIndexer, logger, projectDir, context.globalState);
-	const lineageGraphProvider = new LineageGraphProvider(manifestIndexer, logger, context.globalState);
+	const lineageGraphProvider = new LineageGraphProvider(manifestIndexer, logger, context.globalState, context.workspaceState);
 	const columnLineageTool = new GetColumnLineageTool(manifestIndexer, logger, compileCache, describeCache, ftlParser);
 	lineageGraphProvider.setColumnLineageTool(columnLineageTool);
 	lineageGraphProvider.setExecutionService(executionService);
@@ -760,7 +761,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				// Delete only the specific files we write to storage
 				const storageDir = context.storageUri?.fsPath;
 				if (storageDir) {
-					for (const file of ['compile-cache.json', 'column-store.json', 'content-hashes.json', 'profile-results.json', 'ninja-scan-hashes.json']) {
+					for (const file of ['compile-cache.json', 'column-store.json', 'content-hashes.json', 'profile-results.json', 'ninja-scan-hashes.json', 'workspace-ninja-diagnostics.json']) {
 						try { fs.unlinkSync(`${storageDir}/${file}`); } catch { /* ignore if absent */ }
 					}
 				}
@@ -1328,15 +1329,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	// -------- Ninja workspace scanner (last — needs everything else ready) --------
 	let workspaceScanner: WorkspaceDiagnosticsScanner | undefined;
+	const workspaceDiagnosticsPersistence = new WorkspaceDiagnosticsPersistence(context, logger);
 
 	const initWorkspaceScanner = (): void => {
-		workspaceScanner?.dispose();
+		if (workspaceScanner) {
+			workspaceDiagnosticsPersistence.save(workspaceScanner.getSnapshot());
+			workspaceScanner.dispose();
+		}
 		const enabled = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('ninja.workspaceDiagnostics', false);
 		if (!enabled) {
 			workspaceScanner = undefined;
 			return;
 		}
 		workspaceScanner = new WorkspaceDiagnosticsScanner(parseService, manifestIndexer, pathResolver, logger);
+		const restored = workspaceDiagnosticsPersistence.restore();
+		if (restored) {
+			const applied = workspaceScanner.restoreSnapshot(restored);
+			logger.debug(`WorkspaceNinja: startup restore ${applied ? 'applied' : 'skipped (config changed)'}`);
+		}
 		context.subscriptions.push(workspaceScanner);
 		if (startupReady) {
 			void workspaceScanner.scanAll();
@@ -1346,6 +1356,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	initWorkspaceScanner();
 
 	context.subscriptions.push(
+		{ dispose: () => { if (workspaceScanner) workspaceDiagnosticsPersistence.save(workspaceScanner.getSnapshot()); } },
 		manifestWatcher.onIndexRebuild(({ pivots }) => { void workspaceScanner?.scanAll(pivots); }),
 		vscode.workspace.onDidSaveTextDocument(doc => {
 			if (doc.languageId === 'jinja-sql') void workspaceScanner?.invalidate(doc.uri);

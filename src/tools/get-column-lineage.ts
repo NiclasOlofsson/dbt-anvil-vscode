@@ -57,6 +57,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 	): Promise<SchemaMapping> {
 		this.logger.trace(`[columns] build schema mapping for ${upstreamIds.length} upstream nodes`);
 		const mapping: SchemaMapping = {};
+		const tablePriority = new Map<string, number>();
 		for (const uid of upstreamIds) {
 			const raw = this.indexer.getRawNode(uid);
 			if (!raw) continue;
@@ -105,9 +106,17 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 
 			if (!columnMap || Object.keys(columnMap).length === 0) continue;
 
+			const insertKey = `${db}.${schema}.${table}`;
+			const currentPriority = raw.resource_type === 'model' ? 2 : 1;
+			const existingPriority = tablePriority.get(insertKey) ?? -1;
+			if (existingPriority > currentPriority) {
+				continue;
+			}
+
 			mapping[db] ??= {};
 			mapping[db][schema] ??= {};
 			mapping[db][schema][table] = columnMap;
+			tablePriority.set(insertKey, currentPriority);
 		}
 		return mapping;
 	}
@@ -145,14 +154,14 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		try {
 			if (rawNode.resource_type === 'model' && rawNode.original_file_path) {
 				this.logger.trace(`[columns] resolve parse-first: ${uniqueId}`);
-				const sourceSql = fs.readFileSync(path.join(this.indexer.projectDir, rawNode.original_file_path), 'utf8');
+				const modelSql = fs.readFileSync(path.join(this.indexer.projectDir, rawNode.original_file_path), 'utf8');
 				const parentIds = this.indexer.index?.parentMap.get(uniqueId) ?? [];
 				this.logger.trace(`[columns] resolve ${uniqueId} parent count: ${parentIds.length}`);
 				const schemaMapping = await this._buildSchemaMapping(parentIds, memo, resolving);
 				const { columns } = await this._resolveOutputColumns(
 					rawNode.resource_type,
 					rawNode,
-					sourceSql,
+					modelSql,
 					schemaMapping,
 				);
 				this.logger.trace(`[columns] resolve parse result: ${uniqueId} (${columns.length} cols${columns.includes('*') ? ', has *' : ''})`);
@@ -271,17 +280,24 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		schema: string | undefined,
 		identifier: string | undefined,
 		relationName?: string,
+		overwrite = true,
 	): void {
+		const setKey = (k: string): void => {
+			const key = GetColumnLineageTool._normalizeRelationName(k);
+			if (overwrite || !lookup.has(key)) {
+				lookup.set(key, uid);
+			}
+		};
 		if (relationName) {
-			lookup.set(GetColumnLineageTool._normalizeRelationName(relationName), uid);
+			setKey(relationName);
 		}
 		if (!identifier) return;
-		lookup.set(GetColumnLineageTool._normalizeRelationName(identifier), uid);
+		setKey(identifier);
 		if (schema) {
-			lookup.set(GetColumnLineageTool._normalizeRelationName(`${schema}.${identifier}`), uid);
+			setKey(`${schema}.${identifier}`);
 		}
 		if (db && schema) {
-			lookup.set(GetColumnLineageTool._normalizeRelationName(`${db}.${schema}.${identifier}`), uid);
+			setKey(`${db}.${schema}.${identifier}`);
 		}
 	}
 
@@ -294,18 +310,8 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		const index = this.indexer.index;
 		if (!index) return lookup;
 
-		for (const [uid, model] of index.models) {
-			const raw = this.indexer.getRawNode(uid);
-			if (!raw) continue;
-			type RawRecord = Record<string, unknown>;
-			const r = raw as unknown as RawRecord;
-			const db = typeof r['database'] === 'string' ? r['database'] : undefined;
-			const schema = model.schema ?? (typeof r['schema'] === 'string' ? r['schema'] : undefined);
-			const identifier = (typeof r['alias'] === 'string' ? r['alias'] : undefined) ?? raw.name;
-			const relationName = typeof r['relation_name'] === 'string' ? r['relation_name'] : undefined;
-			GetColumnLineageTool._addRelationKeys(lookup, uid, db, schema, identifier?.toLowerCase(), relationName);
-		}
-
+		// Insert sources first (non-overwriting) and models second (overwriting)
+		// so ambiguous bare relation names prefer dbt models over sources.
 		for (const [uid, source] of index.sources) {
 			const raw = this.indexer.getRawNode(uid);
 			if (!raw) continue;
@@ -315,16 +321,76 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 			const schema = source.schema?.toLowerCase() ?? (typeof r['schema'] === 'string' ? r['schema'] : undefined);
 			const identifier = (typeof r['identifier'] === 'string' ? r['identifier'] : undefined) ?? source.name;
 			const relationName = typeof r['relation_name'] === 'string' ? r['relation_name'] : undefined;
-			GetColumnLineageTool._addRelationKeys(lookup, uid, db, schema, identifier?.toLowerCase(), relationName);
+			GetColumnLineageTool._addRelationKeys(lookup, uid, db, schema, identifier?.toLowerCase(), relationName, false);
+			GetColumnLineageTool._addRelationKeys(
+				lookup,
+				uid,
+				db,
+				schema,
+				`${source.sourceName.toLowerCase()}.${(identifier ?? source.name).toLowerCase()}`,
+				undefined,
+				false,
+			);
+		}
+
+		for (const [uid, model] of index.models) {
+			const raw = this.indexer.getRawNode(uid);
+			if (!raw) continue;
+			type RawRecord = Record<string, unknown>;
+			const r = raw as unknown as RawRecord;
+			const db = typeof r['database'] === 'string' ? r['database'] : undefined;
+			const schema = model.schema ?? (typeof r['schema'] === 'string' ? r['schema'] : undefined);
+			const identifier = (typeof r['alias'] === 'string' ? r['alias'] : undefined) ?? raw.name;
+			const relationName = typeof r['relation_name'] === 'string' ? r['relation_name'] : undefined;
+			GetColumnLineageTool._addRelationKeys(lookup, uid, db, schema, identifier?.toLowerCase(), relationName, true);
 		}
 
 		return lookup;
 	}
 
+	private _dependencyMatchesUid(dep: ColumnDependency, uid: string): boolean {
+		const raw = this.indexer.getRawNode(uid);
+		if (!raw) return false;
+
+		type RawRecord = Record<string, unknown>;
+		const r = raw as unknown as RawRecord;
+		const depTable = dep.table.toLowerCase();
+		const depSchema = dep.schema?.toLowerCase();
+		const depDatabase = dep.database?.toLowerCase();
+
+		const identifier = (
+			raw.resource_type === 'source'
+				? (typeof r['identifier'] === 'string' ? r['identifier'] : undefined) ?? raw.name
+				: (typeof r['alias'] === 'string' ? r['alias'] : undefined) ?? raw.name
+		).toLowerCase();
+
+		if (identifier !== depTable) return false;
+
+		const schema = (typeof r['schema'] === 'string' ? r['schema'] : undefined)?.toLowerCase();
+		const database = (typeof r['database'] === 'string' ? r['database'] : undefined)?.toLowerCase();
+
+		if (depSchema && schema !== depSchema) return false;
+		if (depDatabase && database !== depDatabase) return false;
+
+		return true;
+	}
+
 	/**
 	 * Resolve a lineage dependency table name to a dbt unique_id.
 	 */
-	private _resolveDependency(dep: ColumnDependency, lookup: Map<string, string>): string | undefined {
+	private _resolveDependency(dep: ColumnDependency, lookup: Map<string, string>, currentModelUniqueId?: string): string | undefined {
+		const index = this.indexer.index;
+		if (index && currentModelUniqueId) {
+			const directParents = index.parentMap.get(currentModelUniqueId) ?? [];
+			const parentMatches = directParents.filter(uid => this._dependencyMatchesUid(dep, uid));
+			if (parentMatches.length === 1) return parentMatches[0];
+			if (parentMatches.length > 1) {
+				const modelMatch = parentMatches.find(uid => uid.startsWith('model.'));
+				if (modelMatch) return modelMatch;
+				return parentMatches[0];
+			}
+		}
+
 		const table = dep.table.toLowerCase();
 
 		if (dep.database && dep.schema) {
@@ -459,7 +525,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		const allDeps: ColumnDependency[] = [];
 
 		for (const dep of lineageResult.dependencies) {
-			const resolvedId = this._resolveDependency(dep, relationLookup);
+			const resolvedId = this._resolveDependency(dep, relationLookup, modelUniqueId);
 			if (resolvedId) {
 				dep.dbt_resource = resolvedId;
 				this.logger.trace(`[lineage] resolved ${dep.table} → ${resolvedId}`);

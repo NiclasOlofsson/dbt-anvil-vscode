@@ -18,6 +18,30 @@ export interface ScanSummary {
 	durationMs: number;
 }
 
+export interface PersistedNinjaDiagnostic {
+	message: string;
+	severity: number;
+	startLine: number;
+	startCharacter: number;
+	endLine: number;
+	endCharacter: number;
+	source?: string;
+	code?: string;
+}
+
+export interface PersistedWorkspaceScannerEntry {
+	contentHash: string;
+	mtimeMs: number;
+	size: number;
+	diagnostics: PersistedNinjaDiagnostic[];
+}
+
+export interface PersistedWorkspaceScannerSnapshot {
+	version: 1;
+	configHash: string;
+	entries: Record<string, PersistedWorkspaceScannerEntry>;
+}
+
 /**
  * Runs workspace-wide Ninja diagnostics for all SQL files in the dbt model and
  * analysis directories. Owns its own DiagnosticCollections — independent of
@@ -28,12 +52,16 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 	private readonly _contractsCollection: vscode.DiagnosticCollection;
 	private readonly _statusBarItem: vscode.StatusBarItem;
 	private readonly _contentHashes = new Map<string, string>();
+	private readonly _fileStats = new Map<string, { mtimeMs: number; size: number }>();
 	private readonly _parsedModelCache = new Map<string, DocumentModel>();
+	private readonly _knownDiagnosticUris = new Set<string>();
+	private readonly _diagnosticsByUri = new Map<string, vscode.Diagnostic[]>();
 	private readonly _disposables: vscode.Disposable[] = [];
 	/** Lets a new scanAll() cancel an already-running scan. */
 	private _scanAbort: AbortController | null = null;
 	private _scanning = false;
 	private _countsUpdateTimer: ReturnType<typeof setTimeout> | undefined;
+	private _lastConfigHash: string | undefined;
 
 	private readonly _onDidComplete = new vscode.EventEmitter<ScanSummary>();
 	readonly onDidComplete = this._onDidComplete.event;
@@ -123,6 +151,7 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 
 			// Fetch scan-level shared state once (config, dialect symbols)
 			const config = loadConfig();
+			this._lastConfigHash = this._hashConfig(config);
 			const dialectSymbols = await this.parseService.getDialectSymbols().catch(() => undefined);
 			if (abort.signal.aborted) return;
 
@@ -154,7 +183,12 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 	 * Called on save events for open documents.
 	 */
 	async invalidate(uri: vscode.Uri): Promise<void> {
-		this._contentHashes.delete(uri.toString());
+		const key = uri.toString();
+		this._contentHashes.delete(key);
+		this._fileStats.delete(key);
+		this._parsedModelCache.delete(key);
+		this._knownDiagnosticUris.delete(key);
+		this._diagnosticsByUri.delete(key);
 		await this.scanAll([uri]);
 	}
 
@@ -164,16 +198,79 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 	 */
 	invalidateAllCaches(): void {
 		this._contentHashes.clear();
+		this._fileStats.clear();
 		this._parsedModelCache.clear();
+		this._knownDiagnosticUris.clear();
+		this._diagnosticsByUri.clear();
 	}
 
 	/** Clears all cached hashes, model cache, and diagnostic entries. */
 	clear(): void {
 		this._contentHashes.clear();
+		this._fileStats.clear();
 		this._parsedModelCache.clear();
+		this._knownDiagnosticUris.clear();
+		this._diagnosticsByUri.clear();
 		this._ninjaCollection.clear();
 		this._contractsCollection.clear();
 		this._emitCountsChange();
+	}
+
+	restoreSnapshot(snapshot: PersistedWorkspaceScannerSnapshot): boolean {
+		const currentConfigHash = this._hashConfig(loadConfig());
+		if (snapshot.configHash !== currentConfigHash) {
+			return false;
+		}
+
+		this.clear();
+		this._lastConfigHash = snapshot.configHash;
+
+		for (const [uriStr, entry] of Object.entries(snapshot.entries)) {
+			const uri = vscode.Uri.parse(uriStr);
+			this._contentHashes.set(uriStr, entry.contentHash);
+			this._fileStats.set(uriStr, { mtimeMs: entry.mtimeMs, size: entry.size });
+			const diagnostics = entry.diagnostics.map((d) => {
+				const diag = new vscode.Diagnostic(
+					new vscode.Range(d.startLine, d.startCharacter, d.endLine, d.endCharacter),
+					d.message,
+					d.severity as vscode.DiagnosticSeverity,
+				);
+				diag.source = d.source ?? 'ninja';
+				if (d.code) diag.code = d.code;
+				return diag;
+			});
+			this._setNinjaDiagnostics(uri, diagnostics);
+		}
+
+		this._emitCountsChange();
+		return true;
+	}
+
+	getSnapshot(): PersistedWorkspaceScannerSnapshot {
+		const entries: Record<string, PersistedWorkspaceScannerEntry> = {};
+		for (const [uriStr, diagnostics] of this._diagnosticsByUri.entries()) {
+			const contentHash = this._contentHashes.get(uriStr);
+			const stats = this._fileStats.get(uriStr);
+			if (!contentHash || !stats) continue;
+			entries[uriStr] = {
+				contentHash,
+				mtimeMs: stats.mtimeMs,
+				size: stats.size,
+				diagnostics: diagnostics.map((d) => ({
+					message: d.message,
+					severity: d.severity,
+					startLine: d.range.start.line,
+					startCharacter: d.range.start.character,
+					endLine: d.range.end.line,
+					endCharacter: d.range.end.character,
+					source: d.source,
+					code: typeof d.code === 'string' ? d.code : undefined,
+				})),
+			};
+		}
+
+		const configHash = this._lastConfigHash ?? this._hashConfig(loadConfig());
+		return { version: 1, configHash, entries };
 	}
 
 	dispose(): void {
@@ -212,6 +309,21 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 		const key = uri.toString();
 		if (vscode.workspace.textDocuments.some(d => d.uri.toString() === key)) {
 			this._ninjaCollection.delete(uri);
+			this._knownDiagnosticUris.delete(key);
+			this._diagnosticsByUri.delete(key);
+			return;
+		}
+
+		const stat = await fsPromises.stat(uri.fsPath).catch(() => undefined);
+		const prevStat = this._fileStats.get(key);
+		if (
+			stat
+			&& prevStat
+			&& prevStat.mtimeMs === stat.mtimeMs
+			&& prevStat.size === stat.size
+			&& this._contentHashes.has(key)
+			&& this._knownDiagnosticUris.has(key)
+		) {
 			return;
 		}
 
@@ -224,7 +336,7 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 		if (signal.aborted) return;
 
 		const hash = crypto.createHash('sha256').update(normalizedContent).digest('hex');
-		if (this._contentHashes.get(key) === hash) return;
+		if (this._contentHashes.get(key) === hash && this._knownDiagnosticUris.has(key)) return;
 
 		const model = await this.parseService.parseContent(uri, normalizedContent).catch(() => undefined);
 		if (signal.aborted) return;
@@ -234,6 +346,7 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 		const parsedModel: DocumentModel = model ?? { ctes: [], refs: [], sources: [], tokens: [], finalColumns: [], timing: { parseMs: 0, totalMs: 0 } };
 		this._parsedModelCache.set(key, parsedModel);
 		this._contentHashes.set(key, hash);
+		if (stat) this._fileStats.set(key, { mtimeMs: stat.mtimeMs, size: stat.size });
 
 		const shim = new TextDocumentShim(uri, normalizedContent);
 		const jinjaTokens = tokenize(normalizedContent);
@@ -250,8 +363,30 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 			diag.code = v.rule;
 			return diag;
 		});
-		this._ninjaCollection.set(uri, diagnostics);
+		this._setNinjaDiagnostics(uri, diagnostics);
 		this._scheduleCountsChange();
+	}
+
+	private _setNinjaDiagnostics(uri: vscode.Uri, diagnostics: vscode.Diagnostic[]): void {
+		const key = uri.toString();
+		this._ninjaCollection.set(uri, diagnostics);
+		this._knownDiagnosticUris.add(key);
+		this._diagnosticsByUri.set(key, diagnostics);
+	}
+
+	private _hashConfig(config: ReturnType<typeof loadConfig>): string {
+		const stable = (value: unknown): unknown => {
+			if (Array.isArray(value)) return value.map(stable);
+			if (value !== null && typeof value === 'object') {
+				const obj = value as Record<string, unknown>;
+				const out: Record<string, unknown> = {};
+				for (const k of Object.keys(obj).sort()) out[k] = stable(obj[k]);
+				return out;
+			}
+			return value;
+		};
+		const json = JSON.stringify(stable(config));
+		return crypto.createHash('sha256').update(json).digest('hex');
 	}
 
 	private _runCrossModelChecks(): void {
