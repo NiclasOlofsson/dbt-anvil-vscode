@@ -2,8 +2,14 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as vscode from 'vscode';
 import type { ILogger } from '../types/logger';
 import type { PythonEnvironment } from './env-detector';
+
+export interface DbtLogEvent {
+	info?: { name?: string; msg?: string; level?: string };
+	data?: Record<string, unknown>;
+}
 
 export interface DbtCommandResult {
 	success: boolean;
@@ -12,6 +18,8 @@ export interface DbtCommandResult {
 	error?: Error;
 	/** Parsed JSON payload from the bridge response (for structured commands like get_columns). */
 	data?: Record<string, unknown>;
+	/** Streaming log events captured during the command (--log-format json). */
+	events?: DbtLogEvent[];
 }
 
 interface BridgeRequest {
@@ -47,6 +55,9 @@ export class BridgeRunner {
 	private _stderrBuffer = '';
 	private _stdoutLines: string[] = [];
 	private _stderrLines: string[] = [];
+	private _eventLines: DbtLogEvent[] = [];
+	private readonly _onCommandEvent = new vscode.EventEmitter<DbtLogEvent>();
+	readonly onCommandEvent = this._onCommandEvent.event;
 	/** Serialise commands — only one dbt command at a time */
 	private _queue: (() => Promise<void>)[] = [];
 	private _running = false;
@@ -185,19 +196,25 @@ export class BridgeRunner {
 		for (const line of lines) {
 			if (!line.trim()) continue;
 
-			// Check if this is a completion marker
-			if (line.startsWith('{"success":')) {
-				try {
-					const completion = JSON.parse(line) as BridgeCompletionMessage & Record<string, unknown>;
-					this._stdoutLines.push(line);
+			// Try to parse every line as JSON
+			try {
+				const parsed = JSON.parse(line) as Record<string, unknown>;
+
+				// __bridge__ sentinel marks command completion
+				if (parsed['__bridge__'] === true) {
 					if (this._pendingResolve) {
 						const resolve = this._pendingResolve;
 						this._pendingResolve = null;
+						const stdout = this._eventLines
+							.map(e => e.info?.msg ?? '')
+							.filter(Boolean)
+							.join('\n');
 						const result: DbtCommandResult = {
-							success: completion.success,
-							data: completion,
-							stdout: this._stdoutLines.join('\n'),
+							success: parsed['success'] as boolean,
+							data: parsed,
+							stdout,
 							stderr: this._stderrLines.join('\n'),
+							events: [...this._eventLines],
 						};
 						const label = this._currentCommandLabel || 'bridge request';
 						const status = result.success ? 'succeeded' : 'failed';
@@ -206,9 +223,16 @@ export class BridgeRunner {
 						resolve(result);
 					}
 					return;
-				} catch {
-					// Not valid JSON, treat as regular output
 				}
+
+				// Regular dbt JSON log event — collect and forward
+				const event = parsed as DbtLogEvent;
+				this._eventLines.push(event);
+				this._onCommandEvent.fire(event);
+				this.logger.trace(`[bridge] ${event.info?.msg ?? line}`);
+				continue;
+			} catch {
+				// Not JSON (e.g. compile text output) — treat as plain stdout
 			}
 
 			this._stdoutLines.push(line);
@@ -256,6 +280,7 @@ export class BridgeRunner {
 
 		this._stdoutLines = [];
 		this._stderrLines = [];
+		this._eventLines = [];
 
 		const request: BridgeRequest = { command: args };
 		const line = JSON.stringify(request) + '\n';
