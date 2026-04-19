@@ -16,6 +16,7 @@ import { createDatabaseProvider } from './providers/database/database-provider-f
 import { ColumnStorePersistence } from './indexing/column-store-persistence';
 import { ContentHashPersistence } from './indexing/content-hash-persistence';
 import { registerLanguageModelTools } from './tools';
+import { McpSubsystem } from './mcp/host';
 import { GetColumnLineageTool } from './tools/get-column-lineage';
 import { ModelExplorerProvider } from './views/model-explorer-provider';
 import { LineageGraphProvider } from './views/lineage-graph-provider';
@@ -483,8 +484,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// creates the manifest in the extension target folder.
 	void vscode.commands.executeCommand('setContext', 'workspaceHasDBT', hasDbtProject);
 
-	// -------- Register Copilot language model tools --------
-	registerLanguageModelTools(context, manifestIndexer, executionService, manifestLoader, logger, compileCache, databaseProvider, describeCache, dbtQueryService, ftlParser);
+	// -------- Start MCP subsystem (Claude Code + any other MCP client) --------
+	const mcpSubsystem = new McpSubsystem(logger);
+	context.subscriptions.push({
+		dispose: () => { void mcpSubsystem.dispose(); },
+	});
+	const mcpStart = mcpSubsystem.start(context).catch(err => {
+		logger.warn(`MCP subsystem failed to start: ${err instanceof Error ? err.message : String(err)}`);
+		return null;
+	});
+
+	// -------- Register language model tools (Copilot + MCP registry) --------
+	registerLanguageModelTools(context, manifestIndexer, executionService, manifestLoader, logger, compileCache, databaseProvider, describeCache, dbtQueryService, ftlParser, mcpSubsystem.registry);
+
+	// Surface a one-time toast when the Claude Code config actually changed,
+	// since Claude Code doesn't hot-reload ~/.claude.json.
+	void mcpStart.then(result => {
+		if (result?.configChanged) {
+			void vscode.window.showInformationMessage(
+				'dbt Studio MCP tools registered — restart Claude Code to activate.',
+			);
+		}
+	});
 
 	// -------- Register tree views --------
 	const modelExplorerProvider = new ModelExplorerProvider(manifestIndexer, logger, projectDir, context.globalState);
