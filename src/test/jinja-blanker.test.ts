@@ -422,19 +422,19 @@ describe('blankJinja comment mode', () => {
 	});
 
 	it('ref() tag is unchanged in comment mode (still uses real name)', () => {
-		const tag = "{{ ref('orders') }}";
+		const tag = '{{ ref(\'orders\') }}';
 		const result = blankJinja(tag, 'comment');
 		expect(result.startsWith('orders')).toBe(true);
 	});
 
 	it('source() tag is unchanged in comment mode (still uses real name)', () => {
-		const tag = "{{ source('raw', 'orders') }}";
+		const tag = '{{ source(\'raw\', \'orders\') }}';
 		const result = blankJinja(tag, 'comment');
 		expect(result.startsWith('orders')).toBe(true);
 	});
 
 	it('config() tag blanks to spaces in comment mode (STATEMENT_MACRO unchanged)', () => {
-		const tag = "{{ config(materialized='table') }}";
+		const tag = '{{ config(materialized=\'table\') }}';
 		const result = blankJinja(tag, 'comment');
 		expect(result).toBe(' '.repeat(tag.length));
 	});

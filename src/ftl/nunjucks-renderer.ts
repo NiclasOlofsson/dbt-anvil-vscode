@@ -8,11 +8,11 @@ const STUB = '__jinja__';
  * Used as the stand-in for any unknown dbt macro or variable.
  */
 function makeStub(): unknown {
-    const fn = (..._args: unknown[]): unknown => STUB;
-    Object.defineProperty(fn, 'valueOf', { value: () => STUB });
-    Object.defineProperty(fn, Symbol.toPrimitive, { value: () => STUB });
-    Object.defineProperty(fn, 'toString', { value: () => STUB });
-    return fn;
+	const fn = (..._args: unknown[]): unknown => STUB;
+	Object.defineProperty(fn, 'valueOf', { value: () => STUB });
+	Object.defineProperty(fn, Symbol.toPrimitive, { value: () => STUB });
+	Object.defineProperty(fn, 'toString', { value: () => STUB });
+	return fn;
 }
 
 const _stub = makeStub();
@@ -23,35 +23,35 @@ const _stub = makeStub();
 // resolution — the has/get traps here make all unknown names resolve to _stub
 // without needing a callsite-specific context object.
 const _dbtGlobals = new Proxy(
-    {
-        ref: (...args: string[]) => args[args.length - 1] ?? STUB,
-        source: (...args: string[]) => args[args.length - 1] ?? STUB,
-        config: (..._args: unknown[]) => '',
-        var: (_name: string, d: unknown = STUB) => d,
-        env_var: (_name: string, d: unknown = STUB) => d,
-        is_incremental: () => false,
-        execute: false,
-        run_started_at: '',
-        invocation_id: '',
-        modules: _stub,
-        flags: _stub,
-    } as Record<string | symbol, unknown>,
-    {
-        get(target: Record<string | symbol, unknown>, prop: string | symbol) {
-            if (prop in target) return target[prop];
-            if (typeof prop === 'symbol') return undefined;
-            return _stub;
-        },
-        has(_target: Record<string | symbol, unknown>, prop: string | symbol) {
-            if (typeof prop === 'symbol') return false;
-            return true;
-        },
-    },
+	{
+		ref: (...args: string[]) => args[args.length - 1] ?? STUB,
+		source: (...args: string[]) => args[args.length - 1] ?? STUB,
+		config: (..._args: unknown[]) => '',
+		var: (_name: string, d: unknown = STUB) => d,
+		env_var: (_name: string, d: unknown = STUB) => d,
+		is_incremental: () => false,
+		execute: false,
+		run_started_at: '',
+		invocation_id: '',
+		modules: _stub,
+		flags: _stub,
+	} as Record<string | symbol, unknown>,
+	{
+		get(target: Record<string | symbol, unknown>, prop: string | symbol) {
+			if (prop in target) return target[prop];
+			if (typeof prop === 'symbol') return undefined;
+			return _stub;
+		},
+		has(_target: Record<string | symbol, unknown>, prop: string | symbol) {
+			if (typeof prop === 'symbol') return false;
+			return true;
+		},
+	},
 );
 
 const ENV = new nunjucks.Environment(null as unknown as nunjucks.ILoader, {
-    autoescape: false,
-    throwOnUndefined: false,
+	autoescape: false,
+	throwOnUndefined: false,
 });
 // Replace the default empty globals object so Context.lookup resolves unknown
 // variable/macro names to _stub via the Proxy traps above.
@@ -67,17 +67,17 @@ export type LineMap = Array<[number, number]>;
  * Uses the same bisect-right algorithm as bridge.py `_ren_to_raw_line`.
  */
 export function renToRawLine(renLine: number, lineMap: LineMap): number {
-    if (lineMap.length === 0) return renLine;
-    // Find largest breakpoint index where ren_bp <= renLine.
-    let lo = 0;
-    let hi = lineMap.length - 1;
-    while (lo < hi) {
-        const mid = (lo + hi + 1) >> 1;
-        if (lineMap[mid][0] <= renLine) lo = mid;
-        else hi = mid - 1;
-    }
-    const [renBp, rawBp] = lineMap[lo];
-    return rawBp + (renLine - renBp);
+	if (lineMap.length === 0) return renLine;
+	// Find largest breakpoint index where ren_bp <= renLine.
+	let lo = 0;
+	let hi = lineMap.length - 1;
+	while (lo < hi) {
+		const mid = (lo + hi + 1) >> 1;
+		if (lineMap[mid][0] <= renLine) lo = mid;
+		else hi = mid - 1;
+	}
+	const [renBp, rawBp] = lineMap[lo];
+	return rawBp + (renLine - renBp);
 }
 
 /**
@@ -91,41 +91,41 @@ export function renToRawLine(renLine: number, lineMap: LineMap): number {
  *   A new breakpoint is emitted whenever the two counts diverge.
  */
 export function buildLineMap(rawSql: string): LineMap {
-    let rawLine = 0;
-    let renLine = 0;
-    let rawPos = 0;
-    const breakpoints: LineMap = [[0, 0]];
+	let rawLine = 0;
+	let renLine = 0;
+	let rawPos = 0;
+	const breakpoints: LineMap = [[0, 0]];
 
-    for (const match of iterJinjaTags(rawSql)) {
-        const tagStart = match.index;
-        const tag = match[0];
+	for (const match of iterJinjaTags(rawSql)) {
+		const tagStart = match.index;
+		const tag = match[0];
 
-        // Literal section before this tag — both counters advance equally.
-        for (let i = rawPos; i < tagStart; i++) {
-            if (rawSql[i] === '\n') { rawLine++; renLine++; }
-        }
+		// Literal section before this tag — both counters advance equally.
+		for (let i = rawPos; i < tagStart; i++) {
+			if (rawSql[i] === '\n') { rawLine++; renLine++; }
+		}
 
-        // The tag itself: raw advances by its newlines; ren stays.
-        let tagNewlines = 0;
-        for (let i = 0; i < tag.length; i++) {
-            if (tag[i] === '\n') tagNewlines++;
-        }
-        rawLine += tagNewlines;
-        // renLine does NOT advance.
-        if (tagNewlines > 0) {
-            breakpoints.push([renLine, rawLine]);
-        }
+		// The tag itself: raw advances by its newlines; ren stays.
+		let tagNewlines = 0;
+		for (let i = 0; i < tag.length; i++) {
+			if (tag[i] === '\n') tagNewlines++;
+		}
+		rawLine += tagNewlines;
+		// renLine does NOT advance.
+		if (tagNewlines > 0) {
+			breakpoints.push([renLine, rawLine]);
+		}
 
-        rawPos = tagStart + tag.length;
-    }
+		rawPos = tagStart + tag.length;
+	}
 
-    return breakpoints;
+	return breakpoints;
 }
 
 export interface RenderResult {
-    rendered: string;
-    /** 0-based (ren_line, raw_line) breakpoints for remapping AST positions. */
-    lineMap: LineMap;
+	rendered: string;
+	/** 0-based (ren_line, raw_line) breakpoints for remapping AST positions. */
+	lineMap: LineMap;
 }
 
 /**
@@ -149,19 +149,19 @@ export interface RenderResult {
  * remapping through renToRawLine.
  */
 export function renderForParse(sql: string): RenderResult {
-    // Build the line map from raw SQL before rendering (matches bridge.py order).
-    const lineMap = buildLineMap(sql);
+	// Build the line map from raw SQL before rendering (matches bridge.py order).
+	const lineMap = buildLineMap(sql);
 
-    let rendered: string;
-    try {
-        // No per-call context needed: all dbt builtins and unknown macros are
-        // handled by the module-level _dbtGlobals Proxy on ENV.globals.
-        rendered = ENV.renderString(sql, {});
-    } catch {
-        // If nunjucks itself fails (e.g. malformed template syntax), return
-        // the raw SQL — line map is identity in this case.
-        rendered = sql;
-    }
+	let rendered: string;
+	try {
+		// No per-call context needed: all dbt builtins and unknown macros are
+		// handled by the module-level _dbtGlobals Proxy on ENV.globals.
+		rendered = ENV.renderString(sql, {});
+	} catch {
+		// If nunjucks itself fails (e.g. malformed template syntax), return
+		// the raw SQL — line map is identity in this case.
+		rendered = sql;
+	}
 
-    return { rendered, lineMap };
+	return { rendered, lineMap };
 }

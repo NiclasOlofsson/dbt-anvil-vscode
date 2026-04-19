@@ -161,7 +161,7 @@ describe(RULE, () => {
 
 	it('does not flag null inside a string literal', () => {
 		// sqlglot tokenises 'null' as a string, not a NULL token
-		const v = violationsFor(run("select 'null'"), RULE);
+		const v = violationsFor(run('select \'null\''), RULE);
 		expect(v.length).toBe(0);
 	});
 

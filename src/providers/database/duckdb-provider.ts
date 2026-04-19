@@ -43,7 +43,7 @@ export class DuckdbProvider implements DatabaseProvider {
 			const resolved = path.isAbsolute(opts.externalLocation)
 				? opts.externalLocation
 				: path.join(this._projectDir, opts.externalLocation);
-			const escaped = resolved.replace(/'/g, "''");
+			const escaped = resolved.replace(/'/g, '\'\'');
 			this.logger.trace(`DuckdbProvider: describe external ${resolved}`);
 			const result = await this._runSql(`DESCRIBE SELECT * FROM '${escaped}'`);
 			return result.rows.map(row => ({
