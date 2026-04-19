@@ -23,6 +23,7 @@ interface PositionedNode {
 	width: number;
 	height: number;
 	depthLevel: number;
+	subColumnIndex: number;
 }
 
 interface GraphEdge {
@@ -31,7 +32,6 @@ interface GraphEdge {
 }
 
 const HEADER_HEIGHT = 44;
-const LAYOUT_STORAGE_KEY = 'dbt-studio.lineageLayoutConfig';
 const DEFAULT_LAYOUT_CONFIG = {
 	graph: {
 		rankdir: 'LR',
@@ -42,9 +42,11 @@ const DEFAULT_LAYOUT_CONFIG = {
 		ranker: 'tight-tree',
 		marginx: 20,
 		marginy: 10,
+		strictDepthColumns: true,
+		showBands: true,
 	},
 	node: {
-		width: 140,
+		width: 180,
 		heightPadding: 0,
 	},
 	edge: {
@@ -74,6 +76,8 @@ function normalizeLayoutConfig(config: unknown): typeof DEFAULT_LAYOUT_CONFIG {
 			ranker: typeof graph.ranker === 'string' ? graph.ranker : DEFAULT_LAYOUT_CONFIG.graph.ranker,
 			marginx: typeof graph.marginx === 'number' ? graph.marginx : DEFAULT_LAYOUT_CONFIG.graph.marginx,
 			marginy: typeof graph.marginy === 'number' ? graph.marginy : DEFAULT_LAYOUT_CONFIG.graph.marginy,
+			strictDepthColumns: typeof graph.strictDepthColumns === 'boolean' ? graph.strictDepthColumns : DEFAULT_LAYOUT_CONFIG.graph.strictDepthColumns,
+			showBands: typeof graph.showBands === 'boolean' ? graph.showBands : DEFAULT_LAYOUT_CONFIG.graph.showBands,
 		},
 		node: {
 			width: typeof node.width === 'number' ? node.width : DEFAULT_LAYOUT_CONFIG.node.width,
@@ -112,11 +116,6 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 		private readonly workspaceState: vscode.Memento,
 	) {
 		this._followActive = globalState.get<boolean>('dbt-studio.lineageFollowActive', true);
-		const storedLayout = workspaceState.get<unknown>(LAYOUT_STORAGE_KEY);
-		if (storedLayout !== undefined) {
-			this._savedLayoutConfig = normalizeLayoutConfig(storedLayout);
-			this._layoutConfig = cloneLayoutConfig(this._savedLayoutConfig);
-		}
 		this._showTests = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('lineage.showTests', true);
 		vscode.workspace.onDidChangeConfiguration(e => {
 			if (e.affectsConfiguration('dbt-studio.lineage.showTests')) {
@@ -236,7 +235,6 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 				const cfg = normalizeLayoutConfig(msg['config']);
 				this._savedLayoutConfig = cloneLayoutConfig(cfg);
 				this._layoutConfig = cloneLayoutConfig(cfg);
-				void this.workspaceState.update(LAYOUT_STORAGE_KEY, this._savedLayoutConfig);
 				void this._view?.webview.postMessage({
 					command: 'layoutConfigSaved',
 					message: 'Saved layout config',
@@ -245,7 +243,7 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 			}
 			if (msg['command'] === 'copyLayoutConfig') {
 				const cfg = normalizeLayoutConfig(msg['config']);
-				const text = `{ graph: { rankdir: '${cfg.graph.rankdir}', ranksep: ${cfg.graph.ranksep}, nodesep: ${cfg.graph.nodesep}, edgesep: ${cfg.graph.edgesep}, align: '${cfg.graph.align}', ranker: '${cfg.graph.ranker}', marginx: ${cfg.graph.marginx}, marginy: ${cfg.graph.marginy} }, node: { width: ${cfg.node.width}, heightPadding: ${cfg.node.heightPadding} }, edge: { minlen: ${cfg.edge.minlen}, weight: ${cfg.edge.weight}, strokeWidth: ${cfg.edge.strokeWidth}, opacity: ${cfg.edge.opacity} } }`;
+				const text = `{ graph: { rankdir: '${cfg.graph.rankdir}', ranksep: ${cfg.graph.ranksep}, nodesep: ${cfg.graph.nodesep}, edgesep: ${cfg.graph.edgesep}, align: '${cfg.graph.align}', ranker: '${cfg.graph.ranker}', marginx: ${cfg.graph.marginx}, marginy: ${cfg.graph.marginy}, strictDepthColumns: ${cfg.graph.strictDepthColumns}, showBands: ${cfg.graph.showBands} }, node: { width: ${cfg.node.width}, heightPadding: ${cfg.node.heightPadding} }, edge: { minlen: ${cfg.edge.minlen}, weight: ${cfg.edge.weight}, strokeWidth: ${cfg.edge.strokeWidth}, opacity: ${cfg.edge.opacity} } }`;
 				void vscode.env.clipboard.writeText(text);
 				void this._view?.webview.postMessage({
 					command: 'layoutConfigCopied',
@@ -299,6 +297,7 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 			layoutConfig: this._layoutConfig,
 			storedLayoutConfig: this._savedLayoutConfig,
 			defaultLayoutConfig: DEFAULT_LAYOUT_CONFIG,
+			effectiveNodeWidth: nodes[0]?.width ?? this._layoutConfig.node.width,
 			focusId: this._focusModel,
 			upstreamDepth: this._upstreamDepth,
 			downstreamDepth: this._downstreamDepth,
@@ -554,6 +553,7 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 					width: this._layoutConfig.node.width,
 					height,
 					depthLevel: 0,
+					subColumnIndex: 0,
 				});
 			} else if (source) {
 				const height = computeNodeHeight(id, 'source', columns.length);
@@ -567,6 +567,7 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 					width: this._layoutConfig.node.width,
 					height,
 					depthLevel: 0,
+					subColumnIndex: 0,
 				});
 			} else {
 				const kind = id.split('.')[0];
@@ -582,6 +583,7 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 					width: this._layoutConfig.node.width,
 					height,
 					depthLevel: 0,
+					subColumnIndex: 0,
 				});
 			}
 		}
@@ -632,6 +634,15 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 			}
 		}
 
+		// Auto-size card width from the longest label when on the default setting.
+		// Overhead: stripe(3) + gap(6) + h-padding(16) + type-badge(14) + badge-gap(4) + depth-label(28) ≈ 71px
+		// Name text: ~7.5px per char at 11px/600 weight.
+		if (this._layoutConfig.node.width === DEFAULT_LAYOUT_CONFIG.node.width) {
+			const maxLen = nodes.reduce((m, n) => Math.max(m, n.label.length), 0);
+			const autoWidth = Math.min(300, Math.max(DEFAULT_LAYOUT_CONFIG.node.width, Math.ceil(71 + maxLen * 7.5)));
+			for (const node of nodes) { node.width = autoWidth; }
+		}
+
 		const edges: GraphEdge[] = [];
 		for (const id of allIds) {
 			const parents = index.parentMap.get(id) ?? [];
@@ -647,13 +658,14 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 
 	private _computeLayout(nodes: PositionedNode[], edges: GraphEdge[]): void {
 		if (nodes.length === 0) return;
+		const effectiveRanksep = Math.max(this._layoutConfig.graph.ranksep, 12);
 
 		const g = new dagre.graphlib.Graph();
 		const graphOpts: dagre.GraphLabel = {
 			rankdir: this._layoutConfig.graph.rankdir as dagre.GraphLabel['rankdir'],
 			nodesep: this._layoutConfig.graph.nodesep,
 			edgesep: this._layoutConfig.graph.edgesep,
-			ranksep: this._layoutConfig.graph.ranksep,
+			ranksep: effectiveRanksep,
 			marginx: this._layoutConfig.graph.marginx,
 			marginy: this._layoutConfig.graph.marginy,
 		};
@@ -680,6 +692,107 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 			const pos = g.node(node.id);
 			node.x = pos.x;
 			node.y = pos.y;
+			node.subColumnIndex = 0;
+		}
+
+		if (this._layoutConfig.graph.strictDepthColumns) {
+			const columnGap = effectiveRanksep;
+			const laneSpacing = this._layoutConfig.graph.nodesep;
+			const paddedHeight = (node: PositionedNode): number => node.height + this._layoutConfig.node.heightPadding;
+			const nodeLeft = (node: PositionedNode): number => node.x - (node.width / 2);
+			const nodeRight = (node: PositionedNode): number => node.x + (node.width / 2);
+			const shiftNodes = (laneNodes: PositionedNode[], dx: number): void => {
+				if (dx === 0) return;
+				for (const node of laneNodes) {
+					node.x += dx;
+				}
+			};
+			const laneBounds = (laneNodes: PositionedNode[]): { left: number; right: number } => {
+				let left = Infinity;
+				let right = -Infinity;
+				for (const node of laneNodes) {
+					left = Math.min(left, nodeLeft(node));
+					right = Math.max(right, nodeRight(node));
+				}
+				return { left, right };
+			};
+
+			const baseLanes = new Map<number, PositionedNode[]>();
+			for (const node of nodes) {
+				const lane = baseLanes.get(node.depthLevel) ?? [];
+				lane.push(node);
+				baseLanes.set(node.depthLevel, lane);
+			}
+
+			const focusLane = baseLanes.get(0) ?? [];
+			if (focusLane.length > 0) {
+				const focusBounds = laneBounds(focusLane);
+
+				const upstreamDepths = [...baseLanes.keys()].filter(depth => depth > 0).sort((a, b) => a - b);
+				let upstreamReferenceRight = focusBounds.left;
+				for (const depth of upstreamDepths) {
+					const laneNodes = baseLanes.get(depth) ?? [];
+					if (laneNodes.length === 0) continue;
+					const bounds = laneBounds(laneNodes);
+					const targetRight = upstreamReferenceRight - columnGap;
+					shiftNodes(laneNodes, targetRight - bounds.right);
+					upstreamReferenceRight = laneBounds(laneNodes).left;
+				}
+
+				const downstreamDepths = [...baseLanes.keys()].filter(depth => depth < 0).sort((a, b) => b - a);
+				let downstreamReferenceLeft = focusBounds.right;
+				for (const depth of downstreamDepths) {
+					const laneNodes = baseLanes.get(depth) ?? [];
+					if (laneNodes.length === 0) continue;
+					const bounds = laneBounds(laneNodes);
+					const targetLeft = downstreamReferenceLeft + columnGap;
+					shiftNodes(laneNodes, targetLeft - bounds.left);
+					downstreamReferenceLeft = laneBounds(laneNodes).right;
+				}
+			}
+
+
+			// Compute sub-column index within each depth lane from actual X buckets.
+			const lanesByDepth = new Map<number, PositionedNode[]>();
+			for (const node of nodes) {
+				const lane = lanesByDepth.get(node.depthLevel) ?? [];
+				lane.push(node);
+				lanesByDepth.set(node.depthLevel, lane);
+			}
+			for (const [depth, laneNodes] of lanesByDepth.entries()) {
+				const xKeys = [...new Set(laneNodes.map(node => Math.round(node.x)))].sort((a, b) => a - b);
+				const orderedKeys = depth > 0 ? [...xKeys].reverse() : xKeys;
+				const subColByX = new Map<number, number>();
+				for (let i = 0; i < orderedKeys.length; i++) {
+					subColByX.set(orderedKeys[i], i + 1);
+				}
+				for (const node of laneNodes) {
+					node.subColumnIndex = subColByX.get(Math.round(node.x)) ?? 1;
+				}
+			}
+
+			// Group by depth lane (same depth = same X column after lane shifting).
+			// Use Math.round to avoid floating-point bucket splits.
+			const xColumns = new Map<number, PositionedNode[]>();
+			for (const node of nodes) {
+				const key = Math.round(node.x);
+				const col = xColumns.get(key) ?? [];
+				col.push(node);
+				xColumns.set(key, col);
+			}
+			for (const colNodes of xColumns.values()) {
+				colNodes.sort((a, b) => a.y - b.y);
+				const totalHeight = colNodes.reduce((sum, n) => sum + paddedHeight(n), 0)
+					+ (colNodes.length - 1) * laneSpacing;
+				// Use median Y as anchor so one outlier node doesn't skew the pack position.
+				const mid = Math.floor(colNodes.length / 2);
+				const medianY = colNodes[mid].y;
+				let y = medianY - totalHeight / 2;
+				for (const node of colNodes) {
+					node.y = y + paddedHeight(node) / 2;
+					y += paddedHeight(node) + laneSpacing;
+				}
+			}
 		}
 		// Column wrapping and relaxation are handled in the webview JS
 		// where the viewport dimensions are known.
@@ -702,6 +815,15 @@ body {
 	color: var(--vscode-foreground);
 	background: var(--vscode-editor-background);
 	--layout-panel-width: 272px;
+	display: flex;
+	flex-direction: column;
+}
+#main {
+	display: flex;
+	flex: 1;
+	width: 100%;
+	min-height: 0;
+	overflow: hidden;
 }
 .controls {
 	display: flex; gap: 8px; padding: 6px 8px;
@@ -736,12 +858,10 @@ body {
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
 
 #canvas-wrap {
-	position: relative; width: 100%; height: calc(100% - 36px);
+	position: relative;
+	flex: 1 1 0;
+	min-width: 0;
 	overflow: hidden; cursor: grab;
-	transition: width 180ms ease;
-}
-body.layout-panel-open #canvas-wrap {
-	width: calc(100% - var(--layout-panel-width));
 }
 #canvas-wrap.dragging { cursor: grabbing; }
 #canvas {
@@ -773,19 +893,21 @@ svg.edges path {
 	stroke-opacity: var(--edge-opacity, 0.45);
 }
 svg.edges path.col-edge {
-	stroke-opacity: calc(var(--edge-opacity, 0.45) * 0.7);
+	stroke: var(--vscode-charts-blue, #5B8DEF);
+	stroke-width: 1.5;
+	stroke-opacity: 1;
 }
 svg.edges polygon {
 	fill: var(--vscode-foreground);
 	opacity: var(--edge-opacity, 0.45);
 }
 #edges-fg {
-	z-index: 3;
+	z-index: 4;
 }
 
 .card {
 	position: absolute;
-	width: 180px;
+	width: var(--card-width, 220px);
 	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
 	border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
 	border-radius: 4px;
@@ -900,14 +1022,10 @@ svg.edges polygon {
 
 .empty-state {
 	display: flex; justify-content: center; align-items: center;
-	height: calc(100% - 36px);
-	width: 100%;
+	flex: 1 1 0;
+	min-width: 0;
 	color: var(--vscode-descriptionForeground);
-	font-size: 13px; text-align: center; padding: 16px;
-	transition: width 180ms ease;
-}
-body.layout-panel-open .empty-state {
-	width: calc(100% - var(--layout-panel-width));
+	font-size: var(--vscode-font-size); text-align: center; padding: 16px;
 }
 #status-bar {
 	display: none;
@@ -922,27 +1040,23 @@ body.layout-panel-open .empty-state {
 	color: var(--vscode-errorForeground, #f44);
 }
 .layout-panel {
-	position: fixed;
-	top: 36px;
-	right: 0;
-	bottom: 0;
-	width: var(--layout-panel-width);
+	width: 0;
+	overflow: hidden;
+	flex-shrink: 0;
 	background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
 	border-left: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
-	box-shadow: -6px 0 14px rgba(0,0,0,0.16);
-	z-index: 20;
-	font-size: 11px;
+	font-family: var(--vscode-font-family);
+	font-size: var(--vscode-font-size);
 	display: flex;
 	flex-direction: column;
-	transform: translateX(100%);
-	transition: transform 180ms ease;
+	transition: width 180ms ease;
 }
 .layout-panel.hidden {
-	transform: translateX(100%);
+	width: 0;
 	pointer-events: none;
 }
 body.layout-panel-open .layout-panel {
-	transform: translateX(0);
+	width: var(--layout-panel-width);
 	pointer-events: auto;
 }
 .layout-panel-title {
@@ -1024,12 +1138,17 @@ body.layout-panel-open .layout-panel {
 }
 .layout-select {
 	width: 100%;
-	background: var(--vscode-input-background);
-	color: var(--vscode-input-foreground);
-	border: 1px solid var(--vscode-input-border, transparent);
+	background: var(--vscode-dropdown-background);
+	color: var(--vscode-dropdown-foreground);
+	border: 1px solid var(--vscode-dropdown-border);
 	border-radius: 2px;
-	font-size: 10px;
-	padding: 2px 4px;
+	font-family: var(--vscode-font-family);
+	font-size: var(--vscode-font-size);
+	padding: 3px 4px;
+	outline: none;
+}
+.layout-select:focus {
+	border-color: var(--vscode-focusBorder);
 }
 .layout-divider { height: 1px; background: var(--vscode-editorWidget-border, var(--vscode-panel-border)); margin: 4px 0; }
 .layout-reset-btn {
@@ -1081,12 +1200,14 @@ body.layout-panel-open .layout-panel {
 	</div>
 	<button class="settings-btn" id="layout-toggle" title="Layout settings">⚙</button>
 </div>
+<div id="main">
 <div id="canvas-wrap" style="display:none">
 	<div id="bands"></div>
 	<svg class="edges" id="edges"></svg>
 	<div id="canvas"></div>
 	<svg class="edges" id="edges-fg"></svg>
 </div>
+<div id="empty" class="empty-state">Open a dbt model to see its lineage graph</div>
 <div class="layout-panel hidden" id="layout-panel">
 	<div class="layout-panel-title">
 		<span>Layout Settings</span>
@@ -1144,6 +1265,20 @@ body.layout-panel-open .layout-panel {
 				</select>
 			</div>
 			<div class="layout-row">
+				<div class="layout-label"><span class="layout-label-text">Strict depth columns</span></div>
+				<select class="layout-select" id="strict-depth-columns">
+					<option value="true" selected>on</option>
+					<option value="false">off</option>
+				</select>
+			</div>
+			<div class="layout-row">
+				<div class="layout-label"><span class="layout-label-text">Depth bands</span></div>
+				<select class="layout-select" id="show-bands">
+					<option value="true" selected>on</option>
+					<option value="false">off</option>
+				</select>
+			</div>
+			<div class="layout-row">
 				<div class="layout-label">
 					<span class="layout-label-text">Margin X</span>
 					<span class="layout-value" id="marginx-val">20</span>
@@ -1164,9 +1299,9 @@ body.layout-panel-open .layout-panel {
 			<div class="layout-row">
 				<div class="layout-label">
 					<span class="layout-label-text">Width</span>
-					<span class="layout-value" id="node-width-val">140</span>
+					<span class="layout-value" id="node-width-val">180</span>
 				</div>
-				<input type="range" class="layout-slider" id="node-width" min="140" max="260" step="10" value="140">
+				<input type="range" class="layout-slider" id="node-width" min="160" max="320" step="10" value="180">
 			</div>
 			<div class="layout-row">
 				<div class="layout-label">
@@ -1215,7 +1350,7 @@ body.layout-panel-open .layout-panel {
 		<button class="layout-reset-btn" id="layout-reset">Reset defaults</button>
 	</div>
 </div>
-<div id="empty" class="empty-state">Open a dbt model to see its lineage graph</div>
+</div>
 
 <script nonce="${nonce}">
 (function() {
@@ -1251,38 +1386,13 @@ body.layout-panel-open .layout-panel {
 	const relayoutColsCountByNode = new Map();
 	/* Per-model saved state: expanded cards, column trace, pan/zoom */
 	const savedStates = new Map();
-	const persistedWebviewState = vscode.getState() || {};
 	const layoutDefaults = {
-		graph: { rankdir: 'LR', ranksep: 105, nodesep: 5, edgesep: 0, align: 'none', ranker: 'tight-tree', marginx: 20, marginy: 10 },
+		graph: { rankdir: 'LR', ranksep: 105, nodesep: 5, edgesep: 0, align: 'none', ranker: 'tight-tree', marginx: 20, marginy: 10, strictDepthColumns: true, showBands: true },
 		node: { width: 140, heightPadding: 0 },
 		edge: { minlen: 1, weight: 1, strokeWidth: 0.25, opacity: 0.45 },
 	};
 	let storedLayoutConfig = null;
 	let layoutConfig = JSON.parse(JSON.stringify(layoutDefaults));
-
-	if (persistedWebviewState.savedStates && typeof persistedWebviewState.savedStates === 'object') {
-		for (const [focusId, rawState] of Object.entries(persistedWebviewState.savedStates)) {
-			if (!rawState || typeof rawState !== 'object') continue;
-			const expanded = Array.isArray(rawState.expandedCards)
-				? rawState.expandedCards.filter(function(v) { return typeof v === 'string'; })
-				: [];
-			const rawScrolls = Array.isArray(rawState.colScrollPositions) ? rawState.colScrollPositions : [];
-			const colScrollPositions = new Map();
-			for (const pair of rawScrolls) {
-				if (!Array.isArray(pair) || pair.length !== 2) continue;
-				if (typeof pair[0] !== 'string' || typeof pair[1] !== 'number') continue;
-				colScrollPositions.set(pair[0], pair[1]);
-			}
-			savedStates.set(focusId, {
-				expandedCards: new Set(expanded),
-				lastHighlightMsg: rawState.lastHighlightMsg || null,
-				colScrollPositions: colScrollPositions,
-				panX: typeof rawState.panX === 'number' ? rawState.panX : 0,
-				panY: typeof rawState.panY === 'number' ? rawState.panY : 0,
-				scale: typeof rawState.scale === 'number' ? rawState.scale : 1,
-			});
-		}
-	}
 
 	function captureCurrentModelState() {
 		if (!lastFocusId) return;
@@ -1303,32 +1413,13 @@ body.layout-panel-open .layout-panel {
 		});
 	}
 
-	function persistWebviewState() {
-		captureCurrentModelState();
-		const serializedSavedStates = {};
-		for (const [focusId, state] of savedStates.entries()) {
-			serializedSavedStates[focusId] = {
-				expandedCards: Array.from(state.expandedCards || []),
-				lastHighlightMsg: state.lastHighlightMsg || null,
-				colScrollPositions: Array.from((state.colScrollPositions || new Map()).entries()),
-				panX: typeof state.panX === 'number' ? state.panX : 0,
-				panY: typeof state.panY === 'number' ? state.panY : 0,
-				scale: typeof state.scale === 'number' ? state.scale : 1,
-			};
-		}
-		vscode.setState({
-			savedStates: serializedSavedStates,
-			lastFocusId: lastFocusId,
-		});
-	}
-
 	let persistQueued = false;
 	function schedulePersistState() {
 		if (persistQueued) return;
 		persistQueued = true;
 		requestAnimationFrame(function() {
 			persistQueued = false;
-			persistWebviewState();
+			captureCurrentModelState();
 		});
 	}
 
@@ -1350,6 +1441,8 @@ body.layout-panel-open .layout-panel {
 		document.getElementById('edgesep-val').textContent = String(layoutConfig.graph.edgesep);
 		document.getElementById('align').value = layoutConfig.graph.align;
 		document.getElementById('ranker').value = layoutConfig.graph.ranker;
+		document.getElementById('strict-depth-columns').value = layoutConfig.graph.strictDepthColumns ? 'true' : 'false';
+		document.getElementById('show-bands').value = layoutConfig.graph.showBands ? 'true' : 'false';
 		document.getElementById('marginx').value = String(layoutConfig.graph.marginx);
 		document.getElementById('marginx-val').textContent = String(layoutConfig.graph.marginx);
 		document.getElementById('marginy').value = String(layoutConfig.graph.marginy);
@@ -1379,61 +1472,82 @@ body.layout-panel-open .layout-panel {
 		schedulePersistState();
 	}
 
-	function depthBandColor(depth) {
-		if (depth === 0) {
-			return 'linear-gradient(to right, rgba(212, 165, 22, 0.015) 0%, rgba(212, 165, 22, 0.05) 50%, rgba(212, 165, 22, 0.09) 100%)';
-		}
-		const level = Math.min(Math.abs(depth), 6);
-		const maxAlpha = Math.max(0.04, 0.12 - (level - 1) * 0.015);
-		const midAlpha = Math.max(0.02, maxAlpha * 0.55);
-		const minAlpha = Math.max(0.008, maxAlpha * 0.15);
-		const rgb = depth > 0 ? '91, 141, 239' : '232, 150, 62';
-		return 'linear-gradient(to right, rgba(' + rgb + ', ' + minAlpha.toFixed(3) + ') 0%, rgba(' + rgb + ', ' + midAlpha.toFixed(3) + ') 50%, rgba(' + rgb + ', ' + maxAlpha.toFixed(3) + ') 100%)';
+	function bandRgba(depth) {
+		const level = Math.max(1, Math.abs(depth));
+		const opacities = [0.13, 0.07, 0.035, 0.018];
+		const alpha = opacities[(level - 1) % 4];
+
+		const fgColor = getComputedStyle(document.documentElement).getPropertyValue('--vscode-foreground').trim() || '#CCCCCC';
+		const hex = fgColor.replace('#', '');
+		const r = parseInt(hex.substring(0, 2), 16);
+		const g = parseInt(hex.substring(2, 4), 16);
+		const b = parseInt(hex.substring(4, 6), 16);
+		return 'rgba(' + r + ', ' + g + ', ' + b + ', ' + alpha + ')';
 	}
 
 	function drawDepthBands(data) {
+		if (!layoutConfig.graph.showBands) {
+			bandsEl.innerHTML = '';
+			return;
+		}
 		if (!data || !data.nodes || data.nodes.length === 0) {
 			bandsEl.innerHTML = '';
 			return;
 		}
+
 		bandsEl.innerHTML = '';
-		const depthNodes = new Map();
+
+		const laneExtentsByDepth = new Map();
 		for (const node of data.nodes) {
 			const depth = node.depthLevel ?? 0;
-			if (!depthNodes.has(depth)) depthNodes.set(depth, []);
-			depthNodes.get(depth).push(node);
-		}
-		const laneDepths = Array.from(depthNodes.keys()).sort(function(a, b) { return a - b; });
-		if (laneDepths.length === 0) return;
 
-		const pad = 14;
-		const focusNode = data.nodes.find(function(n) { return n.isFocus; })
-			|| depthNodes.get(0)?.[0]
-			|| data.nodes[0];
-		const focusX = focusNode.x;
-		const depthStep = Math.max(RANKSEP, CARD_W + 24);
+			const card = canvas.querySelector('[data-id="' + CSS.escape(node.id) + '"]');
+			const fallbackWidth = typeof node.width === 'number' ? node.width : CARD_W;
+			const left = card
+				? parseFloat(card.style.left || '0')
+				: node.x - (fallbackWidth / 2);
+			const right = card
+				? left + card.offsetWidth
+				: node.x + (fallbackWidth / 2);
 
-		for (let i = 0; i < laneDepths.length; i++) {
-			const depth = laneDepths[i];
-			const nodes = depthNodes.get(depth);
-			const center = focusX - (depth * depthStep);
-
-			let maxDeviation = 0;
-			for (const n of nodes) {
-				const d = Math.abs(n.x - center);
-				if (d > maxDeviation) maxDeviation = d;
+			const existing = laneExtentsByDepth.get(depth);
+			if (!existing) {
+				laneExtentsByDepth.set(depth, { depth, minLeft: left, maxRight: right });
+				continue;
 			}
+			existing.minLeft = Math.min(existing.minLeft, left);
+			existing.maxRight = Math.max(existing.maxRight, right);
+		}
 
-			const halfWidth = Math.max((CARD_W / 2) + 20, maxDeviation + (CARD_W / 2) + pad);
-			const left = center - halfWidth;
-			const width = halfWidth * 2;
+		const laneInfo = Array.from(laneExtentsByDepth.values());
+		laneInfo.sort(function(a, b) { return a.minLeft - b.minLeft; });
+		if (laneInfo.length === 0) return;
+
+		const outerPad = 20;
+		for (let i = 0; i < laneInfo.length; i++) {
+			const lane = laneInfo[i];
+			if (lane.depth === 0) continue;
+			const prev = i > 0 ? laneInfo[i - 1] : null;
+			const next = i < laneInfo.length - 1 ? laneInfo[i + 1] : null;
+			const growLeft = prev ? (lane.minLeft - prev.maxRight) / 2 : outerPad;
+			const growRight = next ? (next.minLeft - lane.maxRight) / 2 : outerPad;
+			const left = lane.minLeft - growLeft;
+			const width = Math.max(1, (lane.maxRight - lane.minLeft) + growLeft + growRight);
+
+			const thisColor = bandRgba(lane.depth);
+			const edgeFade = 20;
+			const fadeLeft = !prev ? 'transparent, ' + thisColor + ' ' + edgeFade + 'px' : thisColor;
+			const fadeRight = !next ? thisColor + ' ' + (width - edgeFade) + 'px, transparent' : thisColor;
+			const gradient = 'linear-gradient(to right, ' + fadeLeft + ', ' + fadeRight + ')';
+
 			const band = document.createElement('div');
 			band.className = 'depth-band';
 			band.style.left = left + 'px';
 			band.style.width = width + 'px';
 			band.style.top = '-10000px';
 			band.style.height = '20000px';
-			band.style.background = depthBandColor(depth);
+			band.style.background = gradient;
+
 			bandsEl.appendChild(band);
 		}
 	}
@@ -1544,8 +1658,15 @@ body.layout-panel-open .layout-panel {
 			data.nodes[wni]._origY = data.nodes[wni].y;
 		}
 
-		CARD_W = layoutConfig.node.width;
+		CARD_W = data.effectiveNodeWidth ?? layoutConfig.node.width;
 		RANKSEP = layoutConfig.graph.ranksep;
+		document.documentElement.style.setProperty('--card-width', CARD_W + 'px');
+		// Keep the slider in sync with the actual rendered width (may differ from config when auto-sized).
+		if (CARD_W !== layoutConfig.node.width) {
+			layoutConfig.node.width = CARD_W;
+			document.getElementById('node-width').value = String(CARD_W);
+			document.getElementById('node-width-val').textContent = String(CARD_W);
+		}
 		for (var sxi = 0; sxi < data.nodes.length; sxi++) {
 			data.nodes[sxi].x = data.nodes[sxi]._origX;
 			data.nodes[sxi].y = data.nodes[sxi]._origY;
@@ -1581,7 +1702,7 @@ body.layout-panel-open .layout-panel {
 						'<div class="card-title-row">' +
 							'<span class="card-title" title="' + escHtml(node.label) + '">' +
 								'<span class="type-badge open-file-trigger" title="Open model" style="background:' + color + '; color: white;">' + escHtml(typeBadge) + '</span>' +
-								(node.depthLevel !== 0 ? '<span class="depth-label">' + (node.depthLevel > 0 ? '+' + node.depthLevel : '' + node.depthLevel) + '</span>' : '') +
+								(node.depthLevel !== 0 ? '<span class="depth-label">' + (node.depthLevel > 0 ? '+' + node.depthLevel : '' + node.depthLevel) + (node.subColumnIndex > 0 ? '.' + node.subColumnIndex : '') + '</span>' : '') +
 								escHtml(node.label) +
 							'</span>' +
 						'</div>' +
@@ -1779,8 +1900,24 @@ body.layout-panel-open .layout-panel {
 		}
 	});
 
-	/* Keep card positions/sizes in sync on resize. */
+	/* Keep card positions/sizes in sync on resize, and preserve the viewport's
+	 * graph-space center across width/height changes (window resize, panel dock,
+	 * etc.) so content stays centered rather than clipping out of view. */
+	let prevWrapW = wrapEl.clientWidth;
+	let prevWrapH = wrapEl.clientHeight;
 	new ResizeObserver(function() {
+		const newW = wrapEl.clientWidth;
+		const newH = wrapEl.clientHeight;
+		if (prevWrapW > 0 && prevWrapH > 0 && (newW !== prevWrapW || newH !== prevWrapH)) {
+			const gcx = (prevWrapW / 2 - panX) / scale;
+			const gcy = (prevWrapH / 2 - panY) / scale;
+			panX = newW / 2 - gcx * scale;
+			panY = newH / 2 - gcy * scale;
+			applyTransform();
+		}
+		prevWrapW = newW;
+		prevWrapH = newH;
+
 		if (!graphData) return;
 		drawDepthBands(graphData);
 
@@ -1888,6 +2025,16 @@ body.layout-panel-open .layout-panel {
 
 	document.getElementById('ranker').addEventListener('change', function() {
 		layoutConfig.graph.ranker = this.value;
+		postLayoutConfig();
+	});
+
+	document.getElementById('strict-depth-columns').addEventListener('change', function() {
+		layoutConfig.graph.strictDepthColumns = this.value === 'true';
+		postLayoutConfig();
+	});
+
+	document.getElementById('show-bands').addEventListener('change', function() {
+		layoutConfig.graph.showBands = this.value === 'true';
 		postLayoutConfig();
 	});
 
@@ -2191,6 +2338,8 @@ body.layout-panel-open .layout-panel {
 			path.setAttribute('d', 'M' + x1 + ',' + y1 + ' C' + cx + ',' + y1 + ' ' + cx + ',' + y2 + ' ' + x2 + ',' + y2);
 			path.setAttribute('class', 'col-edge');
 			path.style.stroke = 'var(--vscode-charts-blue, #5B8DEF)';
+			path.style.strokeWidth = '1.5';
+			path.style.strokeOpacity = '1';
 			edgesFgSvg.appendChild(path);
 		}
 	}
