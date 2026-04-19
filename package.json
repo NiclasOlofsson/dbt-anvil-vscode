@@ -1627,6 +1627,105 @@
 						}
 					}
 				}
+			},
+			{
+				"name": "get_diagnostics",
+				"displayName": "Get Diagnostics",
+				"userDescription": "Read errors and warnings from the VS Code Problems panel",
+				"modelDescription": "Return diagnostics from the VS Code Problems panel. Sources include TypeScript, ESLint, the dbt-studio Ninja linter, and any other active linter. Use to verify edits before declaring work done. Pass 'path' to scope to one file. Positions are 1-indexed.",
+				"canBeReferencedInPrompt": false,
+				"toolReferenceName": "get_diagnostics",
+				"icon": "$(warning)",
+				"tags": [
+					"vscode"
+				],
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"path": {
+							"type": "string",
+							"description": "Optional file path (absolute, workspace-relative, or URI). If omitted, returns all workspace diagnostics."
+						},
+						"severity": {
+							"type": "string",
+							"enum": ["error", "warning", "info", "hint"],
+							"description": "Filter by severity"
+						},
+						"source": {
+							"type": "string",
+							"description": "Filter by diagnostic source (e.g., 'ts', 'eslint', 'dbt-studio')"
+						},
+						"max_results": {
+							"type": "number",
+							"description": "Maximum number of diagnostics to return (default 200)"
+						}
+					}
+				}
+			},
+			{
+				"name": "workspace_symbols",
+				"displayName": "Search Workspace Symbols",
+				"userDescription": "Semantic symbol search across the workspace using the language server",
+				"modelDescription": "Find symbols (classes, functions, methods, variables) by name across the workspace using the language server. More accurate than text search because it uses type information. Returns up to max_results matches with file, line, and kind.",
+				"canBeReferencedInPrompt": false,
+				"toolReferenceName": "workspace_symbols",
+				"icon": "$(symbol-class)",
+				"tags": [
+					"vscode"
+				],
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"query": {
+							"type": "string",
+							"description": "Symbol name or partial name to search for"
+						},
+						"max_results": {
+							"type": "number",
+							"description": "Maximum number of symbols to return (default 100)"
+						}
+					},
+					"required": ["query"]
+				}
+			},
+			{
+				"name": "navigate_symbol",
+				"displayName": "Navigate Symbol",
+				"userDescription": "Find the definition, references, implementations, or type definition for a symbol at a position",
+				"modelDescription": "Given a file and a 1-indexed position, resolve one of: 'definition', 'references', 'implementations', 'type_definition', 'declaration'. Uses the language server, so it is semantically accurate. Better than grep for renames, method calls, interface implementations.",
+				"canBeReferencedInPrompt": false,
+				"toolReferenceName": "navigate_symbol",
+				"icon": "$(symbol-method)",
+				"tags": [
+					"vscode"
+				],
+				"inputSchema": {
+					"type": "object",
+					"properties": {
+						"path": {
+							"type": "string",
+							"description": "File path (absolute, workspace-relative, or URI)"
+						},
+						"line": {
+							"type": "number",
+							"description": "1-indexed line number of the symbol"
+						},
+						"character": {
+							"type": "number",
+							"description": "1-indexed character column of the symbol"
+						},
+						"kind": {
+							"type": "string",
+							"enum": ["definition", "references", "implementations", "type_definition", "declaration"],
+							"description": "Which kind of navigation to perform"
+						},
+						"max_results": {
+							"type": "number",
+							"description": "Maximum number of locations to return (default 200)"
+						}
+					},
+					"required": ["path", "line", "character", "kind"]
+				}
 			}
 		],
 		"languageModelToolSets": [
@@ -1674,6 +1773,17 @@
 					"load_seeds",
 					"snapshot_models",
 					"compile_model"
+				]
+			},
+			{
+				"name": "vscode",
+				"displayName": "VS Code Context",
+				"description": "Read the Problems panel and perform semantic code navigation (go-to-definition, find references, workspace symbols) via the language server",
+				"icon": "$(code)",
+				"tools": [
+					"get_diagnostics",
+					"workspace_symbols",
+					"navigate_symbol"
 				]
 			}
 		]
