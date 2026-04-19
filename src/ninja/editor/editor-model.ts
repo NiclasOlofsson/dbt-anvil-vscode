@@ -1,13 +1,14 @@
 import type { NinjaCategory } from '../categories';
 import type { NinjaSeverity, RuleOptionValue } from '../rule';
-import type {
-	ConfigScope,
-	EditorSnapshot,
-	EditorSummary,
-	RuleState,
-	RuleScopeInfo,
-	RuleViewModel,
-	SortColumn,
+import {
+	SEVERITY_OPTIONS,
+	type ConfigScope,
+	type EditorSnapshot,
+	type EditorSummary,
+	type RuleState,
+	type RuleScopeInfo,
+	type RuleViewModel,
+	type SortColumn,
 } from './editor-types';
 
 // ── Inspected config input ──────────────────────────────────────────
@@ -249,9 +250,7 @@ export class EditorModel {
 				const bC = this._violationCounts.get(b.id) ?? 0;
 				return dir * (aC - bC);
 			}
-			// 'severity'
-			const order: NinjaSeverity[] = ['error', 'warning', 'info', 'hint', 'off'];
-			return dir * (order.indexOf(this.effectiveSeverity(a.id)) - order.indexOf(this.effectiveSeverity(b.id)));
+			return dir * (SEVERITY_OPTIONS.indexOf(this.effectiveSeverity(a.id)) - SEVERITY_OPTIONS.indexOf(this.effectiveSeverity(b.id)));
 		});
 	}
 

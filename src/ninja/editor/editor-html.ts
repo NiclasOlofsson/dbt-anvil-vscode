@@ -1,4 +1,4 @@
-import type { EditorSnapshot, RuleState, RuleOptionValue, SortColumn } from './editor-types';
+import { SEVERITY_OPTIONS, type EditorSnapshot, type RuleState, type RuleOptionValue, type SortColumn } from './editor-types';
 import type { NinjaCategory } from '../categories';
 import type { RuleConfigOptionSpec } from '../rule';
 
@@ -175,8 +175,7 @@ function optControl(opt: RuleConfigOptionSpec, curVal: RuleOptionValue | undefin
 }
 
 function sevOptions(current: string): string {
-	const opts = ['error', 'warning', 'info', 'hint', 'off'];
-	return opts.map(o => `<option value="${o}"${o === current ? ' selected' : ''}>${o}</option>`).join('');
+	return SEVERITY_OPTIONS.map(o => `<option value="${o}"${o === current ? ' selected' : ''}>${o}</option>`).join('');
 }
 
 function catLabel(cat: NinjaCategory): string {
