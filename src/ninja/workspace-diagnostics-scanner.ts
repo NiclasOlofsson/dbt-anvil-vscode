@@ -286,10 +286,11 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 		dialectSymbols: import('../ftl/sql-parser').DialectSymbols | undefined,
 	): Promise<void> {
 		const queue = uris.slice();
+		const openDocs = new Set(vscode.workspace.textDocuments.map(d => d.uri.toString()));
 		const worker = async (): Promise<void> => {
 			while (queue.length > 0 && !signal.aborted) {
 				const uri = queue.shift()!;
-				await this._scanFile(uri, signal, config, dialectSymbols)
+				await this._scanFile(uri, signal, config, dialectSymbols, openDocs)
 					.catch((err: unknown) => this.logger.debug(`[workspace-scanner] error scanning ${uri.fsPath}: ${String(err)}`));
 			}
 		};
@@ -301,13 +302,14 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 		signal: AbortSignal,
 		config: ReturnType<typeof loadConfig>,
 		dialectSymbols: import('../ftl/sql-parser').DialectSymbols | undefined,
+		openDocs: Set<string>,
 	): Promise<void> {
 		if (signal.aborted) return;
 
 		// If the file is currently open in an editor, EditorDiagnosticsProvider owns its Ninja
 		// diagnostics. Clear any stale workspace-scanner entry and skip to avoid duplicates.
 		const key = uri.toString();
-		if (vscode.workspace.textDocuments.some(d => d.uri.toString() === key)) {
+		if (openDocs.has(key)) {
 			this._ninjaCollection.delete(uri);
 			this._knownDiagnosticUris.delete(key);
 			this._diagnosticsByUri.delete(key);
@@ -367,9 +369,19 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 		this._scheduleCountsChange();
 	}
 
+	/** Clears the scanner's collection entry for a URI (call when editor opens the file). */
+	suppressUri(uri: vscode.Uri): void {
+		this._ninjaCollection.delete(uri);
+	}
+
 	private _setNinjaDiagnostics(uri: vscode.Uri, diagnostics: vscode.Diagnostic[]): void {
 		const key = uri.toString();
-		this._ninjaCollection.set(uri, diagnostics);
+		const isOpen = vscode.workspace.textDocuments.some(d => d.uri.toString() === key);
+		if (isOpen) {
+			this._ninjaCollection.delete(uri);
+		} else {
+			this._ninjaCollection.set(uri, diagnostics);
+		}
 		this._knownDiagnosticUris.add(key);
 		this._diagnosticsByUri.set(key, diagnostics);
 	}
