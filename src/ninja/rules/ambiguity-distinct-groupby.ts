@@ -1,7 +1,7 @@
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import type { NinjaViolation } from '../violation';
-import * as vscode from 'vscode';
+import { tokenRange } from '../token-utils';
 
 export const distinctGroupByRule: TokenRule = {
 	id: 'ninja.ambiguity.distinct-groupby',
@@ -27,10 +27,7 @@ export const distinctGroupByRule: TokenRule = {
 
 		if (!distinctToken || !hasGroupBy) return [];
 
-		const lo = lineOffset(text, distinctToken.line);
-		const col = distinctToken.start - lo;
-		const raw = text.slice(distinctToken.start, distinctToken.end + 1);
-		const range = new vscode.Range(distinctToken.line, col, distinctToken.line, col + raw.length);
+		const range = tokenRange(text, distinctToken);
 
 		return [{
 			rule: 'ninja.ambiguity.distinct-groupby',
@@ -39,13 +36,3 @@ export const distinctGroupByRule: TokenRule = {
 		}];
 	},
 };
-
-function lineOffset(text: string, line: number): number {
-	let offset = 0;
-	for (let i = 0; i < line; i++) {
-		const nl = text.indexOf('\n', offset);
-		if (nl === -1) return offset;
-		offset = nl + 1;
-	}
-	return offset;
-}

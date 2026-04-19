@@ -25,3 +25,14 @@ export function tokenRange(text: string, token: SqlToken): vscode.Range {
 	const lo = lineOffset(text, token.line);
 	return new vscode.Range(token.line, token.start - lo, token.line, token.end + 1 - lo);
 }
+
+/** Convert an absolute char offset into `{ line, col }` (both 0-based). */
+export function offsetToLineCol(text: string, charOffset: number): { line: number; col: number } {
+	let line = 0;
+	let lastNewline = -1;
+	const stop = Math.min(charOffset, text.length);
+	for (let i = 0; i < stop; i++) {
+		if (text[i] === '\n') { line++; lastNewline = i; }
+	}
+	return { line, col: charOffset - lastNewline - 1 };
+}

@@ -2,15 +2,7 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
-
-function lineOffset(text: string, charOffset: number): { line: number; col: number } {
-	let line = 0;
-	let lastNewline = -1;
-	for (let i = 0; i < charOffset && i < text.length; i++) {
-		if (text[i] === '\n') { line++; lastNewline = i; }
-	}
-	return { line, col: charOffset - lastNewline - 1 };
-}
+import { offsetToLineCol } from '../token-utils';
 
 const LEGACY = new Set(['ifnull', 'nvl', 'isnull']);
 
@@ -34,8 +26,8 @@ export const coalesceRule: TokenRule = {
 			const word = text.slice(tok.start, tok.end + 1);
 			if (!LEGACY.has(word.toLowerCase())) continue;
 
-			const start = lineOffset(text, tok.start);
-			const end = lineOffset(text, tok.end + 1);
+			const start = offsetToLineCol(text, tok.start);
+			const end = offsetToLineCol(text, tok.end + 1);
 
 			violations.push({
 				rule: 'ninja.convention.coalesce',

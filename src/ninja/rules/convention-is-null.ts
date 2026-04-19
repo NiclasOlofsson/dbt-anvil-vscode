@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
+import { lineOffset } from '../token-utils';
 
 export const isNullRule: TokenRule = {
 	id: 'ninja.convention.is-null',
@@ -51,13 +52,3 @@ export const isNullRule: TokenRule = {
 		return violations;
 	},
 };
-
-function lineOffset(text: string, line: number): number {
-	let offset = 0;
-	for (let i = 0; i < line; i++) {
-		const nl = text.indexOf('\n', offset);
-		if (nl === -1) return offset;
-		offset = nl + 1;
-	}
-	return offset;
-}
