@@ -1,7 +1,7 @@
-import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
+import { tokenRange, tokenText } from '../token-utils';
 
 export const bareUnionRule: TokenRule = {
 	id: 'ninja.ambiguity.bare-union',
@@ -28,10 +28,8 @@ export const bareUnionRule: TokenRule = {
 			if (next && (next.type === 'ALL' || next.type === 'DISTINCT')) continue;
 
 			const tok = tokens[i];
-			const lo = lineOffset(text, tok.line);
-			const raw = text.slice(tok.start, tok.end + 1);
-			const col = tok.start - lo;
-			const range = new vscode.Range(tok.line, col, tok.line, col + raw.length);
+			const raw = tokenText(text, tok);
+			const range = tokenRange(text, tok);
 			const suffix = config.convention.unionStyle.toUpperCase();
 			violations.push({
 				rule: 'ninja.ambiguity.bare-union',
@@ -44,13 +42,3 @@ export const bareUnionRule: TokenRule = {
 		return violations;
 	},
 };
-
-function lineOffset(text: string, line: number): number {
-	let offset = 0;
-	for (let i = 0; i < line; i++) {
-		const nl = text.indexOf('\n', offset);
-		if (nl === -1) return offset;
-		offset = nl + 1;
-	}
-	return offset;
-}

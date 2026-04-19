@@ -2,15 +2,7 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
-
-function lineOffset(text: string, charOffset: number): { line: number; col: number } {
-	let line = 0;
-	let lastNewline = -1;
-	for (let i = 0; i < charOffset && i < text.length; i++) {
-		if (text[i] === '\n') { line++; lastNewline = i; }
-	}
-	return { line, col: charOffset - lastNewline - 1 };
-}
+import { offsetToLineCol } from '../token-utils';
 
 export const elseNullRule: TokenRule = {
 	id: 'ninja.structure.else-null',
@@ -34,9 +26,9 @@ export const elseNullRule: TokenRule = {
 			if (tokens[i + 1].type !== 'NULL') continue;
 			if (tokens[i + 2].type !== 'END') continue;
 
-			const elseStart = lineOffset(text, tokens[i].start);
-			const nullEnd = lineOffset(text, tokens[i + 1].end + 1);
-			const endStart = lineOffset(text, tokens[i + 2].start);
+			const elseStart = offsetToLineCol(text, tokens[i].start);
+			const nullEnd = offsetToLineCol(text, tokens[i + 1].end + 1);
+			const endStart = offsetToLineCol(text, tokens[i + 2].start);
 
 			// Fix removes from ELSE start to just before END
 			violations.push({
