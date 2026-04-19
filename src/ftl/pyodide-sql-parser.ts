@@ -1,9 +1,9 @@
 import type { PyodideInterface } from 'pyodide';
-import { blankJinja } from '../dbt/jinja-blanker';
-import { renderForParse, renToRawLine } from './nunjucks-renderer';
+import { renToRawLine } from './nunjucks-renderer';
 import type { LineMap } from './nunjucks-renderer';
 import type { AstPayload, ParseResult } from './parse-result';
 import { extractJinjaSpans } from './jinja-spans';
+import { parseWithJinjaFallback } from './parse-with-jinja-fallback';
 import type { DialectSymbols, SqlParser } from './sql-parser';
 
 /**
@@ -69,14 +69,12 @@ export class PyodideSqlParser implements SqlParser {
 	}
 
 	traceLineageV2(sql: string, columnName: string, dialect: string, schemaJson: string): string {
-		const result1 = callPython('_trace_lineage_v2', () => this.#lineageFnV2(blankJinja(sql), columnName, schemaJson, dialect));
-		if ((JSON.parse(result1) as { success: boolean }).success) return result1;
-
-		const result2 = callPython('_trace_lineage_v2', () => this.#lineageFnV2(blankJinja(sql, 'comment'), columnName, schemaJson, dialect));
-		if ((JSON.parse(result2) as { success: boolean }).success) return result2;
-
-		const { rendered } = renderForParse(sql);
-		return callPython('_trace_lineage_v2', () => this.#lineageFnV2(rendered, columnName, schemaJson, dialect));
+		const { result } = parseWithJinjaFallback(
+			sql,
+			passSql => callPython('_trace_lineage_v2', () => this.#lineageFnV2(passSql, columnName, schemaJson, dialect)),
+			r => (JSON.parse(r) as { success: boolean }).success,
+		);
+		return result;
 	}
 
 	decomposeQuery(compiledSql: string, dialect: string): string {
@@ -97,43 +95,37 @@ export class PyodideSqlParser implements SqlParser {
 		const schemaJson = schema ? JSON.stringify(schema) : '';
 		const jinjaTags = extractJinjaSpans(rawSql);
 
-		// Pass 1: length-preserving blank, identifier mode — preserves exact source offsets.
-		const pass1 = callPython('_parse', () => this.#fn(blankJinja(rawSql), dialect, schemaJson));
-		const result1 = JSON.parse(pass1) as ParseResult;
-		if (!result1.warnings.some(w => w.type === 'syntax_error')) {
-			result1.jinjaTags = jinjaTags;
-			return result1;
-		}
+		// Three-pass cascade:
+		//   pass1   — length-preserving blank, identifier mode (preserves source offsets)
+		//   pass1b  — length-preserving blank, comment mode (handles statement-level macros)
+		//   pass2   — nunjucks stub render (valid SQL everywhere; offsets shift, lineMap used to remap)
+		let pass1Result: ParseResult | undefined;
+		const { result, pass, lineMap } = parseWithJinjaFallback(
+			rawSql,
+			(passSql, p) => {
+				const raw = callPython('_parse', () => this.#fn(passSql, dialect, schemaJson));
+				const parsed = JSON.parse(raw) as ParseResult;
+				if (p === 'pass1') pass1Result = parsed;
+				return parsed;
+			},
+			r => !r.warnings.some(w => w.type === 'syntax_error'),
+		);
 
-		// Pass 1b: length-preserving blank, comment mode — replaces unknown macros with
-		// /* ... */ block comments (valid in any SQL position, same byte length).
-		// Handles statement-level macros like {{ generic_is_deleted(col, 'where') }}
-		// that produce a bare identifier in identifier mode and break the parse.
-		const pass1b = callPython('_parse', () => this.#fn(blankJinja(rawSql, 'comment'), dialect, schemaJson));
-		const result1b = JSON.parse(pass1b) as ParseResult;
-		if (!result1b.warnings.some(w => w.type === 'syntax_error')) {
-			result1b.jinjaTags = jinjaTags;
-			return result1b;
-		}
+		result.jinjaTags = jinjaTags;
+		if (pass !== 'pass2') return result;
 
-		// Pass 2: nunjucks stub render — valid SQL everywhere, offsets not preserved.
-		// lineMap is used to remap rendered AST line numbers back to raw-source space.
-		const { rendered, lineMap } = renderForParse(rawSql);
-		const pass2 = callPython('_parse', () => this.#fn(rendered, dialect, schemaJson));
-		const result2 = JSON.parse(pass2) as ParseResult;
-		remapAstLines(result2, lineMap);
-		for (const w of result2.warnings) {
-			if (w.line !== undefined) w.line = renToRawLine(w.line, lineMap);
+		remapAstLines(result, lineMap!);
+		for (const w of result.warnings) {
+			if (w.line !== undefined) w.line = renToRawLine(w.line, lineMap!);
 		}
-		result2.jinjaTags = jinjaTags;
 		// Pass 2 sqlTokens are in rendered-space (nunjucks-compiled), not raw-source
 		// space. Pass 1 always uses length-preserving blanking, so its sqlTokens are
 		// always in raw-source space — even when the parser failed. Use them instead.
-		result2.sqlTokens = result1.sqlTokens;
+		if (pass1Result) result.sqlTokens = pass1Result.sqlTokens;
 		// Column numbers from the pass 2 AST are in rendered-space and are NOT
 		// remapped — only line numbers are. Rules that build vscode.Range from AST
 		// column positions must skip this result to avoid negative-character errors.
-		result2.isPass2 = true;
-		return result2;
+		result.isPass2 = true;
+		return result;
 	}
 }

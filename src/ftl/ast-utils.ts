@@ -136,3 +136,43 @@ export function findDescendants(ast: AstPayload[], ancestorIdx: number, classNam
 	}
 	return out;
 }
+
+/**
+ * Walk the `this` chain from `start` until landing on a Select node.
+ * UNION / WITH wrappers store their body under the `this` key, so the same
+ * descent unwraps them all. Returns `undefined` when no Select is reachable.
+ */
+export function unwrapToSelect(ast: AstPayload[], start: AstNode | undefined): AstNode | undefined {
+	let node = start;
+	while (node && node.node.c !== 'Select') {
+		node = childOf(ast, node.index, 'this') ?? undefined;
+	}
+	return node;
+}
+
+/**
+ * Find an Identifier descendant of `exprIdx` that carries source position metadata.
+ *
+ * - With `aliasOnly: true`, only inspects the `alias` child of an `Alias` node — used
+ *   to locate the user-written alias identifier (and skip qualify()-synthesised ones
+ *   which have no `_meta`).
+ * - Without the flag, returns the first descendant Identifier with `_meta` present.
+ *
+ * Replaces the legacy `_aliasIdentIdx` and `_firstPositionedIdentIdx` helpers.
+ */
+export function findPositionedIdentifier(
+	ast: AstPayload[],
+	exprIdx: number,
+	opts?: { aliasOnly?: boolean },
+): AstNode | undefined {
+	if (opts?.aliasOnly) {
+		if (ast[exprIdx]?.c !== 'Alias') return undefined;
+		const child = childOf(ast, exprIdx, 'alias');
+		if (child?.node.c === 'Identifier' && child.node.m !== undefined) return child;
+		return undefined;
+	}
+	for (const node of findDescendants(ast, exprIdx, 'Identifier')) {
+		if (node.node.m !== undefined) return node;
+	}
+	return undefined;
+}
