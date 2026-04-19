@@ -34,7 +34,7 @@ export interface StatementRange {
 const JINJA_RE = /\{%-?[\s\S]*?-?%\}|\{\{[\s\S]*?\}\}|\{#-?[\s\S]*?-?#\}/g;
 
 export function splitStatements(sql: string): StatementRange[] {
-	const blanked = blankJinja(sql);
+	const { blanked } = blankJinja(sql);
 	const len = blanked.length;
 	const splitPoints: number[] = [];
 

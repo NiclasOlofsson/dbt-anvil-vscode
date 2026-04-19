@@ -1,4 +1,5 @@
 import { blankJinja } from '../dbt/jinja-blanker';
+import type { JinjaTagInfo } from '../dbt/jinja-blanker';
 import { renderForParse } from './nunjucks-renderer';
 import type { LineMap } from './nunjucks-renderer';
 
@@ -8,6 +9,12 @@ export interface ParseWithFallbackResult<T> {
 	result: T;
 	pass: ParsePass;
 	lineMap?: LineMap;
+	/**
+	 * Maps each unique jinja ID (e.g. `__j0__`) to the original tag it replaced.
+	 * Populated from the pass that succeeded — pass1 or pass1b.
+	 * Empty for pass2 (nunjucks render uses its own substitution scheme).
+	 */
+	idMap: Map<string, JinjaTagInfo>;
 }
 
 /**
@@ -20,7 +27,7 @@ export interface ParseWithFallbackResult<T> {
  * `pass` is `'pass2'`.
  *
  * Passes:
- *   1.  length-preserving blank, identifier mode (preserves source offsets)
+ *   1.  length-preserving blank, identifier mode (unique IDs for unknown macros)
  *   1b. length-preserving blank, comment mode (handles statement-level macros)
  *   2.  nunjucks stub render (valid SQL everywhere, but offsets shift)
  */
@@ -29,13 +36,15 @@ export function parseWithJinjaFallback<T>(
 	runOnce: (sql: string, pass: ParsePass, lineMap?: LineMap) => T,
 	isSuccess: (r: T) => boolean,
 ): ParseWithFallbackResult<T> {
-	const r1 = runOnce(blankJinja(rawSql), 'pass1');
-	if (isSuccess(r1)) return { result: r1, pass: 'pass1' };
+	const b1 = blankJinja(rawSql);
+	const r1 = runOnce(b1.blanked, 'pass1');
+	if (isSuccess(r1)) return { result: r1, pass: 'pass1', idMap: b1.idMap };
 
-	const r1b = runOnce(blankJinja(rawSql, 'comment'), 'pass1b');
-	if (isSuccess(r1b)) return { result: r1b, pass: 'pass1b' };
+	const b1b = blankJinja(rawSql, 'comment');
+	const r1b = runOnce(b1b.blanked, 'pass1b');
+	if (isSuccess(r1b)) return { result: r1b, pass: 'pass1b', idMap: b1b.idMap };
 
 	const { rendered, lineMap } = renderForParse(rawSql);
 	const r2 = runOnce(rendered, 'pass2', lineMap);
-	return { result: r2, pass: 'pass2', lineMap };
+	return { result: r2, pass: 'pass2', lineMap, idMap: new Map() };
 }

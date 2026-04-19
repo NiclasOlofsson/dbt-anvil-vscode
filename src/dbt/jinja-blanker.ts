@@ -88,40 +88,81 @@ const MACRO_TAG_RE = /^\{\{\s*(?:[a-zA-Z_]\w*\.)*([a-zA-Z_]\w*)\s*\(/;
 // A bare identifier replacement (e.g. `_`) before `with` causes parse errors.
 const STATEMENT_MACROS = new Set(['config', 'docs', 'print', 'log', 'return', 'exceptions']);
 
-// dbt built-in value functions whose names clash with SQL reserved words/aggregates.
-// Using their name as identifier causes sqlglot parse errors (e.g. `var` = VAR aggregate
-// in DuckDB). Blank these to `_` instead so they parse as a generic SQL identifier.
-const VALUE_MACROS = new Set(['var', 'env_var']);
+// Base-62 alphabet (digits → lowercase → uppercase), same encoding as URL shorteners.
+const B62 = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+function toBase62(n: number): string {
+	if (n === 0) return '0';
+	let s = '';
+	while (n > 0) { s = B62[n % 62] + s; n = Math.floor(n / 62); }
+	return s;
+}
+
+/** Opaque identifier emitted in the blanked SQL for a single jinja expression. */
+export function makeJinjaId(n: number): string {
+	return `__j${toBase62(n)}__`;
+}
+
+/** Original jinja tag and its position in the raw SQL string. */
+export interface JinjaTagInfo {
+	/** Full tag text, e.g. `{{ my_macro(arg) }}`. */
+	original: string;
+	/** 0-based inclusive start offset in the raw SQL string. */
+	start: number;
+	/** 0-based exclusive end offset in the raw SQL string. */
+	end: number;
+}
+
+export interface BlankJinjaResult {
+	blanked: string;
+	/**
+	 * Maps each unique ID (e.g. `__j0__`) to the original jinja tag it replaced.
+	 * Only populated for tags that received a unique ID — ref/source keep their
+	 * real names and are not in this map.
+	 */
+	idMap: Map<string, JinjaTagInfo>;
+}
 
 /**
  * Replace Jinja tags with space-padded SQL-safe placeholders.
  *
- * Preserves `result.length === sql.length` and every newline position so that
+ * Preserves `blanked.length === sql.length` and every newline position so that
  * every character offset in the output maps directly back to the original source.
  *
  * Strategy for `{{ }}` expression tags (in priority order):
  * - `{{ ref('model') }}`        → model name, space-padded to tag length
  * - `{{ source('ns', 'tbl') }}` → table name (2nd arg), space-padded
  * - `{{ config(...) }}` etc.    → all spaces (known no-SQL-output macros)
- * - `{{ var(...) }}` etc.       → `_` placeholder (name is a SQL reserved word)
- * - `{{ my_macro(...) }}`       → macro name, space-padded  (identifier mode)
- *                               → `/* name... *​/` block comment  (comment mode)
- * - `{{ ns.macro(...) }}`       → last name component (same rules as above)
- * - `{{ arbitrary_expr }}`      → `_` followed by spaces
+ * - `{{ my_macro(...) }}`       → unique ID `__j0__`, space-padded  (identifier mode)
+ *                               → `/* ... *​/` block comment            (comment mode)
+ * - `{{ var(...) }}` etc.       → unique ID (name clashes with SQL reserved words)
+ * - `{{ arbitrary_expr }}`      → unique ID followed by spaces
  *
  * Block tags `{% %}` and comment tags `{# #}` always blank to spaces.
  * Newlines within tags are always preserved.
  *
+ * Unique IDs prevent unknown macros from colliding with real CTE/table names in
+ * the blanked SQL, which caused sqlglot to mis-resolve column references.
+ * ref/source keep real names because sqlglot needs them for schema-based qualify.
+ *
  * `macroMode` controls unknown callable `{{ }}` tags:
- * - `'identifier'` (default): replace with the macro name as an identifier.
+ * - `'identifier'` (default): replace with a unique ID.
  *   Works when the macro appears in an expression position; fails when it
  *   appears at statement level (bare identifier after a full SELECT…JOIN).
  * - `'comment'`: replace with a `/* ... *​/` block comment of the same byte
  *   length. Valid in every SQL position — expression or statement level.
  *   Use as pass 1b when identifier mode produces un-parseable SQL.
  */
-export function blankJinja(sql: string, macroMode: 'identifier' | 'comment' = 'identifier'): string {
+export function blankJinja(sql: string, macroMode: 'identifier' | 'comment' = 'identifier'): BlankJinjaResult {
 	const buf = sql.split('');
+	const idMap = new Map<string, JinjaTagInfo>();
+	let idCounter = 0;
+
+	const nextId = (tag: string, tagStart: number): string => {
+		const id = makeJinjaId(idCounter++);
+		idMap.set(id, { original: tag, start: tagStart, end: tagStart + tag.length });
+		return id;
+	};
 
 	for (const match of iterJinjaTags(sql)) {
 		const tag = match[0];
@@ -129,7 +170,6 @@ export function blankJinja(sql: string, macroMode: 'identifier' | 'comment' = 'i
 		const end = start + tag.length;
 
 		let identifier: string | undefined;
-		let identifierNlOffset = 0; // non-NL chars to skip before writing identifier
 		let useComment = false;
 		// Block tags {% %} and comment tags {# #} always become spaces.
 		let blankToSpaces = !tag.startsWith('{{');
@@ -148,26 +188,19 @@ export function blankJinja(sql: string, macroMode: 'identifier' | 'comment' = 'i
 						const name = macroMatch[1];
 						if (STATEMENT_MACROS.has(name)) {
 							// Known no-output macros blank completely to spaces.
-							// Do NOT fall through to the `_` fallback — a bare `_`
-							// before e.g. `with` causes a sqlglot parse error.
+							// Do NOT use an ID — a bare identifier before e.g. `with`
+							// causes a sqlglot parse error.
 							blankToSpaces = true;
-						} else if (VALUE_MACROS.has(name)) {
-							// Known value-returning macros whose names clash with SQL reserved
-							// words — use `_` so they parse as a generic SQL identifier.
-							// identifier stays undefined, falls through to the `_` branch below.
 						} else if (macroMode === 'comment') {
 							useComment = true;
 						} else {
-							identifier = name;
-							// Only offset the identifier when there are newlines before
-							// the name in the tag. Single-line tags keep the old
-							// left-aligned behaviour (identifierNlOffset stays 0).
-							const nameStartInTag = macroMatch[0].length - name.length - 1; // -1 for '('
-							const sliceBeforeName = tag.slice(0, nameStartInTag);
-							if (sliceBeforeName.includes('\n')) {
-								identifierNlOffset = [...sliceBeforeName].filter(c => c !== '\n').length;
-							}
+							// Unknown callable and VALUE_MACROS both get a unique ID.
+							// This prevents collisions with real CTE/table names.
+							identifier = nextId(tag, start);
 						}
+					} else {
+						// Non-callable {{ expr }} — assign a unique ID.
+						identifier = nextId(tag, start);
 					}
 				}
 			}
@@ -198,26 +231,17 @@ export function blankJinja(sql: string, macroMode: 'identifier' | 'comment' = 'i
 				}
 			}
 		} else if (identifier !== undefined) {
-			// Write identifier chars starting at identifierNlOffset so that
-			// multi-line tags (e.g. `{{\n    elo_calc(...) }}`) place the name
-			// on the line where it actually appears, not on the `{{` line.
+			// Write identifier chars left-aligned, space-padded.
+			// IDs are always single-line so no newline-offset logic is needed.
 			for (let j = 0; j < nonNlPositions.length; j++) {
-				const idx = j - identifierNlOffset;
-				buf[nonNlPositions[j]] = idx >= 0 && idx < identifier.length ? identifier[idx] : ' ';
+				buf[nonNlPositions[j]] = j < identifier.length ? identifier[j] : ' ';
 			}
 		} else if (blankToSpaces) {
 			for (const pos of nonNlPositions) {
 				buf[pos] = ' ';
 			}
-		} else {
-			// Unknown {{ expr }} with no callable name.
-			// Use `_` as the first non-newline char so the tag produces a valid
-			// SQL identifier when it lands in an expression position.
-			for (let j = 0; j < nonNlPositions.length; j++) {
-				buf[nonNlPositions[j]] = j === 0 ? '_' : ' ';
-			}
 		}
 	}
 
-	return buf.join('');
+	return { blanked: buf.join(''), idMap };
 }

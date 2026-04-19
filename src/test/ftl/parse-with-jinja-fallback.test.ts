@@ -84,10 +84,33 @@ describe('parseWithJinjaFallback', () => {
 		// Both passes preserve length and newlines.
 		expect(pass1.sql).toHaveLength(raw.length);
 		expect(pass1b.sql).toHaveLength(raw.length);
-		// Identifier mode (pass 1) leaves the macro name visible.
-		expect(pass1.sql).toContain('my_macro');
+		// Identifier mode (pass 1) emits a unique ID, not the macro name.
+		expect(pass1.sql).toContain('__j');
+		expect(pass1.sql).not.toContain('my_macro');
 		// Comment mode (pass 1b) wraps the tag in /* */.
 		expect(pass1b.sql).toContain('/*');
 		expect(pass1b.sql).toContain('*/');
+	});
+
+	it('populates idMap with original tag info for unique-ID replacements', () => {
+		const raw = 'SELECT {{ my_macro() }}, {{ var("x") }} FROM tbl';
+		const out = parseWithJinjaFallback(raw, (sql, pass) => ({ sql, pass }), () => true);
+
+		expect(out.idMap.size).toBe(2);
+		const entries = [...out.idMap.entries()];
+		// Keys are unique IDs.
+		expect(entries[0][0]).toMatch(/^__j\w+__$/);
+		expect(entries[1][0]).toMatch(/^__j\w+__$/);
+		expect(entries[0][0]).not.toBe(entries[1][0]);
+		// Values carry the original tag text.
+		const originals = entries.map(([, v]) => v.original);
+		expect(originals).toContain('{{ my_macro() }}');
+		expect(originals).toContain('{{ var("x") }}');
+	});
+
+	it('idMap is empty for pass 2 (nunjucks render)', () => {
+		const out = parseWithJinjaFallback('SELECT 1', (sql, pass) => ({ sql, pass }), () => false);
+		expect(out.pass).toBe('pass2');
+		expect(out.idMap.size).toBe(0);
 	});
 });
