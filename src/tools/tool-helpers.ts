@@ -2,6 +2,23 @@ import * as vscode from 'vscode';
 import * as path from 'node:path';
 import type { DbtCommandResult } from '../dbt/bridge-runner';
 
+/**
+ * Resolves a tool input path to a Uri. Accepts URIs (`file://...`, `vscode://...`),
+ * absolute paths, or workspace-relative paths. Relative paths are resolved
+ * against the first workspace folder.
+ */
+export function resolvePathToUri(input: string): vscode.Uri {
+	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(input)) {
+		return vscode.Uri.parse(input);
+	}
+	if (/^[a-zA-Z]:[\\/]|^\//.test(input)) {
+		return vscode.Uri.file(input);
+	}
+	const folder = vscode.workspace.workspaceFolders?.[0];
+	if (!folder) { return vscode.Uri.file(input); }
+	return vscode.Uri.joinPath(folder.uri, input);
+}
+
 export interface StateSelectionResult {
 	selector: string | null;
 	stateArgs: string[];

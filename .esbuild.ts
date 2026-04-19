@@ -41,12 +41,29 @@ async function main(): Promise<void> {
 		minify: !isDev,
 	});
 
+	// MCP stdio proxy — spawned by Claude Code as a subprocess. Intentionally
+	// self-contained (no externals, no vscode) so it works outside the
+	// extension host where the vscode module is unavailable.
+	const mcpProxyContext = await esbuild.context({
+		bundle: true,
+		platform: 'node',
+		target: 'node18',
+		format: 'cjs',
+		keepNames: true,
+		entryPoints: ['src/mcp/proxy/index.ts'],
+		outfile: 'dist/mcp-proxy.js',
+		sourcemap: isDev,
+		minify: !isDev,
+	});
+
 	if (isWatch) {
 		await extensionContext.watch();
 		await workerContext.watch();
+		await mcpProxyContext.watch();
 		process.on('SIGINT', async () => {
 			await extensionContext.dispose();
 			await workerContext.dispose();
+			await mcpProxyContext.dispose();
 			process.exit(0);
 		});
 	} else {
@@ -54,6 +71,8 @@ async function main(): Promise<void> {
 		await extensionContext.dispose();
 		await workerContext.rebuild();
 		await workerContext.dispose();
+		await mcpProxyContext.rebuild();
+		await mcpProxyContext.dispose();
 	}
 }
 

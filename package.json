@@ -704,6 +704,17 @@
 				"id": "dbt-studio",
 				"title": "dbt Studio",
 				"properties": {
+					"dbt-studio.mcp.registration": {
+						"type": "string",
+						"default": "auto",
+						"enum": ["auto", "enabled", "disabled"],
+						"enumDescriptions": [
+							"Register MCP tools automatically when Claude Code is detected (recommended).",
+							"Always register MCP tools, even if Claude Code is not detected.",
+							"Never register MCP tools or write .mcp.json / ~/.claude.json entries."
+						],
+						"markdownDescription": "Controls whether dbt Studio registers its tools as an MCP server for Claude Code. In `auto` mode the extension checks whether Claude Code is installed before writing any config files."
+					},
 					"dbt-studio.profilesDir": {
 						"type": "string",
 						"default": "",
