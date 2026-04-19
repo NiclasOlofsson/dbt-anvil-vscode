@@ -1399,6 +1399,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.workspace.onDidSaveTextDocument(doc => {
 			if (doc.languageId === 'jinja-sql') void workspaceScanner?.invalidate(doc.uri);
 		}),
+		vscode.workspace.onDidOpenTextDocument(doc => {
+			// When a document opens, EditorDiagnosticsProvider takes over Ninja diagnostics.
+			// Clear the scanner's copy so the two collections don't both show the same violations.
+			if (doc.languageId === 'jinja-sql') workspaceScanner?.suppressUri(doc.uri);
+		}),
 		vscode.workspace.onDidCloseTextDocument(doc => {
 			// When a document is closed, EditorDiagnosticsProvider no longer covers it.
 			// Re-scan so the workspace scanner picks it up and shows diagnostics in the gutter.
