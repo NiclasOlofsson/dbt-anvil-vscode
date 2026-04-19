@@ -61,6 +61,11 @@ export const functionSpacingRule: LayoutRule = {
 	check(ctx: LayoutRuleContext): NinjaViolation[] {
 		const violations: NinjaViolation[] = [];
 		const commentSpans = (ctx.model?.sqlTokens ?? []).flatMap(t => t.comments ?? []);
+		// String-literal spans must also mask out content; otherwise function names inside
+		// quoted text would be flagged when the spacing pattern happens to match.
+		const stringSpans = (ctx.model?.sqlTokens ?? [])
+			.filter(t => t.type === 'STRING')
+			.map(t => ({ start: t.start, end: t.end + 1 }));
 
 		let absOffset = 0; // running byte offset into ctx.text (matches sqlTokens coordinate space)
 
@@ -84,7 +89,8 @@ export const functionSpacingRule: LayoutRule = {
 					if (SQL_FUNCTIONS.has(word.toLowerCase())) {
 						const absWordStart = absOffset + start;
 						const inComment = commentSpans.some(s => absWordStart >= s.start && absWordStart < s.end);
-						if (!inComment) {
+						const inString = stringSpans.some(s => absWordStart >= s.start && absWordStart < s.end);
+						if (!inComment && !inString) {
 							let j = i;
 							const spaceStart = j;
 							while (j < line.length && (line[j] === ' ' || line[j] === '\t')) j++;

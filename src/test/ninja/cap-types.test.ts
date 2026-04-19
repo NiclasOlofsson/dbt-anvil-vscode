@@ -116,6 +116,24 @@ describe(RULE, () => {
 		expect(v.length).toBe(0);
 	});
 
+	it('does not flag type name inside string literal when sqlTokens contain a STRING span', () => {
+		const sql = 'select \'INT column\' as label from t';
+		const stringStart = sql.indexOf('\'');
+		const stringEnd = sql.lastIndexOf('\'');
+		const modelWithString = {
+			...emptyModel,
+			sqlTokens: [{
+				type: 'STRING',
+				start: stringStart,
+				end: stringEnd,
+				line: 0,
+				col: stringEnd + 1,
+			}],
+		};
+		const v = violationsFor(run(sql, capCfg('types', 'lower'), modelWithString), RULE);
+		expect(v.length).toBe(0);
+	});
+
 	// ── Fix generation ─────────────────────────────────────────────────────
 
 	it('fix targets the type keyword range', () => {

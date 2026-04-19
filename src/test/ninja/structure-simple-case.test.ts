@@ -89,6 +89,26 @@ describe(RULE, () => {
 		expect(check(sql, tokens)).toHaveLength(0);
 	});
 
+	it('no violation when THEN/ELSE values are VAR identifiers (not literals)', () => {
+		// CASE WHEN x THEN true ELSE false END — but the THEN/ELSE values are tagged as VAR
+		// (e.g. user-defined columns named "true" and "false" in some dialect). The rule must
+		// not match on token text alone — token.type must indicate a boolean literal.
+		const sql = 'select case when a > 0 then true else false end';
+		const tokens: SqlToken[] = [
+			sqlTok('CASE', 7, 10, 0, 11),
+			sqlTok('WHEN', 12, 15, 0, 16),
+			sqlTok('VAR', 17, 17, 0, 18),
+			sqlTok('GT', 19, 19, 0, 20),
+			sqlTok('NUMBER', 21, 21, 0, 22),
+			sqlTok('THEN', 23, 26, 0, 27),
+			sqlTok('VAR', 28, 31, 0, 32),
+			sqlTok('ELSE', 33, 36, 0, 37),
+			sqlTok('VAR', 38, 42, 0, 43),
+			sqlTok('END', 44, 46, 0, 47),
+		];
+		expect(check(sql, tokens)).toHaveLength(0);
+	});
+
 	it('no violation for THEN value ELSE value (not boolean)', () => {
 		const sql = 'select case when a > 0 then 5 else 10 end';
 		const tokens: SqlToken[] = [

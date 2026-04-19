@@ -77,6 +77,11 @@ export const functionCapRule: TokenRule = {
 		const violations: NinjaViolation[] = [];
 		const consistentMap = new Map<string, string>();
 		const commentSpans = (ctx.model.sqlTokens ?? []).flatMap(t => t.comments ?? []);
+		// String-literal spans must be excluded too — function names inside string content
+		// would otherwise be incorrectly flagged (e.g. select 'COUNT(*)' as label).
+		const stringSpans = (ctx.model.sqlTokens ?? [])
+			.filter(t => t.type === 'STRING')
+			.map(t => ({ start: t.start, end: t.end + 1 }));
 
 		const functions = ctx.dialectSymbols?.functions ?? SQL_FUNCTIONS;
 		const text = ctx.document.getText();
@@ -109,7 +114,8 @@ export const functionCapRule: TokenRule = {
 					const word = line.slice(start, i);
 					const absWordStart = lineStart + start;
 					const inComment = commentSpans.some(s => absWordStart >= s.start && absWordStart < s.end);
-					if (inComment) {
+					const inString = stringSpans.some(s => absWordStart >= s.start && absWordStart < s.end);
+					if (inComment || inString) {
 						continue;
 					}
 					// A function name is followed by '(' (possibly with whitespace)

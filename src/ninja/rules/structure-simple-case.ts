@@ -2,18 +2,13 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import type { NinjaViolation } from '../violation';
-
-function lineOffset(text: string, charOffset: number): { line: number; col: number } {
-	let line = 0;
-	let lastNewline = -1;
-	for (let i = 0; i < charOffset && i < text.length; i++) {
-		if (text[i] === '\n') { line++; lastNewline = i; }
-	}
-	return { line, col: charOffset - lastNewline - 1 };
-}
+import { offsetToLineCol } from '../token-utils';
 
 const BOOL_TRUE = new Set(['true', '1']);
 const BOOL_FALSE = new Set(['false', '0']);
+// Token types sqlglot emits for boolean / numeric literals — checked alongside text so a
+// VAR identifier whose text happens to be "true"/"1" isn't mistaken for the literal value.
+const LITERAL_TYPES = new Set(['TRUE', 'FALSE', 'NUMBER']);
 
 export const simpleCaseRule: TokenRule = {
 	id: 'ninja.structure.simple-case',
@@ -62,6 +57,11 @@ export const simpleCaseRule: TokenRule = {
 			if (tokens[elseIdx].type !== 'ELSE') continue;
 			if (tokens[endIdx].type !== 'END') continue;
 
+			// Both THEN/ELSE values must be literal-typed tokens — guards against VAR identifiers
+			// whose text happens to spell "true"/"false"/"1"/"0".
+			if (!LITERAL_TYPES.has(tokens[thenValIdx].type)) continue;
+			if (!LITERAL_TYPES.has(tokens[elseValIdx].type)) continue;
+
 			const thenWord = text.slice(tokens[thenValIdx].start, tokens[thenValIdx].end + 1).toLowerCase();
 			const elseWord = text.slice(tokens[elseValIdx].start, tokens[elseValIdx].end + 1).toLowerCase();
 
@@ -70,8 +70,8 @@ export const simpleCaseRule: TokenRule = {
 
 			if (!isTrueFalse && !isFalseTrue) continue;
 
-			const caseStart = lineOffset(text, tokens[i].start);
-			const endEnd = lineOffset(text, tokens[endIdx].end + 1);
+			const caseStart = offsetToLineCol(text, tokens[i].start);
+			const endEnd = offsetToLineCol(text, tokens[endIdx].end + 1);
 
 			violations.push({
 				rule: 'ninja.structure.simple-case',

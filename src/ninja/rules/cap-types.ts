@@ -52,6 +52,11 @@ export const typeCapRule: TokenRule = {
 		const violations: NinjaViolation[] = [];
 		const consistentMap = new Map<string, string>();
 		const commentSpans = (ctx.model.sqlTokens ?? []).flatMap(t => t.comments ?? []);
+		// String-literal spans must be excluded too — type keywords inside string content
+		// would otherwise be incorrectly flagged (e.g. select 'INT column' as label).
+		const stringSpans = (ctx.model.sqlTokens ?? [])
+			.filter(t => t.type === 'STRING')
+			.map(t => ({ start: t.start, end: t.end + 1 }));
 
 		const text = ctx.document.getText();
 		const lines = text.split('\n');
@@ -85,7 +90,8 @@ export const typeCapRule: TokenRule = {
 					const word = line.slice(start, i);
 					const absWordStart = lineStart + start;
 					const inComment = commentSpans.some(s => absWordStart >= s.start && absWordStart < s.end);
-					if (!inComment && types.has(word.toLowerCase()) && !identifierPositions.has(`${lineIdx}:${start}`)) {
+					const inString = stringSpans.some(s => absWordStart >= s.start && absWordStart < s.end);
+					if (!inComment && !inString && types.has(word.toLowerCase()) && !identifierPositions.has(`${lineIdx}:${start}`)) {
 						const fix = checkPolicy(word, policy, consistentMap);
 						if (fix !== undefined) {
 							const range = new vscode.Range(lineIdx, start, lineIdx, start + word.length);
