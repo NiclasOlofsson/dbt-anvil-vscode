@@ -69,6 +69,6 @@ describe(RULE, () => {
 			ctes: [cte('orders', 0, 2, ['*'])],
 		});
 		const v = check(sql, m);
-		expect(v[0].message).toBe("Avoid SELECT * in CTE 'orders' — use explicit column lists.");
+		expect(v[0].message).toBe('Avoid SELECT * in CTE \'orders\' — use explicit column lists.');
 	});
 });

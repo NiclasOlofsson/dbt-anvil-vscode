@@ -175,7 +175,7 @@ export class CompileCache {
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			if (msg.includes('Superseded')) {
-				this.logger.debug(`CompileCache: warm compile superseded — skipped`);
+				this.logger.debug('CompileCache: warm compile superseded — skipped');
 			} else {
 				this.logger.warn(`CompileCache: background full compile error: ${msg}`);
 			}

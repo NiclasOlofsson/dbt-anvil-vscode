@@ -44,12 +44,12 @@ describe('extractJinjaSpans', () => {
 	});
 
 	it('returns empty array for non-ref/source Jinja expression tags', () => {
-		expect(extractJinjaSpans("{{ config(materialized='table') }}")).toEqual([]);
-		expect(extractJinjaSpans("{{ var('my_var') }}")).toEqual([]);
+		expect(extractJinjaSpans('{{ config(materialized=\'table\') }}')).toEqual([]);
+		expect(extractJinjaSpans('{{ var(\'my_var\') }}')).toEqual([]);
 	});
 
 	it('skips {% %} block tags', () => {
-		expect(extractJinjaSpans("{% set x = 1 %}\nSELECT 1")).toEqual([]);
+		expect(extractJinjaSpans('{% set x = 1 %}\nSELECT 1')).toEqual([]);
 	});
 
 	it('skips {# #} comment tags', () => {
@@ -61,7 +61,7 @@ describe('extractJinjaSpans', () => {
 	it('extracts a single-quoted ref tag on line 0', () => {
 		// Positions:
 		//   S(0)E(1)L(2)E(3)C(4)T(5) (6)*(7) (8)F(9)R(10)O(11)M(12) (13){(14){(15) (16)r(17)e(18)f(19)((20)'(21)o(22)r(23)d(24)e(25)r(26)s(27)'(28))(29) (30)}(31)}(32)
-		const sql = "SELECT * FROM {{ ref('orders') }}";
+		const sql = 'SELECT * FROM {{ ref(\'orders\') }}';
 		const spans = extractJinjaSpans(sql);
 
 		expect(spans).toHaveLength(1);
@@ -117,7 +117,7 @@ describe('extractJinjaSpans', () => {
 		//     modelEndCol = col(35+18) = col(53) = 53-17 = 36
 		const sql = [
 			'WITH orders AS (',
-			"    SELECT * FROM {{ ref('stg_orders') }}",
+			'    SELECT * FROM {{ ref(\'stg_orders\') }}',
 			')',
 		].join('\n');
 		const spans = extractJinjaSpans(sql);
@@ -145,7 +145,7 @@ describe('extractJinjaSpans', () => {
 		//   arg1: relStart=11, relEnd=14 → sourceNameCol=11, sourceNameEndCol=14
 		//   arg2: relStart=18, relEnd=24 → tableNameCol=18, tableNameEndCol=24
 		//   jinjaCol=0, jinjaEndCol=29
-		const sql = "{{ source('raw', 'orders') }}";
+		const sql = '{{ source(\'raw\', \'orders\') }}';
 		const spans = extractJinjaSpans(sql);
 
 		expect(spans).toHaveLength(1);
@@ -182,8 +182,8 @@ describe('extractJinjaSpans', () => {
 
 	it('extracts multiple ref tags in one SQL', () => {
 		const sql = [
-			"SELECT * FROM {{ ref('customers') }} AS c",
-			"JOIN {{ ref('orders') }} AS o ON c.id = o.user_id",
+			'SELECT * FROM {{ ref(\'customers\') }} AS c',
+			'JOIN {{ ref(\'orders\') }} AS o ON c.id = o.user_id',
 		].join('\n');
 		const spans = extractJinjaSpans(sql);
 
@@ -200,8 +200,8 @@ describe('extractJinjaSpans', () => {
 
 	it('extracts a mix of ref and source tags', () => {
 		const sql = [
-			"SELECT * FROM {{ source('raw', 'customers') }} AS c",
-			"JOIN {{ ref('stg_orders') }} AS o ON c.id = o.user_id",
+			'SELECT * FROM {{ source(\'raw\', \'customers\') }} AS c',
+			'JOIN {{ ref(\'stg_orders\') }} AS o ON c.id = o.user_id',
 		].join('\n');
 		const spans = extractJinjaSpans(sql);
 
@@ -212,7 +212,7 @@ describe('extractJinjaSpans', () => {
 
 	it('does not match a config() tag that happens to contain the word ref', () => {
 		// 'ref_table' inside config value — no actual ref() call
-		const sql = "{{ config(alias='ref_table') }}\nSELECT 1";
+		const sql = '{{ config(alias=\'ref_table\') }}\nSELECT 1';
 		expect(extractJinjaSpans(sql)).toEqual([]);
 	});
 });
