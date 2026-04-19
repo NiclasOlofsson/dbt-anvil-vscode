@@ -350,6 +350,11 @@ SELECT mkey, sourcename FROM warehouse`;
 		expect(result.jinjaTags).toHaveLength(0);
 	});
 
+	it('does NOT set isPass2 for plain SQL that succeeds on pass 1', async () => {
+		const result = await parser.parse('SELECT id FROM users', 'duckdb');
+		expect(result.isPass2).toBeUndefined();
+	});
+
 	// ── sqlTokens ──────────────────────────────────────────────────────────
 
 	it('sqlTokens is a non-empty array for a successful parse', async () => {

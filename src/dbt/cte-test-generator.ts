@@ -6,7 +6,7 @@
  */
 
 import * as yaml from 'js-yaml';
-import { findCteDef, findMatchingParen, isPositionInComment } from '../tools/cte-extractor';
+import { findCteDef, findMatchingParen, isPositionInComment } from '../ftl/extractors/sql-paren-utils';
 
 // Re-export helpers that tests need to import from one place.
 export { isPositionInComment };
