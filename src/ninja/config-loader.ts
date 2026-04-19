@@ -47,9 +47,8 @@ export function loadConfig(): NinjaConfig {
 }
 
 /** Parse `-- noqa` and `-- noqa: rule1, rule2` comments to get suppressed rules per line. */
-export function parseInlineSuppressions(text: string): Map<number, Set<string> | 'all'> {
+export function parseInlineSuppressions(lines: string[]): Map<number, Set<string> | 'all'> {
 	const suppressions = new Map<number, Set<string> | 'all'>();
-	const lines = text.split('\n');
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i];
 		const idx = line.indexOf('-- noqa');

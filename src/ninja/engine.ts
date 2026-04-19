@@ -140,7 +140,7 @@ export function runNinja(
 
 	const text = document.getText();
 	const lines = text.split('\n');
-	const suppressions = parseInlineSuppressions(text);
+	const suppressions = parseInlineSuppressions(lines);
 
 	const violations: NinjaViolation[] = [];
 	const severityMap = new Map<string, vscode.DiagnosticSeverity>();

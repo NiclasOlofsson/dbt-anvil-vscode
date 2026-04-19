@@ -225,15 +225,23 @@ export class NinjaEditorPanel implements vscode.Disposable {
 
 				this._writingConfig = true;
 				try {
-					for (const write of severityWrites) {
-						await saveRuleSeverity(write.ruleId, write.severity, write.scope);
-					}
-					for (const write of autoFixWrites) {
-						await saveAutoFixRule(write.ruleId, write.enabled, write.scope);
-					}
-					for (const write of optionWrites) {
-						await saveConfigOption(write.settingPath, write.value, write.scope);
-					}
+					// Severity and autoFix writes each read-modify-write the whole map,
+					// so they must be serialised within their own group; options target
+					// distinct setting paths and are safe to parallelise. The three
+					// groups are independent and can run concurrently.
+					await Promise.all([
+						(async () => {
+							for (const write of severityWrites) {
+								await saveRuleSeverity(write.ruleId, write.severity, write.scope);
+							}
+						})(),
+						(async () => {
+							for (const write of autoFixWrites) {
+								await saveAutoFixRule(write.ruleId, write.enabled, write.scope);
+							}
+						})(),
+						Promise.all(optionWrites.map(w => saveConfigOption(w.settingPath, w.value, w.scope))),
+					]);
 				} finally {
 					this._writingConfig = false;
 				}
