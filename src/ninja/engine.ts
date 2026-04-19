@@ -27,6 +27,7 @@ import { notEqualRule } from './rules/convention-not-equal';
 import { countRowsRule } from './rules/convention-count-rows';
 import { isNullRule } from './rules/convention-is-null';
 import { leftJoinRule } from './rules/convention-left-join';
+import { outerJoinRule } from './rules/convention-outer-join';
 import { coalesceRule } from './rules/convention-coalesce';
 import { unionStyleRule } from './rules/convention-union-style';
 
@@ -75,6 +76,7 @@ const ALL_RULES: NinjaRule[] = [
 	countRowsRule,
 	isNullRule,
 	leftJoinRule,
+	outerJoinRule,
 	qualifiedColumnsRule,
 	bareUnionRule,
 	implicitJoinRule,

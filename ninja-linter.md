@@ -268,22 +268,13 @@ from orders
 
 Same convention logic as commas but applied to `AND` and `OR` operators. In **trailing** mode, operators end the line. In **leading** mode, operators start the next line.
 
-Configured via `dbt-studio.ninja.convention.operatorPosition`. Default is `leading` (dbt community standard).
+Configured via `dbt-studio.ninja.layout.operatorPosition`. Default is `trailing`.
 
 - **Default severity:** warning
 - **Auto-fix:** Moves the operator to the correct position (appends to previous line in trailing mode, prepends to next line in leading mode).
 
 ```sql
--- Leading mode (default) flags trailing operators:
-where
-    status = 'active' and   -- violation: trailing AND
-    amount > 100
--- Fix →
-where
-    status = 'active'
-    and amount > 100
-
--- Trailing mode flags leading operators:
+-- Trailing mode (default) flags leading operators:
 where
     status = 'active'
     and amount > 100    -- violation: leading AND
@@ -291,6 +282,15 @@ where
 where
     status = 'active' and
     amount > 100
+
+-- Leading mode flags trailing operators:
+where
+    status = 'active' and   -- violation: trailing AND
+    amount > 100
+-- Fix →
+where
+    status = 'active'
+    and amount > 100
 ```
 
 #### `ninja.convention.not-equal` ⚡
@@ -341,20 +341,36 @@ where status = NULL or category != NULL
 where status IS NULL or category IS NOT NULL
 ```
 
-#### `ninja.convention.left-join` ⚡
+#### `ninja.convention.left-join`
 
-> Use `LEFT JOIN` instead of `LEFT OUTER JOIN`.
+> Prefer `LEFT JOIN` over `RIGHT JOIN` — reorder the tables instead.
 
-`OUTER` is redundant in `LEFT OUTER JOIN` — the word `LEFT` already implies outer semantics. Dropping it reduces noise.
+`RIGHT JOIN` is less readable than `LEFT JOIN` because the primary table ends up on the right side. Reordering the tables and using `LEFT JOIN` keeps the dominant table first and aligns with dbt conventions.
 
 - **Default severity:** warning
-- **Auto-fix:** Removes the `OUTER` keyword.
+- **No auto-fix** — rewriting a RIGHT JOIN as a LEFT JOIN requires swapping the table order, which touches multiple lines.
 
 ```sql
 -- Flags:
-select * from orders left outer join items on orders.id = items.order_id
+select o.id from items i right join orders o on i.order_id = o.id
+-- Better →
+select o.id from orders o left join items i on o.id = i.order_id
+```
+
+#### `ninja.convention.outer-join` ⚡
+
+> Remove the redundant `OUTER` keyword — `LEFT`, `RIGHT`, and `FULL` already imply outer semantics.
+
+`LEFT OUTER JOIN`, `RIGHT OUTER JOIN`, and `FULL OUTER JOIN` are identical to their shorter forms. The `OUTER` keyword adds visual noise without any meaning.
+
+- **Default severity:** warning
+- **Auto-fix:** Deletes `OUTER ` (including the trailing space) from the join clause.
+
+```sql
+-- Flags:
+select * from orders o left outer join items i on o.id = i.order_id
 -- Fix →
-select * from orders left join items on orders.id = items.order_id
+select * from orders o left join items i on o.id = i.order_id
 ```
 
 #### `ninja.convention.coalesce` ⚡
@@ -388,6 +404,10 @@ select 1 union distinct select 2
 -- Fix →
 select 1 union all select 2
 ```
+
+---
+
+### Ambiguity
 
 #### `ninja.ambiguity.qualified-columns`
 
@@ -427,19 +447,23 @@ select * from orders o join items i on o.id = i.order_id
 select * from orders o INNER join items i on o.id = i.order_id
 ```
 
-#### `ninja.ambiguity.bare-union`
+#### `ninja.ambiguity.bare-union` ⚡
 
 > UNION should include an explicit `ALL` or `DISTINCT` qualifier.
 
 Bare `UNION` implies `DISTINCT` by SQL standard, but this is easy to miss. Being explicit clarifies whether duplicates are removed.
 
 - **Default severity:** warning
-- **No auto-fix** — choosing ALL vs DISTINCT changes query semantics.
+- **Auto-fix:** Appends the qualifier configured by `dbt-studio.ninja.convention.unionStyle` (default `ALL`).
 
 ```sql
--- Flags: bare UNION
+-- Flags: bare UNION (unionStyle = "all")
 select id from orders
 union
+select id from archive_orders
+-- Fix →
+select id from orders
+union all
 select id from archive_orders
 ```
 
@@ -720,10 +744,10 @@ select count(*), sum(amount)
 | Jinja | 1 | 1 | — |
 | Structure | 7 | 1 | 1 |
 | Convention | 9 | 7 | — |
-| Ambiguity | 4 | 1 | — |
+| Ambiguity | 4 | 2 | — |
 | Aliasing | 6 | 2 | — |
 | Layout | 7 | 6 | — |
-| **Total** | **38** | **22** | **1** |
+| **Total** | **38** | **23** | **1** |
 
 ---
 
