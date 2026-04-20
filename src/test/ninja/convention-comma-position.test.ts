@@ -79,12 +79,12 @@ describe(RULE, () => {
 		expect(commaPositionRule.check({ model: m, document: doc, config: cfg() })).toHaveLength(0);
 	});
 
-	it('no fix is provided', () => {
+	it('provides an autofix that moves the leading comma to end of previous line', () => {
 		const sql = 'select\n  a\n  ,b\nfrom t';
 		const v = check(sql, 'trailing');
-		if (v.length > 0) {
-			expect(v[0].action).toBeUndefined();
-		}
+		expect(v).toHaveLength(1);
+		expect(v[0].action).toBeDefined();
+		expect(v[0].action?.type).toBe('fix');
 	});
 
 	it('trailing comma before comment not flagged in trailing mode', () => {
