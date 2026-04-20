@@ -164,15 +164,6 @@ Step 4 branches into two paths depending on whether a manifest already exists in
 	- dbt Studio may stay partially initialized (for example limited lineage/model intelligence) until parse/index completes successfully.
 	- A failed compile warm-up is non-fatal — features still work, but the first hover or compile request may be slower than usual.
 
-### Additional behavior: Optional launch configuration creation
-
-- **What happens**
-	- dbt Studio can create/add dbt SQL launch entries in `.vscode/launch.json`.
-- **How it is detected**
-	- Setting `dbt-studio.ensureLaunchConfig` (default `true`).
-- **What users see if it fails**
-	- No crash path; launch entries simply are not added.
-
 ## Where to look when startup goes wrong
 
 - **Python not detected/invalid**
