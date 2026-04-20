@@ -18,6 +18,7 @@ import {
 	type RawLineageV2,
 } from './extractors';
 import { mapAdapterToDialect } from './dialect-map';
+import { mergeSqlAndJinjaTokens } from './ninja-sql-tokens';
 import type { LineageResult } from './extractors/lineage-walker';
 
 export { mapAdapterToDialect };
@@ -135,6 +136,10 @@ export class FtlDocumentParser implements DocumentParser {
 			timing: { parseMs: result.timing.parseMs, totalMs: result.timing.totalMs },
 			sqlTokens: result.sqlTokens,
 			jinjaTags: result.jinjaTags,
+			jinjaTokens: result.jinjaTokens,
+			ninjaSqlTokens: result.sqlTokens && result.jinjaTokens
+				? mergeSqlAndJinjaTokens(result.sqlTokens, result.jinjaTokens)
+				: undefined,
 			pivotVirtualColumns: Object.keys(pivotVirtualColumns).length > 0 ? pivotVirtualColumns : undefined,
 			isPass2: result.isPass2,
 		};

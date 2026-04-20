@@ -5,7 +5,8 @@ import { generateVariants } from '../dbt/sql-variant-generator';
 import { stripJinja } from '../providers/common/jinja-utils';
 import type { ILogger } from '../types/logger';
 import type { DocumentParser } from './document-parser';
-import type { JinjaTagSpan, SqlToken } from '../ftl/parse-result';
+import type { JinjaTagSpan, JinjaToken, SqlToken } from '../ftl/parse-result';
+import type { NinjaSqlToken } from '../ftl/ninja-sql-tokens';
 
 export interface ColumnInfo {
 	name: string;
@@ -244,6 +245,19 @@ export interface DocumentModel {
 	/** Jinja ref/source spans. Only populated by FtlDocumentParser. */
 	jinjaTags?: JinjaTagSpan[];
 	/**
+	 * Flat fine-grained jinja token stream. Additive alongside `jinjaTags`,
+	 * `refs`, and `sources` — consumers may migrate to it as the unified
+	 * source of truth for jinja positions / structure.
+	 */
+	jinjaTokens?: JinjaToken[];
+	/**
+	 * Unified position-ordered stream merging `sqlTokens` and `jinjaTokens`.
+	 * Each entry carries a `category` discriminator. This is the canonical
+	 * surface for any consumer that wants a single token sequence covering
+	 * both SQL and jinja content.
+	 */
+	ninjaSqlTokens?: NinjaSqlToken[];
+	/**
 	 * Virtual columns synthesised by PIVOT/UNPIVOT clauses, keyed by the
 	 * lowercased source-table name. Used to suppress false "column not found"
 	 * errors for virtual columns that don't exist in the source CTE's schema.
@@ -388,11 +402,15 @@ export function mergeModels(models: DocumentModel[]): DocumentModel {
 	// to silently stop working for any file that contains Jinja conditionals.
 	const sqlTokens = models.find(m => m.sqlTokens)?.sqlTokens;
 	const jinjaTags = models.find(m => m.jinjaTags)?.jinjaTags;
+	const jinjaTokens = models.find(m => m.jinjaTokens)?.jinjaTokens;
+	const ninjaSqlTokens = models.find(m => m.ninjaSqlTokens)?.ninjaSqlTokens;
 
 	return { ctes: [...cteMap.values()], refs, sources, finalColumns, finalSelect, tokens, timing, sqlglotWarnings, aliases,
 		pivotVirtualColumns: Object.keys(pivotVirtualColumns).length > 0 ? pivotVirtualColumns : undefined,
 		sqlTokens,
 		jinjaTags,
+		jinjaTokens,
+		ninjaSqlTokens,
 	};
 }
 
