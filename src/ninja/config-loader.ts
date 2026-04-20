@@ -12,8 +12,13 @@ import type { ConfigScope } from './editor/editor-types';
 export function loadConfig(): NinjaConfig {
 	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
 
+	// Backward compat: treat applyOnFormat=true as format.mode='fix-all'
+	const legacyApplyOnFormat = cfg.get<boolean>('autoFix.applyOnFormat', DEFAULT_CONFIG.autoFix.applyOnFormat);
+	const formatMode = cfg.get<'off' | 'fix-all' | 'full'>('format.mode', legacyApplyOnFormat ? 'fix-all' : DEFAULT_CONFIG.format.mode);
+
 	return {
 		enabled: cfg.get<boolean>('enabled', DEFAULT_CONFIG.enabled),
+		format: { mode: formatMode },
 		rules: cfg.get<Record<string, NinjaSeverity>>('rules', DEFAULT_CONFIG.rules),
 		autoFix: {
 			applyOnFormat: cfg.get<boolean>('autoFix.applyOnFormat', DEFAULT_CONFIG.autoFix.applyOnFormat),

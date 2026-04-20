@@ -5,9 +5,14 @@ export type CommaPosition = 'trailing' | 'leading';
 export type OperatorPosition = 'trailing' | 'leading';
 export type NotEqualStyle = '!=' | '<>';
 export type UnionStyle = 'all' | 'distinct';
+export type FormatMode = 'off' | 'fix-all' | 'full';
 
 export interface NinjaConfig {
 	enabled: boolean;
+	format: {
+		/** Controls what happens when the user invokes Format Document. */
+		mode: FormatMode;
+	};
 	/** Per-rule severity overrides. Key = rule ID, value = severity or 'off'. */
 	rules: Record<string, NinjaSeverity>;
 	autoFix: {
@@ -43,6 +48,7 @@ export interface NinjaConfig {
 
 export const DEFAULT_CONFIG: NinjaConfig = {
 	enabled: true,
+	format: { mode: 'off' },
 	rules: {},
 	autoFix: {
 		applyOnFormat: false,

@@ -7,6 +7,7 @@ import { tokenize } from '../../dbt/jinja-tokenizer';
 import { FixAction, type NinjaViolation } from '../../ninja/violation';
 import { planEdits } from '../../ninja/edit-planner';
 import type { NinjaConfig } from '../../ninja/config';
+import { formatDocument } from '../../ninja/reflow/format-document';
 
 /**
  * Document formatting provider powered by Ninja.
@@ -27,18 +28,26 @@ export class NinjaFormattingProvider implements vscode.DocumentFormattingEditPro
 		_token: vscode.CancellationToken,
 	): Promise<vscode.TextEdit[]> {
 		const config = loadConfig();
-		// applyOnFormat gates the document-format path — applies all autoFix edits automatically
-		// without any explicit user selection. Individual quick-fixes are always offered regardless.
-		if (!config.enabled || !config.autoFix.applyOnFormat) return [];
+		if (!config.enabled) return [];
+
+		const mode = config.format.mode;
+		if (mode === 'off') return [];
 
 		const [model, dialectSymbols] = await Promise.all([
 			this.parseService.getDocumentModel(document),
 			this.parseService.getDialectSymbols(),
 		]);
+
+		// Full reflow: replace the whole document with one pretty-printed TextEdit.
+		if (mode === 'full') {
+			const m = model ?? { ctes: [], refs: [], sources: [], tokens: [], finalColumns: [], timing: { parseMs: 0, totalMs: 0 } };
+			return formatDocument(document, m, config);
+		}
+
+		// fix-all: run all rules, apply safe autofixes via the edit planner.
 		const jinjaTokens = tokenize(document.getText());
 		const emptyModel: DocumentModel = { ctes: [], refs: [], sources: [], tokens: [], finalColumns: [], timing: { parseMs: 0, totalMs: 0 } };
 		const result = runNinja(document, model ?? emptyModel, jinjaTokens, config, dialectSymbols ?? undefined);
-
 		const allowed = filterAutoFixViolations(result.violations, config);
 		const planned = planEdits(allowed, document);
 		return planned.edits;
