@@ -42,7 +42,7 @@ async function waitForDiscovery(workspacePath: string): Promise<DiscoveryFile> {
 		await sleep(CONNECT_RETRY_MS);
 	}
 	throw new Error(
-		`dbt Studio extension not responding — is the workspace open and the extension activated?`,
+		'dbt Studio extension not responding — is the workspace open and the extension activated?',
 	);
 }
 
