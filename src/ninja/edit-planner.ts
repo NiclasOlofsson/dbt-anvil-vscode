@@ -1,22 +1,23 @@
 import type * as vscode from 'vscode';
 import { FixAction, type NinjaViolation } from './violation';
 import { DEFAULT_RULE_PRIORITY, getRulePriority } from './engine';
+import type { FixOp } from './fix-op';
 
 /**
  * One rule's `FixAction` collapsed into offset-space. The whole group is
  * applied or dropped together — rules like `convention.operator-position`
- * emit paired insert+delete edits that are only semantically valid as a unit.
+ * emit paired ops that are only semantically valid as a unit.
  */
 export interface FixGroup {
 	rule: string;
 	priority: number;
 	/** Sequence index of the source violation; lower = earlier rule output. */
 	seq: number;
-	/** Inclusive start offset (min over the group's edits). */
+	/** Inclusive start offset (min over the group's ops). */
 	start: number;
-	/** Exclusive end offset (max over the group's edits). */
+	/** Exclusive end offset (max over the group's ops). */
 	end: number;
-	edits: vscode.TextEdit[];
+	ops: FixOp[];
 }
 
 /** Diagnostic emitted when a fix group is dropped during arbitration. */
@@ -26,9 +27,9 @@ export interface DroppedFix {
 	winnerRule: string;
 }
 
-/** Output of `planEdits` — ordered edits ready to apply, plus a record of what was dropped. */
+/** Output of `planEdits` — surviving groups sorted ascending, plus what was dropped. */
 export interface PlannedEdits {
-	edits: vscode.TextEdit[];
+	groups: FixGroup[];
 	dropped: DroppedFix[];
 }
 
@@ -70,13 +71,19 @@ export function planEdits(
 	let seq = 0;
 	for (const v of violations) {
 		if (v.action?.type !== FixAction.TYPE) continue;
-		if (v.action.edits.length === 0) continue;
+		if (v.action.ops.length === 0) continue;
 
 		let start = Number.POSITIVE_INFINITY;
 		let end = Number.NEGATIVE_INFINITY;
-		for (const e of v.action.edits) {
-			const s = document.offsetAt(e.range.start);
-			const en = document.offsetAt(e.range.end);
+		for (const op of v.action.ops) {
+			let s: number;
+			let en: number;
+			if (op.kind === 'insert' || op.kind === 'linebreak') {
+				s = en = document.offsetAt(op.position);
+			} else {
+				s = document.offsetAt(op.range.start);
+				en = document.offsetAt(op.range.end);
+			}
 			if (s < start) start = s;
 			if (en > end) end = en;
 		}
@@ -87,17 +94,16 @@ export function planEdits(
 			seq: seq++,
 			start,
 			end,
-			edits: v.action.edits,
+			ops: v.action.ops,
 		});
 	}
 
 	const { kept, dropped } = arbitrateOverlaps(groups);
 
-	const edits: vscode.TextEdit[] = [];
-	for (const g of kept) edits.push(...g.edits);
-	edits.sort((a, b) => document.offsetAt(b.range.start) - document.offsetAt(a.range.start));
+	// Sort ascending — the Rewriter-based applier walks forward.
+	kept.sort((a, b) => a.start - b.start);
 
-	return { edits, dropped };
+	return { groups: kept, dropped };
 }
 
 /**

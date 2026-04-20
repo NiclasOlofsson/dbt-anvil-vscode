@@ -53,9 +53,9 @@ describe(RULE, () => {
 		];
 		const v = check(sql, tokens);
 		expect(v).toHaveLength(1);
-		const edits = (v[0].action as FixAction).edits;
-		expect(edits[0].newText).toBe('');
-		const fixed = applyEditsToText(sql, edits);
+		const ops = (v[0].action as FixAction).ops;
+		expect(ops[0].kind).toBe('delete');
+		const fixed = applyEditsToText(sql, ops);
 		expect(fixed).toBe('select a from t');
 	});
 

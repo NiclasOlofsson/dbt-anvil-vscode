@@ -75,7 +75,7 @@ describe(RULE, () => {
 		expect(v[0].rule).toBe(RULE);
 		expect(v[0].message).toContain('trailing comma');
 		expect(v[0].action).toBeDefined();
-		expect((v[0].action as FixAction).edits[0].newText).toBe(',');
+		expect((v[0].action as FixAction).ops[0].text).toBe(',');
 	});
 
 	it('autofix inserts comma after last column token', () => {
@@ -89,9 +89,27 @@ describe(RULE, () => {
 		];
 		const v = check(sql, toks, 'trailing');
 		expect(v).toHaveLength(1);
-		const edits = (v[0].action as FixAction).edits;
-		const fixed = applyEditsToText(sql, edits);
+		const ops = (v[0].action as FixAction).ops;
+		const fixed = applyEditsToText(sql, ops);
 		expect(fixed).toContain('b,');
+	});
+
+	it('autofix inserts comma before trailing whitespace, not after it', () => {
+		// Source has a trailing space after 'b' — comma must land as 'b,' not 'b ,'
+		const sql = 'select\n  a,\n  b \nfrom t';
+		const toks: SqlToken[] = [
+			sqlTok('SELECT', 0, 5, 0, 6),
+			sqlTok('VAR', 9, 9, 1, 2),
+			sqlTok('COMMA', 10, 10, 1, 3),
+			sqlTok('VAR', 14, 14, 2, 2),
+			sqlTok('FROM', 17, 20, 3, 4),
+		];
+		const v = check(sql, toks, 'trailing');
+		expect(v).toHaveLength(1);
+		const ops = (v[0].action as FixAction).ops;
+		const fixed = applyEditsToText(sql, ops);
+		expect(fixed).toContain('b,');
+		expect(fixed).not.toContain('b ,');
 	});
 
 	// ── Leading-comma policy ───────────────────────────────────────────────
@@ -132,7 +150,7 @@ describe(RULE, () => {
 		expect(v).toHaveLength(1);
 		expect(v[0].rule).toBe(RULE);
 		expect(v[0].message).toContain('not allowed');
-		expect((v[0].action as FixAction).edits[0].newText).toBe('');
+		expect((v[0].action as FixAction).ops[0].kind).toBe('delete');
 	});
 
 	// ── Edge cases ─────────────────────────────────────────────────────────

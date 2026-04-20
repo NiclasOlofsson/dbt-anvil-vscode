@@ -5,7 +5,7 @@ import { runSpacingEngine } from '../layout/spacing-engine';
 import { SET_OPERATOR_SPEC } from '../layout/spacing-specs';
 
 /**
- * UNION / INTERSECT / EXCEPT must each appear alone on their own line.
+ * UNION / UNION ALL / INTERSECT / EXCEPT must each appear alone on their own line.
  *
  * Correct:
  *   select a from t1
@@ -23,7 +23,7 @@ export const setOperatorRule: TokenRule = {
 	type: 'token',
 	category: NinjaCategory.Layout,
 	defaultSeverity: 'warning',
-	description: 'UNION / INTERSECT / EXCEPT must be on their own line.',
+	description: 'UNION / UNION ALL / INTERSECT / EXCEPT must be on their own line.',
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document, config } = ctx;
@@ -41,7 +41,7 @@ export const setOperatorRule: TokenRule = {
 				rule: 'ninja.layout.set-operator',
 				message: e.message,
 				range: e.range,
-				...(e.fix ? { action: { type: 'fix' as const, edits: e.fix.edits, autoFix: e.fix.autoFix } } : {}),
+				...(e.fix ? { action: { type: 'fix' as const, ops: e.fix.ops, autoFix: e.fix.autoFix } } : {}),
 			}));
 	},
 };

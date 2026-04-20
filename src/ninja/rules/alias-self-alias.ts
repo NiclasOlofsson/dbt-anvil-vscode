@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
+import { deleteOp } from '../fix-op';
 
 export const selfAliasRule: TokenRule = {
 	id: 'ninja.aliasing.self-alias',
@@ -36,7 +37,7 @@ export const selfAliasRule: TokenRule = {
 				rule: 'ninja.aliasing.self-alias',
 				message: `Table '${tok.name}' is aliased to itself — remove the alias.`,
 				range,
-				action: { type: FixAction.TYPE, edits: [{ range: fixRange, newText: '' }], autoFix: true },
+				action: { type: FixAction.TYPE, ops: [deleteOp(fixRange)], autoFix: true },
 			});
 		}
 

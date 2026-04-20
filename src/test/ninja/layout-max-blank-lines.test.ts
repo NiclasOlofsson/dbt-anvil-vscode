@@ -31,7 +31,7 @@ describe(RULE, () => {
 	it('provides delete fix for extra blank lines', () => {
 		const v = violationsFor(run('select 1\n\n\n\nfrom t\n'), RULE);
 		expect(v[0].action).toBeDefined();
-		expect((v[0].action as FixAction).edits[0].newText).toBe('');
+		expect((v[0].action as FixAction).ops[0].kind).toBe('delete');
 	});
 
 	it('passes file with no blank lines', () => {

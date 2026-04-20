@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
+import { deleteOp } from '../fix-op';
 import { lineOffset } from '../token-utils';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
@@ -44,7 +45,7 @@ export const statementTerminatorRule: TokenRule = {
 				range,
 				action: {
 					type: FixAction.TYPE,
-					edits: [{ range, newText: '' }],
+					ops: [deleteOp(range)],
 					autoFix: true,
 				},
 			});

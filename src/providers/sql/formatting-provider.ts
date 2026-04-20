@@ -5,6 +5,7 @@ import { loadConfig } from '../../ninja/config-loader';
 import { tokenize } from '../../dbt/jinja-tokenizer';
 import { FixAction, type NinjaViolation } from '../../ninja/violation';
 import { planEdits } from '../../ninja/edit-planner';
+import { applyFixGroups } from '../../ninja/reflow/applier';
 import type { NinjaConfig } from '../../ninja/config';
 
 /**
@@ -27,8 +28,7 @@ export class NinjaFormattingProvider implements vscode.DocumentFormattingEditPro
 		const config = loadConfig();
 		if (!config.enabled) return [];
 
-		const mode = config.format.mode;
-		if (mode === 'off') return [];
+		if (!config.autoFix.applyOnFormat) return [];
 
 		const [model, dialectSymbols] = await Promise.all([
 			this.parseService.getDocumentModel(document),
@@ -41,7 +41,7 @@ export class NinjaFormattingProvider implements vscode.DocumentFormattingEditPro
 		const result = runNinja(document, model ?? emptyModel, jinjaTokens, config, dialectSymbols ?? undefined);
 		const allowed = filterAutoFixViolations(result.violations, config);
 		const planned = planEdits(allowed, document);
-		return planned.edits;
+		return applyFixGroups(planned.groups, document, config);
 	}
 }
 

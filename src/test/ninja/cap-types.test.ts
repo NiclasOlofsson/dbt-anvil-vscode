@@ -10,7 +10,7 @@ describe(RULE, () => {
 	it('flags uppercase type when policy is lower', () => {
 		const v = violationsFor(run('select cast(x as VARCHAR)'), RULE);
 		expect(v.length).toBe(1);
-		expect((v[0].action as FixAction).edits[0].newText).toBe('varchar');
+		expect((v[0].action as FixAction).ops[0].text).toBe('varchar');
 	});
 
 	it('passes lowercase type', () => {
@@ -29,7 +29,7 @@ describe(RULE, () => {
 	it('flags lowercase type when policy is upper', () => {
 		const v = violationsFor(run('select cast(x as int)', capCfg('types', 'upper')), RULE);
 		expect(v.length).toBe(1);
-		expect((v[0].action as FixAction).edits[0].newText).toBe('INT');
+		expect((v[0].action as FixAction).ops[0].text).toBe('INT');
 	});
 
 	it('passes uppercase type when policy is upper', () => {
@@ -42,7 +42,7 @@ describe(RULE, () => {
 	it('flags inconsistent type casing', () => {
 		const v = violationsFor(run('select cast(x as int), cast(y as INT)', capCfg('types', 'consistent')), RULE);
 		expect(v.length).toBe(1);
-		expect((v[0].action as FixAction).edits[0].newText).toBe('int');
+		expect((v[0].action as FixAction).ops[0].text).toBe('int');
 	});
 
 	it('passes consistent type casing', () => {
@@ -55,7 +55,7 @@ describe(RULE, () => {
 	it('detects BIGINT', () => {
 		const v = violationsFor(run('select cast(x as BIGINT)'), RULE);
 		expect(v.length).toBe(1);
-		expect((v[0].action as FixAction).edits[0].newText).toBe('bigint');
+		expect((v[0].action as FixAction).ops[0].text).toBe('bigint');
 	});
 
 	it('detects DECIMAL', () => {

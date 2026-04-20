@@ -13,9 +13,6 @@ import type { ConfigScope } from './editor/editor-types';
 export function loadConfig(): NinjaConfig {
 	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
 
-	// Backward compat: treat applyOnFormat=true as format.mode='fix-all'
-	const legacyApplyOnFormat = cfg.get<boolean>('autoFix.applyOnFormat', DEFAULT_CONFIG.autoFix.applyOnFormat);
-	const formatMode = cfg.get<'off' | 'fix-all' | 'full'>('format.mode', legacyApplyOnFormat ? 'fix-all' : DEFAULT_CONFIG.format.mode);
 	const formatPreset = cfg.get<FormatPreset>('format.preset', DEFAULT_CONFIG.format.preset);
 	const preset = PRESETS[formatPreset] ?? {};
 
@@ -30,7 +27,7 @@ export function loadConfig(): NinjaConfig {
 
 	return {
 		enabled: cfg.get<boolean>('enabled', DEFAULT_CONFIG.enabled),
-		format: { mode: formatMode, preset: formatPreset },
+		format: { preset: formatPreset },
 		rules: cfg.get<Record<string, NinjaSeverity>>('rules', DEFAULT_CONFIG.rules),
 		disabledRules: cfg.get<string[]>('disabledRules', DEFAULT_CONFIG.disabledRules),
 		autoFix: {
@@ -47,6 +44,10 @@ export function loadConfig(): NinjaConfig {
 		indentation: {
 			unit: get<'space' | 'tab'>('indentation.unit', preset.indentation?.unit, DEFAULT_CONFIG.indentation.unit),
 			size: get('indentation.size', preset.indentation?.size, DEFAULT_CONFIG.indentation.size),
+			indentedJoins: get('indentation.indentedJoins', preset.indentation?.indentedJoins, DEFAULT_CONFIG.indentation.indentedJoins),
+			indentedOn: get('indentation.indentedOn', preset.indentation?.indentedOn, DEFAULT_CONFIG.indentation.indentedOn),
+			indentedThen: get('indentation.indentedThen', preset.indentation?.indentedThen, DEFAULT_CONFIG.indentation.indentedThen),
+			indentedCtes: get('indentation.indentedCtes', preset.indentation?.indentedCtes, DEFAULT_CONFIG.indentation.indentedCtes),
 		},
 		maxLineLength: get('maxLineLength', preset.maxLineLength, DEFAULT_CONFIG.maxLineLength),
 		maxBlankLines: get('maxBlankLines', preset.maxBlankLines, DEFAULT_CONFIG.maxBlankLines),

@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
+import { replaceOp } from '../fix-op';
 import { offsetToLineCol } from '../token-utils';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
@@ -35,7 +36,7 @@ export const coalesceRule: TokenRule = {
 				rule: 'ninja.convention.coalesce',
 				message: `Use COALESCE instead of ${word.toUpperCase()}.`,
 				range: new vscode.Range(start.line, start.col, end.line, end.col),
-				action: { type: FixAction.TYPE, edits: [{ range: new vscode.Range(start.line, start.col, end.line, end.col), newText: 'coalesce' }], autoFix: true },
+				action: { type: FixAction.TYPE, ops: [replaceOp(new vscode.Range(start.line, start.col, end.line, end.col), 'coalesce')], autoFix: true },
 			});
 		}
 

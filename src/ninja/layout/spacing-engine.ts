@@ -29,6 +29,7 @@ import type { NinjaSqlToken } from '../../ftl/ninja-sql-tokens';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 import type { NinjaConfig } from '../config';
 import { lastContentTokenOnLine, firstContentTokenOnLine, tokenStartCol } from '../fix-utils';
+import { insertOp, deleteOp, type FixOp } from '../fix-op';
 
 export type LinePositionPolicy = 'leading' | 'trailing' | 'alone';
 export type SpacingPolicy = 'space' | 'no-space';
@@ -58,7 +59,7 @@ export interface LinePositionEvent {
 	isTrailing: boolean;
 	range: vscode.Range;
 	message: string;
-	fix?: { edits: vscode.TextEdit[]; autoFix: boolean };
+	fix?: { ops: FixOp[]; autoFix: boolean };
 }
 
 export interface SpacingEvent {
@@ -70,7 +71,7 @@ export interface SpacingEvent {
 	actualSpace: boolean;
 	range: vscode.Range;
 	message: string;
-	fix?: { edits: vscode.TextEdit[]; autoFix: boolean };
+	fix?: { ops: FixOp[]; autoFix: boolean };
 }
 
 export type EngineEvent = LinePositionEvent | SpacingEvent;
@@ -209,15 +210,13 @@ function buildSpacingFix(
 	gapEnd: number,
 	expectedSpace: boolean,
 	document: vscode.TextDocument,
-): { edits: vscode.TextEdit[]; autoFix: boolean } | undefined {
+): { ops: FixOp[]; autoFix: boolean } | undefined {
 	if (expectedSpace) {
-		// Insert a space where there is none.
 		const pos = document.positionAt(gapEnd);
-		return { edits: [vscode.TextEdit.insert(pos, ' ')], autoFix: true };
+		return { ops: [insertOp(pos, ' ')], autoFix: true };
 	} else {
-		// Delete the whitespace gap.
 		const range = new vscode.Range(document.positionAt(gapStart), document.positionAt(gapEnd));
-		return { edits: [vscode.TextEdit.delete(range)], autoFix: true };
+		return { ops: [deleteOp(range)], autoFix: true };
 	}
 }
 
@@ -230,34 +229,31 @@ export function buildLinePositionFix(
 	lines: string[],
 	sqlTokens: SqlToken[],
 	_document: vscode.TextDocument,
-): { edits: vscode.TextEdit[]; autoFix: boolean } | undefined {
+): { ops: FixOp[]; autoFix: boolean } | undefined {
 	const line = tok.line;
 	const tokStartCol = tokenStartCol(tok);
 	const lineText = lines[line];
 
 	if (policy === 'trailing' && isLeading && line > 0) {
-		// Token is at the start of a line but should be at the end of the previous line.
-		// Pattern: move token from current line start → previous line end.
 		const tokenStr = lineText.slice(tokStartCol, tok.col).trim();
 		const trailingSpace = lineText[tok.col] === ' ' ? 1 : 0;
 
-		// Find the best insert point on the previous line.
 		let prevSqlLine = line - 1;
 		while (prevSqlLine > 0 && !lastContentTokenOnLine(sqlTokens, prevSqlLine)) prevSqlLine--;
 		const prevAnchor = lastContentTokenOnLine(sqlTokens, prevSqlLine);
 		const insertCol = prevAnchor?.col ?? lines[prevSqlLine].length;
 
+		const insertText = tokenStr === ',' ? tokenStr : ` ${tokenStr}`;
 		return {
-			edits: [
-				vscode.TextEdit.insert(new vscode.Position(prevSqlLine, insertCol), ` ${tokenStr}`),
-				vscode.TextEdit.delete(new vscode.Range(line, tokStartCol, line, tok.col + trailingSpace)),
+			ops: [
+				insertOp(new vscode.Position(prevSqlLine, insertCol), insertText),
+				deleteOp(new vscode.Range(line, tokStartCol, line, tok.col + trailingSpace)),
 			],
 			autoFix: true,
 		};
 	}
 
 	if (policy === 'leading' && isTrailing && line < lines.length - 1) {
-		// Token is at the end of a line but should be at the start of the next line.
 		const tokenStr = lineText.slice(tokStartCol, tok.col).trim();
 		const spaceBefore = tokStartCol > 0 && lineText[tokStartCol - 1] === ' ' ? 1 : 0;
 		const nextLine = line + 1;
@@ -265,20 +261,15 @@ export function buildLinePositionFix(
 		const insertCol = nextAnchor ? tokenStartCol(nextAnchor) : (lines[nextLine].length - lines[nextLine].trimStart().length);
 
 		return {
-			edits: [
-				vscode.TextEdit.delete(new vscode.Range(line, tokStartCol - spaceBefore, line, tok.col)),
-				vscode.TextEdit.insert(new vscode.Position(nextLine, insertCol), `${tokenStr} `),
+			ops: [
+				deleteOp(new vscode.Range(line, tokStartCol - spaceBefore, line, tok.col)),
+				insertOp(new vscode.Position(nextLine, insertCol), `${tokenStr} `),
 			],
 			autoFix: true,
 		};
 	}
 
 	if (policy === 'alone' && line > 0 && line < lines.length - 1) {
-		// Token should be alone on its own line. If it isn't leading, we need a newline
-		// before it; if it isn't trailing, we need a newline after.
-		// Simple case: token is in the middle of a line — we'd need to split the line,
-		// which is a multi-edit operation. Return undefined to keep this detection-only
-		// until the reflow engine (Layer 3) can handle it properly.
 		if (!isLeading || !isTrailing) return undefined;
 	}
 

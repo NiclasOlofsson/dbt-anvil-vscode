@@ -42,6 +42,26 @@ export function sqlOnly(stream: NinjaSqlToken[] | undefined): SqlToken[] {
 }
 
 /**
+ * Lines whose first content token is a jinja tag rather than SQL.
+ *
+ * Indent rules rely on this to avoid re-indenting a line whose leading
+ * content is `{{ ref(...) }}` or similar — the first SQL token on such a
+ * line sits AFTER the jinja, so replacing `[col 0 .. sqlTokenCol)` would
+ * silently delete the jinja. Rules should skip any line in this set.
+ */
+export function jinjaLeadingLines(stream: NinjaSqlToken[] | undefined): Set<number> {
+	const result = new Set<number>();
+	if (!stream) return result;
+	const seen = new Set<number>();
+	for (const t of stream) {
+		if (seen.has(t.line)) continue;
+		seen.add(t.line);
+		if (t.category === 'jinja') result.add(t.line);
+	}
+	return result;
+}
+
+/**
  * Merge sqlglot and jinja token streams into a single position-ordered
  * sequence. SQL tokens whose `start` falls inside a jinja tag region (as
  * marked by `*_open` tokens carrying `tagEnd`) are dropped — the jinja

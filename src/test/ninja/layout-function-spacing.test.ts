@@ -27,13 +27,13 @@ describe(RULE, () => {
 	it('provides a delete fix removing the space', () => {
 		const v = violationsFor(run('select count (*) from t\n'), RULE);
 		expect(v[0].action).toBeDefined();
-		expect((v[0].action as FixAction).edits[0].newText).toBe('');
+		expect((v[0].action as FixAction).ops[0].kind).toBe('delete');
 	});
 
 	it('flags multiple spaces before paren', () => {
 		const v = violationsFor(run('select count   (*) from t\n'), RULE);
 		expect(v.length).toBe(1);
-		expect((v[0].action as FixAction).edits[0].newText).toBe('');
+		expect((v[0].action as FixAction).ops[0].kind).toBe('delete');
 	});
 
 	it('flags tab before paren', () => {

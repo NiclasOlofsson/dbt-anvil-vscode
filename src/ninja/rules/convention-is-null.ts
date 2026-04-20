@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
+import { replaceOp } from '../fix-op';
 import { lineOffset } from '../token-utils';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
@@ -35,7 +36,7 @@ export const isNullRule: TokenRule = {
 					rule: 'ninja.convention.is-null',
 					message: 'Use IS NULL instead of = NULL.',
 					range,
-					action: { type: FixAction.TYPE, edits: [{ range, newText: `IS ${raw}` }], autoFix: true },
+					action: { type: FixAction.TYPE, ops: [replaceOp(range, `IS ${raw}`)], autoFix: true },
 				});
 			} else if (op.type === 'NEQ') {
 				const lo = lineOffset(text, op.line);
@@ -45,7 +46,7 @@ export const isNullRule: TokenRule = {
 					rule: 'ninja.convention.is-null',
 					message: 'Use IS NOT NULL instead of != NULL.',
 					range,
-					action: { type: FixAction.TYPE, edits: [{ range, newText: `IS NOT ${raw}` }], autoFix: true },
+					action: { type: FixAction.TYPE, ops: [replaceOp(range, `IS NOT ${raw}`)], autoFix: true },
 				});
 			}
 		}

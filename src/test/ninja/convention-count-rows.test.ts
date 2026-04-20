@@ -26,7 +26,7 @@ describe(RULE, () => {
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('COUNT(*)');
 		expect(v[0].action).toBeDefined();
-		expect((v[0].action as FixAction).edits[0].newText).toBe('*');
+		expect((v[0].action as FixAction).ops[0].text).toBe('*');
 	});
 
 	it('no violation for COUNT(*)', () => {

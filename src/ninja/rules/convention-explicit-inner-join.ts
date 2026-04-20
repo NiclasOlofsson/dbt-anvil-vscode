@@ -1,6 +1,7 @@
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
+import { replaceOp } from '../fix-op';
 import { tokenRange } from '../token-utils';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
@@ -42,7 +43,7 @@ export const explicitInnerJoinRule: TokenRule = {
 				range,
 				action: {
 					type: FixAction.TYPE,
-					edits: [{ range, newText: 'INNER JOIN' }],
+					ops: [replaceOp(range, 'INNER JOIN')],
 					autoFix: true,
 				},
 			});

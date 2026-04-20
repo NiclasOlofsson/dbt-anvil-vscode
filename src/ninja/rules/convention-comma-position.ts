@@ -38,7 +38,7 @@ export const commaPositionRule: TokenRule = {
 				rule: 'ninja.convention.comma-position',
 				message: e.message,
 				range: e.range,
-				...(e.fix ? { action: { type: 'fix' as const, edits: e.fix.edits, autoFix: e.fix.autoFix } } : {}),
+				...(e.fix ? { action: { type: 'fix' as const, ops: e.fix.ops, autoFix: e.fix.autoFix } } : {}),
 			}));
 	},
 };

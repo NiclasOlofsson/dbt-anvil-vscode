@@ -1,9 +1,10 @@
 import * as vscode from 'vscode';
+import type { FixOp } from './fix-op';
 
 /** Text edit fix — can be applied automatically or restricted to code actions only. */
 export interface FixAction {
 	type: typeof FixAction.TYPE;
-	edits: vscode.TextEdit[];
+	ops: FixOp[];
 	/** When false, excluded from bulk/auto-fix ("Fix all", source.fixAll.ninja). Use for destructive edits like deleting a CTE. */
 	autoFix: boolean;
 }

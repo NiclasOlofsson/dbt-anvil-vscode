@@ -6,6 +6,8 @@ import type { NinjaResult } from '../../ninja/engine';
 import { loadConfig } from '../../ninja/config-loader';
 import { FixAction, SnippetAction } from '../../ninja/violation';
 import { planEdits } from '../../ninja/edit-planner';
+import { applyFixGroups } from '../../ninja/reflow/applier';
+import { opToTextEdit } from '../../ninja/fix-op';
 import { filterAutoFixViolations } from './formatting-provider';
 
 /**
@@ -180,9 +182,7 @@ export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 						vscode.CodeActionKind.QuickFix,
 					);
 					action.edit = new vscode.WorkspaceEdit();
-					for (const edit of v.action.edits) {
-						action.edit.replace(document.uri, edit.range, edit.newText);
-					}
+					action.edit.set(document.uri, v.action.ops.map(op => opToTextEdit(op, ninjaConfig)));
 					action.diagnostics = [new vscode.Diagnostic(v.range, v.message)];
 					actions.push(action);
 				} else if (v.action?.type === SnippetAction.TYPE) {
@@ -214,9 +214,7 @@ export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 					vscode.CodeActionKind.QuickFix,
 				);
 				fixAll.edit = new vscode.WorkspaceEdit();
-				for (const edit of planned.edits) {
-					fixAll.edit.replace(document.uri, edit.range, edit.newText);
-				}
+				fixAll.edit.set(document.uri, applyFixGroups(planned.groups, document, ninjaConfig));
 				actions.push(fixAll);
 			}
 
@@ -229,9 +227,7 @@ export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 					vscode.CodeActionKind.SourceFixAll.append('ninja'),
 				);
 				sourceFixAll.edit = new vscode.WorkspaceEdit();
-				for (const edit of planned.edits) {
-					sourceFixAll.edit.replace(document.uri, edit.range, edit.newText);
-				}
+				sourceFixAll.edit.set(document.uri, applyFixGroups(planned.groups, document, ninjaConfig));
 				actions.push(sourceFixAll);
 			}
 		}

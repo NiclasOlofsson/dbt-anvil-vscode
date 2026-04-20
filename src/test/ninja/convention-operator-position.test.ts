@@ -94,7 +94,7 @@ describe(RULE, () => {
 		const sql = 'select *\nfrom t\nwhere a = 1\n  AND b = 2';
 		const v = await check(sql, 'trailing');
 		expect(v).toHaveLength(1);
-		const result = applyEditsToText(sql, (v[0].action as FixAction).edits);
+		const result = applyEditsToText(sql, (v[0].action as FixAction).ops);
 		expect(result).toBe('select *\nfrom t\nwhere a = 1 AND\n  b = 2');
 	}, 30_000);
 
@@ -102,7 +102,7 @@ describe(RULE, () => {
 		const sql = 'select *\nfrom t\nwhere a = 1 AND\n  b = 2';
 		const v = await check(sql, 'leading');
 		expect(v).toHaveLength(1);
-		const result = applyEditsToText(sql, (v[0].action as FixAction).edits);
+		const result = applyEditsToText(sql, (v[0].action as FixAction).ops);
 		expect(result).toBe('select *\nfrom t\nwhere a = 1\n  AND b = 2');
 	}, 30_000);
 
@@ -110,7 +110,7 @@ describe(RULE, () => {
 		const sql = 'select *\nfrom t\nwhere a = 1\n  OR b = 2';
 		const v = await check(sql, 'trailing');
 		expect(v).toHaveLength(1);
-		const result = applyEditsToText(sql, (v[0].action as FixAction).edits);
+		const result = applyEditsToText(sql, (v[0].action as FixAction).ops);
 		expect(result).toBe('select *\nfrom t\nwhere a = 1 OR\n  b = 2');
 	}, 30_000);
 
@@ -118,7 +118,7 @@ describe(RULE, () => {
 		const sql = 'select *\nfrom t\nwhere a = 1 OR\n  b = 2';
 		const v = await check(sql, 'leading');
 		expect(v).toHaveLength(1);
-		const result = applyEditsToText(sql, (v[0].action as FixAction).edits);
+		const result = applyEditsToText(sql, (v[0].action as FixAction).ops);
 		expect(result).toBe('select *\nfrom t\nwhere a = 1\n  OR b = 2');
 	}, 30_000);
 
@@ -128,11 +128,11 @@ describe(RULE, () => {
 		const sql = 'select *\nfrom t\nwhere a = 1 -- a comment\n  AND b = 2';
 		const v = await check(sql, 'trailing');
 		expect(v).toHaveLength(1);
-		const insert = (v[0].action as FixAction).edits.find(e => e.newText === ' AND');
+		const ops = (v[0].action as FixAction).ops;
+		const insert = ops.find(op => op.kind === 'insert' && op.text === ' AND') as { kind: 'insert'; position: import('vscode').Position; text: string } | undefined;
 		expect(insert).toBeDefined();
-		// Insert must land before the comment text, not at the end of the raw line
-		expect(insert!.range.start.character).toBeLessThan('where a = 1 -- a comment'.length);
-		const result = applyEditsToText(sql, (v[0].action as FixAction).edits);
+		expect(insert!.position.character).toBeLessThan('where a = 1 -- a comment'.length);
+		const result = applyEditsToText(sql, ops);
 		expect(result).toContain('AND -- a comment');
 	}, 30_000);
 
@@ -150,11 +150,11 @@ describe(RULE, () => {
 		].join('\n');
 		const v = await check(sql, 'trailing');
 		expect(v).toHaveLength(1);
-		const insert = (v[0].action as FixAction).edits.find(e => e.newText === ' AND');
+		const ops = (v[0].action as FixAction).ops;
+		const insert = ops.find(op => op.kind === 'insert' && op.text === ' AND') as { kind: 'insert'; position: import('vscode').Position; text: string } | undefined;
 		expect(insert).toBeDefined();
-		// Must target line 2 (the SQL line with 'false'), NOT any comment line (3-5)
-		expect(insert!.range.start.line).toBe(2);
-		const result = applyEditsToText(sql, (v[0].action as FixAction).edits);
+		expect(insert!.position.line).toBe(2);
+		const result = applyEditsToText(sql, ops);
 		expect(result).toContain('false AND');
 	}, 30_000);
 });

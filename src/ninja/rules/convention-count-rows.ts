@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
+import { replaceOp } from '../fix-op';
 import { lineOffset } from '../token-utils';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
@@ -41,7 +42,7 @@ export const countRowsRule: TokenRule = {
 				rule: 'ninja.convention.count-rows',
 				message: 'Use COUNT(*) instead of COUNT(1).',
 				range,
-				action: { type: FixAction.TYPE, edits: [{ range, newText: '*' }], autoFix: true },
+				action: { type: FixAction.TYPE, ops: [replaceOp(range, '*')], autoFix: true },
 			});
 		}
 

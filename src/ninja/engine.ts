@@ -81,6 +81,19 @@ import { joinTableOrderRule } from './rules/structure-join-table-order';
 import { jinjaArgumentSpacingRule } from './rules/jinja-argument-spacing';
 
 // -- Layout rules --
+import { indentOnRule } from './rules/layout-indent-on';
+import { indentJoinsRule } from './rules/layout-indent-joins';
+import { indentThenRule } from './rules/layout-indent-then';
+import { indentCommentsRule } from './rules/layout-indent-comments';
+import { indentBodyRule } from './rules/layout-indent-body';
+import { indentBracketRule } from './rules/layout-indent-bracket';
+import { indentFromRule } from './rules/layout-indent-from';
+import { indentWhereRule } from './rules/layout-indent-where';
+import { indentGroupByRule } from './rules/layout-indent-group-by';
+import { indentHavingRule } from './rules/layout-indent-having';
+import { indentOrderByRule } from './rules/layout-indent-order-by';
+import { indentLimitRule } from './rules/layout-indent-limit';
+import { indentSetOpRule } from './rules/layout-indent-set-op';
 import { selectTargetsRule } from './rules/layout-select-targets';
 import { selectModifiersRule } from './rules/layout-select-modifiers';
 import { cteBracketRule } from './rules/layout-cte-bracket';
@@ -95,6 +108,8 @@ import { functionSpacingRule } from './rules/layout-function-spacing';
 import { setOperatorRule } from './rules/layout-set-operator';
 import { clauseKeywordRule } from './rules/layout-clause-keyword';
 import { bracketSpacingRule } from './rules/layout-spacing';
+import { binaryOperatorSpacingRule } from './rules/layout-binary-operator-spacing';
+import { commaSpacingRule } from './rules/layout-comma-spacing';
 
 /** All built-in rules. Order does not matter — they all run independently. */
 const ALL_RULES: NinjaRule[] = [
@@ -158,10 +173,25 @@ const ALL_RULES: NinjaRule[] = [
 	maxBlankLinesRule,
 	longLinesRule,
 	indentRule,
+	indentOnRule,
+	indentJoinsRule,
+	indentThenRule,
+	indentCommentsRule,
+	indentBodyRule,
+	indentBracketRule,
+	indentFromRule,
+	indentWhereRule,
+	indentGroupByRule,
+	indentHavingRule,
+	indentOrderByRule,
+	indentLimitRule,
+	indentSetOpRule,
 	functionSpacingRule,
 	setOperatorRule,
 	clauseKeywordRule,
 	bracketSpacingRule,
+	binaryOperatorSpacingRule,
+	commaSpacingRule,
 	selectTargetsRule,
 	selectModifiersRule,
 	cteBracketRule,

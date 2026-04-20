@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import { FixAction, type NinjaViolation } from '../violation';
 import type { LayoutRule, LayoutRuleContext } from '../rule';
+import { insertOp, deleteOp } from '../fix-op';
 
 /**
  * JJ01: Jinja tags should have single-space padding inside delimiters.
@@ -49,7 +50,7 @@ export const jinjaPaddingRule: LayoutRule = {
 					rule: 'ninja.jinja.padding',
 					message: 'Expected single space after jinja opening delimiter',
 					range,
-					action: { type: FixAction.TYPE, edits: [vscode.TextEdit.insert(pos, ' ')], autoFix: true },
+					action: { type: FixAction.TYPE, ops: [insertOp(pos, ' ')], autoFix: true },
 				});
 			} else if (afterOpen === ' ' && raw[contentStart + 1] === ' ') {
 				// Multiple spaces — collapse to one
@@ -63,7 +64,7 @@ export const jinjaPaddingRule: LayoutRule = {
 						rule: 'ninja.jinja.padding',
 						message: 'Expected single space after jinja opening delimiter',
 						range,
-						action: { type: FixAction.TYPE, edits: [vscode.TextEdit.delete(range)], autoFix: true },
+						action: { type: FixAction.TYPE, ops: [deleteOp(range)], autoFix: true },
 					});
 				}
 			}
@@ -77,7 +78,7 @@ export const jinjaPaddingRule: LayoutRule = {
 					rule: 'ninja.jinja.padding',
 					message: 'Expected single space before jinja closing delimiter',
 					range,
-					action: { type: FixAction.TYPE, edits: [vscode.TextEdit.insert(pos, ' ')], autoFix: true },
+					action: { type: FixAction.TYPE, ops: [insertOp(pos, ' ')], autoFix: true },
 				});
 			} else if (beforeClose === ' ' && raw[contentEnd - 2] === ' ') {
 				// Multiple spaces — collapse to one
@@ -91,7 +92,7 @@ export const jinjaPaddingRule: LayoutRule = {
 						rule: 'ninja.jinja.padding',
 						message: 'Expected single space before jinja closing delimiter',
 						range,
-						action: { type: FixAction.TYPE, edits: [vscode.TextEdit.delete(range)], autoFix: true },
+						action: { type: FixAction.TYPE, ops: [deleteOp(range)], autoFix: true },
 					});
 				}
 			}

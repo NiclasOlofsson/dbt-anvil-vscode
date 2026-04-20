@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
+import { replaceOp } from '../fix-op';
 import { lineOffset } from '../token-utils';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
@@ -34,7 +35,7 @@ export const notEqualRule: TokenRule = {
 				rule: 'ninja.convention.not-equal',
 				message: `Use '${preferred}' instead of '${raw}'.`,
 				range,
-				action: { type: FixAction.TYPE, edits: [{ range, newText: preferred }], autoFix: true },
+				action: { type: FixAction.TYPE, ops: [replaceOp(range, preferred)], autoFix: true },
 			});
 		}
 

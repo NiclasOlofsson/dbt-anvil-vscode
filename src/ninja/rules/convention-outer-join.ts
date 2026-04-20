@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
+import { deleteOp } from '../fix-op';
 import { lineOffset, tokenRange } from '../token-utils';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
@@ -38,7 +39,7 @@ export const outerJoinRule: TokenRule = {
 				rule: 'ninja.convention.outer-join',
 				message: 'OUTER is redundant — use LEFT JOIN, RIGHT JOIN, or FULL JOIN.',
 				range: outerRange,
-				action: { type: FixAction.TYPE, edits: [{ range: fixRange, newText: '' }], autoFix: true },
+				action: { type: FixAction.TYPE, ops: [deleteOp(fixRange)], autoFix: true },
 			});
 		}
 
