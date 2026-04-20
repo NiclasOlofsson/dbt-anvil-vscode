@@ -71,6 +71,7 @@ export interface DbtNode {
 	schema?: string;
 	database?: string;
 	alias?: string;
+	relation_name?: string;
 	checksum?: { name: string; checksum: string };
 	// For tests
 	test_metadata?: {
@@ -104,6 +105,7 @@ export interface DbtSource {
 	schema: string;
 	database?: string;
 	identifier: string;
+	relation_name?: string;
 	loaded_at_field?: string;
 	freshness?: DbtFreshness;
 	source_description?: string;

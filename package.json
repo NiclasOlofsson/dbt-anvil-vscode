@@ -1437,7 +1437,7 @@
 				"name": "get_resource_info",
 				"displayName": "Get Resource Info",
 				"userDescription": "Get detailed information about a dbt resource including columns, compiled SQL, and tests",
-				"modelDescription": "Get detailed information about a dbt resource (model, source, test, etc.) including columns, compiled SQL, raw SQL, and description. Set include_compiled_sql=true to trigger compilation if needed.",
+				"modelDescription": "Get detailed information about a dbt resource (model, source, test, etc.) including columns, the fully-qualified relation_name (e.g. \"db\".\"schema\".\"table\" — use this in query_database for plain SQL, avoiding an inline compile), database, schema, alias, raw SQL, and description. Compiled SQL is NOT included by default — set include_compiled_sql=true only when you need the rendered SQL body (triggers a dbt compile, which runs serialized through the dbt bridge).",
 				"canBeReferencedInPrompt": false,
 				"toolReferenceName": "get_resource_info",
 				"icon": "$(info)",
@@ -1457,7 +1457,7 @@
 						},
 						"include_compiled_sql": {
 							"type": "boolean",
-							"description": "Include compiled SQL in output, triggering compilation if needed (default: true)"
+							"description": "Include compiled SQL in output, triggering a dbt compile if not already cached (default: false). Leave false when you only need the relation_name/schema/columns — those are returned for free from the manifest."
 						}
 					},
 					"required": [
@@ -1490,7 +1490,7 @@
 				"name": "query_database",
 				"displayName": "Query Database via dbt",
 				"userDescription": "Execute a SQL query against the configured database using dbt show",
-				"modelDescription": "Execute a SQL query against the configured database using dbt show. Supports Jinja templating with ref() and source(). Include LIMIT in your SQL to control row count (e.g. LIMIT 10). Use cte_name + model_name to extract and query a specific CTE from a model.",
+				"modelDescription": "Execute a SQL query against the configured database. PREFER plain SQL with fully-qualified identifiers (e.g. SELECT * FROM \"analytics\".\"marts\".\"dim_customers\" LIMIT 10) — look up each model/source's relation_name via get_resource_info or list_resources first. Plain SQL goes directly to the native database connection and multiple queries run IN PARALLEL. Jinja ({{ ref('x') }}, {{ source('s','t') }}) is supported but triggers an inline dbt compile that runs SERIALIZED through the dbt bridge — slower, and it blocks every other dbt operation (other queries, compiles, parses) while it runs. Include LIMIT in your SQL to control row count. Use cte_name + model_name to extract and query a specific CTE from a model.",
 				"canBeReferencedInPrompt": false,
 				"toolReferenceName": "query_database",
 				"icon": "$(database)",
@@ -1502,7 +1502,7 @@
 					"properties": {
 						"sql": {
 							"type": "string",
-							"description": "SQL query to execute (supports Jinja: {{ ref('model') }}, {{ source('src', 'table') }}). Include LIMIT in your SQL to control row count."
+							"description": "SQL query to execute. Prefer plain SQL with fully-qualified identifiers from relation_name — these run in parallel on the native connection. Jinja ({{ ref() }}, {{ source() }}) is supported but slower and serialized. Include LIMIT to control row count."
 						},
 						"cte_name": {
 							"type": "string",
