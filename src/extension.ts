@@ -1360,11 +1360,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 	);
 
-	// -------- Ensure .vscode/launch.json exists with SQL runner configs --------
-	if (vscode.workspace.getConfiguration('dbt-studio').get<boolean>('ensureLaunchConfig', true)) {
-		void ensureLaunchConfig(vscode.workspace.workspaceFolders?.[0]);
-	}
-
 	// -------- Ninja workspace scanner (last — needs everything else ready) --------
 	let workspaceScanner: WorkspaceDiagnosticsScanner | undefined;
 	const workspaceDiagnosticsPersistence = new WorkspaceDiagnosticsPersistence(context, logger);
@@ -1438,35 +1433,6 @@ async function _runBootstrap(cmd: string[], projectDir: string, envVars?: Record
 		child.on('error', () => resolve(false));
 		child.on('close', (code) => resolve(code === 0));
 	});
-}
-
-async function ensureLaunchConfig(folder: vscode.WorkspaceFolder | undefined): Promise<void> {
-	if (!folder) return;
-	const launchUri = vscode.Uri.joinPath(folder.uri, '.vscode', 'launch.json');
-
-	const dbtConfigs = [
-		{ name: 'Run SQL', type: 'dbt-sql', request: 'launch' },
-		{ name: 'Run All SQL', type: 'dbt-sql', request: 'launch', scope: 'all' },
-		{ name: 'Debug SQL', type: 'dbt-sql', request: 'launch' },
-	];
-
-	let existing: { version: string; configurations: Array<Record<string, unknown>> } = { version: '0.2.0', configurations: [] };
-	try {
-		const raw = await vscode.workspace.fs.readFile(launchUri);
-		existing = JSON.parse(Buffer.from(raw).toString('utf8'));
-	} catch {
-		// File doesn't exist or is unparseable — start fresh.
-	}
-
-	const configs: Array<Record<string, unknown>> = Array.isArray(existing.configurations) ? existing.configurations : [];
-
-	// Only add configs that aren't already present (match by name+type).
-	const hasDbtConfig = configs.some(c => c.type === 'dbt-sql');
-	if (hasDbtConfig) return;
-
-	const merged = { version: existing.version ?? '0.2.0', configurations: [...configs, ...dbtConfigs] };
-	try { await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(folder.uri, '.vscode')); } catch { /* exists */ }
-	await vscode.workspace.fs.writeFile(launchUri, Buffer.from(JSON.stringify(merged, null, 4) + '\n', 'utf8'));
 }
 
 function getActiveModelName(): string | undefined {
