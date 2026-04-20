@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import type { NinjaViolation } from '../violation';
-import type { SqlToken } from '../../ftl/parse-result';
+import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 /**
  * Enforces consistent comma placement (trailing or leading).
@@ -23,10 +23,11 @@ export const commaPositionRule: TokenRule = {
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document, config } = ctx;
-		if (!model.sqlTokens || model.sqlTokens.length === 0) return [];
+		const tokens = sqlOnly(model.ninjaSqlTokens);
+		if (tokens.length === 0) return [];
 
 		const policy = config.layout.commaPosition;
-		const commas = model.sqlTokens.filter(t => t.type === 'COMMA');
+		const commas = tokens.filter(t => t.type === 'COMMA');
 		if (commas.length === 0) return [];
 
 		const text = document.getText();

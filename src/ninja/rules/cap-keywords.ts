@@ -4,6 +4,7 @@ import { FixAction, type NinjaViolation } from '../violation';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import type { CapitalisationPolicy } from '../config';
 import { tokenText, tokenRange } from '../token-utils';
+import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 const RULE_ID = 'ninja.cap.keywords';
 
@@ -62,13 +63,14 @@ export const keywordCapRule: TokenRule = {
 		const violations: NinjaViolation[] = [];
 		const consistentMap = new Map<string, string>();
 
-		if (!ctx.model.sqlTokens) return violations;
+		const sqlTokens = sqlOnly(ctx.model.ninjaSqlTokens);
+		if (sqlTokens.length === 0) return violations;
 
 		const text = ctx.document.getText();
 
 		const keywordTypes = ctx.dialectSymbols?.keywordTokenTypes ?? KEYWORD_TOKEN_TYPES;
 
-		for (const token of ctx.model.sqlTokens) {
+		for (const token of sqlTokens) {
 			if (!keywordTypes.has(token.type.toLowerCase())) continue;
 
 			const word = tokenText(text, token);

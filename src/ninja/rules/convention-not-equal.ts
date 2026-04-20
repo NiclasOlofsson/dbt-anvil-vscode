@@ -3,6 +3,7 @@ import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
 import { lineOffset } from '../token-utils';
+import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 export const notEqualRule: TokenRule = {
 	id: 'ninja.convention.not-equal',
@@ -16,13 +17,14 @@ export const notEqualRule: TokenRule = {
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document, config } = ctx;
-		if (!model.sqlTokens || model.sqlTokens.length === 0) return [];
+		const tokens = sqlOnly(model.ninjaSqlTokens);
+		if (tokens.length === 0) return [];
 
 		const preferred = config.convention.notEqual;
 		const text = document.getText();
 		const violations: NinjaViolation[] = [];
 
-		for (const tok of model.sqlTokens) {
+		for (const tok of tokens) {
 			if (tok.type !== 'NEQ') continue;
 			const raw = text.slice(tok.start, tok.end + 1);
 			if (raw === preferred) continue;

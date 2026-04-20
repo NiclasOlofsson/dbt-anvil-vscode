@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { run, violationsFor, capCfg, emptyModel } from './helpers';
+import { run, violationsFor, capCfg, emptyModel, model } from './helpers';
 import { FixAction } from '../../ninja/violation';
 
 const RULE = 'ninja.cap.types';
@@ -82,8 +82,7 @@ describe(RULE, () => {
 		const sql = '-- Date should be lower\nselect 1';
 		const start = sql.indexOf('Date');
 		const end = start + 'Date'.length;
-		const modelWithCommentSpan = {
-			...emptyModel,
+		const modelWithCommentSpan = model({
 			sqlTokens: [{
 				type: 'SELECT',
 				start: sql.indexOf('select'),
@@ -92,7 +91,7 @@ describe(RULE, () => {
 				col: 'select'.length,
 				comments: [{ start, end, text: '-- Date should be lower' }],
 			}],
-		};
+		});
 		const v = violationsFor(run(sql, capCfg('types', 'lower'), modelWithCommentSpan), RULE);
 		expect(v.length).toBe(0);
 	});
@@ -101,8 +100,7 @@ describe(RULE, () => {
 		const sql = 'select 1 /* Date */';
 		const start = sql.indexOf('Date');
 		const end = start + 'Date'.length;
-		const modelWithCommentSpan = {
-			...emptyModel,
+		const modelWithCommentSpan = model({
 			sqlTokens: [{
 				type: 'SELECT',
 				start: 0,
@@ -111,7 +109,7 @@ describe(RULE, () => {
 				col: 6,
 				comments: [{ start, end, text: '/* Date */' }],
 			}],
-		};
+		});
 		const v = violationsFor(run(sql, capCfg('types', 'lower'), modelWithCommentSpan), RULE);
 		expect(v.length).toBe(0);
 	});
@@ -120,8 +118,7 @@ describe(RULE, () => {
 		const sql = 'select \'INT column\' as label from t';
 		const stringStart = sql.indexOf('\'');
 		const stringEnd = sql.lastIndexOf('\'');
-		const modelWithString = {
-			...emptyModel,
+		const modelWithString = model({
 			sqlTokens: [{
 				type: 'STRING',
 				start: stringStart,
@@ -129,7 +126,7 @@ describe(RULE, () => {
 				line: 0,
 				col: stringEnd + 1,
 			}],
-		};
+		});
 		const v = violationsFor(run(sql, capCfg('types', 'lower'), modelWithString), RULE);
 		expect(v.length).toBe(0);
 	});

@@ -2,6 +2,7 @@ import { DEFAULT_CONFIG, type NinjaConfig } from '../../ninja/config';
 import { runNinja, type NinjaResult } from '../../ninja/engine';
 import type { CteInfo, ColumnRefToken, TableRefToken, ColumnDefToken, DocumentModel } from '../../services/parse-service';
 import type { SqlToken } from '../../ftl/parse-result';
+import { mergeSqlAndJinjaTokens } from '../../ftl/ninja-sql-tokens';
 import * as vscode from 'vscode';
 
 /** Build a minimal NinjaConfig with optional overrides. */
@@ -143,7 +144,18 @@ export function sqlTok(type: string, start: number, end: number, line: number, c
 	return { type, start, end, line, col };
 }
 
-/** Build a DocumentModel with custom fields. */
+/**
+ * Build a DocumentModel with custom fields.
+ *
+ * If `sqlTokens` (or `jinjaTokens`) is supplied without an explicit
+ * `ninjaSqlTokens`, the merged stream is derived automatically. This keeps
+ * legacy tests that only set `sqlTokens` working transparently — ninja rules
+ * now read from `ninjaSqlTokens`, so the factory backfills it.
+ */
 export function model(overrides: Partial<DocumentModel> = {}): DocumentModel {
-	return { ...emptyModel, ...overrides };
+	const merged = { ...emptyModel, ...overrides };
+	if (merged.ninjaSqlTokens === undefined && (merged.sqlTokens || merged.jinjaTokens)) {
+		merged.ninjaSqlTokens = mergeSqlAndJinjaTokens(merged.sqlTokens ?? [], merged.jinjaTokens ?? []);
+	}
+	return merged;
 }

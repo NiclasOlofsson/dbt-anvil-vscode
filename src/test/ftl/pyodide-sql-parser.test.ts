@@ -471,7 +471,10 @@ SELECT mkey, sourcename FROM warehouse`;
 			jinjaTokens: [],
 			document: doc,
 			config: DEFAULT_CONFIG,
-			model: { sqlTokens: result.sqlTokens } as any,
+			model: {
+				sqlTokens: result.sqlTokens,
+				ninjaSqlTokens: (result.sqlTokens ?? []).map(t => ({ category: 'sql' as const, ...t })),
+			} as any,
 		});
 
 		expect(violations, 'layout rule must not flag "count" inside a -- comment').toHaveLength(0);

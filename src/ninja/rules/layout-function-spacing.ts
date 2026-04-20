@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import { FixAction, type NinjaViolation } from '../violation';
 import type { LayoutRule, LayoutRuleContext } from '../rule';
+import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 // Common SQL aggregate/scalar/window functions (same set as cap-functions).
 const SQL_FUNCTIONS = new Set([
@@ -60,10 +61,11 @@ export const functionSpacingRule: LayoutRule = {
 
 	check(ctx: LayoutRuleContext): NinjaViolation[] {
 		const violations: NinjaViolation[] = [];
-		const commentSpans = (ctx.model?.sqlTokens ?? []).flatMap(t => t.comments ?? []);
+		const sqlTokens = sqlOnly(ctx.model?.ninjaSqlTokens);
+		const commentSpans = sqlTokens.flatMap(t => t.comments ?? []);
 		// String-literal spans must also mask out content; otherwise function names inside
 		// quoted text would be flagged when the spacing pattern happens to match.
-		const stringSpans = (ctx.model?.sqlTokens ?? [])
+		const stringSpans = sqlTokens
 			.filter(t => t.type === 'STRING')
 			.map(t => ({ start: t.start, end: t.end + 1 }));
 

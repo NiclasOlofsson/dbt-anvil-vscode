@@ -2,6 +2,7 @@ import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
 import { tokenRange, tokenText } from '../token-utils';
+import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 export const bareUnionRule: TokenRule = {
 	id: 'ninja.ambiguity.bare-union',
@@ -15,10 +16,10 @@ export const bareUnionRule: TokenRule = {
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document, config } = ctx;
-		if (!model.sqlTokens || model.sqlTokens.length === 0) return [];
+		const tokens = sqlOnly(model.ninjaSqlTokens);
+		if (tokens.length === 0) return [];
 
 		const text = document.getText();
-		const tokens = model.sqlTokens;
 		const violations: NinjaViolation[] = [];
 
 		for (let i = 0; i < tokens.length; i++) {

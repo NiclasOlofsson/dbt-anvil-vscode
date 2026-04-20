@@ -2,6 +2,7 @@ import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import type { NinjaViolation } from '../violation';
 import { tokenRange } from '../token-utils';
+import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 export const leftJoinRule: TokenRule = {
 	id: 'ninja.convention.left-join',
@@ -12,10 +13,10 @@ export const leftJoinRule: TokenRule = {
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document } = ctx;
-		if (!model.sqlTokens || model.sqlTokens.length === 0) return [];
+		const tokens = sqlOnly(model.ninjaSqlTokens);
+		if (tokens.length === 0) return [];
 
 		const text = document.getText();
-		const tokens = model.sqlTokens;
 		const violations: NinjaViolation[] = [];
 
 		for (let i = 0; i < tokens.length - 1; i++) {
