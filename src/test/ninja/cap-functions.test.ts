@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { run, violationsFor, capCfg, emptyModel } from './helpers';
+import { run, violationsFor, capCfg, emptyModel, model } from './helpers';
 import { FixAction } from '../../ninja/violation';
 
 const RULE = 'ninja.cap.functions';
@@ -66,8 +66,7 @@ describe(RULE, () => {
 		const sql = '-- COUNT(*)\nselect 1';
 		const start = sql.indexOf('COUNT');
 		const end = start + 'COUNT(*)'.length;
-		const modelWithCommentSpan = {
-			...emptyModel,
+		const modelWithCommentSpan = model({
 			sqlTokens: [{
 				type: 'SELECT',
 				start: sql.indexOf('select'),
@@ -76,7 +75,7 @@ describe(RULE, () => {
 				col: 'select'.length,
 				comments: [{ start, end, text: '-- COUNT(*)' }],
 			}],
-		};
+		});
 		const v = violationsFor(run(sql, capCfg('functions', 'lower'), modelWithCommentSpan), RULE);
 		expect(v.length).toBe(0);
 	});
@@ -85,8 +84,7 @@ describe(RULE, () => {
 		const sql = 'select 1 /* COUNT(*) */';
 		const start = sql.indexOf('COUNT');
 		const end = start + 'COUNT(*)'.length;
-		const modelWithCommentSpan = {
-			...emptyModel,
+		const modelWithCommentSpan = model({
 			sqlTokens: [{
 				type: 'SELECT',
 				start: 0,
@@ -95,7 +93,7 @@ describe(RULE, () => {
 				col: 6,
 				comments: [{ start, end, text: '/* COUNT(*) */' }],
 			}],
-		};
+		});
 		const v = violationsFor(run(sql, capCfg('functions', 'lower'), modelWithCommentSpan), RULE);
 		expect(v.length).toBe(0);
 	});
@@ -104,8 +102,7 @@ describe(RULE, () => {
 		const sql = 'select \'COUNT(*)\' as label from t';
 		const stringStart = sql.indexOf('\'');
 		const stringEnd = sql.lastIndexOf('\'');
-		const modelWithString = {
-			...emptyModel,
+		const modelWithString = model({
 			sqlTokens: [{
 				type: 'STRING',
 				start: stringStart,
@@ -113,7 +110,7 @@ describe(RULE, () => {
 				line: 0,
 				col: stringEnd + 1,
 			}],
-		};
+		});
 		const v = violationsFor(run(sql, capCfg('functions', 'lower'), modelWithString), RULE);
 		expect(v.length).toBe(0);
 	});

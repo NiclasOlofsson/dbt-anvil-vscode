@@ -3,6 +3,7 @@ import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { SnippetAction, type NinjaViolation } from '../violation';
 import { lastContentTokenOnLine } from '../fix-utils';
+import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 export const expressionNoAliasRule: TokenRule = {
 	id: 'ninja.aliasing.expression-no-alias',
@@ -27,7 +28,7 @@ export const expressionNoAliasRule: TokenRule = {
 			// col values when the anchor position is smaller than the name length.
 			if (col.col < 0 || col.endCol < 0) continue;
 
-			const lastTok = model.sqlTokens ? lastContentTokenOnLine(model.sqlTokens, col.endLine) : undefined;
+			const lastTok = lastContentTokenOnLine(sqlOnly(model.ninjaSqlTokens), col.endLine);
 			const insertCol = lastTok && lastTok.col > col.endCol ? lastTok.col : col.endCol;
 			const insertPos = new vscode.Position(col.endLine, insertCol);
 			const placeholder = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(col.name) ? col.name : 'alias';

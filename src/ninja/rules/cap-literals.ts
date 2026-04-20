@@ -4,6 +4,7 @@ import { FixAction, type NinjaViolation } from '../violation';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import type { CapitalisationPolicy } from '../config';
 import { tokenText, tokenRange } from '../token-utils';
+import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 // Boolean/null literals that should follow capitalisation policy.
 // These token types are emitted by sqlglot and never appear inside SQL comments.
@@ -42,11 +43,12 @@ export const literalCapRule: TokenRule = {
 		const violations: NinjaViolation[] = [];
 		const consistentMap = new Map<string, string>();
 
-		if (!ctx.model.sqlTokens) return violations;
+		const sqlTokens = sqlOnly(ctx.model.ninjaSqlTokens);
+		if (sqlTokens.length === 0) return violations;
 
 		const text = ctx.document.getText();
 
-		for (const token of ctx.model.sqlTokens) {
+		for (const token of sqlTokens) {
 			if (!LITERAL_TOKEN_TYPES.has(token.type.toLowerCase())) continue;
 
 			const word = tokenText(text, token);

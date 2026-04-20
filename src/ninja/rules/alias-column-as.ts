@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
+import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 /**
  * Flags column aliases that omit the `AS` keyword.
@@ -22,9 +23,10 @@ export const columnAsRule: TokenRule = {
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model } = ctx;
 		if (!model.finalSelect) return [];
-		if (!model.sqlTokens || model.sqlTokens.length === 0) return [];
+		const tokens = sqlOnly(model.ninjaSqlTokens);
+		if (tokens.length === 0) return [];
 
-		const aliasTokens = model.sqlTokens.filter(t => t.type === 'ALIAS');
+		const aliasTokens = tokens.filter(t => t.type === 'ALIAS');
 		const violations: NinjaViolation[] = [];
 
 		for (const col of model.finalSelect.columns) {

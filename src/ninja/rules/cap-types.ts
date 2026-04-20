@@ -3,6 +3,7 @@ import { NinjaCategory } from '../categories';
 import { FixAction, type NinjaViolation } from '../violation';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import type { CapitalisationPolicy } from '../config';
+import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 // SQL datatype keywords that should follow capitalisation policy.
 const SQL_TYPES = new Set([
@@ -51,10 +52,11 @@ export const typeCapRule: TokenRule = {
 		const policy = ctx.config.capitalisation.types;
 		const violations: NinjaViolation[] = [];
 		const consistentMap = new Map<string, string>();
-		const commentSpans = (ctx.model.sqlTokens ?? []).flatMap(t => t.comments ?? []);
+		const sqlTokens = sqlOnly(ctx.model.ninjaSqlTokens);
+		const commentSpans = sqlTokens.flatMap(t => t.comments ?? []);
 		// String-literal spans must be excluded too — type keywords inside string content
 		// would otherwise be incorrectly flagged (e.g. select 'INT column' as label).
-		const stringSpans = (ctx.model.sqlTokens ?? [])
+		const stringSpans = sqlTokens
 			.filter(t => t.type === 'STRING')
 			.map(t => ({ start: t.start, end: t.end + 1 }));
 

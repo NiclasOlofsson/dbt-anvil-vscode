@@ -3,6 +3,7 @@ import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
 import { lineOffset } from '../token-utils';
+import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 export const countRowsRule: TokenRule = {
 	id: 'ninja.convention.count-rows',
@@ -15,10 +16,10 @@ export const countRowsRule: TokenRule = {
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document } = ctx;
-		if (!model.sqlTokens || model.sqlTokens.length === 0) return [];
+		const tokens = sqlOnly(model.ninjaSqlTokens);
+		if (tokens.length === 0) return [];
 
 		const text = document.getText();
-		const tokens = model.sqlTokens;
 		const violations: NinjaViolation[] = [];
 
 		for (let i = 0; i < tokens.length - 3; i++) {

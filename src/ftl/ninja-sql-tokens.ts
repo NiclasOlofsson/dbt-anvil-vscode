@@ -30,6 +30,18 @@ export type NinjaSqlToken =
 	| ({ category: 'jinja' } & JinjaToken);
 
 /**
+ * Extract only the sql-category tokens from a unified stream.
+ * Centralizes the discriminator filter so consumers don't repeat the
+ * type-narrowing predicate at every call site.
+ */
+export function sqlOnly(stream: NinjaSqlToken[] | undefined): SqlToken[] {
+	if (!stream) return [];
+	const out: SqlToken[] = [];
+	for (const t of stream) if (t.category === 'sql') out.push(t);
+	return out;
+}
+
+/**
  * Merge sqlglot and jinja token streams into a single position-ordered
  * sequence. SQL tokens whose `start` falls inside a jinja tag region (as
  * marked by `*_open` tokens carrying `tagEnd`) are dropped — the jinja

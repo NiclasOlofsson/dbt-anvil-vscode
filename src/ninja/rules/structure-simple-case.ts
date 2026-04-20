@@ -3,6 +3,7 @@ import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import type { NinjaViolation } from '../violation';
 import { offsetToLineCol } from '../token-utils';
+import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 const BOOL_TRUE = new Set(['true', '1']);
 const BOOL_FALSE = new Set(['false', '0']);
@@ -19,11 +20,10 @@ export const simpleCaseRule: TokenRule = {
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document } = ctx;
-		if (!model.sqlTokens) return [];
+		const tokens = sqlOnly(model.ninjaSqlTokens);
+		if (tokens.length === 0) return [];
 		const text = document.getText();
 		const violations: NinjaViolation[] = [];
-
-		const tokens = model.sqlTokens;
 
 		// Look for pattern: CASE WHEN ... THEN (TRUE|1) ELSE (FALSE|0) END
 		// or the inverse:    CASE WHEN ... THEN (FALSE|0) ELSE (TRUE|1) END

@@ -2,6 +2,7 @@ import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import type { NinjaViolation } from '../violation';
 import { tokenRange } from '../token-utils';
+import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 export const distinctGroupByRule: TokenRule = {
 	id: 'ninja.ambiguity.distinct-groupby',
@@ -12,10 +13,10 @@ export const distinctGroupByRule: TokenRule = {
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document } = ctx;
-		if (!model.sqlTokens || model.sqlTokens.length === 0) return [];
+		const tokens = sqlOnly(model.ninjaSqlTokens);
+		if (tokens.length === 0) return [];
 
 		const text = document.getText();
-		const tokens = model.sqlTokens;
 
 		let distinctToken = null;
 		let hasGroupBy = false;

@@ -3,6 +3,7 @@ import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
 import { lastContentTokenOnLine, firstContentTokenOnLine, tokenStartCol } from '../fix-utils';
+import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 /**
  * Enforces consistent boolean operator placement (trailing or leading).
@@ -24,10 +25,11 @@ export const operatorPositionRule: TokenRule = {
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document, config } = ctx;
-		if (!model.sqlTokens || model.sqlTokens.length === 0) return [];
+		const sqlTokens = sqlOnly(model.ninjaSqlTokens);
+		if (sqlTokens.length === 0) return [];
 
 		const policy = config.layout.operatorPosition;
-		const operators = model.sqlTokens.filter(t => t.type === 'AND' || t.type === 'OR');
+		const operators = sqlTokens.filter(t => t.type === 'AND' || t.type === 'OR');
 		if (operators.length === 0) return [];
 
 		const text = document.getText();
@@ -51,12 +53,10 @@ export const operatorPositionRule: TokenRule = {
 					const trailingSpace = lineText[opStart + opLen] === ' ' ? 1 : 0;
 					// Scan backward to find the last line that has SQL tokens (skip pure comment lines)
 					let prevSqlLine = line - 1;
-					if (model.sqlTokens) {
-						while (prevSqlLine > 0 && !lastContentTokenOnLine(model.sqlTokens, prevSqlLine)) {
-							prevSqlLine--;
-						}
+					while (prevSqlLine > 0 && !lastContentTokenOnLine(sqlTokens, prevSqlLine)) {
+						prevSqlLine--;
 					}
-					const prevAnchor = model.sqlTokens ? lastContentTokenOnLine(model.sqlTokens, prevSqlLine) : undefined;
+					const prevAnchor = lastContentTokenOnLine(sqlTokens, prevSqlLine);
 					const insertCol = prevAnchor?.col ?? lines[prevSqlLine].length;
 					violations.push({
 						rule: 'ninja.convention.operator-position',
@@ -77,7 +77,7 @@ export const operatorPositionRule: TokenRule = {
 						const opText = lineText.slice(opStart, opStart + opLen).trim();
 						const nextLineText = lines[line + 1];
 						const spaceBefore = opStart > 0 && lineText[opStart - 1] === ' ' ? 1 : 0;
-						const nextAnchor = firstContentTokenOnLine(model.sqlTokens, line + 1);
+						const nextAnchor = firstContentTokenOnLine(sqlTokens, line + 1);
 						const insertCol = nextAnchor ? tokenStartCol(nextAnchor) : (nextLineText.length - nextLineText.trimStart().length);
 						violations.push({
 							rule: 'ninja.convention.operator-position',

@@ -3,6 +3,7 @@ import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
 import { offsetToLineCol } from '../token-utils';
+import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 const LEGACY = new Set(['ifnull', 'nvl', 'isnull']);
 
@@ -17,11 +18,12 @@ export const coalesceRule: TokenRule = {
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document } = ctx;
-		if (!model.sqlTokens) return [];
+		const tokens = sqlOnly(model.ninjaSqlTokens);
+		if (tokens.length === 0) return [];
 		const text = document.getText();
 		const violations: NinjaViolation[] = [];
 
-		for (const tok of model.sqlTokens) {
+		for (const tok of tokens) {
 			if (tok.type !== 'VAR') continue;
 			const word = text.slice(tok.start, tok.end + 1);
 			if (!LEGACY.has(word.toLowerCase())) continue;

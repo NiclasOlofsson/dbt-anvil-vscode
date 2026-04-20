@@ -3,6 +3,7 @@ import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
 import { offsetToLineCol } from '../token-utils';
+import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 export const elseNullRule: TokenRule = {
 	id: 'ninja.structure.else-null',
@@ -15,11 +16,10 @@ export const elseNullRule: TokenRule = {
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document } = ctx;
-		if (!model.sqlTokens) return [];
+		const tokens = sqlOnly(model.ninjaSqlTokens);
+		if (tokens.length === 0) return [];
 		const text = document.getText();
 		const violations: NinjaViolation[] = [];
-
-		const tokens = model.sqlTokens;
 
 		for (let i = 0; i < tokens.length - 2; i++) {
 			if (tokens[i].type !== 'ELSE') continue;
