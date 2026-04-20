@@ -3,6 +3,7 @@ import { NinjaCategory } from '../categories';
 import { FixAction, type NinjaViolation } from '../violation';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { normaliseTagSpacing } from '../jinja/tag-formatter';
+import { replaceOp } from '../fix-op';
 
 const RULE_ID = 'ninja.jinja.argument-spacing';
 
@@ -62,7 +63,7 @@ export const jinjaArgumentSpacingRule: TokenRule = {
 				range,
 				action: {
 					type: FixAction.TYPE,
-					edits: [vscode.TextEdit.replace(range, normalised)],
+					ops: [replaceOp(range, normalised)],
 					autoFix: true,
 				},
 			});

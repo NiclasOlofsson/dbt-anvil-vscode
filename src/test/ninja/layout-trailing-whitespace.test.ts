@@ -33,7 +33,7 @@ describe(RULE, () => {
 	it('provides a delete fix removing trailing whitespace', () => {
 		const v = violationsFor(run('select 1   \n'), RULE);
 		expect(v[0].action).toBeDefined();
-		expect((v[0].action as FixAction).edits[0].newText).toBe('');
+		expect((v[0].action as FixAction).ops[0].kind).toBe('delete');
 		expect(v[0].range.start.character).toBe(8);
 		expect(v[0].range.end.character).toBe(11);
 	});

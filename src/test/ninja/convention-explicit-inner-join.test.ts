@@ -34,7 +34,7 @@ describe(RULE, () => {
 		];
 		const v = check(sql, tokens);
 		expect(v[0].action?.type).toBe(FixAction.TYPE);
-		const fixed = applyEditsToText(sql, v[0].action!.edits);
+		const fixed = applyEditsToText(sql, (v[0].action as FixAction).ops);
 		expect(fixed).toBe('select * from a INNER JOIN b on a.id = b.id');
 	});
 

@@ -22,8 +22,8 @@ function applyFixes(sql: string): string {
 	const jinjaTokens = tokenizeJinja(sql);
 	const m = model({ jinjaTokens });
 	const violations = jinjaArgumentSpacingRule.check({ model: m, document: doc, config: cfg() });
-	const edits = violations.flatMap(v => v.action?.type === FixAction.TYPE ? v.action.edits : []);
-	return applyEditsToText(sql, edits);
+	const ops = violations.flatMap(v => v.action?.type === FixAction.TYPE ? v.action.ops : []);
+	return applyEditsToText(sql, ops);
 }
 
 // ── Unit tests: normaliseTagSpacing ─────────────────────────────────────────

@@ -20,6 +20,18 @@ export const COMMA_SPEC: TokenSpec = {
 	configLinePosition: (c: NinjaConfig) => c.layout.commaPosition,
 };
 
+/**
+ * ninja.layout.comma-spacing — no space before a comma, exactly one space
+ * after. Only fires within the same line; cross-line commas (leading-comma
+ * style) skip the same-line check in the engine.
+ */
+export const COMMA_SPACING_SPEC: TokenSpec = {
+	tokenTypes: 'COMMA',
+	diagnostic: 'ninja.layout.comma-spacing',
+	spaceBefore: 'no-space',
+	spaceAfter: 'space',
+};
+
 /** ninja.convention.operator-position — trailing vs leading boolean operators. */
 export const OPERATOR_SPEC: TokenSpec = {
 	tokenTypes: ['AND', 'OR'],
@@ -70,6 +82,20 @@ export const CLOSE_PAREN_SPEC: TokenSpec = {
 	tokenTypes: 'R_PAREN',
 	diagnostic: 'ninja.layout.spacing',
 	spaceBefore: 'no-space',
+};
+
+/**
+ * ninja.layout.binary-operator-spacing — require a space on both sides of
+ * comparison/equality operators. Arithmetic ops (`+`, `-`, `*`, `/`) are
+ * intentionally excluded: `*` is also SELECT-star, `-` is also unary
+ * negation, and inline arithmetic (e.g. `col1+col2`) is common enough that
+ * flagging it would create noise.
+ */
+export const BINARY_OPERATOR_SPEC: TokenSpec = {
+	tokenTypes: ['EQ', 'NEQ', 'LT', 'LTE', 'GT', 'GTE'],
+	diagnostic: 'ninja.layout.binary-operator-spacing',
+	spaceBefore: 'space',
+	spaceAfter: 'space',
 };
 
 /** All built-in spacing specs in one array, in priority order (first match wins). */

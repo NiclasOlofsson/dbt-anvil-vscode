@@ -3,6 +3,7 @@ import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
+import { deleteOp, type FixOp } from '../fix-op';
 
 /**
  * Flags CTEs that are defined but never referenced in any FROM/JOIN.
@@ -48,7 +49,7 @@ export const unusedCteRule: TokenRule = {
 				rule: 'ninja.structure.unused-cte',
 				message: `CTE '${cte.name}' is defined but never referenced.`,
 				range,
-				action: deleteEdits ? { type: FixAction.TYPE, edits: deleteEdits, autoFix: false } : undefined,
+				action: deleteEdits ? { type: FixAction.TYPE, ops: deleteEdits, autoFix: false } : undefined,
 			});
 		}
 
@@ -69,7 +70,7 @@ function buildDeleteFix(
 	index: number,
 	sqlTokens: import('../../ftl/parse-result').SqlToken[] | undefined,
 	document: vscode.TextDocument,
-): vscode.TextEdit[] | undefined {
+): FixOp[] | undefined {
 	if (!sqlTokens || sqlTokens.length === 0) return undefined;
 
 	const cte = ctes[index];
@@ -93,7 +94,7 @@ function deleteOnlyCte(
 	cte: import('../../services/parse-service').CteInfo,
 	sqlTokens: import('../../ftl/parse-result').SqlToken[],
 	document: vscode.TextDocument,
-): vscode.TextEdit[] | undefined {
+): FixOp[] | undefined {
 	// Find the WITH keyword token
 	const withToken = sqlTokens.find(t => t.type === 'WITH');
 	if (!withToken) return undefined;
@@ -119,7 +120,7 @@ function deleteOnlyCte(
 		deleteStart = new vscode.Position(startPos.line, 0);
 	}
 
-	return [vscode.TextEdit.delete(new vscode.Range(deleteStart, deleteEnd))];
+	return [deleteOp(new vscode.Range(deleteStart, deleteEnd))];
 }
 
 /** Delete the first CTE of many: from CTE name AS ( ... ) up to but not including next CTE name. */
@@ -128,7 +129,7 @@ function deleteFirstCte(
 	nextCte: import('../../services/parse-service').CteInfo,
 	_sqlTokens: import('../../ftl/parse-result').SqlToken[],
 	document: vscode.TextDocument,
-): vscode.TextEdit[] | undefined {
+): FixOp[] | undefined {
 	const nameCol = cte.col ?? 0;
 	const startPos = new vscode.Position(cte.line, nameCol);
 
@@ -143,7 +144,7 @@ function deleteFirstCte(
 		deleteStart = new vscode.Position(cte.line, 0);
 	}
 
-	return [vscode.TextEdit.delete(new vscode.Range(deleteStart, endPos))];
+	return [deleteOp(new vscode.Range(deleteStart, endPos))];
 }
 
 /** Delete a non-first CTE: from the end of the previous CTE through this CTE's closing paren. */
@@ -151,7 +152,7 @@ function deleteNonFirstCte(
 	cte: import('../../services/parse-service').CteInfo,
 	prevCte: import('../../services/parse-service').CteInfo,
 	document: vscode.TextDocument,
-): vscode.TextEdit[] | undefined {
+): FixOp[] | undefined {
 	// Start from end of previous CTE's closing paren
 	const prevEndLine = prevCte.endLine;
 	const prevEndCol = prevCte.endCol ?? document.lineAt(prevEndLine).text.length;
@@ -169,5 +170,5 @@ function deleteNonFirstCte(
 		endPos = new vscode.Position(endLine + 1, 0);
 	}
 
-	return [vscode.TextEdit.delete(new vscode.Range(startPos, endPos))];
+	return [deleteOp(new vscode.Range(startPos, endPos))];
 }

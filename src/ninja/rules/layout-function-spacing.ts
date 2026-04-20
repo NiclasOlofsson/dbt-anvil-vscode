@@ -3,6 +3,7 @@ import { NinjaCategory } from '../categories';
 import { FixAction, type NinjaViolation } from '../violation';
 import type { LayoutRule, LayoutRuleContext } from '../rule';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
+import { deleteOp } from '../fix-op';
 
 // Common SQL aggregate/scalar/window functions (same set as cap-functions).
 const SQL_FUNCTIONS = new Set([
@@ -102,7 +103,7 @@ export const functionSpacingRule: LayoutRule = {
 									rule: 'ninja.layout.function_spacing',
 									message: `Unexpected space before '(' in function call '${word}'`,
 									range,
-									action: { type: FixAction.TYPE, edits: [vscode.TextEdit.delete(range)], autoFix: true },
+									action: { type: FixAction.TYPE, ops: [deleteOp(range)], autoFix: true },
 								});
 							}
 						}

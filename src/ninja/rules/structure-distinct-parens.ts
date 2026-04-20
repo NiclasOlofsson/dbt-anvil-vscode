@@ -3,6 +3,7 @@ import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
 import { lineOffset } from '../token-utils';
+import { deleteOp, replaceOp } from '../fix-op';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 export const distinctParensRule: TokenRule = {
@@ -61,7 +62,7 @@ export const distinctParensRule: TokenRule = {
 				rule: 'ninja.structure.distinct-parens',
 				message: 'DISTINCT is not a function — remove parentheses.',
 				range,
-				action: { type: FixAction.TYPE, edits: [{ range: rparenRange, newText: '' }, { range: lparenRange, newText: ' ' }], autoFix: true },
+				action: { type: FixAction.TYPE, ops: [deleteOp(rparenRange), replaceOp(lparenRange, ' ')], autoFix: true },
 			});
 		}
 

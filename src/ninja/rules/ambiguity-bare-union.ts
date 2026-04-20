@@ -1,6 +1,7 @@
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
+import { replaceOp } from '../fix-op';
 import { tokenRange, tokenText } from '../token-utils';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
@@ -34,7 +35,7 @@ export const bareUnionRule: TokenRule = {
 				rule: 'ninja.ambiguity.bare-union',
 				message: `Use UNION ${suffix} instead of bare UNION.`,
 				range,
-				action: { type: FixAction.TYPE, edits: [{ range, newText: `${raw} ${suffix}` }], autoFix: true },
+				action: { type: FixAction.TYPE, ops: [replaceOp(range, `${raw} ${suffix}`)], autoFix: true },
 			});
 		}
 

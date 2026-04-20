@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
+import { insertOp } from '../fix-op';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 /**
@@ -54,7 +55,7 @@ export const columnAsRule: TokenRule = {
 					rule: 'ninja.aliasing.column-as',
 					message: `Column alias '${col.name}' should use explicit AS keyword.`,
 					range,
-					action: { type: FixAction.TYPE, edits: [vscode.TextEdit.insert(new vscode.Position(col.aliasLine, col.aliasCol), 'AS ')], autoFix: true },
+					action: { type: FixAction.TYPE, ops: [insertOp(new vscode.Position(col.aliasLine, col.aliasCol), 'AS ')], autoFix: true },
 				});
 			}
 		}

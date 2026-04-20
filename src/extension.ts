@@ -673,12 +673,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const callHierarchyProvider = new DbtCallHierarchyProvider(manifestIndexer, logger, parseService);
 
 	let providerDisposables: vscode.Disposable[] = [];
+	let sqlSelector: vscode.DocumentFilter[] = [];
 
 	const registerProviders = (): void => {
 		// Dispose previous registrations
 		for (const d of providerDisposables) d.dispose();
 
-		const sqlSelector: vscode.DocumentSelector = pathResolver.buildSqlSelector();
+		sqlSelector = pathResolver.buildSqlSelector();
 		const yamlSelector: vscode.DocumentSelector = pathResolver.buildYamlSelector();
 
 		providerDisposables = [
@@ -720,6 +721,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			registerProviders();
 		}),
 		{ dispose: () => { for (const d of providerDisposables) d.dispose(); } },
+		vscode.workspace.onWillSaveTextDocument(e => {
+			const { loadConfig } = require('./ninja/config-loader') as typeof import('./ninja/config-loader');
+			const config = loadConfig();
+			if (!config.enabled || !config.autoFix.applyOnFixAll) return;
+			if (!sqlSelector.some(s => vscode.languages.match(s, e.document))) return;
+			e.waitUntil(ninjaFormattingProvider.provideDocumentFormattingEdits(
+				e.document,
+				{ tabSize: 4, insertSpaces: true },
+				new vscode.CancellationTokenSource().token,
+			));
+		}),
 	);
 
 	const requireEnv = (): boolean => {

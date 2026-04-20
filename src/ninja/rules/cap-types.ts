@@ -3,6 +3,7 @@ import { NinjaCategory } from '../categories';
 import { FixAction, type NinjaViolation } from '../violation';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import type { CapitalisationPolicy } from '../config';
+import { replaceOp } from '../fix-op';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 // SQL datatype keywords that should follow capitalisation policy.
@@ -101,7 +102,7 @@ export const typeCapRule: TokenRule = {
 								rule: 'ninja.cap.types',
 								message: `Expected type '${word}' to be '${fix}'`,
 								range,
-								action: { type: FixAction.TYPE, edits: [vscode.TextEdit.replace(range, fix)], autoFix: true },
+								action: { type: FixAction.TYPE, ops: [replaceOp(range, fix)], autoFix: true },
 							});
 						}
 					}

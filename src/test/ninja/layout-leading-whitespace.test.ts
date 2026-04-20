@@ -28,7 +28,7 @@ describe(RULE, () => {
 	it('provides a delete fix removing leading blank lines', () => {
 		const v = violationsFor(run('\n\nselect 1\n'), RULE);
 		expect(v[0].action).toBeDefined();
-		expect((v[0].action as FixAction).edits[0].newText).toBe('');
+		expect((v[0].action as FixAction).ops[0].kind).toBe('delete');
 		expect(v[0].range.start.line).toBe(0);
 		expect(v[0].range.end.line).toBe(2);
 	});

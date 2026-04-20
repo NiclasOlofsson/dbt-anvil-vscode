@@ -1,6 +1,7 @@
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
+import { replaceOp } from '../fix-op';
 import { tokenRange, tokenText } from '../token-utils';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
@@ -36,7 +37,7 @@ export const implicitJoinRule: TokenRule = {
 				rule: 'ninja.ambiguity.implicit-join',
 				message: 'Use INNER JOIN instead of bare JOIN.',
 				range,
-				action: { type: FixAction.TYPE, edits: [{ range, newText: `INNER ${raw}` }], autoFix: true },
+				action: { type: FixAction.TYPE, ops: [replaceOp(range, `INNER ${raw}`)], autoFix: true },
 			});
 		}
 

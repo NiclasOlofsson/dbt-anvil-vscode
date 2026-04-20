@@ -68,8 +68,9 @@ describe(RULE, () => {
 		const tokens: SqlToken[] = [sqlTok('SELECT', 0, 5, 0, 6)];
 		const v = check(sql, fs, tokens);
 		expect(v[0].action).toBeDefined();
-		expect((v[0].action as FixAction).edits[0].newText).toBe('AS ');
-		expect((v[0].action as FixAction).edits[0].range.start.character).toBe(10);
+		const op = (v[0].action as FixAction).ops[0] as { kind: 'insert'; position: import('vscode').Position; text: string };
+		expect(op.text).toBe('AS ');
+		expect(op.position.character).toBe(10);
 	});
 
 	it('no violation when column has no alias', () => {
@@ -120,7 +121,7 @@ describe(RULE, () => {
 		};
 		const tokens: SqlToken[] = [sqlTok('SELECT', 0, 5, 0, 6)];
 		const v = check(sql, fs, tokens);
-		const result = applyEditsToText(sql, (v[0].action as FixAction).edits);
+		const result = applyEditsToText(sql, (v[0].action as FixAction).ops);
 		expect(result).toBe('select id AS user_id from t');
 	});
 });

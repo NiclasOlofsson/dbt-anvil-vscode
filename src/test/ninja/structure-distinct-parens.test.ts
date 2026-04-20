@@ -28,8 +28,8 @@ describe(RULE, () => {
 		expect(v[0].message).toContain('not a function');
 		expect(v[0].action).toBeDefined();
 		// Fix should remove ( and ) replacing ( with space
-		expect((v[0].action as FixAction).edits[0].newText).toBe('');   // R_PAREN removal
-		expect((v[0].action as FixAction).edits[1].newText).toBe(' ');   // L_PAREN to space
+		expect((v[0].action as FixAction).ops[0].kind).toBe('delete');   // R_PAREN removal
+		expect((v[0].action as FixAction).ops[1].text).toBe(' ');   // L_PAREN to space
 	});
 
 	it('no violation for DISTINCT col (no parens)', () => {

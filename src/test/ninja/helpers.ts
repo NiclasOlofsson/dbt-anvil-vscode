@@ -79,17 +79,27 @@ export function capCfg(key: 'keywords' | 'functions' | 'literals' | 'types', pol
 }
 
 /**
- * Apply a list of TextEdits to a string, returning the result.
- * Edits are applied end-to-start (by offset) so earlier edits don't shift later ones.
+ * Apply a list of FixOps to a string, returning the result.
+ * Ops are applied end-to-start (by offset) so earlier ops don't shift later ones.
  */
-export function applyEditsToText(text: string, edits: vscode.TextEdit[]): string {
+export function applyEditsToText(text: string, ops: import('../../ninja/fix-op').FixOp[]): string {
 	const doc = mockDocument(text);
-	const sorted = [...edits].sort((a, b) => doc.offsetAt(b.range.start) - doc.offsetAt(a.range.start));
+	type Segment = { start: number; end: number; replacement: string };
+	const segments: Segment[] = ops.map(op => {
+		if (op.kind === 'replace') {
+			return { start: doc.offsetAt(op.range.start), end: doc.offsetAt(op.range.end), replacement: op.text };
+		} else if (op.kind === 'delete') {
+			return { start: doc.offsetAt(op.range.start), end: doc.offsetAt(op.range.end), replacement: '' };
+		} else {
+			// insert or linebreak — both have a position
+			const offset = doc.offsetAt(op.kind === 'insert' ? op.position : op.position);
+			return { start: offset, end: offset, replacement: op.kind === 'insert' ? op.text : '\n' };
+		}
+	});
+	const sorted = segments.sort((a, b) => b.start - a.start);
 	let result = text;
-	for (const edit of sorted) {
-		const start = doc.offsetAt(edit.range.start);
-		const end = doc.offsetAt(edit.range.end);
-		result = result.slice(0, start) + edit.newText + result.slice(end);
+	for (const seg of sorted) {
+		result = result.slice(0, seg.start) + seg.replacement + result.slice(seg.end);
 	}
 	return result;
 }

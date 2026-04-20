@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
+import { replaceOp, deleteOp } from '../fix-op';
 import { lineOffset } from '../token-utils';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
@@ -100,9 +101,12 @@ export const trailingCommaRule: TokenRule = {
 				}
 				// The last column item has no trailing comma. We need to insert one
 				// after the last value token before the clause boundary.
+				// Use the trimmed end of the token's line to avoid placing the comma
+				// after any trailing whitespace.
 				const insertAfter = tokens[endIdx - 1];
-				const insertOffset = insertAfter.end + 1;
-				const insertPos = document.positionAt(insertOffset);
+				const lineText = document.lineAt(insertAfter.line).text;
+				const insertCol = lineText.trimEnd().length;
+				const insertPos = new vscode.Position(insertAfter.line, insertCol);
 				const insertRange = new vscode.Range(insertPos, insertPos);
 				violations.push({
 					rule: 'ninja.convention.trailing-comma',
@@ -110,7 +114,7 @@ export const trailingCommaRule: TokenRule = {
 					range: insertRange,
 					action: {
 						type: FixAction.TYPE,
-						edits: [{ range: insertRange, newText: ',' }],
+						ops: [replaceOp(insertRange, ',')],
 						autoFix: true,
 					},
 				});
@@ -134,7 +138,7 @@ export const trailingCommaRule: TokenRule = {
 					range,
 					action: {
 						type: FixAction.TYPE,
-						edits: [{ range, newText: '' }],
+						ops: [deleteOp(range)],
 						autoFix: true,
 					},
 				});

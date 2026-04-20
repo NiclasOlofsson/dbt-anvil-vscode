@@ -105,9 +105,9 @@ describe(RULE, () => {
 		});
 		const v = check(sql, m);
 		expect(v[0].action).toBeDefined();
-		expect((v[0].action as FixAction).edits).toHaveLength(1);
+		expect((v[0].action as FixAction).ops).toHaveLength(1);
 		// Should delete from WITH through closing paren
-		const edit = (v[0].action as FixAction).edits[0];
+		const edit = (v[0].action as FixAction).ops[0];
 		expect(edit.range.start.line).toBe(0);
 		expect(edit.range.end.line).toBe(3); // next line after )
 	});
@@ -124,7 +124,7 @@ describe(RULE, () => {
 		const v = check(sql, m);
 		expect(v).toHaveLength(1);
 		expect(v[0].action).toBeDefined();
-		const edit = (v[0].action as FixAction).edits[0];
+		const edit = (v[0].action as FixAction).ops[0];
 		// Should delete from CTE name line through to start of next CTE
 		expect(edit.range.start.line).toBe(0);
 		expect(edit.range.end.line).toBe(3);
@@ -143,7 +143,7 @@ describe(RULE, () => {
 		const v = check(sql, m);
 		expect(v).toHaveLength(1);
 		expect(v[0].action).toBeDefined();
-		const edit = (v[0].action as FixAction).edits[0];
+		const edit = (v[0].action as FixAction).ops[0];
 		// Should start from end of previous CTE
 		expect(edit.range.start.line).toBe(2);
 		expect(edit.range.start.character).toBe(1); // endCol of prev CTE

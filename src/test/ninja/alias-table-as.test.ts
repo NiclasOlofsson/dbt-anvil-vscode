@@ -70,7 +70,7 @@ describe(RULE, () => {
 		const m = model({ tokens: [tok] });
 		const v = tableAsRule.check({ model: m, document: doc, config: cfg() });
 		expect(v[0].action?.type).toBe(FixAction.TYPE);
-		const fixed = applyEditsToText(sql, v[0].action!.edits);
+		const fixed = applyEditsToText(sql, (v[0].action as FixAction).ops);
 		expect(fixed).toBe('select * from orders AS o');
 	});
 

@@ -1,6 +1,7 @@
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
+import { replaceOp } from '../fix-op';
 import { tokenRange } from '../token-utils';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
@@ -39,7 +40,7 @@ export const unionStyleRule: TokenRule = {
 				rule: 'ninja.convention.union-style',
 				message: `Use UNION ${preferred.toUpperCase()} — UNION ${actual.toUpperCase()} conflicts with the configured style.`,
 				range,
-				action: { type: FixAction.TYPE, edits: [{ range, newText: preferred.toUpperCase() }], autoFix: true },
+				action: { type: FixAction.TYPE, ops: [replaceOp(range, preferred.toUpperCase())], autoFix: true },
 			});
 		}
 

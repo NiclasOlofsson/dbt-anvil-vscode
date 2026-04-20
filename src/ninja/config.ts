@@ -6,13 +6,10 @@ export type CommaPosition = 'trailing' | 'leading';
 export type OperatorPosition = 'trailing' | 'leading';
 export type NotEqualStyle = '!=' | '<>';
 export type UnionStyle = 'all' | 'distinct';
-export type FormatMode = 'off' | 'fix-all' | 'full';
 
 export interface NinjaConfig {
 	enabled: boolean;
 	format: {
-		/** Controls what happens when the user invokes Format Document. */
-		mode: FormatMode;
 		/** Named style preset. When set, provides defaults for unset config keys. */
 		preset: FormatPreset;
 	};
@@ -35,6 +32,14 @@ export interface NinjaConfig {
 	indentation: {
 		unit: 'space' | 'tab';
 		size: number;
+		/** Indent JOIN clauses one level deeper than FROM (sqlfluff: indented_joins). */
+		indentedJoins: boolean;
+		/** Indent ON/USING one level deeper than its JOIN (sqlfluff: indented_using_on). */
+		indentedOn: boolean;
+		/** Indent THEN one level deeper than its WHEN (sqlfluff: indented_then). */
+		indentedThen: boolean;
+		/** Indent CTE body one extra level (sqlfluff: indented_ctes). */
+		indentedCtes: boolean;
 	};
 	maxLineLength: number;
 	maxBlankLines: number;
@@ -57,11 +62,11 @@ export interface NinjaConfig {
 
 export const DEFAULT_CONFIG: NinjaConfig = {
 	enabled: true,
-	format: { mode: 'off', preset: 'sqlfmt' },
+	format: { preset: 'sqlfmt' },
 	rules: {},
 	disabledRules: [],
 	autoFix: {
-		applyOnFormat: false,
+		applyOnFormat: true,
 		applyOnFixAll: false,
 		rules: {},
 	},
@@ -74,6 +79,10 @@ export const DEFAULT_CONFIG: NinjaConfig = {
 	indentation: {
 		unit: 'space',
 		size: 4,
+		indentedJoins: false,
+		indentedOn: true,
+		indentedThen: true,
+		indentedCtes: false,
 	},
 	maxLineLength: 120,
 	maxBlankLines: 2,

@@ -963,17 +963,6 @@
 							]
 						}
 					},
-					"dbt-studio.ninja.format.mode": {
-						"type": "string",
-						"default": "off",
-						"enum": ["off", "fix-all", "full"],
-						"enumDescriptions": [
-							"Formatting is disabled. Use `source.fixAll.ninja` for incremental auto-fix.",
-							"Apply safe auto-fix edits (no reflow). Equivalent to the legacy `autoFix.applyOnFormat` setting.",
-							"Full reformat: reflow, reindent, and normalise the entire document."
-						],
-						"markdownDescription": "Controls what happens when **Format Document** (`Shift+Alt+F`) is invoked on a SQL file."
-					},
 					"dbt-studio.ninja.format.preset": {
 						"type": "string",
 						"default": "sqlfmt",
@@ -987,8 +976,8 @@
 					},
 					"dbt-studio.ninja.autoFix.applyOnFormat": {
 						"type": "boolean",
-						"default": false,
-						"markdownDescription": "**Deprecated** — use `#dbt-studio.ninja.format.mode#` instead. When `true`, treated as `format.mode: fix-all`."
+						"default": true,
+						"markdownDescription": "Apply safe auto-fixes when **Format Document** (`Shift+Alt+F`) is invoked on a SQL file. Which rules auto-fix is controlled by `#dbt-studio.ninja.autoFix.rules#`."
 					},
 					"dbt-studio.ninja.autoFix.applyOnFixAll": {
 						"type": "boolean",
@@ -1131,6 +1120,26 @@
 						"minimum": 1,
 						"maximum": 8,
 						"markdownDescription": "Number of spaces (or tabs) per indent level."
+					},
+					"dbt-studio.ninja.indentation.indentedJoins": {
+						"type": "boolean",
+						"default": false,
+						"markdownDescription": "Indent JOIN clauses one extra level relative to FROM (sqlfluff: `indented_joins`)."
+					},
+					"dbt-studio.ninja.indentation.indentedOn": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "Indent ON/USING one level under their JOIN clause (sqlfluff: `indented_using_on`)."
+					},
+					"dbt-studio.ninja.indentation.indentedThen": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "Indent THEN one level under its WHEN clause (sqlfluff: `indented_then`)."
+					},
+					"dbt-studio.ninja.indentation.indentedCtes": {
+						"type": "boolean",
+						"default": false,
+						"markdownDescription": "Indent CTE body one extra level (sqlfluff: `indented_ctes`)."
 					},
 					"dbt-studio.ninja.maxLineLength": {
 						"type": "number",

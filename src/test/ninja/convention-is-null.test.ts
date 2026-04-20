@@ -24,7 +24,7 @@ describe(RULE, () => {
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('IS NULL');
 		expect(v[0].action).toBeDefined();
-		expect((v[0].action as FixAction).edits[0].newText).toBe('IS NULL');
+		expect((v[0].action as FixAction).ops[0].text).toBe('IS NULL');
 	});
 
 	it('flags != NULL', () => {
@@ -36,7 +36,7 @@ describe(RULE, () => {
 		const v = check(sql, tokens);
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('IS NOT NULL');
-		expect((v[0].action as FixAction).edits[0].newText).toBe('IS NOT NULL');
+		expect((v[0].action as FixAction).ops[0].text).toBe('IS NOT NULL');
 	});
 
 	it('flags <> NULL', () => {
@@ -47,7 +47,7 @@ describe(RULE, () => {
 		];
 		const v = check(sql, tokens);
 		expect(v).toHaveLength(1);
-		expect((v[0].action as FixAction).edits[0].newText).toBe('IS NOT NULL');
+		expect((v[0].action as FixAction).ops[0].text).toBe('IS NOT NULL');
 	});
 
 	it('no violation for IS NULL', () => {

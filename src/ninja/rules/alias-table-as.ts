@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
+import { insertOp } from '../fix-op';
 import type { TableRefToken } from '../../services/parse-service';
 
 const RULE_ID = 'ninja.aliasing.table-as';
@@ -51,7 +52,7 @@ export const tableAsRule: TokenRule = {
 				range,
 				action: {
 					type: FixAction.TYPE,
-					edits: [vscode.TextEdit.insert(new vscode.Position(ref.aliasLine, ref.aliasCol), 'AS ')],
+					ops: [insertOp(new vscode.Position(ref.aliasLine, ref.aliasCol), 'AS ')],
 					autoFix: true,
 				},
 			});

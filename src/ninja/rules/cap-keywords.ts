@@ -1,8 +1,8 @@
-import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import { FixAction, type NinjaViolation } from '../violation';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import type { CapitalisationPolicy } from '../config';
+import { replaceOp } from '../fix-op';
 import { tokenText, tokenRange } from '../token-utils';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
@@ -10,10 +10,16 @@ const RULE_ID = 'ninja.cap.keywords';
 
 // sqlglot TokenType names that represent SQL keywords.
 // All stored lowercase for comparison against token.type.toLowerCase().
+// Includes compound token types emitted by sqlglot for multi-word keywords:
+// `ALIAS` (the AS keyword), `GROUP_BY`, `ORDER_BY`, `ISNULL`, `NOTNULL`, etc.
+// For compound tokens, `tokenText` returns the raw multi-word slice
+// (e.g. "GROUP BY"), and the replace pass lowercases it intact.
 const KEYWORD_TOKEN_TYPES = new Set([
 	'select', 'from', 'where', 'and', 'or', 'not', 'in', 'is', 'null',
-	'as', 'on', 'join', 'left', 'right', 'inner', 'outer', 'full', 'cross',
+	'as', 'alias', 'on', 'join', 'left', 'right', 'inner', 'outer', 'full', 'cross',
 	'group', 'by', 'order', 'having', 'limit', 'offset', 'union', 'all',
+	'group_by', 'order_by', 'order_siblings_by', 'distribute_by',
+	'isnull', 'notnull',
 	'distinct', 'case', 'when', 'then', 'else', 'end', 'with', 'recursive',
 	'insert', 'into', 'values', 'update', 'set', 'delete', 'create', 'table',
 	'drop', 'alter', 'index', 'view', 'if', 'exists', 'between', 'like',
@@ -81,7 +87,7 @@ export const keywordCapRule: TokenRule = {
 					rule: RULE_ID,
 					message: `Expected keyword '${word}' to be '${fix}'`,
 					range,
-					action: { type: FixAction.TYPE, edits: [vscode.TextEdit.replace(range, fix)], autoFix: true },
+					action: { type: FixAction.TYPE, ops: [replaceOp(range, fix)], autoFix: true },
 				});
 			}
 		}

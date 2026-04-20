@@ -3,6 +3,7 @@ import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
 import { offsetToLineCol } from '../token-utils';
+import { deleteOp } from '../fix-op';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 export const elseNullRule: TokenRule = {
@@ -35,7 +36,7 @@ export const elseNullRule: TokenRule = {
 				rule: 'ninja.structure.else-null',
 				message: 'Redundant ELSE NULL — CASE returns NULL by default.',
 				range: new vscode.Range(elseStart.line, elseStart.col, nullEnd.line, nullEnd.col),
-				action: { type: FixAction.TYPE, edits: [{ range: new vscode.Range(elseStart.line, elseStart.col, endStart.line, endStart.col), newText: '' }], autoFix: true },
+				action: { type: FixAction.TYPE, ops: [deleteOp(new vscode.Range(elseStart.line, elseStart.col, endStart.line, endStart.col))], autoFix: true },
 			});
 		}
 
