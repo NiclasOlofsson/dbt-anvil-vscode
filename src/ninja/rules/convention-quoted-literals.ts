@@ -42,7 +42,7 @@ export const quotedLiteralsRule: TokenRule = {
 				: 'single';
 
 		const badType = quoteStyle === 'single' ? 'DOUBLE_QUOTE' : 'SINGLE_QUOTE';
-		const preferredChar = quoteStyle === 'single' ? "'" : '"';
+		const preferredChar = quoteStyle === 'single' ? '\'' : '"';
 
 		for (const tok of tokens) {
 			if (tok.type !== badType) continue;
@@ -54,7 +54,7 @@ export const quotedLiteralsRule: TokenRule = {
 			);
 			violations.push({
 				rule: 'ninja.convention.quoted-literals',
-				message: `Use ${preferredChar === "'" ? 'single' : 'double'}-quoted string literals (${preferredChar}text${preferredChar}).`,
+				message: `Use ${preferredChar === '\'' ? 'single' : 'double'}-quoted string literals (${preferredChar}text${preferredChar}).`,
 				range,
 			});
 		}

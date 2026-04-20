@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
-import type { NinjaConfig, CapitalisationPolicy, CommaPosition, OperatorPosition, NotEqualStyle, UnionStyle } from './config';
+import type { NinjaConfig, CommaPosition, OperatorPosition, NotEqualStyle, UnionStyle } from './config';
 import { DEFAULT_CONFIG } from './config';
+import { PRESETS, type FormatPreset } from './presets';
 import type { NinjaSeverity, RuleOptionValue } from './rule';
 import type { InspectedRuleConfig } from './editor/editor-model';
 import type { ConfigScope } from './editor/editor-types';
@@ -15,38 +16,52 @@ export function loadConfig(): NinjaConfig {
 	// Backward compat: treat applyOnFormat=true as format.mode='fix-all'
 	const legacyApplyOnFormat = cfg.get<boolean>('autoFix.applyOnFormat', DEFAULT_CONFIG.autoFix.applyOnFormat);
 	const formatMode = cfg.get<'off' | 'fix-all' | 'full'>('format.mode', legacyApplyOnFormat ? 'fix-all' : DEFAULT_CONFIG.format.mode);
+	const formatPreset = cfg.get<FormatPreset>('format.preset', DEFAULT_CONFIG.format.preset);
+	const preset = PRESETS[formatPreset] ?? {};
+
+	// For each setting: use the explicitly-set user value if present, otherwise
+	// fall back to the preset value, then to DEFAULT_CONFIG.
+	function get<T>(key: string, presetVal: T | undefined, defaultVal: T): T {
+		const info = cfg.inspect<T>(key);
+		if (info?.workspaceValue !== undefined) return info.workspaceValue;
+		if (info?.globalValue !== undefined) return info.globalValue;
+		return presetVal !== undefined ? presetVal : defaultVal;
+	}
 
 	return {
 		enabled: cfg.get<boolean>('enabled', DEFAULT_CONFIG.enabled),
-		format: { mode: formatMode },
+		format: { mode: formatMode, preset: formatPreset },
 		rules: cfg.get<Record<string, NinjaSeverity>>('rules', DEFAULT_CONFIG.rules),
+		disabledRules: cfg.get<string[]>('disabledRules', DEFAULT_CONFIG.disabledRules),
 		autoFix: {
 			applyOnFormat: cfg.get<boolean>('autoFix.applyOnFormat', DEFAULT_CONFIG.autoFix.applyOnFormat),
 			applyOnFixAll: cfg.get<boolean>('autoFix.applyOnFixAll', DEFAULT_CONFIG.autoFix.applyOnFixAll),
 			rules: cfg.get<Record<string, boolean>>('autoFix.rules', DEFAULT_CONFIG.autoFix.rules),
 		},
 		capitalisation: {
-			keywords: cfg.get<CapitalisationPolicy>('capitalisation.keywords', DEFAULT_CONFIG.capitalisation.keywords),
-			functions: cfg.get<CapitalisationPolicy>('capitalisation.functions', DEFAULT_CONFIG.capitalisation.functions),
-			literals: cfg.get<CapitalisationPolicy>('capitalisation.literals', DEFAULT_CONFIG.capitalisation.literals),
-			types: cfg.get<CapitalisationPolicy>('capitalisation.types', DEFAULT_CONFIG.capitalisation.types),
+			keywords: get('capitalisation.keywords', preset.capitalisation?.keywords, DEFAULT_CONFIG.capitalisation.keywords),
+			functions: get('capitalisation.functions', preset.capitalisation?.functions, DEFAULT_CONFIG.capitalisation.functions),
+			literals: get('capitalisation.literals', preset.capitalisation?.literals, DEFAULT_CONFIG.capitalisation.literals),
+			types: get('capitalisation.types', preset.capitalisation?.types, DEFAULT_CONFIG.capitalisation.types),
 		},
 		indentation: {
-			unit: cfg.get<'space' | 'tab'>('indentation.unit', DEFAULT_CONFIG.indentation.unit),
-			size: cfg.get<number>('indentation.size', DEFAULT_CONFIG.indentation.size),
+			unit: get<'space' | 'tab'>('indentation.unit', preset.indentation?.unit, DEFAULT_CONFIG.indentation.unit),
+			size: get('indentation.size', preset.indentation?.size, DEFAULT_CONFIG.indentation.size),
 		},
-		maxLineLength: cfg.get<number>('maxLineLength', DEFAULT_CONFIG.maxLineLength),
-		maxBlankLines: cfg.get<number>('maxBlankLines', DEFAULT_CONFIG.maxBlankLines),
+		maxLineLength: get('maxLineLength', preset.maxLineLength, DEFAULT_CONFIG.maxLineLength),
+		maxBlankLines: get('maxBlankLines', preset.maxBlankLines, DEFAULT_CONFIG.maxBlankLines),
 		layout: {
-			commaPosition: cfg.get<CommaPosition>('layout.commaPosition', DEFAULT_CONFIG.layout.commaPosition),
-			operatorPosition: cfg.get<OperatorPosition>('layout.operatorPosition', DEFAULT_CONFIG.layout.operatorPosition),
+			commaPosition: get<CommaPosition>('layout.commaPosition', preset.layout?.commaPosition, DEFAULT_CONFIG.layout.commaPosition),
+			operatorPosition: get<OperatorPosition>('layout.operatorPosition', preset.layout?.operatorPosition, DEFAULT_CONFIG.layout.operatorPosition),
 		},
 		structure: {
 			allowStarInCte: cfg.get<boolean>('structure.allowStarInCte', DEFAULT_CONFIG.structure.allowStarInCte),
 		},
 		convention: {
-			notEqual: cfg.get<NotEqualStyle>('convention.notEqual', DEFAULT_CONFIG.convention.notEqual),
-			unionStyle: cfg.get<UnionStyle>('convention.unionStyle', DEFAULT_CONFIG.convention.unionStyle),
+			notEqual: get<NotEqualStyle>('convention.notEqual', preset.convention?.notEqual, DEFAULT_CONFIG.convention.notEqual),
+			unionStyle: get<UnionStyle>('convention.unionStyle', preset.convention?.unionStyle, DEFAULT_CONFIG.convention.unionStyle),
+			explicitAs: get<boolean>('convention.explicitAs', preset.convention?.explicitAs, DEFAULT_CONFIG.convention.explicitAs),
+			explicitInnerJoin: get<boolean>('convention.explicitInnerJoin', preset.convention?.explicitInnerJoin, DEFAULT_CONFIG.convention.explicitInnerJoin),
 		},
 	};
 }
@@ -169,6 +184,37 @@ export function inspectConfigOptions(paths: string[]): Record<string, RuleOption
 		if (val !== undefined) result[p] = val;
 	}
 	return result;
+}
+
+/** Return the merged disabled rule IDs across user + workspace scopes. */
+export function inspectDisabledRules(): { user: string[]; workspace: string[] } {
+	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
+	const info = cfg.inspect<string[]>('disabledRules');
+	return {
+		user: info?.globalValue ?? [],
+		workspace: info?.workspaceValue ?? [],
+	};
+}
+
+/** Add a rule ID to the disabled list at the given scope. */
+export async function disableRule(ruleId: string, scope: ConfigScope): Promise<void> {
+	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
+	const target = scope === 'user' ? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Workspace;
+	const info = cfg.inspect<string[]>('disabledRules');
+	const current = (scope === 'user' ? info?.globalValue : info?.workspaceValue) ?? [];
+	if (!current.includes(ruleId)) {
+		await cfg.update('disabledRules', [...current, ruleId], target);
+	}
+}
+
+/** Remove a rule ID from the disabled list at the given scope (re-enables it). */
+export async function enableRule(ruleId: string, scope: ConfigScope): Promise<void> {
+	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
+	const target = scope === 'user' ? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Workspace;
+	const info = cfg.inspect<string[]>('disabledRules');
+	const current = (scope === 'user' ? info?.globalValue : info?.workspaceValue) ?? [];
+	const updated = current.filter(id => id !== ruleId);
+	await cfg.update('disabledRules', updated.length > 0 ? updated : undefined, target);
 }
 
 /** Returns the subset of paths that have an explicit override at the given scope. */

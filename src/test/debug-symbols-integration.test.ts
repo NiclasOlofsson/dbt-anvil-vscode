@@ -458,8 +458,8 @@ describe('decompose_query UNION leg promotion (FTL)', () => {
 			'SELECT id FROM t',       // 0
 			'UNION ALL',              // 1
 			'SELECT',                 // 2 ← branch 2 SELECT keyword
-			"  '-1' AS id,",          // 3 ← first identifier (alias)
-			"  'nd' AS name",         // 4
+			'  \'-1\' AS id,',          // 3 ← first identifier (alias)
+			'  \'nd\' AS name',         // 4
 		].join('\n');
 
 		const result = decompose(sql);

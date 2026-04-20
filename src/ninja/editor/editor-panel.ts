@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { EditorModel } from './editor-model';
 import { renderEditor } from './editor-html';
 import { getAllRuleMetadata } from '../engine';
-import { inspectRuleSeverities, saveRuleSeverity, removeRuleSeverity, inspectAutoFixRules, saveAutoFixRule, removeAutoFixRule, saveConfigOption, inspectConfigOptions, removeConfigOption, getOverriddenOptionPaths } from '../config-loader';
+import { inspectRuleSeverities, saveRuleSeverity, removeRuleSeverity, inspectAutoFixRules, saveAutoFixRule, removeAutoFixRule, saveConfigOption, inspectConfigOptions, removeConfigOption, getOverriddenOptionPaths, inspectDisabledRules, disableRule, enableRule } from '../config-loader';
 import type { WorkspaceDiagnosticsScanner } from '../workspace-diagnostics-scanner';
 import type { InboundMessage, ConfigScope, RuleOptionValue } from './editor-types';
 import type { NinjaSeverity } from '../rule';
@@ -29,6 +29,7 @@ export class NinjaEditorPanel implements vscode.Disposable {
 		this._model = new EditorModel(getAllRuleMetadata());
 		this._model.applyInspectedConfig(inspectRuleSeverities());
 		this._model.applyAutoFixConfig(inspectAutoFixRules());
+		this._model.applyDisabledRules(this._mergedDisabledRules());
 		this._model.applyOptionValues(inspectConfigOptions(this._allOptionPaths()));
 		this._model.applyOptionOverrides(getOverriddenOptionPaths(this._allOptionPaths(), this._model.activeScope));
 		// Refresh view when the user edits settings.json directly
@@ -38,6 +39,7 @@ export class NinjaEditorPanel implements vscode.Disposable {
 				if (e.affectsConfiguration('dbt-studio.ninja')) {
 					this._model.applyInspectedConfig(inspectRuleSeverities());
 					this._model.applyAutoFixConfig(inspectAutoFixRules());
+					this._model.applyDisabledRules(this._mergedDisabledRules());
 					this._model.applyOptionValues(inspectConfigOptions(this._allOptionPaths()));
 					this._model.applyOptionOverrides(getOverriddenOptionPaths(this._allOptionPaths(), this._model.activeScope));
 					this._pushSnapshot();
@@ -174,6 +176,11 @@ export class NinjaEditorPanel implements vscode.Disposable {
 				this._queueOptionSave(msg.settingPath, msg.value);
 				this._pushSnapshot();
 				break;
+			case 'setDisabled':
+				this._model.setDisabled(msg.ruleId, msg.disabled);
+				void this._persistDisabled(msg.ruleId, msg.disabled);
+				this._pushSnapshot();
+				break;
 		}
 	}
 
@@ -249,6 +256,7 @@ export class NinjaEditorPanel implements vscode.Disposable {
 
 			this._model.applyInspectedConfig(inspectRuleSeverities());
 			this._model.applyAutoFixConfig(inspectAutoFixRules());
+			this._model.applyDisabledRules(this._mergedDisabledRules());
 			this._model.applyOptionValues(inspectConfigOptions(this._allOptionPaths()));
 			this._model.applyOptionOverrides(getOverriddenOptionPaths(this._allOptionPaths(), this._model.activeScope));
 			this._pushSnapshot();
@@ -266,6 +274,18 @@ export class NinjaEditorPanel implements vscode.Disposable {
 		}
 	}
 
+	private async _persistDisabled(ruleId: string, disabled: boolean): Promise<void> {
+		this._writingConfig = true;
+		try {
+			if (disabled) await disableRule(ruleId, this._model.activeScope);
+			else await enableRule(ruleId, this._model.activeScope);
+		} finally {
+			this._writingConfig = false;
+		}
+		this._model.applyDisabledRules(this._mergedDisabledRules());
+		this._pushSnapshot();
+	}
+
 	private async _persistReset(ruleId: string): Promise<void> {
 		this._writingConfig = true;
 		try {
@@ -280,12 +300,18 @@ export class NinjaEditorPanel implements vscode.Disposable {
 		}
 		this._model.applyInspectedConfig(inspectRuleSeverities());
 		this._model.applyAutoFixConfig(inspectAutoFixRules());
+		this._model.applyDisabledRules(this._mergedDisabledRules());
 		this._model.applyOptionValues(inspectConfigOptions(this._allOptionPaths()));
 		this._model.applyOptionOverrides(getOverriddenOptionPaths(this._allOptionPaths(), this._model.activeScope));
 		this._pushSnapshot();
 	}
 
 	// ── Render ────────────────────────────────────────────────
+
+	private _mergedDisabledRules(): string[] {
+		const { user, workspace } = inspectDisabledRules();
+		return [...new Set([...user, ...workspace])];
+	}
 
 	private _allOptionPaths(): string[] {
 		const paths = new Set<string>();

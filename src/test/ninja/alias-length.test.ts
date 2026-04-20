@@ -91,7 +91,7 @@ describe(RULE, () => {
 		const v = check(sql, tokens);
 		expect(v).toHaveLength(1);
 		expect(v[0].rule).toBe(RULE);
-		expect(v[0].message).toContain("'o'");
+		expect(v[0].message).toContain('\'o\'');
 	});
 
 	it('flags multiple 1-character aliases', () => {

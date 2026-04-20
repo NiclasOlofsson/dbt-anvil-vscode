@@ -47,6 +47,9 @@ export class EditorModel {
 	// Paths that have an explicit override at the active scope
 	private _overriddenOptionPaths = new Set<string>();
 
+	// Rule IDs that are completely disabled (merged from all scopes)
+	private _disabledRules = new Set<string>();
+
 	constructor(rules: RuleViewModel[]) {
 		this._rules = rules;
 	}
@@ -60,6 +63,19 @@ export class EditorModel {
 	}
 
 	// ── Config data ingestion ─────────────────────────────────────
+
+	applyDisabledRules(ids: string[]): void {
+		this._disabledRules = new Set(ids);
+	}
+
+	isDisabled(ruleId: string): boolean {
+		return this._disabledRules.has(ruleId);
+	}
+
+	setDisabled(ruleId: string, disabled: boolean): void {
+		if (disabled) this._disabledRules.add(ruleId);
+		else this._disabledRules.delete(ruleId);
+	}
 
 	applyAutoFixConfig(rules: Record<string, boolean>): void {
 		this._autoFixRules = new Map(Object.entries(rules));
@@ -140,13 +156,13 @@ export class EditorModel {
 		const user = this._userOverrides.get(ruleId);
 		if (user !== undefined) return user;
 		const rule = this._rules.find(r => r.id === ruleId);
-		return rule?.defaultSeverity ?? 'off';
+		return rule?.defaultSeverity ?? 'mute';
 	}
 
 	scopeInfo(ruleId: string): RuleScopeInfo {
 		const rule = this._rules.find(r => r.id === ruleId);
 		return {
-			defaultSeverity: rule?.defaultSeverity ?? 'off',
+			defaultSeverity: rule?.defaultSeverity ?? 'mute',
 			userSeverity: this._userOverrides.get(ruleId),
 			workspaceSeverity: this._workspaceOverrides.get(ruleId),
 			effectiveSeverity: this.effectiveSeverity(ruleId),
@@ -194,6 +210,7 @@ export class EditorModel {
 				scopeInfo: this.scopeInfo(rule.id),
 				violationCount: this._violationCounts.get(rule.id) ?? 0,
 				isModified: this.isModified(rule.id),
+				isDisabled: this._disabledRules.has(rule.id),
 				autoFixEnabled: this._autoFixRules.get(rule.id) ?? true,
 				configOptionValues,
 			};
@@ -258,7 +275,7 @@ export class EditorModel {
 		let activeRules = 0;
 		let violations = 0;
 		for (const rule of this._rules) {
-			if (this.effectiveSeverity(rule.id) !== 'off') activeRules++;
+			if (!this._disabledRules.has(rule.id)) activeRules++;
 			violations += this._violationCounts.get(rule.id) ?? 0;
 		}
 		return {

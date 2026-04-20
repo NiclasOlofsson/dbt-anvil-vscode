@@ -358,13 +358,15 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 		const fileName = uri.fsPath.replace(/\\/g, '/').split('/').pop() ?? uri.fsPath;
 		this.logger.trace(`[workspace-scanner] ${fileName}  parse=${parsedModel.timing.parseMs}ms  ninja=${ninjaMs}ms`);
 
-		const diagnostics: vscode.Diagnostic[] = result.violations.map(v => {
-			const sev = result.severityMap.get(v.rule) ?? vscode.DiagnosticSeverity.Warning;
+		const diagnostics: vscode.Diagnostic[] = [];
+		for (const v of result.violations) {
+			const sev = result.severityMap.get(v.rule);
+			if (sev === undefined) continue; // mute: no diagnostic
 			const diag = new vscode.Diagnostic(v.range, v.message, sev);
 			diag.source = 'ninja';
 			diag.code = v.rule;
-			return diag;
-		});
+			diagnostics.push(diag);
+		}
 		this._setNinjaDiagnostics(uri, diagnostics);
 		this._scheduleCountsChange();
 	}

@@ -5,12 +5,6 @@ import { tokenRange } from '../token-utils';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 /**
- * Keywords that precede JOIN and qualify its type.
- * We need to know whether the join was a CROSS JOIN so we can skip the ON/USING check.
- */
-const JOIN_QUALIFIERS = new Set(['INNER', 'LEFT', 'RIGHT', 'FULL', 'OUTER', 'CROSS']);
-
-/**
  * Clause-level keywords that end a JOIN body at depth 0.
  * When we see one of these we know the JOIN body ended.
  */

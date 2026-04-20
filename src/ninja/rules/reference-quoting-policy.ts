@@ -27,7 +27,7 @@ function stripQuotes(raw: string): string {
 	if (raw.length < 2) return raw;
 	const first = raw[0];
 	const last = raw[raw.length - 1];
-	if ((first === '"' && last === '"') || (first === '`' && last === '`') || (first === "'" && last === "'")) {
+	if ((first === '"' && last === '"') || (first === '`' && last === '`') || (first === '\'' && last === '\'')) {
 		return raw.slice(1, -1);
 	}
 	return raw;

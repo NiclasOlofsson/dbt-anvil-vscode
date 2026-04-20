@@ -17,7 +17,7 @@ import type { NinjaConfig } from '../config';
 import type {
 	Segment, TopLevelSegment,
 	ClauseSegment, CteSegment, WithSegment, StatementSegment,
-	ListSegment, ParenSegment, SetOpSegment,
+	ListSegment, SetOpSegment,
 } from './segments';
 
 export function render(segments: TopLevelSegment[], config: NinjaConfig): string {

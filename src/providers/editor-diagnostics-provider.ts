@@ -461,7 +461,8 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 
 		const diagnostics: vscode.Diagnostic[] = [];
 		for (const v of result.violations) {
-			const sev = result.severityMap.get(v.rule) ?? vscode.DiagnosticSeverity.Warning;
+			const sev = result.severityMap.get(v.rule);
+			if (sev === undefined) continue; // fix-only: formatter uses it, Problems panel doesn't
 			const diag = new vscode.Diagnostic(v.range, v.message, sev);
 			diag.source = 'ninja';
 			diag.code = v.rule;

@@ -28,7 +28,7 @@ export const joinTableOrderRule: TokenRule = {
 	defaultSeverity: 'hint',
 	description: 'In JOIN ON conditions, the driving (FROM) table\'s column should appear on the left side of equality predicates.',
 
-	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+
 	check(_ctx: TokenRuleContext): NinjaViolation[] {
 		// Not yet implemented — requires resolved column/table metadata.
 		return [];

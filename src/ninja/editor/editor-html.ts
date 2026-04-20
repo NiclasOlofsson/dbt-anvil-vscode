@@ -87,6 +87,7 @@ function ruleHeader(s: EditorSnapshot): string {
 		return `<button class="sort-btn${cls}" data-col="${col}">${esc(label)}${icon}</button>`;
 	}
 	return `<div class="rule-header" data-active-col="${escAttr(s.sortColumn ?? '')}" data-active-dir="${s.sortDir}">
+	<div class="col-enabled col-hcell" title="Enable / disable rule"></div>
 	<div class="col-id col-hcell">${h('id', 'Rule ID')}<div class="col-resize" data-col="id"></div></div>
 	<div class="col-desc col-hcell">${h('description', 'Description')}</div>
 	<div class="col-opts col-hcell"><span class="col-head-text">Options</span><div class="col-resize" data-col="opts"></div></div>
@@ -99,6 +100,7 @@ function ruleHeader(s: EditorSnapshot): string {
 
 function ruleRow(rs: RuleState): string {
 	const modCls = rs.isModified ? ' modified' : '';
+	const disabledCls = rs.isDisabled ? ' rule-disabled' : '';
 	const sev = rs.scopeInfo.effectiveSeverity;
 	const kinds = rs.rule.actionKinds ?? (rs.rule.fixable ? ['fix'] : []);
 	const badgeText = kinds.includes('snippet') ? 'snippet' : kinds.includes('fix') ? 'fix' : '';
@@ -110,7 +112,10 @@ function ruleRow(rs: RuleState): string {
 				? `<select class="autofix-select" data-rule="${escAttr(rs.rule.id)}" title="Auto-fix for this rule"><option value="true"${rs.autoFixEnabled ? ' selected' : ''}>enabled</option><option value="false"${!rs.autoFixEnabled ? ' selected' : ''}>disabled</option></select>`
 				: '')
 		: '';
-	return `<div class="rule-row${modCls}" data-rule="${escAttr(rs.rule.id)}">
+	return `<div class="rule-row${modCls}${disabledCls}" data-rule="${escAttr(rs.rule.id)}">
+	<div class="col-enabled">
+		<input type="checkbox" class="rule-enabled-toggle" data-rule="${escAttr(rs.rule.id)}"${rs.isDisabled ? '' : ' checked'} title="${rs.isDisabled ? 'Enable rule' : 'Disable rule'}">
+	</div>
 	<div class="col-id">
 		<span class="rule-id sev-${sev}">${esc(rs.rule.id)}</span>
 	</div>
@@ -337,7 +342,7 @@ body {
 }
 .rule-header {
 	display: grid;
-	grid-template-columns: var(--cw-id, 200px) 1fr var(--cw-opts, 150px) var(--cw-fix, 160px) var(--cw-counts, 90px) var(--cw-sev, 90px) 28px;
+	grid-template-columns: 28px var(--cw-id, 200px) 1fr var(--cw-opts, 150px) var(--cw-fix, 160px) var(--cw-counts, 90px) var(--cw-sev, 90px) 28px;
 	align-items: center;
 	padding: 4px 12px;
 	gap: 0 8px;
@@ -393,7 +398,7 @@ body {
 }
 .rule-row {
 	display: grid;
-	grid-template-columns: var(--cw-id, 200px) 1fr var(--cw-opts, 150px) var(--cw-fix, 160px) var(--cw-counts, 90px) var(--cw-sev, 90px) 28px;
+	grid-template-columns: 28px var(--cw-id, 200px) 1fr var(--cw-opts, 150px) var(--cw-fix, 160px) var(--cw-counts, 90px) var(--cw-sev, 90px) 28px;
 	align-items: center;
 	padding: 4px 12px;
 	border-left: 3px solid transparent;
@@ -405,6 +410,26 @@ body {
 }
 .rule-row.modified {
 	border-left-color: var(--vscode-focusBorder, #007fd4);
+}
+.col-enabled {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.rule-enabled-toggle {
+	cursor: pointer;
+	width: 14px;
+	height: 14px;
+	accent-color: var(--vscode-focusBorder, #007fd4);
+}
+.rule-disabled {
+	opacity: 0.45;
+}
+.rule-disabled .sev-select,
+.rule-disabled .autofix-select,
+.rule-disabled .opt-select,
+.rule-disabled .opt-number {
+	pointer-events: none;
 }
 .col-id {
 	overflow: hidden;
@@ -710,6 +735,13 @@ const CLIENT_JS = /* js */`
 		const newState = { ...(vscode.getState() ?? {}), colWidths: { ...colWidths } };
 		vscode.setState(newState);
 		resizingCol = null;
+	});
+
+	// Enable/disable toggles
+	document.querySelectorAll('.rule-enabled-toggle').forEach(chk => {
+		chk.addEventListener('change', () => {
+			vscode.postMessage({ type: 'setDisabled', ruleId: chk.dataset.rule, disabled: !chk.checked });
+		});
 	});
 
 	// Severity dropdowns
