@@ -191,3 +191,19 @@ export function getAllRuleMetadata(): RuleViewModel[] {
 		configOptions: r.configOptions,
 	}));
 }
+
+/** Default arbitration priority used when a rule does not declare one. */
+export const DEFAULT_RULE_PRIORITY = 100;
+
+const _priorityById: Map<string, number> = new Map(
+	ALL_RULES.map(r => [r.id, r.priority ?? DEFAULT_RULE_PRIORITY] as const),
+);
+
+/**
+ * Lookup the arbitration priority for a rule by id. Lower wins when two
+ * rules' fix groups overlap. Unknown ids fall back to DEFAULT_RULE_PRIORITY,
+ * which keeps the planner safe for tests that synthesize violations.
+ */
+export function getRulePriority(ruleId: string): number {
+	return _priorityById.get(ruleId) ?? DEFAULT_RULE_PRIORITY;
+}
