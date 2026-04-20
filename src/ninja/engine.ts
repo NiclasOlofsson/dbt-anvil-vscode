@@ -59,6 +59,9 @@ import { maxBlankLinesRule } from './rules/layout-max-blank-lines';
 import { longLinesRule } from './rules/layout-long-lines';
 import { indentRule } from './rules/layout-indent';
 import { functionSpacingRule } from './rules/layout-function-spacing';
+import { setOperatorRule } from './rules/layout-set-operator';
+import { clauseKeywordRule } from './rules/layout-clause-keyword';
+import { bracketSpacingRule } from './rules/layout-spacing';
 
 /** All built-in rules. Order does not matter — they all run independently. */
 const ALL_RULES: NinjaRule[] = [
@@ -100,6 +103,9 @@ const ALL_RULES: NinjaRule[] = [
 	longLinesRule,
 	indentRule,
 	functionSpacingRule,
+	setOperatorRule,
+	clauseKeywordRule,
+	bracketSpacingRule,
 ];
 
 function effectiveSeverity(rule: NinjaRule, config: NinjaConfig): NinjaSeverity {

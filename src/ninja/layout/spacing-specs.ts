@@ -1,0 +1,83 @@
+/**
+ * Default spacing/line-position specs for the Ninja layout rules.
+ *
+ * Each spec maps one or more sqlglot token types to:
+ *   - the diagnostic tag (rule id) it belongs to
+ *   - the expected line position (or runtime config path)
+ *   - optional space requirements
+ *
+ * Rules import the spec(s) they care about and pass them to runSpacingEngine.
+ * Using named exports keeps tree-shaking intact and makes the mapping readable.
+ */
+
+import type { TokenSpec } from './spacing-engine';
+import type { NinjaConfig } from '../config';
+
+/** ninja.convention.comma-position — trailing vs leading commas. */
+export const COMMA_SPEC: TokenSpec = {
+	tokenTypes: 'COMMA',
+	diagnostic: 'ninja.convention.comma-position',
+	configLinePosition: (c: NinjaConfig) => c.layout.commaPosition,
+};
+
+/** ninja.convention.operator-position — trailing vs leading boolean operators. */
+export const OPERATOR_SPEC: TokenSpec = {
+	tokenTypes: ['AND', 'OR'],
+	diagnostic: 'ninja.convention.operator-position',
+	configLinePosition: (c: NinjaConfig) => c.layout.operatorPosition,
+};
+
+/**
+ * ninja.layout.set-operator — UNION/INTERSECT/EXCEPT must each appear alone on
+ * their own line (blank-line-before and blank-line-after is handled by the
+ * max-blank-lines rule; here we just enforce the "alone" line-position policy).
+ */
+export const SET_OPERATOR_SPEC: TokenSpec = {
+	tokenTypes: ['UNION', 'INTERSECT', 'EXCEPT'],
+	diagnostic: 'ninja.layout.set-operator',
+	linePosition: 'alone',
+};
+
+/**
+ * ninja.layout.clause-keyword — SQL clause openers (WHERE, GROUP BY, ORDER BY,
+ * HAVING, LIMIT, QUALIFY) must be leading (first non-space content on their line).
+ *
+ * SELECT and FROM are intentionally excluded: SELECT almost always opens a
+ * new statement/CTE and FROM is also usually leading in dbt style, but both
+ * have frequent legitimate trailing positions (e.g. `select foo from t`
+ * on one line). The reflow engine (Layer 3) handles the full SELECT layout.
+ *
+ * Note: GROUP, ORDER, HAVING, LIMIT are the individual sqlglot token types.
+ * "GROUP BY" is two tokens; we flag GROUP and let the next token (BY) follow.
+ */
+export const CLAUSE_KEYWORD_SPEC: TokenSpec = {
+	tokenTypes: ['WHERE', 'GROUP', 'HAVING', 'ORDER', 'LIMIT', 'QUALIFY'],
+	diagnostic: 'ninja.layout.clause-keyword',
+	linePosition: 'leading',
+};
+
+/**
+ * ninja.layout.spacing — No space after `(` / before `)`.
+ * Two separate specs keyed by bracket type.
+ */
+export const OPEN_PAREN_SPEC: TokenSpec = {
+	tokenTypes: 'L_PAREN',
+	diagnostic: 'ninja.layout.spacing',
+	spaceAfter: 'no-space',
+};
+
+export const CLOSE_PAREN_SPEC: TokenSpec = {
+	tokenTypes: 'R_PAREN',
+	diagnostic: 'ninja.layout.spacing',
+	spaceBefore: 'no-space',
+};
+
+/** All built-in spacing specs in one array, in priority order (first match wins). */
+export const ALL_SPECS: TokenSpec[] = [
+	COMMA_SPEC,
+	OPERATOR_SPEC,
+	SET_OPERATOR_SPEC,
+	CLAUSE_KEYWORD_SPEC,
+	OPEN_PAREN_SPEC,
+	CLOSE_PAREN_SPEC,
+];
