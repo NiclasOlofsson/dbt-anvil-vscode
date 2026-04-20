@@ -1,112 +1,76 @@
 import { describe, it, expect } from 'vitest';
 import type { AstPayload, ParseResult } from '../../ftl/parse-result';
-import type { JinjaTagSpan } from '../../ftl/parse-result';
 import type { SqlParser } from '../../ftl/sql-parser';
 import { extractRefs, extractSources, mapWarnings, extractCtes, extractSubqueries, extractFinalColumns, extractFinalSelect, extractTokens, resolveTableRefs, FtlDocumentParser } from '../../ftl/ftl-document-parser';
+import { tokenizeJinja } from '../../ftl/jinja-tokenizer';
 import type { TableRefToken, ColumnRefToken } from '../../services/parse-service';
 
 describe('extractRefs', () => {
-	it('maps a ref span to RefInfo', () => {
-		const tags: JinjaTagSpan[] = [{
-			type: 'ref',
-			line: 2,
-			col: 8,
-			model: 'orders',
-			modelCol: 14,
-			modelEndCol: 20,
-			jinjaCol: 5,
-			jinjaEndCol: 25,
-		}];
-		const result = extractRefs(tags);
+	it('maps a ref tag to RefInfo with precise column positions', () => {
+		// "select * from {{ ref('orders') }}"
+		//                 ^col 14: jinjaCol (open of {{)
+		//                    ^col 17: ref identifier
+		//                        ^col 21: opening quote of 'orders'
+		//                                ^col 33: jinjaEndCol (after }})
+		const sql = 'select * from {{ ref(\'orders\') }}';
+		const result = extractRefs(tokenizeJinja(sql));
 		expect(result).toHaveLength(1);
 		expect(result[0]).toEqual({
 			model: 'orders',
-			line: 2,
-			col: 8,
-			modelCol: 14,
-			modelEndCol: 20,
-			jinjaCol: 5,
-			jinjaEndCol: 25,
+			line: 0,
+			col: 17,
+			modelCol: 22,           // first char inside the quotes
+			modelEndCol: 28,        // position of closing quote
+			jinjaCol: 14,
+			jinjaEndCol: 33,
 		});
 	});
 
-	it('ignores source spans', () => {
-		const tags: JinjaTagSpan[] = [{
-			type: 'source',
-			line: 0, col: 0,
-			sourceName: 'jaffle_shop', tableName: 'orders',
-			sourceNameCol: 1, sourceNameEndCol: 12,
-			tableNameCol: 14, tableNameEndCol: 20,
-			jinjaCol: 0, jinjaEndCol: 30,
-		}];
-		expect(extractRefs(tags)).toHaveLength(0);
+	it('ignores source tags', () => {
+		const sql = 'select * from {{ source(\'jaffle_shop\', \'orders\') }}';
+		expect(extractRefs(tokenizeJinja(sql))).toHaveLength(0);
 	});
 
-	it('returns multiple refs in order', () => {
-		const tags: JinjaTagSpan[] = [
-			{ type: 'ref', line: 0, col: 0, model: 'a', modelCol: 5, modelEndCol: 6, jinjaCol: 0, jinjaEndCol: 10 },
-			{ type: 'ref', line: 1, col: 0, model: 'b', modelCol: 5, modelEndCol: 6, jinjaCol: 0, jinjaEndCol: 10 },
-		];
-		const result = extractRefs(tags);
+	it('returns multiple refs in source order', () => {
+		const sql = 'select 1 from {{ ref(\'a\') }} union all select 2 from {{ ref(\'b\') }}';
+		const result = extractRefs(tokenizeJinja(sql));
 		expect(result.map(r => r.model)).toEqual(['a', 'b']);
 	});
 
-	it('returns empty array for empty tags', () => {
+	it('returns empty array when there are no jinja tokens', () => {
 		expect(extractRefs([])).toEqual([]);
 	});
 });
 
 describe('extractSources', () => {
-	it('maps a source span to SourceInfo', () => {
-		const tags: JinjaTagSpan[] = [{
-			type: 'source',
-			line: 3,
-			col: 4,
-			sourceName: 'jaffle_shop',
-			tableName: 'raw_orders',
-			sourceNameCol: 12,
-			sourceNameEndCol: 23,
-			tableNameCol: 26,
-			tableNameEndCol: 36,
-			jinjaCol: 0,
-			jinjaEndCol: 40,
-		}];
-		const result = extractSources(tags);
+	it('maps a source tag to SourceInfo with precise column positions', () => {
+		// "select * from {{ source('jaffle_shop', 'raw_orders') }}"
+		const sql = 'select * from {{ source(\'jaffle_shop\', \'raw_orders\') }}';
+		const result = extractSources(tokenizeJinja(sql));
 		expect(result).toHaveLength(1);
-		expect(result[0]).toEqual({
+		expect(result[0]).toMatchObject({
 			sourceName: 'jaffle_shop',
 			tableName: 'raw_orders',
-			line: 3,
-			col: 4,
-			sourceNameCol: 12,
-			sourceNameEndCol: 23,
-			tableNameCol: 26,
-			tableNameEndCol: 36,
-			jinjaCol: 0,
-			jinjaEndCol: 40,
+			line: 0,
 		});
+		const r = result[0];
+		expect(sql.slice(r.sourceNameCol!, r.sourceNameEndCol!)).toBe('jaffle_shop');
+		expect(sql.slice(r.tableNameCol!, r.tableNameEndCol!)).toBe('raw_orders');
+		expect(sql.slice(r.jinjaCol!, r.jinjaEndCol!)).toBe('{{ source(\'jaffle_shop\', \'raw_orders\') }}');
 	});
 
-	it('ignores ref spans', () => {
-		const tags: JinjaTagSpan[] = [{
-			type: 'ref',
-			line: 0, col: 0, model: 'x',
-			modelCol: 0, modelEndCol: 1,
-			jinjaCol: 0, jinjaEndCol: 5,
-		}];
-		expect(extractSources(tags)).toHaveLength(0);
+	it('ignores ref tags', () => {
+		const sql = 'select * from {{ ref(\'orders\') }}';
+		expect(extractSources(tokenizeJinja(sql))).toHaveLength(0);
 	});
 
-	it('returns multiple sources in order', () => {
-		const tags: JinjaTagSpan[] = [
-			{ type: 'source', line: 0, col: 0, sourceName: 'src', tableName: 'a', sourceNameCol: 0, sourceNameEndCol: 3, tableNameCol: 5, tableNameEndCol: 6, jinjaCol: 0, jinjaEndCol: 10 },
-			{ type: 'source', line: 1, col: 0, sourceName: 'src', tableName: 'b', sourceNameCol: 0, sourceNameEndCol: 3, tableNameCol: 5, tableNameEndCol: 6, jinjaCol: 0, jinjaEndCol: 10 },
-		];
-		const result = extractSources(tags);
+	it('returns multiple sources in source order', () => {
+		const sql = 'select * from {{ source(\'s\', \'a\') }} union all select * from {{ source(\'s\', \'b\') }}';
+		const result = extractSources(tokenizeJinja(sql));
 		expect(result.map(r => r.tableName)).toEqual(['a', 'b']);
 	});
 
-	it('returns empty array for empty tags', () => {
+	it('returns empty array when there are no jinja tokens', () => {
 		expect(extractSources([])).toEqual([]);
 	});
 });
@@ -880,13 +844,7 @@ describe('FtlDocumentParser', () => {
 			dialect: 'ansi',
 			warnings: [{ type: 'syntax_error', message: 'oops' }],
 			timing: { parseMs: 1, qualifyMs: 0, scopeMs: 0, totalMs: 2 },
-			jinjaTags: [{
-				type: 'ref',
-				line: 1, col: 5,
-				model: 'orders',
-				modelCol: 11, modelEndCol: 17,
-				jinjaCol: 5, jinjaEndCol: 26,
-			}],
+			jinjaTokens: tokenizeJinja(sql),
 		};
 
 		const mockParser: SqlParser = { parse: async () => fakeResult };

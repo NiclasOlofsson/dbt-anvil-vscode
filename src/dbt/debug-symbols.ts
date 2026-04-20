@@ -1,6 +1,7 @@
 import { iterJinjaTags } from './jinja-blanker';
 import { buildLineStarts, lineAtOffset } from '../ftl/jinja-spans';
-import type { SqlToken, JinjaTagSpan } from '../ftl/parse-result';
+import type { SqlToken } from '../ftl/parse-result';
+import type { JinjaToken } from '../ftl/jinja-tokenizer';
 
 export interface SymbolEntry {
 	line: number;
@@ -518,7 +519,7 @@ function buildCteRanges(
 export function emitDebugSymbolsFromTokens(
 	source: string,
 	tokens: SqlToken[],
-	jinjaTags: JinjaTagSpan[],
+	jinjaTokens: JinjaToken[],
 ): EmitResult | undefined {
 	if (tokens.length === 0) return undefined;
 
@@ -566,13 +567,50 @@ export function emitDebugSymbolsFromTokens(
 	const sourceMarkers: BridgeSourceMarker[] = [];
 	const macroSpans: BridgeMacroSpan[] = [];
 
-	for (const span of jinjaTags) {
-		const tagStart = lineStarts[span.line] + span.jinjaCol;
-		const tagEnd = lineStarts[span.line] + span.jinjaEndCol;
-		if (span.type === 'ref') {
-			refMarkers.push({ name: span.model, sourceLine: span.line, startOffset: tagStart, endOffset: tagEnd });
-		} else {
-			sourceMarkers.push({ schema: span.sourceName, name: span.tableName, sourceLine: span.line, startOffset: tagStart, endOffset: tagEnd });
+	for (let i = 0; i < jinjaTokens.length; i++) {
+		const open = jinjaTokens[i];
+		if (open.type !== 'jinja_expression_open' || open.tagEnd === undefined) continue;
+		const tagStart = open.start;
+		const tagEnd = open.tagEnd;
+		const sourceLine = open.line;
+
+		// Scan inside the tag for ref('name') or source('schema', 'table').
+		for (let j = i + 1; j < jinjaTokens.length && jinjaTokens[j].start < tagEnd; j++) {
+			const id = jinjaTokens[j];
+			if (id.type !== 'jinja_identifier') continue;
+
+			if (id.value === 'ref') {
+				const lp = jinjaTokens[j + 1];
+				const arg = jinjaTokens[j + 2];
+				const rp = jinjaTokens[j + 3];
+				if (lp?.type === 'jinja_paren_open' && arg?.type === 'jinja_string' && rp?.type === 'jinja_paren_close') {
+					refMarkers.push({ name: arg.value, sourceLine, startOffset: tagStart, endOffset: tagEnd });
+				}
+				break;
+			}
+			if (id.value === 'source') {
+				const lp = jinjaTokens[j + 1];
+				const arg1 = jinjaTokens[j + 2];
+				const comma = jinjaTokens[j + 3];
+				const arg2 = jinjaTokens[j + 4];
+				const rp = jinjaTokens[j + 5];
+				if (
+					lp?.type === 'jinja_paren_open' &&
+					arg1?.type === 'jinja_string' &&
+					comma?.type === 'jinja_comma' &&
+					arg2?.type === 'jinja_string' &&
+					rp?.type === 'jinja_paren_close'
+				) {
+					sourceMarkers.push({
+						schema: arg1.value,
+						name: arg2.value,
+						sourceLine,
+						startOffset: tagStart,
+						endOffset: tagEnd,
+					});
+				}
+				break;
+			}
 		}
 	}
 

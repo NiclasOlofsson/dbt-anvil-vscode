@@ -163,7 +163,7 @@ function mockManifestIndexer(): ManifestIndexer {
 
 function mockParseService(
 	decomposeResult?: object,
-	tokenResult?: { sqlTokens: SqlToken[]; jinjaTags: [] },
+	tokenResult?: { sqlTokens: SqlToken[]; jinjaTokens: [] },
 ): ParseService {
 	return {
 		getDocumentModel: vi.fn().mockResolvedValue(null),
@@ -1959,7 +1959,7 @@ describe('SqlDebugAdapter', () => {
 
 			// Provide a minimal SELECT token so emitDebugSymbolsFromTokens returns non-undefined,
 			// causing _compileWithSymbols to use the annotated path and build a source map.
-			const tokenResult = { sqlTokens: [{ type: 'SELECT', start: 0, end: 5, line: 0, col: 6 }], jinjaTags: [] as [] };
+			const tokenResult = { sqlTokens: [{ type: 'SELECT', start: 0, end: 5, line: 0, col: 6 }], jinjaTokens: [] as [] };
 
 			harness = new DapHarness({
 				bridgeRunner: bridge,
@@ -2025,7 +2025,7 @@ describe('SqlDebugAdapter', () => {
 			} as unknown as BridgeRunner;
 
 			// Provide a minimal SELECT token so _compileWithSymbols builds a source map.
-			const tokenResult = { sqlTokens: [{ type: 'SELECT', start: 0, end: 5, line: 0, col: 6 }], jinjaTags: [] as [] };
+			const tokenResult = { sqlTokens: [{ type: 'SELECT', start: 0, end: 5, line: 0, col: 6 }], jinjaTokens: [] as [] };
 
 			harness = new DapHarness({
 				bridgeRunner: bridge,

@@ -62,47 +62,6 @@ export interface SqlToken {
 	comments?: Array<{ start: number; end: number; text: string }>;
 }
 
-export interface JinjaRefSpan {
-	type: 'ref';
-	/** 0-based line of the `ref(` call */
-	line: number;
-	/** 0-based col of the `r` in `ref(` */
-	col: number;
-	model: string;
-	/** 0-based col of the model name content (no quotes) */
-	modelCol: number;
-	/** 0-based exclusive end col of the model name content */
-	modelEndCol: number;
-	/** 0-based col of the opening `{{` */
-	jinjaCol: number;
-	/** 0-based exclusive end col after the closing `}}` */
-	jinjaEndCol: number;
-}
-
-export interface JinjaSourceSpan {
-	type: 'source';
-	/** 0-based line of the `source(` call */
-	line: number;
-	/** 0-based col of the `s` in `source(` */
-	col: number;
-	sourceName: string;
-	tableName: string;
-	/** 0-based col of the sourceName content (no quotes) */
-	sourceNameCol: number;
-	/** 0-based exclusive end col of the sourceName content */
-	sourceNameEndCol: number;
-	/** 0-based col of the tableName content (no quotes) */
-	tableNameCol: number;
-	/** 0-based exclusive end col of the tableName content */
-	tableNameEndCol: number;
-	/** 0-based col of the opening `{{` */
-	jinjaCol: number;
-	/** 0-based exclusive end col after the closing `}}` */
-	jinjaEndCol: number;
-}
-
-export type JinjaTagSpan = JinjaRefSpan | JinjaSourceSpan;
-
 export type { JinjaToken, JinjaTokenType } from './jinja-tokenizer';
 import type { JinjaToken } from './jinja-tokenizer';
 
@@ -113,13 +72,10 @@ export interface ParseResult {
 	warnings: ParseWarning[];
 	timing: ParseTiming;
 	sqlTokens?: SqlToken[];
-	/** Jinja ref/source spans extracted from the raw SQL, always in raw-source space. */
-	jinjaTags?: JinjaTagSpan[];
 	/**
 	 * Flat fine-grained jinja token stream covering every `{{ }}`, `{% %}`,
-	 * and `{# #}` tag in the raw source. Interleavable with `sqlTokens` by
-	 * `start` offset. New unified representation — additive alongside
-	 * `jinjaTags`/refs/sources while consumers migrate.
+	 * and `{# #}` tag in the raw source. The unified per-tag representation —
+	 * `ref`/`source`/macro extraction now reads this stream directly.
 	 */
 	jinjaTokens?: JinjaToken[];
 	/** CTEs whose body was `SELECT *` before qualify() expanded them. Line is 0-based. */

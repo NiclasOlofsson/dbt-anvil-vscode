@@ -2403,7 +2403,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		try {
 			const tokenResult = await this._parseService.parseRawForTokens(sourceText);
 			const emitResult = tokenResult
-				? emitDebugSymbolsFromTokens(sourceText, tokenResult.sqlTokens, tokenResult.jinjaTags)
+				? emitDebugSymbolsFromTokens(sourceText, tokenResult.sqlTokens, tokenResult.jinjaTokens)
 				: undefined;
 
 			if (!emitResult) {

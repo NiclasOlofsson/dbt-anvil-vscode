@@ -2,7 +2,6 @@ import type { PyodideInterface } from 'pyodide';
 import { renToRawLine } from './nunjucks-renderer';
 import type { LineMap } from './nunjucks-renderer';
 import type { AstPayload, ParseResult } from './parse-result';
-import { extractJinjaSpans } from './jinja-spans';
 import { tokenizeJinja } from './jinja-tokenizer';
 import { parseWithJinjaFallback } from './parse-with-jinja-fallback';
 import type { DialectSymbols, SqlParser } from './sql-parser';
@@ -94,7 +93,6 @@ export class PyodideSqlParser implements SqlParser {
 
 	async parse(rawSql: string, dialect: string, schema?: Record<string, Record<string, string>>): Promise<ParseResult> {
 		const schemaJson = schema ? JSON.stringify(schema) : '';
-		const jinjaTags = extractJinjaSpans(rawSql);
 		const jinjaTokens = tokenizeJinja(rawSql);
 
 		// Three-pass cascade:
@@ -113,7 +111,6 @@ export class PyodideSqlParser implements SqlParser {
 			r => !r.warnings.some(w => w.type === 'syntax_error'),
 		);
 
-		result.jinjaTags = jinjaTags;
 		result.jinjaTokens = jinjaTokens;
 		if (pass !== 'pass2') return result;
 

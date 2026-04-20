@@ -5,8 +5,8 @@ import { generateVariants } from '../dbt/sql-variant-generator';
 import { stripJinja } from '../providers/common/jinja-utils';
 import type { ILogger } from '../types/logger';
 import type { DocumentParser } from './document-parser';
-import type { JinjaTagSpan, JinjaToken, SqlToken } from '../ftl/parse-result';
-import type { NinjaSqlToken } from '../ftl/ninja-sql-tokens';
+import type { JinjaToken, SqlToken } from '../ftl/parse-result';
+import { sqlOnly, type NinjaSqlToken } from '../ftl/ninja-sql-tokens';
 
 export interface ColumnInfo {
 	name: string;
@@ -240,21 +240,18 @@ export interface DocumentModel {
 	 * (empty when schema_mapping had no entries for the upstream tables).
 	 */
 	aliases?: Record<string, string[]>;
-	/** Raw sqlglot tokens from the FTL parser. Only populated by FtlDocumentParser. */
-	sqlTokens?: SqlToken[];
-	/** Jinja ref/source spans. Only populated by FtlDocumentParser. */
-	jinjaTags?: JinjaTagSpan[];
 	/**
-	 * Flat fine-grained jinja token stream. Additive alongside `jinjaTags`,
-	 * `refs`, and `sources` — consumers may migrate to it as the unified
-	 * source of truth for jinja positions / structure.
+	 * Flat fine-grained jinja token stream. Used by jinja-aware extractors
+	 * and by the debug adapter to emit ref/source/macro markers.
 	 */
 	jinjaTokens?: JinjaToken[];
 	/**
-	 * Unified position-ordered stream merging `sqlTokens` and `jinjaTokens`.
-	 * Each entry carries a `category` discriminator. This is the canonical
-	 * surface for any consumer that wants a single token sequence covering
-	 * both SQL and jinja content.
+	 * Unified position-ordered stream interleaving SQL tokens and jinja tokens.
+	 * Each entry carries a `category` discriminator (`'sql'` | `'jinja'`).
+	 * This is the canonical surface for any consumer that wants a single
+	 * token sequence covering both SQL and jinja content. SQL tokens that
+	 * fall inside jinja regions (the blanker's placeholder substitutions)
+	 * are filtered out — the jinja stream is authoritative there.
 	 */
 	ninjaSqlTokens?: NinjaSqlToken[];
 	/**
@@ -396,19 +393,16 @@ export function mergeModels(models: DocumentModel[]): DocumentModel {
 		}
 	}
 
-	// sqlTokens / jinjaTags: all variants are parsed from the same raw source (generateVariants
-	// is length-preserving), so every variant's sqlTokens carries the same positions. Take the
-	// first model that has them. Dropping them here causes comment-span masking in layout rules
-	// to silently stop working for any file that contains Jinja conditionals.
-	const sqlTokens = models.find(m => m.sqlTokens)?.sqlTokens;
-	const jinjaTags = models.find(m => m.jinjaTags)?.jinjaTags;
+	// jinjaTokens / ninjaSqlTokens: all variants are parsed from the same raw source
+	// (generateVariants is length-preserving), so every variant's token streams carry
+	// the same positions. Take the first model that has them. Dropping them here
+	// causes comment-span masking in layout rules to silently stop working for any
+	// file that contains Jinja conditionals.
 	const jinjaTokens = models.find(m => m.jinjaTokens)?.jinjaTokens;
 	const ninjaSqlTokens = models.find(m => m.ninjaSqlTokens)?.ninjaSqlTokens;
 
 	return { ctes: [...cteMap.values()], refs, sources, finalColumns, finalSelect, tokens, timing, sqlglotWarnings, aliases,
 		pivotVirtualColumns: Object.keys(pivotVirtualColumns).length > 0 ? pivotVirtualColumns : undefined,
-		sqlTokens,
-		jinjaTags,
 		jinjaTokens,
 		ninjaSqlTokens,
 	};
@@ -879,15 +873,15 @@ export class ParseService {
 	}
 
 	/**
-	 * Parse a raw SQL string and return its sqlglot tokens and Jinja spans.
+	 * Parse a raw SQL string and return its sqlglot tokens and jinja token stream.
 	 * Returns `undefined` when the parser backend does not supply tokens.
 	 * No caching, no enrichment, no variant expansion.
 	 */
-	async parseRawForTokens(sql: string): Promise<{ sqlTokens: SqlToken[]; jinjaTags: JinjaTagSpan[] } | undefined> {
+	async parseRawForTokens(sql: string): Promise<{ sqlTokens: SqlToken[]; jinjaTokens: JinjaToken[] } | undefined> {
 		try {
 			const model = await this._parser.parse(sql);
-			if (!model.sqlTokens) return undefined;
-			return { sqlTokens: model.sqlTokens, jinjaTags: model.jinjaTags ?? [] };
+			if (!model.ninjaSqlTokens) return undefined;
+			return { sqlTokens: sqlOnly(model.ninjaSqlTokens), jinjaTokens: model.jinjaTokens ?? [] };
 		} catch {
 			return undefined;
 		}
