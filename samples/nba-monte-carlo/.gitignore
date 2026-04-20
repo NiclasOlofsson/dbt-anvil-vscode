@@ -6,3 +6,4 @@ dbt_modules/
 data/nba_dlt/
 
 logs/
+.mcp.json
