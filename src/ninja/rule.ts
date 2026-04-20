@@ -45,6 +45,13 @@ export interface NinjaRuleBase {
 	autoFixable?: boolean;
 	/** Configurable options surfaced in the Rule Editor. */
 	configOptions?: RuleConfigOptionSpec[];
+	/**
+	 * Priority for the edit planner's overlap arbitration. Lower wins.
+	 * Default 100. Lower values let semantic/structural fixes (e.g. delete an
+	 * unused CTE) take precedence over cosmetic ones (e.g. recase a keyword
+	 * inside that CTE) when their edits overlap.
+	 */
+	priority?: number;
 }
 
 /** Context passed to token-based rules. */

@@ -5,6 +5,8 @@ import type { ILogger } from '../../types/logger';
 import type { NinjaResult } from '../../ninja/engine';
 import { loadConfig } from '../../ninja/config-loader';
 import { FixAction, SnippetAction } from '../../ninja/violation';
+import { planEdits } from '../../ninja/edit-planner';
+import { filterAutoFixViolations } from './formatting-provider';
 
 /**
  * Quick-fix code actions for dbt SQL files.
@@ -204,21 +206,16 @@ export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 			// consciously chose this action so autoFix policy does not apply.
 			// Exclude codeActionOnly violations (e.g. delete-CTE) — those are code fixes only.
 			// Per-rule autoFix.rules overrides take precedence over each violation's built-in autoFix flag.
-			const fixable = ninjaResult.violations.filter((v): v is typeof v & { action: FixAction } => {
-				if (v.action?.type !== FixAction.TYPE) return false;
-				const autoFix = v.rule in ninjaConfig.autoFix.rules ? ninjaConfig.autoFix.rules[v.rule] : v.action.autoFix;
-				return autoFix;
-			});
+			const fixable = filterAutoFixViolations(ninjaResult.violations, ninjaConfig);
 			if (fixable.length > 1) {
+				const planned = planEdits(fixable, document);
 				const fixAll = new vscode.CodeAction(
 					`Fix all ${fixable.length} ninja violations`,
 					vscode.CodeActionKind.QuickFix,
 				);
 				fixAll.edit = new vscode.WorkspaceEdit();
-				for (const v of fixable) {
-					for (const edit of (v.action as FixAction).edits) {
-						fixAll.edit.replace(document.uri, edit.range, edit.newText);
-					}
+				for (const edit of planned.edits) {
+					fixAll.edit.replace(document.uri, edit.range, edit.newText);
 				}
 				actions.push(fixAll);
 			}
@@ -226,15 +223,14 @@ export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 			// source.fixAll.ninja — triggered automatically by VS Code on save (outside user control).
 			// Gated by applyOnFixAll so the user can disable silent background fixes.
 			if (ninjaConfig.autoFix.applyOnFixAll && fixable.length > 0) {
+				const planned = planEdits(fixable, document);
 				const sourceFixAll = new vscode.CodeAction(
 					'Fix all ninja violations',
 					vscode.CodeActionKind.SourceFixAll.append('ninja'),
 				);
 				sourceFixAll.edit = new vscode.WorkspaceEdit();
-				for (const v of fixable) {
-					for (const edit of (v.action as FixAction).edits) {
-						sourceFixAll.edit.replace(document.uri, edit.range, edit.newText);
-					}
+				for (const edit of planned.edits) {
+					sourceFixAll.edit.replace(document.uri, edit.range, edit.newText);
 				}
 				actions.push(sourceFixAll);
 			}
