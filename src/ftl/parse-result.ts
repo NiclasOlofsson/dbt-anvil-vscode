@@ -103,6 +103,9 @@ export interface JinjaSourceSpan {
 
 export type JinjaTagSpan = JinjaRefSpan | JinjaSourceSpan;
 
+export type { JinjaToken, JinjaTokenType } from './jinja-tokenizer';
+import type { JinjaToken } from './jinja-tokenizer';
+
 export interface ParseResult {
 	ast: AstPayload[];
 	scopes: ScopeNode[];
@@ -112,6 +115,13 @@ export interface ParseResult {
 	sqlTokens?: SqlToken[];
 	/** Jinja ref/source spans extracted from the raw SQL, always in raw-source space. */
 	jinjaTags?: JinjaTagSpan[];
+	/**
+	 * Flat fine-grained jinja token stream covering every `{{ }}`, `{% %}`,
+	 * and `{# #}` tag in the raw source. Interleavable with `sqlTokens` by
+	 * `start` offset. New unified representation — additive alongside
+	 * `jinjaTags`/refs/sources while consumers migrate.
+	 */
+	jinjaTokens?: JinjaToken[];
 	/** CTEs whose body was `SELECT *` before qualify() expanded them. Line is 0-based. */
 	wildcardCtes?: Array<{ name: string; line: number; col?: number }>;
 	/**
