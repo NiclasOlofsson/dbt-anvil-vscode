@@ -37,6 +37,10 @@ export class ListResourcesTool implements vscode.LanguageModelTool<ListResources
 					package_name: model.packageName,
 					path: model.path,
 					materialization: model.materialisation,
+					database: model.database,
+					schema: model.schema,
+					alias: model.alias,
+					relation_name: model.relationName,
 					tags: model.tags,
 					description: model.description,
 				});
@@ -50,7 +54,10 @@ export class ListResourcesTool implements vscode.LanguageModelTool<ListResources
 					name: source.name,
 					resource_type: 'source',
 					source_name: source.sourceName,
+					database: source.database,
 					schema: source.schema,
+					identifier: source.identifier,
+					relation_name: source.relationName,
 					tags: source.tags,
 					description: source.description,
 				});

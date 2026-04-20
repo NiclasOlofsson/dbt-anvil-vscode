@@ -25,7 +25,7 @@ export class GetResourceInfoTool implements vscode.LanguageModelTool<GetResource
 		options: vscode.LanguageModelToolInvocationOptions<GetResourceInfoInput>,
 		_token: vscode.CancellationToken,
 	): Promise<vscode.LanguageModelToolResult> {
-		const { name, resource_type, include_compiled_sql = true } = options.input;
+		const { name, resource_type, include_compiled_sql = false } = options.input;
 		this.logger.info(`LM Tool: getResourceInfo name="${name}" include_compiled_sql=${include_compiled_sql}`);
 
 		// Find the resource
@@ -70,6 +70,11 @@ export class GetResourceInfoTool implements vscode.LanguageModelTool<GetResource
 			tags: rawNode.tags,
 			...('schema' in rawNode ? { schema: rawNode.schema } : {}),
 			...('database' in rawNode ? { database: rawNode.database } : {}),
+			...('alias' in rawNode && rawNode.alias ? { alias: rawNode.alias } : {}),
+			...('identifier' in rawNode && rawNode.identifier ? { identifier: rawNode.identifier } : {}),
+			...('relation_name' in rawNode && rawNode.relation_name
+				? { relation_name: rawNode.relation_name }
+				: {}),
 			...(compiledSql && include_compiled_sql ? { compiled_sql: compiledSql } : {}),
 			...('raw_code' in rawNode && rawNode.raw_code
 				? { raw_sql: rawNode.raw_code }

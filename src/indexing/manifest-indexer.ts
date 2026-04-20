@@ -34,6 +34,8 @@ export interface IndexedModel {
 	path: string;
 	schema?: string;
 	database?: string;
+	alias?: string;
+	relationName?: string;
 	tags: string[];
 	materialisation: string;
 	description?: string;
@@ -45,6 +47,8 @@ export interface IndexedSource {
 	sourceName: string;
 	schema: string;
 	database?: string;
+	identifier?: string;
+	relationName?: string;
 	description?: string;
 	tags: string[];
 }
@@ -164,6 +168,8 @@ export class ManifestIndexer {
 					path: path.join(this.loader.projectDir, node.original_file_path),
 					schema: node.schema,
 					database: node.database,
+					alias: node.alias,
+					relationName: node.relation_name,
 					tags: node.tags ?? [],
 					materialisation: node.config?.materialized ?? 'view',
 					description: node.description,
@@ -186,6 +192,8 @@ export class ManifestIndexer {
 				sourceName: source.source_name,
 				schema: source.schema,
 				database: source.database,
+				identifier: source.identifier,
+				relationName: source.relation_name,
 				description: source.description,
 				tags: source.tags ?? [],
 			};
