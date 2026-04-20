@@ -296,58 +296,55 @@ SELECT mkey, sourcename FROM warehouse`;
 		expect(root.columns).toContain('*');
 	});
 
-	// ── jinjaTags (populated by extractJinjaSpans on raw SQL) ─────────────
+	// ── jinjaTokens (populated by tokenizeJinja on raw SQL) ───────────────
 
-	it('populates jinjaTags with a ref entry for a ref() tag', async () => {
+	it('populates jinjaTokens with the open/identifier/string/close stream for a ref() tag', async () => {
 		const sql = 'SELECT * FROM {{ ref(\'orders\') }}';
 		const result = await parser.parse(sql, 'duckdb');
 
-		expect(result.jinjaTags).toBeDefined();
-		expect(result.jinjaTags).toHaveLength(1);
-		const span = result.jinjaTags![0];
-		expect(span.type).toBe('ref');
-		if (span.type !== 'ref') return;
-		expect(span.model).toBe('orders');
-		expect(span.line).toBe(0);
-		// '{{' is at offset 14 on a single-line SQL
-		expect(span.jinjaCol).toBe(14);
+		expect(result.jinjaTokens).toBeDefined();
+		const types = result.jinjaTokens!.map(t => t.type);
+		expect(types).toContain('jinja_expression_open');
+		expect(types).toContain('jinja_identifier');
+		expect(types).toContain('jinja_string');
+		expect(types).toContain('jinja_expression_close');
+		const id = result.jinjaTokens!.find(t => t.type === 'jinja_identifier' && t.value === 'ref');
+		expect(id).toBeDefined();
+		const str = result.jinjaTokens!.find(t => t.type === 'jinja_string');
+		expect(str!.value).toBe('orders');
 	});
 
-	it('populates jinjaTags with a source entry for a source() tag', async () => {
+	it('populates jinjaTokens with two string tokens for a source() tag', async () => {
 		const sql = 'SELECT * FROM {{ source(\'raw\', \'orders\') }}';
 		const result = await parser.parse(sql, 'duckdb');
 
-		expect(result.jinjaTags).toBeDefined();
-		expect(result.jinjaTags).toHaveLength(1);
-		const span = result.jinjaTags![0];
-		expect(span.type).toBe('source');
-		if (span.type !== 'source') return;
-		expect(span.sourceName).toBe('raw');
-		expect(span.tableName).toBe('orders');
+		expect(result.jinjaTokens).toBeDefined();
+		const id = result.jinjaTokens!.find(t => t.type === 'jinja_identifier' && t.value === 'source');
+		expect(id).toBeDefined();
+		const strings = result.jinjaTokens!.filter(t => t.type === 'jinja_string').map(t => t.value);
+		expect(strings).toEqual(['raw', 'orders']);
 	});
 
-	it('jinjaTags positions are in raw-source space even when pass 2 is used', async () => {
+	it('jinjaTokens positions are in raw-source space even when pass 2 is used', async () => {
 		// This SQL requires pass 2 (nunjucks): a statement-level macro forces
-		// the nunjucks render path.  jinjaTags must still report raw-source positions.
+		// the nunjucks render path. jinjaTokens must still report raw-source offsets.
 		const sql = [
 			'{{ config(materialized=\'table\') }}',   // line 0 — statement macro
 			'SELECT * FROM {{ ref(\'orders\') }}',      // line 1
 		].join('\n');
 		const result = await parser.parse(sql, 'duckdb');
 
-		expect(result.jinjaTags).toBeDefined();
-		const refSpan = result.jinjaTags!.find(s => s.type === 'ref');
-		expect(refSpan).toBeDefined();
-		if (!refSpan || refSpan.type !== 'ref') return;
+		expect(result.jinjaTokens).toBeDefined();
+		const refId = result.jinjaTokens!.find(t => t.type === 'jinja_identifier' && t.value === 'ref');
+		expect(refId).toBeDefined();
 		// ref() is on line 1 in the raw SQL regardless of which pass was used.
-		expect(refSpan.line).toBe(1);
-		expect(refSpan.model).toBe('orders');
+		expect(refId!.line).toBe(1);
 	});
 
-	it('jinjaTags is empty for SQL with no ref/source tags', async () => {
+	it('jinjaTokens is empty for SQL with no jinja tags', async () => {
 		const result = await parser.parse('SELECT id FROM users', 'duckdb');
-		expect(result.jinjaTags).toBeDefined();
-		expect(result.jinjaTags).toHaveLength(0);
+		expect(result.jinjaTokens).toBeDefined();
+		expect(result.jinjaTokens).toHaveLength(0);
 	});
 
 	it('does NOT set isPass2 for plain SQL that succeeds on pass 1', async () => {

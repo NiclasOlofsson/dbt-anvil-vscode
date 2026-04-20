@@ -147,15 +147,21 @@ export function sqlTok(type: string, start: number, end: number, line: number, c
 /**
  * Build a DocumentModel with custom fields.
  *
- * If `sqlTokens` (or `jinjaTokens`) is supplied without an explicit
- * `ninjaSqlTokens`, the merged stream is derived automatically. This keeps
- * legacy tests that only set `sqlTokens` working transparently — ninja rules
- * now read from `ninjaSqlTokens`, so the factory backfills it.
+ * Accepts optional `sqlTokens` / `jinjaTokens` as convenience inputs — when
+ * either is supplied without an explicit `ninjaSqlTokens`, the merged stream
+ * is derived automatically and stored on the model. This keeps tests terse
+ * (build SQL tokens, get the unified stream for free) without hand-rolling
+ * `mergeSqlAndJinjaTokens` at every call site.
  */
-export function model(overrides: Partial<DocumentModel> = {}): DocumentModel {
-	const merged = { ...emptyModel, ...overrides };
-	if (merged.ninjaSqlTokens === undefined && (merged.sqlTokens || merged.jinjaTokens)) {
-		merged.ninjaSqlTokens = mergeSqlAndJinjaTokens(merged.sqlTokens ?? [], merged.jinjaTokens ?? []);
+import type { JinjaToken } from '../../ftl/jinja-tokenizer';
+export function model(
+	overrides: Partial<DocumentModel> & { sqlTokens?: SqlToken[]; jinjaTokens?: JinjaToken[] } = {},
+): DocumentModel {
+	const { sqlTokens, jinjaTokens, ...modelFields } = overrides;
+	const merged: DocumentModel = { ...emptyModel, ...modelFields };
+	if (merged.jinjaTokens === undefined && jinjaTokens !== undefined) merged.jinjaTokens = jinjaTokens;
+	if (merged.ninjaSqlTokens === undefined && (sqlTokens || jinjaTokens)) {
+		merged.ninjaSqlTokens = mergeSqlAndJinjaTokens(sqlTokens ?? [], jinjaTokens ?? []);
 	}
 	return merged;
 }

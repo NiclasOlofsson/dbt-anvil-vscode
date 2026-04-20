@@ -120,8 +120,8 @@ export class FtlDocumentParser implements DocumentParser {
 		const subqueries = extractSubqueries(result.ast);
 		const tokens = extractTokens(result.ast, ctes);
 		resolveTableRefs(tokens);
-		const refs = extractRefs(result.jinjaTags ?? []);
-		const sources = extractSources(result.jinjaTags ?? []);
+		const refs = extractRefs(result.jinjaTokens ?? []);
+		const sources = extractSources(result.jinjaTokens ?? []);
 		enrichTokensWithJinjaSpans(tokens, refs, sources);
 		const pivotVirtualColumns = extractPivotVirtualColumns(result.ast);
 
@@ -134,8 +134,6 @@ export class FtlDocumentParser implements DocumentParser {
 			tokens,
 			sqlglotWarnings: mapWarnings(result.warnings),
 			timing: { parseMs: result.timing.parseMs, totalMs: result.timing.totalMs },
-			sqlTokens: result.sqlTokens,
-			jinjaTags: result.jinjaTags,
 			jinjaTokens: result.jinjaTokens,
 			ninjaSqlTokens: result.sqlTokens && result.jinjaTokens
 				? mergeSqlAndJinjaTokens(result.sqlTokens, result.jinjaTokens)
