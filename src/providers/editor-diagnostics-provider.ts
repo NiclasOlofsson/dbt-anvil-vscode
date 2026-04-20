@@ -493,11 +493,11 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		this._columnDebounceTimers.set(key, timer);
 	}
 
-	private async _validateColumnsAsync(document: vscode.TextDocument): Promise<void> {
+	private async _validateColumnsAsync(_document: vscode.TextDocument): Promise<void> {
 		if (!this._startupReady) return;
 		if (!this.parseService) return;
 
-		const key = document.uri.toString();
+		// const key = document.uri.toString();
 		// this._columnCtsSources.get(key)?.cancel();
 		// const cts = new vscode.CancellationTokenSource();
 		// this._columnCtsSources.set(key, cts);

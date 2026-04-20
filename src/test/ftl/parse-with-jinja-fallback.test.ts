@@ -3,6 +3,7 @@ import {
 	parseWithJinjaFallback,
 	type ParsePass,
 } from '../../ftl/parse-with-jinja-fallback';
+import type { LineMap } from '../../ftl/nunjucks-renderer';
 
 // The helper orchestrates the three-pass cascade. We don't care about sqlglot
 // here — runOnce is a stub that lets us script which passes "succeed". This
@@ -41,7 +42,7 @@ describe('parseWithJinjaFallback', () => {
 	});
 
 	it('falls through to pass 2 (nunjucks render) when both blanker passes fail', () => {
-		const runOnce = vi.fn((sql: string, pass: ParsePass) => ({ sql, pass }));
+		const runOnce = vi.fn((sql: string, pass: ParsePass, _lineMap?: LineMap) => ({ sql, pass }));
 		const out = parseWithJinjaFallback(
 			'SELECT 1',
 			runOnce,
