@@ -1181,12 +1181,58 @@ def _decompose_query(compiled_sql: str, dialect: str) -> str:
         return line_starts[line] if line < len(line_starts) else 0
 
     def find_clause_line(select_node: _Any, clause_key: str) -> int:
+        # The SELECT keyword sits BEFORE the first projected identifier, so
+        # forward-searching from node_line (which uses the first identifier)
+        # would skip past it. For "select" we instead pick the SELECT token
+        # whose offset is ≤ the first identifier's offset and largest — the
+        # nearest preceding SELECT keyword. All other clause keys (FROM,
+        # WHERE, GROUP, …) come AFTER projections, so the forward search is
+        # correct for them.
+        if clause_key == "select":
+            first_ident_start: int | None = None
+            for ident in select_node.find_all(_exp.Identifier):
+                s = ident.meta.get("start")
+                if s is not None:
+                    first_ident_start = s
+                    break
+            if first_ident_start is not None:
+                best_line: int | None = None
+                best_start = -1
+                for tt, tline, tstart in _token_positions:
+                    if tt == _TT.SELECT and tstart <= first_ident_start and tstart > best_start:
+                        best_start = tstart
+                        best_line = tline
+                if best_line is not None:
+                    return best_line
+            return node_line(select_node)
+
         after = _select_start_offset(select_node)
         return token_clause_line(clause_key, after) or node_line(select_node)
 
     def extract_clauses(
         name: str, select_node: _Any, _cte_prefix: str
     ) -> list[dict[str, _Any]]:
+        # UNION-aware: if the node is a Union, flatten its legs and concatenate
+        # their clauses in source order. Each leg contributes its own FROM/
+        # JOIN/WHERE/SELECT clauses with their own source line numbers, so the
+        # concatenated list is already sorted by line. Breakpoints and stepping
+        # treat the UNION as a single linear clause sequence within the frame.
+        if isinstance(select_node, _exp.Union):
+            legs = _collect_union_selects(select_node)
+            combined: list[dict[str, _Any]] = []
+            for leg_index, leg in enumerate(legs, start=1):
+                leg_clauses = extract_clauses(name, leg, _cte_prefix)
+                # Tag each clause with its 1-based UNION leg position so the
+                # debug adapter can disambiguate identical-stage clauses
+                # ("select", "where") that come from different legs.
+                for c in leg_clauses:
+                    c["union_leg"] = leg_index
+                    c["union_total"] = len(legs)
+                combined.extend(leg_clauses)
+            for idx, clause in enumerate(combined):
+                clause["order"] = idx
+            return combined
+
         clauses: list[dict[str, _Any]] = []
 
         with_node = ast.args.get("with_")
@@ -1496,12 +1542,119 @@ def _decompose_query(compiled_sql: str, dialect: str) -> str:
         if main_sel:
             promote_in_select(main_sel, "_main_")
 
+    # Maps synthetic __union_N__ CTE name → (startLine, endLine) in the
+    # compiled-SQL coordinate system. Populated by promote_unions and
+    # consulted during frame enumeration so the synthetic CTE gets a precise
+    # line range rather than node_end_line's paren-matching heuristic (UNION
+    # legs aren't parenthesised in source).
+    synthetic_frame_ranges: dict[str, tuple[int, int]] = {}
+
+    def promote_unions(the_ast: _Any) -> None:
+        """Promote each leg of a UNION into its own __union_N__ CTE.
+
+        Runs after promote_subqueries. For any Union found at the top of a
+        scope (main AST or a CTE body), each leg becomes a separate CTE so
+        breakpoints inside a branch match the branch's frame range and
+        stepping produces accurate per-branch clauses.
+
+        The original Union structure is preserved in the main/CTE body. We
+        only ADD new CTEs referencing copies of the legs; we do not rewrite
+        the Union to stubs. That keeps source positions intact (the original
+        leg nodes retain their meta) and leaves the existing UNION SQL
+        executable as-is.
+        """
+        the_with_node: _Any = the_ast.args.get("with_")
+
+        existing_names: set[str] = set()
+        if the_with_node:
+            for _c in the_with_node.expressions:
+                if _c.alias:
+                    existing_names.add(_c.alias)
+
+        counter: list[int] = [0]
+
+        def make_union_name() -> str:
+            while True:
+                counter[0] += 1
+                name = f"__union_{counter[0]}__"
+                if name not in existing_names:
+                    existing_names.add(name)
+                    return name
+
+        def insert_before(new_cte: _Any, before_alias: str) -> None:
+            nonlocal the_with_node
+            if the_with_node is None:
+                the_with_node = _exp.With(expressions=[new_cte])
+                the_ast.set("with_", the_with_node)
+            else:
+                exprs = list(the_with_node.expressions)
+                idx = next(
+                    (i for i, c in enumerate(exprs) if (c.alias or "") == before_alias),
+                    len(exprs),
+                )
+                exprs.insert(idx, new_cte)
+                the_with_node.set("expressions", exprs)
+
+        def leg_last_line(leg: _Any) -> int:
+            """Line of the last positioned descendant of leg. Bounds the
+            branch to the tightest range around its real source content, so
+            the UNION keyword line (which usually sits between legs on its
+            own line) falls outside any frame range.
+            """
+            last_start: int | None = None
+            for node in leg.walk():
+                s = node.meta.get("start")
+                if s is not None and (last_start is None or s > last_start):
+                    last_start = s
+            if last_start is None:
+                return node_line(leg)
+            return offset_to_line(last_start)
+
+        def promote_legs(union_node: _Any, before_alias: str, enclosing_end: int) -> None:
+            legs = _collect_union_selects(union_node)
+            if len(legs) < 2:
+                return
+            for i, leg in enumerate(legs):
+                cte_name = make_union_name()
+                start_line = node_line(leg)
+                if i + 1 < len(legs):
+                    # endLine = last positioned token in this leg. Lines
+                    # after the last token (including a bare UNION ALL
+                    # keyword line between legs) fall outside every frame,
+                    # so setBreakpoints returns verified:false for them.
+                    end_line = max(start_line, leg_last_line(leg))
+                else:
+                    end_line = max(start_line, enclosing_end)
+                synthetic_frame_ranges[cte_name] = (start_line, end_line)
+                new_cte = _exp.CTE(
+                    this=leg.copy(),
+                    alias=_exp.TableAlias(this=_exp.Identifier(this=cte_name)),
+                )
+                insert_before(new_cte, before_alias)
+
+        # Top-level UNION as the main query.
+        if isinstance(the_ast, _exp.Union):
+            promote_legs(the_ast, "_main_", compiled_sql.count("\n"))
+
+        # UNION as a CTE body (skip the __union_N__ CTEs we just added).
+        if the_with_node:
+            for cte_node in list(the_with_node.expressions):
+                cte_alias = cte_node.alias or ""
+                if cte_alias in synthetic_frame_ranges:
+                    continue
+                body = cte_node.this
+                if isinstance(body, _exp.Union):
+                    # Containing CTE's own end line (paren-matched — works
+                    # because a real CTE body is wrapped in parens).
+                    promote_legs(body, cte_alias, node_end_line(cte_node))
+
     try:
         frames: list[dict[str, _Any]] = []
         clauses_map: dict[str, list[dict[str, _Any]]] = {}
         refs_map: dict[str, list[str]] = {}
 
         promote_subqueries(ast)
+        promote_unions(ast)
 
         with_node = ast.args.get("with_")
         if with_node:
@@ -1510,9 +1663,20 @@ def _decompose_query(compiled_sql: str, dialect: str) -> str:
                 if not cte_name:
                     continue
 
-                select_node = cte_node.find(_exp.Select)
-                start_line = node_line(cte_node)
-                end_line = node_end_line(cte_node)
+                # Body may be a Select OR a Union (e.g. `foo AS (SELECT a UNION
+                # ALL SELECT b)`). Pass the full body to extract_clauses — it
+                # handles both shapes.
+                body: _Any = cte_node.this
+                if not isinstance(body, (_exp.Select, _exp.Union)):
+                    # Fallback: walk to find a Select (covers edge cases like
+                    # a CTE wrapping a Subquery).
+                    body = cte_node.find(_exp.Select)
+
+                if cte_name in synthetic_frame_ranges:
+                    start_line, end_line = synthetic_frame_ranges[cte_name]
+                else:
+                    start_line = node_line(cte_node)
+                    end_line = node_end_line(cte_node)
 
                 frames.append(
                     {
@@ -1523,13 +1687,15 @@ def _decompose_query(compiled_sql: str, dialect: str) -> str:
                     }
                 )
 
-                if select_node:
-                    clauses_map[cte_name] = extract_clauses(cte_name, select_node, "")
-                    refs_map[cte_name] = extract_table_refs(select_node)
+                if body is not None:
+                    clauses_map[cte_name] = extract_clauses(cte_name, body, "")
+                    refs_map[cte_name] = extract_table_refs(body)
 
-        if isinstance(ast, _exp.Select):
+        # _main_ node: pass Union directly (extract_clauses handles it) when
+        # the top-level query is a UNION.
+        if isinstance(ast, (_exp.Select, _exp.Union)):
             main_select = ast
-        elif hasattr(ast, "this") and isinstance(ast.this, _exp.Select):
+        elif hasattr(ast, "this") and isinstance(ast.this, (_exp.Select, _exp.Union)):
             main_select = ast.this
         else:
             main_select = ast.find(_exp.Select)
@@ -1546,7 +1712,7 @@ def _decompose_query(compiled_sql: str, dialect: str) -> str:
             }
         )
 
-        if main_select and isinstance(main_select, _exp.Select):
+        if main_select and isinstance(main_select, (_exp.Select, _exp.Union)):
             clauses_map["_main_"] = extract_clauses("_main_", main_select, "")
             refs_map["_main_"] = extract_table_refs(main_select)
 

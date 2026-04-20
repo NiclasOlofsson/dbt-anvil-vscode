@@ -37,6 +37,10 @@ interface DecomposeClause {
 	/** Line number in the compiled (annotated) SQL — never overwritten by _remapPositions. */
 	compiledLine?: number;
 	order?: number;
+	/** 1-based position of this clause's UNION leg, when the parent is a UNION. Absent for non-UNION clauses. */
+	union_leg?: number;
+	/** Total number of UNION legs at the parent level. Pairs with union_leg. */
+	union_total?: number;
 }
 
 interface DecomposeResult {
@@ -2345,7 +2349,8 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	private _currentClauseName(): string {
 		const frame = this._frames[this._currentFrameIndex];
 		const clauses = this._clauses[frame.name] ?? [];
-		return clauses[this._currentClauseIndex]?.stage ?? 'unknown';
+		if (!clauses[this._currentClauseIndex]) return 'unknown';
+		return this._clauseLabel(frame.name, this._currentClauseIndex, clauses);
 	}
 
 	// ──────────────────────────────────────────────────────────────
@@ -2669,22 +2674,32 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	}
 
 	/** Display label for a single clause in the call stack.
-	 *  FROM/JOIN clauses include the target table name for clarity. */
+	 *  FROM/JOIN clauses include the target table name for clarity.
+	 *  Clauses inside a UNION leg get a `[union N/M]` suffix so identical
+	 *  stage names from different legs are distinguishable. */
 	private _clauseLabel(
 		frameName: string,
 		clauseIndex: number,
-		clauses: Array<{ stage: string }>,
+		clauses: Array<{ stage: string; union_leg?: number; union_total?: number }>,
 	): string {
 		const clause = clauses[clauseIndex];
 		if (!clause) return '';
-		if (clause.stage !== 'from' && clause.stage !== 'join') return clause.stage;
-		const refs = this._refs[frameName] ?? [];
-		const refIndex = clauses
-			.slice(0, clauseIndex + 1)
-			.filter(c => c.stage === 'from' || c.stage === 'join')
-			.length - 1;
-		const target = refs[refIndex];
-		return target ? `${clause.stage} ${target}` : clause.stage;
+		let base: string;
+		if (clause.stage !== 'from' && clause.stage !== 'join') {
+			base = clause.stage;
+		} else {
+			const refs = this._refs[frameName] ?? [];
+			const refIndex = clauses
+				.slice(0, clauseIndex + 1)
+				.filter(c => c.stage === 'from' || c.stage === 'join')
+				.length - 1;
+			const target = refs[refIndex];
+			base = target ? `${clause.stage} ${target}` : clause.stage;
+		}
+		if (clause.union_leg && clause.union_total && clause.union_total > 1) {
+			return `${base} [union ${clause.union_leg}/${clause.union_total}]`;
+		}
+		return base;
 	}
 
 	/** Return the table/CTE name targeted by the current FROM or JOIN clause.

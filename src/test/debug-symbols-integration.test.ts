@@ -6,7 +6,7 @@
  */
 import { beforeAll, describe, expect, it } from 'vitest';
 import * as path from 'node:path';
-import { emitDebugSymbolsFromTokens, findJinjaSpans, injectMarkers, parseSourceMap, type SymbolEntry } from '../dbt/debug-symbols';
+import { emitDebugSymbolsFromTokens, findJinjaSpans, injectMarkers, parseSourceMap } from '../dbt/debug-symbols';
 import { initPyodide } from '../ftl/pyodide-loader.js';
 import type { PyodideRuntime } from '../ftl/pyodide-loader.js';
 import { PyodideSqlParser } from '../ftl/pyodide-sql-parser.js';
@@ -26,7 +26,7 @@ describe('emitDebugSymbolsFromTokens', () => {
 
 	async function emit(sql: string, dialect = 'duckdb') {
 		const result = await parser.parse(sql, dialect);
-		return emitDebugSymbolsFromTokens(sql, result.sqlTokens ?? [], result.jinjaTags ?? []);
+		return emitDebugSymbolsFromTokens(sql, result.sqlTokens ?? [], result.jinjaTokens ?? []);
 	}
 
 	it('returns symbols for simple SQL', async () => {
@@ -306,5 +306,168 @@ describe('decompose_query subquery promotion (FTL)', () => {
 
 		// 'anon_sub' alias used as CTE name
 		expect(result.frames.find(f => f.name === 'anon_sub')).toBeDefined();
+	});
+});
+
+describe('decompose_query UNION leg promotion (FTL)', () => {
+	const PYODIDE_DIR = path.join(__dirname, '..', '..', 'node_modules', 'pyodide');
+	const VENDOR_DIR = path.join(__dirname, '..', '..', 'resources', 'ftl', 'vendor');
+	const SCRIPTS_DIR = path.join(__dirname, '..', '..', 'resources', 'ftl');
+
+	let runtime: PyodideRuntime;
+	let parser: PyodideSqlParser;
+
+	beforeAll(async () => {
+		runtime = await initPyodide(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR);
+		parser = PyodideSqlParser.create(runtime.pyodide);
+	}, 60_000);
+
+	function decompose(sql: string, dialect = 'duckdb') {
+		return JSON.parse(parser.decomposeQuery(sql, dialect)) as {
+			success: boolean;
+			frames: Array<{ name: string; type: string; line: number; endLine: number }>;
+			clauses: Record<string, Array<{ stage: string; line: number }>>;
+			refs: Record<string, string[]>;
+		};
+	}
+
+	it('promotes each leg of a top-level UNION ALL into its own __union_N__ frame', async () => {
+		const sql = [
+			'SELECT id, name FROM raw_a WHERE active = 1', // 0
+			'UNION ALL',                                   // 1
+			'SELECT id, name FROM raw_b WHERE active = 1', // 2
+		].join('\n');
+
+		const result = decompose(sql);
+		expect(result.success).toBe(true);
+
+		const u1 = result.frames.find(f => f.name === '__union_1__');
+		const u2 = result.frames.find(f => f.name === '__union_2__');
+		expect(u1, '__union_1__ frame').toBeDefined();
+		expect(u2, '__union_2__ frame').toBeDefined();
+
+		// Branch 1 occupies line 0; branch 2 starts at line 2. Both frame
+		// ranges are tight — line 1 (UNION ALL keyword) falls in the gap.
+		expect(u1!.line).toBe(0);
+		expect(u1!.endLine).toBe(0);
+		expect(u2!.line).toBe(2);
+		expect(u2!.endLine).toBe(2);
+	});
+
+	it('leaves a UNION-keyword-only line outside any frame range', async () => {
+		const sql = [
+			'SELECT 1 AS x',   // 0
+			'UNION ALL',       // 1 ← should NOT match any frame
+			'SELECT 2 AS x',   // 2
+		].join('\n');
+
+		const result = decompose(sql);
+		expect(result.success).toBe(true);
+
+		// Simulate the frame-matching logic: for each source-line, does any
+		// synthetic union frame contain it?
+		const unionFrames = result.frames.filter(f => f.name.startsWith('__union_'));
+		expect(unionFrames.length).toBeGreaterThanOrEqual(2);
+
+		// Line 1 is the UNION keyword. Assert no union frame covers it
+		// (excluding _main_ which always covers the whole range).
+		const coveringUnion = unionFrames.find(f => 1 >= f.line && 1 <= f.endLine);
+		expect(coveringUnion, 'UNION-keyword line should fall between __union_1__ and __union_2__').toBeUndefined();
+	});
+
+	it('promotes UNION legs inside a CTE body', async () => {
+		const sql = [
+			'WITH foo AS (',                  // 0
+			'  SELECT id FROM raw_a',         // 1
+			'  UNION ALL',                    // 2
+			'  SELECT id FROM raw_b',         // 3
+			')',                              // 4
+			'SELECT * FROM foo',              // 5
+		].join('\n');
+
+		const result = decompose(sql);
+		expect(result.success).toBe(true);
+
+		// Original CTE still present.
+		expect(result.frames.find(f => f.name === 'foo')).toBeDefined();
+
+		// Two synthetic leg frames.
+		const legs = result.frames.filter(f => f.name.startsWith('__union_'));
+		expect(legs.length).toBe(2);
+	});
+
+	it('concatenates clauses across UNION branches in _main_', async () => {
+		const sql = [
+			'SELECT id FROM raw_a WHERE x = 1', // 0
+			'UNION ALL',                         // 1
+			'SELECT id FROM raw_b WHERE y = 2',  // 2
+		].join('\n');
+
+		const result = decompose(sql);
+		expect(result.success).toBe(true);
+
+		const mainClauses = result.clauses['_main_'];
+		expect(mainClauses, '_main_ clauses').toBeDefined();
+
+		// Both branches' FROM/WHERE/SELECT should appear, in source order.
+		const stages = mainClauses.map(c => c.stage);
+		expect(stages.filter(s => s === 'from').length).toBe(2);
+		expect(stages.filter(s => s === 'where').length).toBe(2);
+		expect(stages.filter(s => s === 'select').length).toBe(2);
+
+		// Lines must be monotonically non-decreasing.
+		for (let i = 1; i < mainClauses.length; i++) {
+			expect(mainClauses[i].line).toBeGreaterThanOrEqual(mainClauses[i - 1].line);
+		}
+	});
+
+	it('still succeeds (no regression) on a plain SELECT with no UNION', async () => {
+		const result = decompose('SELECT id FROM t WHERE id = 1');
+		expect(result.success).toBe(true);
+		expect(result.frames.find(f => f.name === '_main_')).toBeDefined();
+		// No synthetic union frames.
+		expect(result.frames.filter(f => f.name.startsWith('__union_'))).toHaveLength(0);
+	});
+
+	it('records SELECT clause line at the SELECT keyword, not the first projection', async () => {
+		// SELECT keyword on its own line, projections indented on the next line.
+		// A breakpoint on the SELECT keyword line must resolve to the SELECT
+		// clause (previously it resolved to WHERE because find_clause_line
+		// picked up the first identifier's line instead of the keyword's).
+		const sql = [
+			'SELECT',          // 0 ← SELECT keyword
+			'  id,',            // 1 ← first projected identifier
+			'  name',           // 2
+			'FROM t',           // 3
+			'WHERE id = 1',     // 4
+		].join('\n');
+
+		const result = decompose(sql);
+		expect(result.success).toBe(true);
+		const selectClause = result.clauses['_main_'].find(c => c.stage === 'select');
+		expect(selectClause, 'SELECT clause').toBeDefined();
+		expect(selectClause!.line).toBe(0);
+	});
+
+	it('records branch-2 SELECT clause at the SELECT keyword line (UNION with multi-line legs)', async () => {
+		// Mirrors the gold__item.sql shape: branch 2 is all literals with the
+		// SELECT keyword on its own line. Previously this clause was recorded
+		// one line too late, so a breakpoint on the SELECT keyword matched
+		// branch 1's WHERE instead of branch 2's SELECT.
+		const sql = [
+			'SELECT id FROM t',       // 0
+			'UNION ALL',              // 1
+			'SELECT',                 // 2 ← branch 2 SELECT keyword
+			"  '-1' AS id,",          // 3 ← first identifier (alias)
+			"  'nd' AS name",         // 4
+		].join('\n');
+
+		const result = decompose(sql);
+		expect(result.success).toBe(true);
+
+		const mainClauses = result.clauses['_main_'];
+		const selectLines = mainClauses.filter(c => c.stage === 'select').map(c => c.line);
+		// Two SELECTs, branch 1 at line 0, branch 2 at line 2 (keyword line).
+		expect(selectLines).toEqual([0, 2]);
 	});
 });

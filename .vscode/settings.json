@@ -28,7 +28,5 @@
 		"**/node_modules": true,
 		"out/**": true,
 		"dist/**": true
-	},
-	// --- ESLint ---
-	"eslint.useFlatConfig": true
+	}
 }
