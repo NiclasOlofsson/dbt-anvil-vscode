@@ -1,13 +1,11 @@
 import * as vscode from 'vscode';
 import type { ParseService, DocumentModel } from '../../services/parse-service';
-import type { ManifestIndexer } from '../../indexing/manifest-indexer';
 import { runNinja } from '../../ninja/engine';
 import { loadConfig } from '../../ninja/config-loader';
 import { tokenize } from '../../dbt/jinja-tokenizer';
 import { FixAction, type NinjaViolation } from '../../ninja/violation';
 import { planEdits } from '../../ninja/edit-planner';
 import type { NinjaConfig } from '../../ninja/config';
-import { formatDocument } from '../../ninja/reflow/format-document';
 
 /**
  * Document formatting provider powered by Ninja.
@@ -19,7 +17,6 @@ import { formatDocument } from '../../ninja/reflow/format-document';
 export class NinjaFormattingProvider implements vscode.DocumentFormattingEditProvider {
 	constructor(
 		private readonly parseService: ParseService,
-		private readonly indexer: ManifestIndexer,
 	) {}
 
 	async provideDocumentFormattingEdits(
@@ -38,13 +35,7 @@ export class NinjaFormattingProvider implements vscode.DocumentFormattingEditPro
 			this.parseService.getDialectSymbols(),
 		]);
 
-		// Full reflow: replace the whole document with one pretty-printed TextEdit.
-		if (mode === 'full') {
-			const m = model ?? { ctes: [], refs: [], sources: [], tokens: [], finalColumns: [], timing: { parseMs: 0, totalMs: 0 } };
-			return formatDocument(document, m, config);
-		}
-
-		// fix-all: run all rules, apply safe autofixes via the edit planner.
+		// Run all rules, apply safe autofixes via the edit planner.
 		const jinjaTokens = tokenize(document.getText());
 		const emptyModel: DocumentModel = { ctes: [], refs: [], sources: [], tokens: [], finalColumns: [], timing: { parseMs: 0, totalMs: 0 } };
 		const result = runNinja(document, model ?? emptyModel, jinjaTokens, config, dialectSymbols ?? undefined);
