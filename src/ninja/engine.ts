@@ -13,6 +13,7 @@ import { keywordCapRule } from './rules/cap-keywords';
 import { functionCapRule } from './rules/cap-functions';
 import { literalCapRule } from './rules/cap-literals';
 import { typeCapRule } from './rules/cap-types';
+import { capIdentifiersRule } from './rules/cap-identifiers';
 import { jinjaPaddingRule } from './rules/jinja-padding';
 
 // -- Structure rules --
@@ -30,12 +31,28 @@ import { leftJoinRule } from './rules/convention-left-join';
 import { outerJoinRule } from './rules/convention-outer-join';
 import { coalesceRule } from './rules/convention-coalesce';
 import { unionStyleRule } from './rules/convention-union-style';
+import { trailingCommaRule } from './rules/convention-trailing-comma';
+import { statementTerminatorRule } from './rules/convention-statement-terminator';
+import { quotedLiteralsRule } from './rules/convention-quoted-literals';
+import { castStyleRule } from './rules/convention-cast-style';
+import { blockedWordsRule } from './rules/convention-blocked-words';
 
 // -- Ambiguity rules --
 import { qualifiedColumnsRule } from './rules/ambiguity-qualified-columns';
 import { bareUnionRule } from './rules/ambiguity-bare-union';
 import { implicitJoinRule } from './rules/ambiguity-implicit-join';
 import { distinctGroupByRule } from './rules/ambiguity-distinct-groupby';
+import { orderByDirectionRule } from './rules/ambiguity-order-by-direction';
+import { starWithSetOpRule } from './rules/ambiguity-star-with-setop';
+import { joinWithoutOnRule } from './rules/ambiguity-join-without-on';
+import { setopColumnCountRule } from './rules/ambiguity-setop-column-count';
+
+// -- Reference rules --
+import { refInFromRule } from './rules/reference-ref-in-from';
+import { qualifyMultiTableRule } from './rules/reference-qualify-multi-table';
+import { consistentSingleTableRule } from './rules/reference-consistent-single-table';
+import { keywordsAsIdentifiersRule } from './rules/reference-keywords-as-identifiers';
+import { quotingPolicyRule } from './rules/reference-quoting-policy';
 
 // -- Aliasing rules --
 import { columnAsRule } from './rules/alias-column-as';
@@ -44,14 +61,24 @@ import { selfAliasRule } from './rules/alias-self-alias';
 import { uniqueTableRule } from './rules/alias-unique-table';
 import { unusedAliasRule } from './rules/alias-unused';
 import { expressionNoAliasRule } from './rules/alias-expression-no-alias';
+import { aliasLengthRule } from './rules/alias-length';
+import { aliasUniqueColumnsRule } from './rules/alias-unique-columns';
 
 // -- Structure rules (additional) --
 import { distinctParensRule } from './rules/structure-distinct-parens';
 import { unusedJoinRule } from './rules/structure-unused-join';
 import { elseNullRule } from './rules/structure-else-null';
 import { simpleCaseRule } from './rules/structure-simple-case';
+import { subqueryToCteRule } from './rules/structure-subquery-to-cte';
+import { columnOrderRule } from './rules/structure-column-order';
+import { onVsUsingRule } from './rules/structure-on-vs-using';
+import { joinTableOrderRule } from './rules/structure-join-table-order';
 
 // -- Layout rules --
+import { selectTargetsRule } from './rules/layout-select-targets';
+import { selectModifiersRule } from './rules/layout-select-modifiers';
+import { cteBracketRule } from './rules/layout-cte-bracket';
+import { cteBlankLineRule } from './rules/layout-cte-blank-line';
 import { trailingWhitespaceRule } from './rules/layout-trailing-whitespace';
 import { trailingNewlineRule } from './rules/layout-trailing-newline';
 import { leadingWhitespaceRule } from './rules/layout-leading-whitespace';
@@ -69,6 +96,7 @@ const ALL_RULES: NinjaRule[] = [
 	functionCapRule,
 	literalCapRule,
 	typeCapRule,
+	capIdentifiersRule,
 	jinjaPaddingRule,
 	unusedCteRule,
 	unusedColumnsRule,
@@ -84,18 +112,38 @@ const ALL_RULES: NinjaRule[] = [
 	bareUnionRule,
 	implicitJoinRule,
 	distinctGroupByRule,
+	orderByDirectionRule,
+	starWithSetOpRule,
+	joinWithoutOnRule,
+	setopColumnCountRule,
+	refInFromRule,
+	qualifyMultiTableRule,
+	consistentSingleTableRule,
+	keywordsAsIdentifiersRule,
+	quotingPolicyRule,
 	columnAsRule,
 	requireTableAliasRule,
 	selfAliasRule,
 	uniqueTableRule,
 	unusedAliasRule,
 	expressionNoAliasRule,
+	aliasLengthRule,
+	aliasUniqueColumnsRule,
 	distinctParensRule,
 	unusedJoinRule,
 	elseNullRule,
 	simpleCaseRule,
+	subqueryToCteRule,
+	columnOrderRule,
+	onVsUsingRule,
+	joinTableOrderRule,
 	coalesceRule,
 	unionStyleRule,
+	trailingCommaRule,
+	statementTerminatorRule,
+	quotedLiteralsRule,
+	castStyleRule,
+	blockedWordsRule,
 	trailingWhitespaceRule,
 	trailingNewlineRule,
 	leadingWhitespaceRule,
@@ -106,6 +154,10 @@ const ALL_RULES: NinjaRule[] = [
 	setOperatorRule,
 	clauseKeywordRule,
 	bracketSpacingRule,
+	selectTargetsRule,
+	selectModifiersRule,
+	cteBracketRule,
+	cteBlankLineRule,
 ];
 
 function effectiveSeverity(rule: NinjaRule, config: NinjaConfig): NinjaSeverity {
