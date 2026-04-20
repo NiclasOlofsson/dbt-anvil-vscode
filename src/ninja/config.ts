@@ -1,4 +1,5 @@
 import type { NinjaSeverity } from './rule';
+import type { FormatPreset } from './presets';
 
 export type CapitalisationPolicy = 'upper' | 'lower' | 'consistent';
 export type CommaPosition = 'trailing' | 'leading';
@@ -12,9 +13,13 @@ export interface NinjaConfig {
 	format: {
 		/** Controls what happens when the user invokes Format Document. */
 		mode: FormatMode;
+		/** Named style preset. When set, provides defaults for unset config keys. */
+		preset: FormatPreset;
 	};
-	/** Per-rule severity overrides. Key = rule ID, value = severity or 'off'. */
+	/** Per-rule severity overrides. Key = rule ID, value = severity level. */
 	rules: Record<string, NinjaSeverity>;
+	/** Rule IDs that are completely disabled — no diagnostic, no autofix. */
+	disabledRules: string[];
 	autoFix: {
 		applyOnFormat: boolean;
 		applyOnFixAll: boolean;
@@ -43,13 +48,18 @@ export interface NinjaConfig {
 	convention: {
 		notEqual: NotEqualStyle;
 		unionStyle: UnionStyle;
+		/** Require AS keyword for all table aliases, e.g. `FROM orders AS o`. */
+		explicitAs: boolean;
+		/** Require INNER keyword for inner joins, e.g. `INNER JOIN` not bare `JOIN`. */
+		explicitInnerJoin: boolean;
 	};
 }
 
 export const DEFAULT_CONFIG: NinjaConfig = {
 	enabled: true,
-	format: { mode: 'off' },
+	format: { mode: 'off', preset: 'sqlfmt' },
 	rules: {},
+	disabledRules: [],
 	autoFix: {
 		applyOnFormat: false,
 		applyOnFixAll: false,
@@ -77,5 +87,7 @@ export const DEFAULT_CONFIG: NinjaConfig = {
 	convention: {
 		notEqual: '!=',
 		unionStyle: 'all',
+		explicitAs: true,
+		explicitInnerJoin: true,
 	},
 };

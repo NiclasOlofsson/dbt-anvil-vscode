@@ -37,6 +37,8 @@ export interface RuleState {
 	scopeInfo: RuleScopeInfo;
 	violationCount: number;
 	isModified: boolean;
+	/** Rule is in disabledRules — engine skips it entirely. */
+	isDisabled: boolean;
 	/** Effective auto-fix enabled state. Only meaningful when rule.autoFixable is true. */
 	autoFixEnabled: boolean;
 	/** Current values for this rule's configOptions, keyed by settingPath. */
@@ -70,7 +72,7 @@ export type SortColumn = 'id' | 'description' | 'counts' | 'severity';
 
 // ── Severity options ────────────────────────────────────────────────
 
-export const SEVERITY_OPTIONS: NinjaSeverity[] = ['error', 'warning', 'info', 'hint', 'off'];
+export const SEVERITY_OPTIONS: NinjaSeverity[] = ['error', 'warning', 'info', 'hint', 'mute'];
 
 // ── Messages: webview -> extension ──────────────────────────────────
 
@@ -85,7 +87,8 @@ export type InboundMessage =
 	| { type: 'setSearch'; query: string }
 	| { type: 'setAutoFix'; ruleId: string; enabled: boolean }
 	| { type: 'setSort'; column: SortColumn | null; dir: 'asc' | 'desc' }
-	| { type: 'setRuleOption'; settingPath: string; value: RuleOptionValue };
+	| { type: 'setRuleOption'; settingPath: string; value: RuleOptionValue }
+	| { type: 'setDisabled'; ruleId: string; disabled: boolean };
 
 // ── Messages: extension -> webview ──────────────────────────────────
 

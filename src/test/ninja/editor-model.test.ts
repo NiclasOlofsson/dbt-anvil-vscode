@@ -48,9 +48,9 @@ describe('EditorModel', () => {
 
 	it('workspace override wins over user override', () => {
 		model.applyInspectedConfig([
-			{ ruleId: 'cap-keywords', userSeverity: 'error', workspaceSeverity: 'off' },
+			{ ruleId: 'cap-keywords', userSeverity: 'error', workspaceSeverity: 'mute' },
 		]);
-		expect(model.effectiveSeverity('cap-keywords')).toBe('off');
+		expect(model.effectiveSeverity('cap-keywords')).toBe('mute');
 	});
 
 	it('user override wins over default', () => {
@@ -60,8 +60,8 @@ describe('EditorModel', () => {
 		expect(model.effectiveSeverity('cap-keywords')).toBe('error');
 	});
 
-	it('returns off for unknown rule', () => {
-		expect(model.effectiveSeverity('nonexistent')).toBe('off');
+	it('returns mute for unknown rule', () => {
+		expect(model.effectiveSeverity('nonexistent')).toBe('mute');
 	});
 
 	// ── setSeverity / resetRule ───────────────────────────────
@@ -80,8 +80,8 @@ describe('EditorModel', () => {
 		expect(model.effectiveSeverity('cap-keywords')).toBe('hint');
 		// Workspace override would still win
 		model.switchScope('workspace');
-		model.setSeverity('cap-keywords', 'off');
-		expect(model.effectiveSeverity('cap-keywords')).toBe('off');
+		model.setSeverity('cap-keywords', 'mute');
+		expect(model.effectiveSeverity('cap-keywords')).toBe('mute');
 	});
 
 	it('resetRule removes override and marks dirty', () => {
@@ -93,7 +93,7 @@ describe('EditorModel', () => {
 
 	it('resetAll clears all overrides for active scope', () => {
 		model.setSeverity('cap-keywords', 'error');
-		model.setSeverity('cap-functions', 'off');
+		model.setSeverity('cap-functions', 'mute');
 		model.resetAll();
 		expect(model.effectiveSeverity('cap-keywords')).toBe('warning');
 		expect(model.effectiveSeverity('cap-functions')).toBe('warning');
@@ -141,7 +141,7 @@ describe('EditorModel', () => {
 		const overrides = model.getOverrides('workspace');
 		expect(overrides.get('cap-keywords')).toBe('error');
 		// Mutating the copy doesn't affect model
-		overrides.set('cap-functions', 'off');
+		overrides.set('cap-functions', 'mute');
 		expect(model.effectiveSeverity('cap-functions')).toBe('warning');
 	});
 
@@ -187,8 +187,8 @@ describe('EditorModel', () => {
 
 	// ── Summary ───────────────────────────────────────────────
 
-	it('summary counts active rules (not off)', () => {
-		model.setSeverity('cap-keywords', 'off');
+	it('summary counts active rules (not disabled)', () => {
+		model.applyDisabledRules(['cap-keywords']);
 		const snap = model.snapshot();
 		expect(snap.summary.totalRules).toBe(4);
 		expect(snap.summary.activeRules).toBe(3);

@@ -6,6 +6,7 @@ import type { DocumentModel } from '../services/parse-service';
 import type { JinjaToken } from '../dbt/jinja-tokenizer';
 import type { DialectSymbols } from '../ftl/sql-parser';
 import { parseInlineSuppressions } from './config-loader';
+import { parseFmtOffRegions, isInFmtOffRegion } from './jinja/directive-parser';
 import type { RuleViewModel } from './editor/editor-types';
 
 // -- Token rules --
@@ -29,6 +30,7 @@ import { countRowsRule } from './rules/convention-count-rows';
 import { isNullRule } from './rules/convention-is-null';
 import { leftJoinRule } from './rules/convention-left-join';
 import { outerJoinRule } from './rules/convention-outer-join';
+import { explicitInnerJoinRule } from './rules/convention-explicit-inner-join';
 import { coalesceRule } from './rules/convention-coalesce';
 import { unionStyleRule } from './rules/convention-union-style';
 import { trailingCommaRule } from './rules/convention-trailing-comma';
@@ -56,6 +58,7 @@ import { quotingPolicyRule } from './rules/reference-quoting-policy';
 
 // -- Aliasing rules --
 import { columnAsRule } from './rules/alias-column-as';
+import { tableAsRule } from './rules/alias-table-as';
 import { requireTableAliasRule } from './rules/alias-require-table-alias';
 import { selfAliasRule } from './rules/alias-self-alias';
 import { uniqueTableRule } from './rules/alias-unique-table';
@@ -73,6 +76,9 @@ import { subqueryToCteRule } from './rules/structure-subquery-to-cte';
 import { columnOrderRule } from './rules/structure-column-order';
 import { onVsUsingRule } from './rules/structure-on-vs-using';
 import { joinTableOrderRule } from './rules/structure-join-table-order';
+
+// -- Jinja rules --
+import { jinjaArgumentSpacingRule } from './rules/jinja-argument-spacing';
 
 // -- Layout rules --
 import { selectTargetsRule } from './rules/layout-select-targets';
@@ -108,6 +114,7 @@ const ALL_RULES: NinjaRule[] = [
 	isNullRule,
 	leftJoinRule,
 	outerJoinRule,
+	explicitInnerJoinRule,
 	qualifiedColumnsRule,
 	bareUnionRule,
 	implicitJoinRule,
@@ -122,6 +129,7 @@ const ALL_RULES: NinjaRule[] = [
 	keywordsAsIdentifiersRule,
 	quotingPolicyRule,
 	columnAsRule,
+	tableAsRule,
 	requireTableAliasRule,
 	selfAliasRule,
 	uniqueTableRule,
@@ -158,6 +166,7 @@ const ALL_RULES: NinjaRule[] = [
 	selectModifiersRule,
 	cteBracketRule,
 	cteBlankLineRule,
+	jinjaArgumentSpacingRule,
 ];
 
 function effectiveSeverity(rule: NinjaRule, config: NinjaConfig): NinjaSeverity {
@@ -172,7 +181,7 @@ function toVsSeverity(sev: NinjaSeverity): vscode.DiagnosticSeverity | undefined
 		case 'warning': return 1; // DiagnosticSeverity.Warning
 		case 'info': return 2; // DiagnosticSeverity.Information
 		case 'hint': return 3; // DiagnosticSeverity.Hint
-		case 'off': return undefined;
+		case 'mute': return undefined; // violations kept for formatter, not shown as diagnostics
 	}
 }
 
@@ -199,16 +208,19 @@ export function runNinja(
 	const text = document.getText();
 	const lines = text.split('\n');
 	const suppressions = parseInlineSuppressions(lines);
+	const fmtOffRegions = parseFmtOffRegions(lines);
 
 	const violations: NinjaViolation[] = [];
 	const severityMap = new Map<string, vscode.DiagnosticSeverity>();
 
-	for (const rule of ALL_RULES) {
-		const sev = effectiveSeverity(rule, config);
-		if (sev === 'off') continue;
+	const disabledSet = new Set(config.disabledRules);
 
+	for (const rule of ALL_RULES) {
+		if (disabledSet.has(rule.id)) continue;
+
+		const sev = effectiveSeverity(rule, config);
 		const vsSev = toVsSeverity(sev);
-		if (vsSev === undefined) continue;
+		// mute: vsSev is undefined — rule still runs for autofix, just no diagnostic.
 
 		let ruleViolations: NinjaViolation[];
 		try {
@@ -227,8 +239,11 @@ export function runNinja(
 			const lineSuppression = suppressions.get(v.range.start.line);
 			if (lineSuppression === 'all') continue;
 			if (lineSuppression && lineSuppression.has(v.rule)) continue;
+			if (isInFmtOffRegion(v.range.start.line, fmtOffRegions)) continue;
 			violations.push(v);
-			severityMap.set(v.rule, vsSev);
+			// fix-only violations are kept in the array for the formatter but not
+			// added to severityMap, so the diagnostic provider won't show them.
+			if (vsSev !== undefined) severityMap.set(v.rule, vsSev);
 		}
 	}
 

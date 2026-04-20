@@ -54,7 +54,7 @@ describe(RULE, () => {
 			]);
 			expect(v).toHaveLength(1);
 			expect(v[0].rule).toBe(RULE);
-			expect(v[0].message).toContain("'a'");
+			expect(v[0].message).toContain('\'a\'');
 		});
 
 		it('flags only the second occurrence, not the first', () => {
@@ -145,7 +145,7 @@ describe(RULE, () => {
 			const v = checkFinalColumns('select id, id from t', columns);
 			expect(v).toHaveLength(1);
 			expect(v[0].rule).toBe(RULE);
-			expect(v[0].message).toContain("'id'");
+			expect(v[0].message).toContain('\'id\'');
 		});
 
 		it('comparison is case-insensitive in fallback path', () => {

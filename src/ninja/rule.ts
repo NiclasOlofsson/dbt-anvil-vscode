@@ -6,8 +6,17 @@ import type { JinjaToken } from '../dbt/jinja-tokenizer';
 import type { NinjaConfig } from './config';
 import type { DialectSymbols } from '../ftl/sql-parser';
 
-/** Severity for a rule: 'error' | 'warning' | 'info' | 'hint' | 'off'. */
-export type NinjaSeverity = 'error' | 'warning' | 'info' | 'hint' | 'off';
+/**
+ * Diagnostic level for a Ninja rule.
+ *
+ * `error` → `hint`: shown in the Problems panel at the corresponding level.
+ * `mute`: rule runs and autofixes fire during formatting, but nothing appears
+ * in the Problems panel. Use for cosmetic rules you want silently corrected.
+ *
+ * To disable a rule entirely (no diagnostic, no autofix), add its ID to
+ * `dbt-studio.ninja.disabledRules` rather than using a severity override.
+ */
+export type NinjaSeverity = 'error' | 'warning' | 'info' | 'hint' | 'mute';
 
 /** Action kinds a rule may emit on its violations. */
 export type NinjaActionKind = 'fix' | 'snippet';

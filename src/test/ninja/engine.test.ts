@@ -74,8 +74,8 @@ describe('engine', () => {
 		expect(r.violations.length).toBe(0);
 	});
 
-	it('respects rule severity override to off', () => {
-		const r = run('SELECT 1', { rules: { 'ninja.cap.keywords': 'off' } });
+	it('respects disabledRules — disabled rule produces no violations', () => {
+		const r = run('SELECT 1', { disabledRules: ['ninja.cap.keywords'] });
 		const kw = violationsFor(r, 'ninja.cap.keywords');
 		expect(kw.length).toBe(0);
 	});
@@ -148,15 +148,10 @@ describe('engine', () => {
 		expect(kw[0].range.start.line).toBe(1);
 	});
 
-	it('disabling all rules via overrides produces no violations', () => {
+	it('disabling rules via disabledRules produces no violations for those rules', () => {
 		const r = run('SELECT NULL  \n', {
-			rules: {
-				'ninja.cap.keywords': 'off',
-				'ninja.cap.literals': 'off',
-				'ninja.layout.trailing-whitespace': 'off',
-			},
+			disabledRules: ['ninja.cap.keywords', 'ninja.cap.literals', 'ninja.layout.trailing-whitespace'],
 		});
-		// Only rules with explicit off are suppressed; others may still fire
 		const kw = violationsFor(r, 'ninja.cap.keywords');
 		const lit = violationsFor(r, 'ninja.cap.literals');
 		const tw = violationsFor(r, 'ninja.layout.trailing-whitespace');
