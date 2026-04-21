@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(node -e 'console.log\\(JSON.parse\\(require\\('\\\\''fs'\\\\''\\).readFileSync\\('\\\\''__TRACKED_VAR__'\\\\'','\\\\''utf8'\\\\''\\)\\).sql.length\\)')"
+      "Bash(node -e 'console.log\\(JSON.parse\\(require\\('\\\\''fs'\\\\''\\).readFileSync\\('\\\\''__TRACKED_VAR__'\\\\'','\\\\''utf8'\\\\''\\)\\).sql.length\\)')",
+      "Bash(node -e ' *)",
+      "Bash(node experiments/native-sql-parser-v3/harness/tools/peek.mjs*)"
     ]
   }
 }
