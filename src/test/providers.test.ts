@@ -6,7 +6,7 @@ import { SqlCodeLensProvider } from '../providers/sql/codelens-provider';
 import { YamlDocumentSymbolProvider } from '../providers/yaml/document-symbol-provider';
 import { DbtWorkspaceSymbolProvider } from '../providers/workspace-symbol-provider';
 import { DbtSignatureHelpProvider } from '../providers/sql/signature-help-provider';
-import { SqlCodeActionProvider } from '../providers/sql/code-action-provider';
+import { SqlCodeActionProvider } from '../ninja/code-actions/provider';
 import { createMockLogger } from './helpers';
 import type { ManifestIndexer, ManifestIndex, IndexedModel, IndexedSource, IndexedMacro } from '../indexing/manifest-indexer';
 import type { ManifestLoader } from '../dbt/manifest-loader';

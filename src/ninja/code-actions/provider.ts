@@ -2,13 +2,25 @@ import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../../indexing/manifest-indexer';
 import type { DbtPathResolver } from '../../dbt/dbt-path-resolver';
 import type { ILogger } from '../../types/logger';
-import type { NinjaResult } from '../../ninja/engine';
-import { loadConfig } from '../../ninja/config-loader';
-import { FixAction, SnippetAction } from '../../ninja/violation';
-import { planEdits } from '../../ninja/edit-planner';
-import { applyFixGroups } from '../../ninja/reflow/applier';
-import { opToTextEdit } from '../../ninja/fix-op';
-import { filterAutoFixViolations } from './formatting-provider';
+import type { NinjaResult } from '../engine';
+import { getRuleFixScopeById } from '../engine';
+import { loadConfig } from '../config-loader';
+import { FixAction, SnippetAction } from '../violation';
+import { planEdits } from './edit-planner';
+import { applyFixGroups } from './applier';
+import { opToTextEdit } from '../fix-op';
+import { filterAutoFixViolations } from '../../providers/sql/formatting-provider';
+
+/**
+ * Keep only violations whose rule classifies as `surgical`. Structural rules
+ * (indentation, comma/operator position, spacing, etc.) are owned by the
+ * reflow engine and must not appear as individual code actions — otherwise
+ * the user would fix them one line at a time and drive the document toward
+ * incoherent partial states.
+ */
+function filterSurgical<V extends { rule: string }>(violations: V[]): V[] {
+	return violations.filter(v => getRuleFixScopeById(v.rule) === 'surgical');
+}
 
 /**
  * Quick-fix code actions for dbt SQL files.
@@ -172,8 +184,10 @@ export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 		if (ninjaResult) {
 			const ninjaConfig = loadConfig();
 			// Individual per-violation quick-fixes are always offered — the user explicitly
-			// invoked the action, so autoFix policy does not apply here.
-			for (const v of ninjaResult.violations) {
+			// invoked the action, so autoFix policy does not apply here. Structural rules
+			// (layout/indent/spacing) are filtered out: their fix path is Format Document.
+			const surgical = filterSurgical(ninjaResult.violations);
+			for (const v of surgical) {
 				if (!v.range.intersection(range)) continue;
 
 				if (v.action?.type === FixAction.TYPE) {
@@ -206,7 +220,7 @@ export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 			// consciously chose this action so autoFix policy does not apply.
 			// Exclude codeActionOnly violations (e.g. delete-CTE) — those are code fixes only.
 			// Per-rule autoFix.rules overrides take precedence over each violation's built-in autoFix flag.
-			const fixable = filterAutoFixViolations(ninjaResult.violations, ninjaConfig);
+			const fixable = filterSurgical(filterAutoFixViolations(ninjaResult.violations, ninjaConfig));
 			if (fixable.length > 1) {
 				const planned = planEdits(fixable, document);
 				const fixAll = new vscode.CodeAction(

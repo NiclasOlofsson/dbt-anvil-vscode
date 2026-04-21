@@ -269,8 +269,52 @@ export function buildLinePositionFix(
 		};
 	}
 
-	if (policy === 'alone' && line > 0 && line < lines.length - 1) {
-		if (!isLeading || !isTrailing) return undefined;
+	if (policy === 'alone' && (!isLeading || !isTrailing)) {
+		// Move the inline token onto its own line. Two transformations:
+		//   1. Delete the token (plus any flanking space) from its current
+		//      inline position.
+		//   2. Insert it on a fresh line between the previous line's end
+		//      and the next line's start. We anchor the insertion at the
+		//      beginning of the next line so it naturally sits between
+		//      the preceding content (ending with a newline) and whatever
+		//      follows.
+		const tokenStr = lineText.slice(tokStartCol, tok.col).trim();
+		if (!tokenStr) return undefined;
+
+		// Trim one space on each side of the token if present, so we don't
+		// leave dangling whitespace after removing it.
+		const leftGap = tokStartCol > 0 && lineText[tokStartCol - 1] === ' ' ? 1 : 0;
+		const rightGap = lineText[tok.col] === ' ' ? 1 : 0;
+		const deleteFromCol = tokStartCol - leftGap;
+		const deleteToCol = tok.col + rightGap;
+
+		const ops: FixOp[] = [];
+
+		if (!isLeading && !isTrailing) {
+			// Content on both sides → split the line into three:
+			//   <before>\n<token>\n<after>
+			// We replace [deleteFromCol, deleteToCol) with two linebreaks
+			// around the token using two insertOps framed by a delete.
+			ops.push(deleteOp(new vscode.Range(line, deleteFromCol, line, deleteToCol)));
+			ops.push(insertOp(new vscode.Position(line, deleteFromCol), `\n${tokenStr}\n`));
+		} else if (isLeading && !isTrailing) {
+			// Token is at start of line with content after: push the trailing
+			// content down one line so the token stays alone.
+			ops.push(insertOp(new vscode.Position(line, tok.col + rightGap), '\n'));
+			// Collapse the space between the token and the content-that-was-after.
+			if (rightGap) {
+				ops.push(deleteOp(new vscode.Range(line, tok.col, line, tok.col + rightGap)));
+			}
+		} else if (!isLeading && isTrailing) {
+			// Content before the token, token at end of line: insert a line
+			// break before the token.
+			ops.push(insertOp(new vscode.Position(line, tokStartCol - leftGap), '\n'));
+			if (leftGap) {
+				ops.push(deleteOp(new vscode.Range(line, tokStartCol - leftGap, line, tokStartCol)));
+			}
+		}
+
+		return ops.length > 0 ? { ops, autoFix: true } : undefined;
 	}
 
 	return undefined;

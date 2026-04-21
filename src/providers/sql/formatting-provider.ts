@@ -1,12 +1,9 @@
 import * as vscode from 'vscode';
-import type { ParseService, DocumentModel } from '../../services/parse-service';
-import { runNinja } from '../../ninja/engine';
+import type { ParseService } from '../../services/parse-service';
 import { loadConfig } from '../../ninja/config-loader';
-import { tokenize } from '../../dbt/jinja-tokenizer';
 import { FixAction, type NinjaViolation } from '../../ninja/violation';
-import { planEdits } from '../../ninja/edit-planner';
-import { applyFixGroups } from '../../ninja/reflow/applier';
 import type { NinjaConfig } from '../../ninja/config';
+import { reflowDocument } from '../../ninja/reflow/engine';
 
 /**
  * Document formatting provider powered by Ninja.
@@ -30,18 +27,18 @@ export class NinjaFormattingProvider implements vscode.DocumentFormattingEditPro
 
 		if (!config.autoFix.applyOnFormat) return [];
 
-		const [model, dialectSymbols] = await Promise.all([
+		const [model, symbols] = await Promise.all([
 			this.parseService.getDocumentModel(document),
 			this.parseService.getDialectSymbols(),
 		]);
 
-		// Run all rules, apply safe autofixes via the edit planner.
-		const jinjaTokens = tokenize(document.getText());
-		const emptyModel: DocumentModel = { ctes: [], refs: [], sources: [], tokens: [], finalColumns: [], timing: { parseMs: 0, totalMs: 0 } };
-		const result = runNinja(document, model ?? emptyModel, jinjaTokens, config, dialectSymbols ?? undefined);
-		const allowed = filterAutoFixViolations(result.violations, config);
-		const planned = planEdits(allowed, document);
-		return applyFixGroups(planned.groups, document, config);
+		// Format Document is owned end-to-end by the reflow engine. Surgical
+		// fixes (cap-keywords, is-null, not-equal, etc.) are NOT applied here —
+		// their home is the code-action surface, so the user invokes them
+		// explicitly. Mixing the two paths produced the multi-pass
+		// convergence pathology that the original reflow engine failed on.
+		const reflow = reflowDocument(document, model ?? undefined, config, symbols ?? undefined);
+		return reflow.edit ? [reflow.edit] : [];
 	}
 }
 

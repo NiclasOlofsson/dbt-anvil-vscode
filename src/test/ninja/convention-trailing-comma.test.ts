@@ -75,7 +75,7 @@ describe(RULE, () => {
 		expect(v[0].rule).toBe(RULE);
 		expect(v[0].message).toContain('trailing comma');
 		expect(v[0].action).toBeDefined();
-		expect((v[0].action as FixAction).ops[0].text).toBe(',');
+		expect((v[0].action as FixAction).ops[0]).toMatchObject({ text: ',' });
 	});
 
 	it('autofix inserts comma after last column token', () => {

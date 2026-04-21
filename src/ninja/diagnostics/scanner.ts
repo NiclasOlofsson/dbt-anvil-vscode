@@ -1,14 +1,14 @@
 import * as crypto from 'node:crypto';
 import * as fsPromises from 'node:fs/promises';
 import * as vscode from 'vscode';
-import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import type { ILogger } from '../types/logger';
-import type { DbtPathResolver } from '../dbt/dbt-path-resolver';
-import type { DocumentModel, ParseService } from '../services/parse-service';
-import { runNinja } from './engine';
-import { loadConfig } from './config-loader';
-import { tokenize } from '../dbt/jinja-tokenizer';
-import { TextDocumentShim } from './text-document-shim';
+import type { ManifestIndexer } from '../../indexing/manifest-indexer';
+import type { ILogger } from '../../types/logger';
+import type { DbtPathResolver } from '../../dbt/dbt-path-resolver';
+import type { DocumentModel, ParseService } from '../../services/parse-service';
+import { runNinja } from '../engine';
+import { loadConfig } from '../config-loader';
+import { tokenize } from '../../dbt/jinja-tokenizer';
+import { TextDocumentShim } from '../text-document-shim';
 
 /** Summary emitted after a full workspace scan completes. */
 export interface ScanSummary {
@@ -283,7 +283,7 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 		uris: vscode.Uri[],
 		signal: AbortSignal,
 		config: ReturnType<typeof loadConfig>,
-		dialectSymbols: import('../ftl/sql-parser').DialectSymbols | undefined,
+		dialectSymbols: import('../../ftl/sql-parser').DialectSymbols | undefined,
 	): Promise<void> {
 		const queue = uris.slice();
 		const openDocs = new Set(vscode.workspace.textDocuments.map(d => d.uri.toString()));
@@ -301,7 +301,7 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 		uri: vscode.Uri,
 		signal: AbortSignal,
 		config: ReturnType<typeof loadConfig>,
-		dialectSymbols: import('../ftl/sql-parser').DialectSymbols | undefined,
+		dialectSymbols: import('../../ftl/sql-parser').DialectSymbols | undefined,
 		openDocs: Set<string>,
 	): Promise<void> {
 		if (signal.aborted) return;

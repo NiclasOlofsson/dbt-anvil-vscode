@@ -24,7 +24,7 @@ describe(RULE, () => {
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('IFNULL');
 		expect(v[0].action).toBeDefined();
-		expect((v[0].action as FixAction).ops[0].text).toBe('coalesce');
+		expect((v[0].action as FixAction).ops[0]).toMatchObject({ text: 'coalesce' });
 	});
 
 	it('flags NVL', () => {

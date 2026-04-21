@@ -32,7 +32,7 @@ describe(RULE, () => {
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('!=');
 		expect(v[0].action).toBeDefined();
-		expect((v[0].action as FixAction).ops[0].text).toBe('!=');
+		expect((v[0].action as FixAction).ops[0]).toMatchObject({ text: '!=' });
 	});
 
 	it('flags != when <> is preferred', () => {
@@ -40,7 +40,7 @@ describe(RULE, () => {
 		const tokens: SqlToken[] = [sqlTok('NEQ', 24, 25, 0, 26)];
 		const v = check(sql, tokens, '<>');
 		expect(v).toHaveLength(1);
-		expect((v[0].action as FixAction).ops[0].text).toBe('<>');
+		expect((v[0].action as FixAction).ops[0]).toMatchObject({ text: '<>' });
 	});
 
 	it('no violation when using preferred <> style', () => {

@@ -108,8 +108,7 @@ describe(RULE, () => {
 		expect((v[0].action as FixAction).ops).toHaveLength(1);
 		// Should delete from WITH through closing paren
 		const edit = (v[0].action as FixAction).ops[0];
-		expect(edit.range.start.line).toBe(0);
-		expect(edit.range.end.line).toBe(3); // next line after )
+		expect(edit).toMatchObject({ range: { start: { line: 0 }, end: { line: 3 } } });
 	});
 
 	// ── Auto-fix: first of many ────────────────────────────────────────────
@@ -126,9 +125,7 @@ describe(RULE, () => {
 		expect(v[0].action).toBeDefined();
 		const edit = (v[0].action as FixAction).ops[0];
 		// Should delete from CTE name line through to start of next CTE
-		expect(edit.range.start.line).toBe(0);
-		expect(edit.range.end.line).toBe(3);
-		expect(edit.range.end.character).toBe(0);
+		expect(edit).toMatchObject({ range: { start: { line: 0 }, end: { line: 3, character: 0 } } });
 	});
 
 	// ── Auto-fix: last of many ─────────────────────────────────────────────
@@ -145,8 +142,7 @@ describe(RULE, () => {
 		expect(v[0].action).toBeDefined();
 		const edit = (v[0].action as FixAction).ops[0];
 		// Should start from end of previous CTE
-		expect(edit.range.start.line).toBe(2);
-		expect(edit.range.start.character).toBe(1); // endCol of prev CTE
+		expect(edit).toMatchObject({ range: { start: { line: 2, character: 1 } } });
 	});
 
 	// ── No fix without sqlTokens ────────────────────────────────────────────

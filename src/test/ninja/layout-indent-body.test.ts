@@ -86,7 +86,7 @@ describe('ninja.layout.indent-body', () => {
 		];
 		const v = check(sql, toks);
 		expect(v).toHaveLength(1);
-		expect(v[0].message).toContain("under 'from'");
+		expect(v[0].message).toContain('under \'from\'');
 	});
 
 	// ── WHERE body ─────────────────────────────────────────────────────────
@@ -113,7 +113,7 @@ describe('ninja.layout.indent-body', () => {
 		];
 		const v = check(sql, toks);
 		expect(v).toHaveLength(1);
-		expect(v[0].message).toContain("under 'where'");
+		expect(v[0].message).toContain('under \'where\'');
 	});
 
 	// ── Skip set verifications ─────────────────────────────────────────────
@@ -216,7 +216,7 @@ describe('ninja.layout.indent-body', () => {
 		];
 		const v = check(sql, toks);
 		expect(v).toHaveLength(1);
-		expect(v[0].message).toContain("under 'where'");
+		expect(v[0].message).toContain('under \'where\'');
 	});
 
 	// ── CASE body is intentionally NOT flagged (out of scope for Phase 1) ──
@@ -253,7 +253,7 @@ describe('ninja.layout.indent-body', () => {
 		// But the actual input already has CASE at col 4 (expected for SELECT body), so no flag for CASE.
 		// WHEN/ELSE/END are all first-on-line but in SKIP_ANCHOR_TYPES.
 		const v = check(sql, toks);
-		expect(v.every(e => !e.message.includes("under 'select'") || e.range.start.line > 0)).toBe(true);
+		expect(v.every(e => !e.message.includes('under \'select\'') || e.range.start.line > 0)).toBe(true);
 		// Specifically: none of WHEN/ELSE/END lines are flagged.
 		const flaggedLines = v.map(e => e.range.start.line);
 		expect(flaggedLines).not.toContain(2); // when x

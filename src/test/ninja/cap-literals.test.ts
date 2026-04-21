@@ -70,7 +70,7 @@ describe(RULE, () => {
 	it('flags uppercase NULL when policy is lower', () => {
 		const v = violationsFor(run('select NULL'), RULE);
 		expect(v.length).toBe(1);
-		expect((v[0].action as FixAction).ops[0].text).toBe('null');
+		expect((v[0].action as FixAction).ops[0]).toMatchObject({ text: 'null' });
 	});
 
 	it('passes lowercase null', () => {
@@ -81,13 +81,13 @@ describe(RULE, () => {
 	it('flags uppercase TRUE when policy is lower', () => {
 		const v = violationsFor(run('select TRUE'), RULE);
 		expect(v.length).toBe(1);
-		expect((v[0].action as FixAction).ops[0].text).toBe('true');
+		expect((v[0].action as FixAction).ops[0]).toMatchObject({ text: 'true' });
 	});
 
 	it('flags uppercase FALSE when policy is lower', () => {
 		const v = violationsFor(run('select FALSE'), RULE);
 		expect(v.length).toBe(1);
-		expect((v[0].action as FixAction).ops[0].text).toBe('false');
+		expect((v[0].action as FixAction).ops[0]).toMatchObject({ text: 'false' });
 	});
 
 	it('passes lowercase true and false', () => {
@@ -100,13 +100,13 @@ describe(RULE, () => {
 	it('flags lowercase null when policy is upper', () => {
 		const v = violationsFor(run('select null', capCfg('literals', 'upper')), RULE);
 		expect(v.length).toBe(1);
-		expect((v[0].action as FixAction).ops[0].text).toBe('NULL');
+		expect((v[0].action as FixAction).ops[0]).toMatchObject({ text: 'NULL' });
 	});
 
 	it('flags lowercase true when policy is upper', () => {
 		const v = violationsFor(run('select true', capCfg('literals', 'upper')), RULE);
 		expect(v.length).toBe(1);
-		expect((v[0].action as FixAction).ops[0].text).toBe('TRUE');
+		expect((v[0].action as FixAction).ops[0]).toMatchObject({ text: 'TRUE' });
 	});
 
 	it('passes uppercase literals when policy is upper', () => {
@@ -119,7 +119,7 @@ describe(RULE, () => {
 	it('flags inconsistent literal casing', () => {
 		const v = violationsFor(run('select null, NULL', capCfg('literals', 'consistent')), RULE);
 		expect(v.length).toBe(1);
-		expect((v[0].action as FixAction).ops[0].text).toBe('null');
+		expect((v[0].action as FixAction).ops[0]).toMatchObject({ text: 'null' });
 	});
 
 	it('passes consistent literal casing (all lower)', () => {

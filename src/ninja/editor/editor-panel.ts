@@ -3,7 +3,7 @@ import { EditorModel } from './editor-model';
 import { renderEditor } from './editor-html';
 import { getAllRuleMetadata } from '../engine';
 import { inspectRuleSeverities, saveRuleSeverity, removeRuleSeverity, inspectAutoFixRules, saveAutoFixRule, removeAutoFixRule, saveConfigOption, inspectConfigOptions, removeConfigOption, getOverriddenOptionPaths, inspectDisabledRules, disableRule, enableRule } from '../config-loader';
-import type { WorkspaceDiagnosticsScanner } from '../workspace-diagnostics-scanner';
+import type { WorkspaceDiagnosticsScanner } from '../diagnostics/scanner';
 import type { InboundMessage, ConfigScope, RuleOptionValue } from './editor-types';
 import type { NinjaSeverity } from '../rule';
 import type { NinjaCategory } from '../categories';

@@ -31,7 +31,7 @@ describe(RULE, () => {
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('UNION ALL');
 		expect(v[0].action).toBeDefined();
-		expect((v[0].action as FixAction).ops[0].text).toBe('ALL');
+		expect((v[0].action as FixAction).ops[0]).toMatchObject({ text: 'ALL' });
 	});
 
 	it('flags UNION ALL when style is distinct', () => {
@@ -47,7 +47,7 @@ describe(RULE, () => {
 		const v = check(sql, tokens, 'distinct');
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('UNION DISTINCT');
-		expect((v[0].action as FixAction).ops[0].text).toBe('DISTINCT');
+		expect((v[0].action as FixAction).ops[0]).toMatchObject({ text: 'DISTINCT' });
 	});
 
 	it('no violation when style matches (all)', () => {

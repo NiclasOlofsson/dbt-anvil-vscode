@@ -1,7 +1,7 @@
 import type * as vscode from 'vscode';
-import { FixAction, type NinjaViolation } from './violation';
-import { DEFAULT_RULE_PRIORITY, getRulePriority } from './engine';
-import type { FixOp } from './fix-op';
+import { FixAction, type NinjaViolation } from '../violation';
+import { DEFAULT_RULE_PRIORITY, getRulePriority } from '../engine';
+import type { FixOp } from '../fix-op';
 
 /**
  * One rule's `FixAction` collapsed into offset-space. The whole group is

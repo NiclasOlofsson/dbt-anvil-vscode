@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { Rewriter } from './rewriter';
-import type { FixGroup } from '../edit-planner';
+import type { FixGroup } from './edit-planner';
 import type { FixOp } from '../fix-op';
 import type { NinjaConfig } from '../config';
 

@@ -1,8 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type * as vscode from 'vscode';
-import type { ILogger } from '../types/logger';
-import type { PersistedWorkspaceScannerSnapshot } from './workspace-diagnostics-scanner';
+import type { ILogger } from '../../types/logger';
+import type { PersistedWorkspaceScannerSnapshot } from './scanner';
 
 const FILE_NAME = 'workspace-ninja-diagnostics.json';
 

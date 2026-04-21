@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as vscode from 'vscode';
 import { mockDocument } from './helpers';
-import { planEdits } from '../../ninja/edit-planner';
+import { planEdits } from '../../ninja/code-actions/edit-planner';
 import { FixAction, type NinjaViolation } from '../../ninja/violation';
 
 function fixViolation(

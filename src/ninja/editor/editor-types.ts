@@ -1,5 +1,5 @@
 import type { NinjaCategory } from '../categories';
-import type { NinjaActionKind, NinjaSeverity, RuleConfigOptionSpec, RuleOptionValue } from '../rule';
+import type { FixScope, NinjaActionKind, NinjaSeverity, RuleConfigOptionSpec, RuleOptionValue } from '../rule';
 
 export type { RuleOptionValue };
 
@@ -18,6 +18,8 @@ export interface RuleViewModel {
 	actionKinds?: NinjaActionKind[];
 	autoFixable?: boolean;
 	fixable?: boolean;
+	/** Resolved fix scope — drives the badge shown in the Rule Editor. */
+	fixScope: FixScope;
 	configOptions?: RuleConfigOptionSpec[];
 }
 
