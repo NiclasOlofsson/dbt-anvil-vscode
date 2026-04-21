@@ -103,12 +103,20 @@ function ruleRow(rs: RuleState): string {
 	const disabledCls = rs.isDisabled ? ' rule-disabled' : '';
 	const sev = rs.scopeInfo.effectiveSeverity;
 	const kinds = rs.rule.actionKinds ?? (rs.rule.fixable ? ['fix'] : []);
-	const badgeText = kinds.includes('snippet') ? 'snippet' : kinds.includes('fix') ? 'fix' : '';
+	const isStructural = rs.rule.fixScope === 'structural';
+	const badgeText = isStructural
+		? 'format'
+		: kinds.includes('snippet') ? 'snippet' : kinds.includes('fix') ? 'fix' : '';
 	const hasBadge = badgeText !== '';
+	const badgeTitle = badgeText === 'snippet'
+		? 'Inserts a snippet'
+		: badgeText === 'format'
+			? 'Fixed by Format Document'
+			: 'Has auto-fix action';
 	const badgeDisabledCls = (rs.rule.autoFixable && !rs.autoFixEnabled) ? ' disabled' : '';
 	const fixCell = hasBadge
-		? `<span class="fix-badge${badgeDisabledCls}" title="${badgeText === 'snippet' ? 'Inserts a snippet' : 'Has auto-fix action'}">${badgeText}</span>`
-			+ (rs.rule.autoFixable
+		? `<span class="fix-badge${badgeDisabledCls}" title="${badgeTitle}">${badgeText}</span>`
+			+ (rs.rule.autoFixable && !isStructural
 				? `<select class="autofix-select" data-rule="${escAttr(rs.rule.id)}" title="Auto-fix for this rule"><option value="true"${rs.autoFixEnabled ? ' selected' : ''}>enabled</option><option value="false"${!rs.autoFixEnabled ? ' selected' : ''}>disabled</option></select>`
 				: '')
 		: '';

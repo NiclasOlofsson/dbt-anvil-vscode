@@ -28,7 +28,7 @@ describe(RULE, () => {
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('UNION ALL');
 		expect(v[0].action).toBeDefined();
-		expect((v[0].action as FixAction).ops[0].text).toBe('union ALL');
+		expect((v[0].action as FixAction).ops[0]).toMatchObject({ text: 'union ALL' });
 	});
 
 	it('no violation for UNION ALL', () => {
@@ -57,7 +57,7 @@ describe(RULE, () => {
 			sqlTok('SELECT', 15, 20, 0, 21),
 		];
 		const v = check(sql, tokens, 'distinct');
-		expect((v[0].action as FixAction).ops[0].text).toBe('union DISTINCT');
+		expect((v[0].action as FixAction).ops[0]).toMatchObject({ text: 'union DISTINCT' });
 	});
 
 	it('flags multiple bare UNIONs', () => {

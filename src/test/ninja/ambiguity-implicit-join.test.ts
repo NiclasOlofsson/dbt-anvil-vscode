@@ -25,7 +25,7 @@ describe(RULE, () => {
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('INNER JOIN');
 		expect(v[0].action).toBeDefined();
-		expect((v[0].action as FixAction).ops[0].text).toBe('INNER join');
+		expect((v[0].action as FixAction).ops[0]).toMatchObject({ text: 'INNER join' });
 	});
 
 	it('no violation for INNER JOIN', () => {

@@ -5,7 +5,7 @@ import { generateVariants } from '../dbt/sql-variant-generator';
 import { stripJinja } from '../providers/common/jinja-utils';
 import type { ILogger } from '../types/logger';
 import type { DocumentParser } from './document-parser';
-import type { JinjaToken, SqlToken } from '../ftl/parse-result';
+import type { AstPayload, JinjaToken, SqlToken } from '../ftl/parse-result';
 import { sqlOnly, type NinjaSqlToken } from '../ftl/ninja-sql-tokens';
 
 export interface ColumnInfo {
@@ -255,6 +255,18 @@ export interface DocumentModel {
 	 */
 	ninjaSqlTokens?: NinjaSqlToken[];
 	/**
+	 * Flat AST payload from sqlglot's `serde.dump()`. Each entry carries its
+	 * byte range (`m.start` / `m.end`), class name (`c`), and parent linkage
+	 * (`i`, `k`, `a`). The reflow printer consults this to make clause-aware
+	 * layout decisions (comma-position, indented_on, CTE body break) instead
+	 * of inferring structure from token-stream heuristics.
+	 *
+	 * When a file has Jinja conditionals, the node set is the byte-range
+	 * union of every variant's AST — so each branch has structural coverage
+	 * at its own bytes. See `mergeModels` for the merge policy.
+	 */
+	ast?: AstPayload[];
+	/**
 	 * Virtual columns synthesised by PIVOT/UNPIVOT clauses, keyed by the
 	 * lowercased source-table name. Used to suppress false "column not found"
 	 * errors for virtual columns that don't exist in the source CTE's schema.
@@ -401,10 +413,36 @@ export function mergeModels(models: DocumentModel[]): DocumentModel {
 	const jinjaTokens = models.find(m => m.jinjaTokens)?.jinjaTokens;
 	const ninjaSqlTokens = models.find(m => m.ninjaSqlTokens)?.ninjaSqlTokens;
 
+	// ast: union by byte range. Each variant's AST covers the shared bytes
+	// (outside any Jinja conditional) PLUS its own active branches. Non-active
+	// branches in that variant are blanked to spaces, so they contribute no
+	// nodes. Unioning across variants gives structural coverage for every
+	// branch — nodes from different variants never overlap *inside*
+	// conditionals because their spans are disjoint there. Shared nodes
+	// (outside conditionals) appear at identical byte ranges in every
+	// variant and dedupe via the byte-range key.
+	//
+	// The combined tree is not logically consistent as a single executable
+	// statement (e.g. a Select may end up with two sibling Where nodes, one
+	// per branch). That's fine: consumers query by byte range for
+	// "what's the structural role here?", not tree traversal.
+	const astOut: AstPayload[] = [];
+	const covered = new Set<string>();
+	for (const m of models) {
+		if (!m.ast) continue;
+		for (const node of m.ast) {
+			const key = `${node.m?.start ?? ''}:${node.m?.end ?? ''}:${node.c ?? ''}`;
+			if (covered.has(key)) continue;
+			covered.add(key);
+			astOut.push(node);
+		}
+	}
+
 	return { ctes: [...cteMap.values()], refs, sources, finalColumns, finalSelect, tokens, timing, sqlglotWarnings, aliases,
 		pivotVirtualColumns: Object.keys(pivotVirtualColumns).length > 0 ? pivotVirtualColumns : undefined,
 		jinjaTokens,
 		ninjaSqlTokens,
+		ast: astOut.length > 0 ? astOut : undefined,
 	};
 }
 

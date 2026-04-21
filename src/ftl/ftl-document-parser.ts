@@ -138,6 +138,7 @@ export class FtlDocumentParser implements DocumentParser {
 			ninjaSqlTokens: result.sqlTokens && result.jinjaTokens
 				? mergeSqlAndJinjaTokens(result.sqlTokens, result.jinjaTokens)
 				: undefined,
+			ast: result.ast,
 			pivotVirtualColumns: Object.keys(pivotVirtualColumns).length > 0 ? pivotVirtualColumns : undefined,
 			isPass2: result.isPass2,
 		};

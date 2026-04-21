@@ -71,7 +71,7 @@ describe('parseFmtOffRegions', () => {
 		];
 		for (const variant of variants) {
 			const regions = parseFmtOffRegions([variant, '-- fmt: on']);
-			expect(regions).toEqual([[0, 1]], `failed for variant: ${variant}`);
+			expect(regions, `failed for variant: ${variant}`).toEqual([[0, 1]]);
 		}
 	});
 

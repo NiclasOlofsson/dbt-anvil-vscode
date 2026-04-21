@@ -2,12 +2,17 @@ import { DEFAULT_CONFIG, type NinjaConfig } from '../../ninja/config';
 import { runNinja, type NinjaResult } from '../../ninja/engine';
 import type { CteInfo, ColumnRefToken, TableRefToken, ColumnDefToken, DocumentModel } from '../../services/parse-service';
 import type { SqlToken } from '../../ftl/parse-result';
+import type { DialectSymbols } from '../../ftl/sql-parser';
 import { mergeSqlAndJinjaTokens } from '../../ftl/ninja-sql-tokens';
 import * as vscode from 'vscode';
 
+type ConfigOverride = Omit<Partial<NinjaConfig>, 'indentation'> & {
+	indentation?: Partial<NinjaConfig['indentation']>;
+};
+
 /** Build a minimal NinjaConfig with optional overrides. */
-export function cfg(overrides: Partial<NinjaConfig> = {}): NinjaConfig {
-	return { ...DEFAULT_CONFIG, ...overrides };
+export function cfg(overrides: ConfigOverride = {}): NinjaConfig {
+	return { ...DEFAULT_CONFIG, ...overrides, indentation: { ...DEFAULT_CONFIG.indentation, ...overrides.indentation } };
 }
 
 /** Build a minimal mock vscode.TextDocument from SQL text. */
@@ -58,7 +63,7 @@ export const emptyModel: DocumentModel = {
 };
 
 /** Run ninja and return result for convenience. */
-export function run(sql: string, config?: Partial<NinjaConfig>, model?: DocumentModel): NinjaResult {
+export function run(sql: string, config?: ConfigOverride, model?: DocumentModel): NinjaResult {
 	const doc = mockDocument(sql);
 	return runNinja(doc, model ?? emptyModel, [], cfg(config));
 }
@@ -174,4 +179,42 @@ export function model(
 		merged.ninjaSqlTokens = mergeSqlAndJinjaTokens(sqlTokens ?? [], jinjaTokens ?? []);
 	}
 	return merged;
+}
+
+/**
+ * Stub `DialectSymbols` for unit tests that want to exercise recasing
+ * without booting Pyodide. Production always gets the real dialect-aware
+ * sets from sqlglot — this fixture intentionally lives in test helpers
+ * so no production code depends on hardcoded keyword/type lists.
+ *
+ * Callers can override any of the three sets; defaults cover the common
+ * shapes used across reflow unit tests (SELECT/FROM/WHERE keywords,
+ * count/coalesce/etc. functions, int/varchar/timestamp types).
+ */
+export function stubDialectSymbols(overrides: Partial<{
+	keywordTokenTypes: Iterable<string>;
+	functions: Iterable<string>;
+	types: Iterable<string>;
+}> = {}): DialectSymbols {
+	return {
+		keywordTokenTypes: new Set(overrides.keywordTokenTypes ?? [
+			'select', 'from', 'where', 'and', 'or', 'not', 'in', 'is', 'null',
+			'as', 'alias', 'on', 'join', 'left', 'right', 'inner', 'outer', 'full', 'cross',
+			'group', 'by', 'order', 'having', 'limit', 'offset', 'union', 'all',
+			'group_by', 'order_by', 'not_in',
+			'distinct', 'case', 'when', 'then', 'else', 'end', 'with',
+			'between', 'like', 'ilike', 'asc', 'desc', 'over', 'partition',
+			'except', 'intersect', 'true', 'false', 'cast', 'using',
+			'qualify', 'pivot', 'unpivot',
+		]),
+		functions: new Set(overrides.functions ?? [
+			'count', 'coalesce', 'nullif', 'cast', 'lower', 'upper',
+			'sum', 'avg', 'min', 'max', 'round', 'abs', 'trim',
+		]),
+		types: new Set(overrides.types ?? [
+			'int', 'integer', 'bigint', 'smallint', 'varchar', 'char', 'text',
+			'boolean', 'bool', 'date', 'datetime', 'timestamp', 'timestamptz',
+			'float', 'double', 'decimal', 'numeric', 'real', 'json', 'uuid',
+		]),
+	};
 }

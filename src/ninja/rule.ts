@@ -21,6 +21,19 @@ export type NinjaSeverity = 'error' | 'warning' | 'info' | 'hint' | 'mute';
 /** Action kinds a rule may emit on its violations. */
 export type NinjaActionKind = 'fix' | 'snippet';
 
+/**
+ * How a rule's violations are fixed.
+ *
+ * `surgical`  — single-location edit safe via code action (e.g. `cap-keywords`,
+ *               `convention-is-null`). Participates in `source.fixAll.ninja`.
+ * `structural` — layout concern owned by the reflow engine. Rule emits a
+ *               violation (diagnostic only); the fix happens through
+ *               `Format Document`, not a code action.
+ * `none`      — no autofix at all (e.g. ambiguity warnings that require a
+ *               human decision).
+ */
+export type FixScope = 'surgical' | 'structural' | 'none';
+
 /** Value type for a configurable rule option. */
 export type RuleOptionValue = string | boolean | number;
 
@@ -52,6 +65,15 @@ export interface NinjaRuleBase {
 	actionKinds?: NinjaActionKind[];
 	/** True when this rule's fix actions are safe for bulk auto-fix flows. */
 	autoFixable?: boolean;
+	/**
+	 * How violations of this rule get fixed. Determines which consumer picks
+	 * up the rule's violations:
+	 *   - `surgical`   → code-action provider; per-violation `FixAction` expected.
+	 *   - `structural` → reflow engine owns layout; rule is detection-only.
+	 *   - `none`       → diagnostics only.
+	 * Default `none` when omitted.
+	 */
+	fixScope?: FixScope;
 	/** Configurable options surfaced in the Rule Editor. */
 	configOptions?: RuleConfigOptionSpec[];
 	/**

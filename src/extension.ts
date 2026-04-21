@@ -34,7 +34,7 @@ import { SqlDocumentSymbolProvider } from './providers/sql/document-symbol-provi
 import { YamlDocumentSymbolProvider } from './providers/yaml/document-symbol-provider';
 import { DbtWorkspaceSymbolProvider } from './providers/workspace-symbol-provider';
 import { DbtSignatureHelpProvider } from './providers/sql/signature-help-provider';
-import { SqlCodeActionProvider } from './providers/sql/code-action-provider';
+import { SqlCodeActionProvider } from './ninja/code-actions/provider';
 import { NinjaFormattingProvider } from './providers/sql/formatting-provider';
 import { ConfigCodeActionProvider } from './providers/common/config-code-action-provider';
 import { DbtCallHierarchyProvider } from './providers/sql/call-hierarchy-provider';
@@ -58,8 +58,8 @@ import { SqlDebugConfigProvider } from './dbt/debug-config-provider';
 import { DataPipelineProvider } from './dbt/debug-pipeline-provider';
 import { SymbolSqlProvider } from './providers/symbol-sql-provider';
 import { splitStatements } from './dbt/statement-splitter';
-import { WorkspaceDiagnosticsScanner } from './ninja/workspace-diagnostics-scanner';
-import { WorkspaceDiagnosticsPersistence } from './ninja/workspace-diagnostics-persistence';
+import { WorkspaceDiagnosticsScanner } from './ninja/diagnostics/scanner';
+import { WorkspaceDiagnosticsPersistence } from './ninja/diagnostics/persistence';
 import { NinjaEditorPanel } from './ninja/editor';
 import * as path from 'node:path';
 

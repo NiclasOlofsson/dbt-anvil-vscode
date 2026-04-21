@@ -17,13 +17,9 @@ import { initPyodide } from '../../ftl/pyodide-loader';
 import { PyodideSqlParser } from '../../ftl/pyodide-sql-parser';
 import { FtlDocumentParser } from '../../ftl/ftl-document-parser';
 
-import { runNinja } from '../../ninja/engine';
-import { filterAutoFixViolations } from '../../providers/sql/formatting-provider';
-import { planEdits } from '../../ninja/edit-planner';
-import { applyFixGroups } from '../../ninja/reflow/applier';
+import { reflowDocument } from '../../ninja/reflow/engine';
 import { DEFAULT_CONFIG, type NinjaConfig } from '../../ninja/config';
 import { PRESETS, type FormatPreset } from '../../ninja/presets';
-import { tokenize } from '../../dbt/jinja-tokenizer';
 import { mockDocument } from './helpers';
 
 const PYODIDE_DIR = path.join(__dirname, '..', '..', '..', 'node_modules', 'pyodide');
@@ -52,35 +48,24 @@ function buildConfig(preset: FormatPreset = 'sqlfmt'): NinjaConfig {
 	};
 }
 
-async function formatOnce(sql: string, config: NinjaConfig): Promise<string> {
-	const model = await documentParser.parse(sql);
-	const doc = mockDocument(sql);
-	const jinjaTokens = tokenize(sql);
-	const result = runNinja(doc, model, jinjaTokens, config);
-	const allowed = filterAutoFixViolations(result.violations, config);
-	const planned = planEdits(allowed, doc);
-	const edits = applyFixGroups(planned.groups, doc, config);
-	return edits.length > 0 ? edits[0].newText : sql;
-}
-
 /**
- * Run the same pipeline as NinjaFormattingProvider, repeatedly until the
- * output stabilises. The edit planner's overlap-arbitration strategy
- * (`edit-planner.ts:59-61`) is explicit that convergence takes multiple
- * passes — losers drop and re-fire once the winner has converged.
+ * Runs exactly the same pipeline as NinjaFormattingProvider:
+ *   1. reflow (structural) if available
+ *   2. surgical rule autofixes as a fallback
  *
- * Capped at MAX_PASSES as a safety valve — anything exceeding that is a
- * genuine non-convergent rule interaction and the test should fail loudly.
+ * Surgical-only filtering is explicit — structural rules still emit
+ * FixAction for tests/code-actions, but the formatting path must never
+ * apply them as point-edits. That's what the central `fixScope`
+ * classification buys us.
  */
-const MAX_PASSES = 5;
 async function format(sql: string, config: NinjaConfig): Promise<string> {
-	let text = sql;
-	for (let i = 0; i < MAX_PASSES; i++) {
-		const next = await formatOnce(text, config);
-		if (next === text) return text;
-		text = next;
-	}
-	throw new Error(`formatter did not converge in ${MAX_PASSES} passes`);
+	const [model, symbols] = await Promise.all([
+		documentParser.parse(sql),
+		documentParser.getDialectSymbols(),
+	]);
+	const doc = mockDocument(sql);
+	const reflow = reflowDocument(doc, model, config, symbols);
+	return reflow.edit ? reflow.edit.newText : sql;
 }
 
 /** Every *.in.sql in FIXTURES_DIR gets paired with a matching *.out.sql. */
@@ -107,7 +92,6 @@ describe('Ninja formatter roundtrip', () => {
 				const expected = fs.readFileSync(expectedPath, 'utf8');
 				const actual   = await format(input, config);
 
-				// Drop a sibling .actual.sql on mismatch so diffs are easy to inspect.
 				if (actual !== expected) {
 					fs.writeFileSync(actualPath, actual, 'utf8');
 				} else if (fs.existsSync(actualPath)) {

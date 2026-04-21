@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { Rewriter } from '../../ninja/reflow/rewriter';
+import { Rewriter } from '../../ninja/code-actions/rewriter';
 
 describe('Rewriter', () => {
 	it('renders the original text unchanged when no edits are applied', () => {

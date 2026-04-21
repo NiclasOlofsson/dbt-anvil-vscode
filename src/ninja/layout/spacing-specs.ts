@@ -45,7 +45,10 @@ export const OPERATOR_SPEC: TokenSpec = {
  * max-blank-lines rule; here we just enforce the "alone" line-position policy).
  */
 export const SET_OPERATOR_SPEC: TokenSpec = {
-	tokenTypes: ['UNION', 'INTERSECT', 'EXCEPT'],
+	// sqlglot collapses `UNION ALL` into a single `UNION_ALL` token type and
+	// `UNION DISTINCT` into `UNION_DISTINCT`. Both must be covered here —
+	// leaving them out was the source of false-negatives on chained queries.
+	tokenTypes: ['UNION', 'UNION_ALL', 'UNION_DISTINCT', 'INTERSECT', 'EXCEPT'],
 	diagnostic: 'ninja.layout.set-operator',
 	linePosition: 'alone',
 };

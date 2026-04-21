@@ -1,5 +1,5 @@
 import type * as vscode from 'vscode';
-import type { NinjaRule, NinjaSeverity } from './rule';
+import type { FixScope, NinjaRule, NinjaSeverity } from './rule';
 import type { NinjaViolation } from './violation';
 import type { NinjaConfig } from './config';
 import type { DocumentModel } from '../services/parse-service';
@@ -291,9 +291,102 @@ export function getAllRuleMetadata(): RuleViewModel[] {
 		actionKinds: r.actionKinds,
 		autoFixable: r.autoFixable,
 		fixable: !!r.actionKinds?.includes('fix'),
+		fixScope: getRuleFixScope(r),
 		configOptions: r.configOptions,
 	}));
 }
+
+/**
+ * Centralized classification of how each rule's violations get fixed. The
+ * table lives here so we don't touch 80+ rule files when the policy shifts.
+ *
+ * - `surgical`   — local, single-location edit safe via code action + `source.fixAll.ninja`
+ * - `structural` — layout concern owned by the reflow engine; rule is detection-only for consumers
+ * - `none`       — diagnostic only (rule may still emit a FixAction for internal tests, but no consumer acts on it)
+ *
+ * Rules not listed here default to `none`.
+ */
+const FIX_SCOPE_TABLE: Record<string, FixScope> = {
+	// ── Surgical: local cosmetic/semantic edits ─────────────────────────────
+	'ninja.cap.keywords': 'surgical',
+	'ninja.cap.functions': 'surgical',
+	'ninja.cap.literals': 'surgical',
+	'ninja.cap.types': 'surgical',
+	'ninja.convention.is-null': 'surgical',
+	'ninja.convention.not-equal': 'surgical',
+	'ninja.convention.count-rows': 'surgical',
+	'ninja.convention.coalesce': 'surgical',
+	'ninja.convention.outer-join': 'surgical',
+	'ninja.convention.explicit-inner-join': 'surgical',
+	'ninja.convention.statement-terminator': 'surgical',
+	'ninja.structure.unused-cte': 'surgical',
+	'ninja.structure.else-null': 'surgical',
+	'ninja.structure.distinct-parens': 'surgical',
+	'ninja.alias.column-as': 'surgical',
+	'ninja.alias.table-as': 'surgical',
+	'ninja.alias.self-alias': 'surgical',
+	'ninja.alias.expression-no-alias': 'surgical',
+	'ninja.ambiguity.bare-union': 'surgical',
+	'ninja.ambiguity.implicit-join': 'surgical',
+
+	// ── Structural: reflow owns the fix ─────────────────────────────────────
+	'ninja.convention.comma-position': 'structural',
+	'ninja.convention.operator-position': 'structural',
+	'ninja.convention.trailing-comma': 'structural',
+	'ninja.convention.union-style': 'structural',
+	'ninja.jinja.padding': 'structural',
+	'ninja.jinja.argument-spacing': 'structural',
+	'ninja.layout.binary-operator-spacing': 'structural',
+	'ninja.layout.clause-keyword': 'structural',
+	'ninja.layout.comma-spacing': 'structural',
+	'ninja.layout.function-spacing': 'structural',
+	'ninja.layout.spacing': 'structural',
+	'ninja.layout.indent': 'structural',
+	'ninja.layout.indent-body': 'structural',
+	'ninja.layout.indent-bracket': 'structural',
+	'ninja.layout.indent-comments': 'structural',
+	'ninja.layout.indent-from': 'structural',
+	'ninja.layout.indent-group-by': 'structural',
+	'ninja.layout.indent-having': 'structural',
+	'ninja.layout.indent-joins': 'structural',
+	'ninja.layout.indent-limit': 'structural',
+	'ninja.layout.indent-on': 'structural',
+	'ninja.layout.indent-order-by': 'structural',
+	'ninja.layout.indent-set-op': 'structural',
+	'ninja.layout.indent-then': 'structural',
+	'ninja.layout.indent-where': 'structural',
+	'ninja.layout.leading-whitespace': 'structural',
+	'ninja.layout.max-blank-lines': 'structural',
+	'ninja.layout.set-operator': 'structural',
+	'ninja.layout.trailing-newline': 'structural',
+	'ninja.layout.trailing-whitespace': 'structural',
+	'ninja.layout.cte-blank-line': 'structural',
+	'ninja.layout.cte-bracket': 'structural',
+	'ninja.layout.select-targets': 'structural',
+	'ninja.layout.select-modifiers': 'structural',
+	'ninja.layout.long-lines': 'structural',
+};
+
+/**
+ * Resolve a rule's fix scope. Preference order: explicit `rule.fixScope` on the
+ * rule object (if set) > central `FIX_SCOPE_TABLE` lookup > `'none'`.
+ */
+export function getRuleFixScope(rule: Pick<NinjaRule, 'id' | 'fixScope'>): FixScope {
+	return rule.fixScope ?? FIX_SCOPE_TABLE[rule.id] ?? 'none';
+}
+
+/**
+ * ID-only variant of {@link getRuleFixScope}. Use at call sites that only
+ * hold a rule id (e.g. `NinjaViolation.rule`). Falls back to `'none'` when
+ * the id is unknown, which keeps synthetic test violations safe.
+ */
+export function getRuleFixScopeById(ruleId: string): FixScope {
+	return _fixScopeOverrides.get(ruleId) ?? FIX_SCOPE_TABLE[ruleId] ?? 'none';
+}
+
+const _fixScopeOverrides: Map<string, FixScope> = new Map(
+	ALL_RULES.flatMap(r => (r.fixScope ? [[r.id, r.fixScope] as const] : [])),
+);
 
 /** Default arbitration priority used when a rule does not declare one. */
 export const DEFAULT_RULE_PRIORITY = 100;
