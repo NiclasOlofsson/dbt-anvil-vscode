@@ -2,7 +2,7 @@
 	"name": "dbt-studio-vscode",
 	"displayName": "dbt Studio",
 	"description": "A VS Code extension that gives dbt the same kind of language support that most programming languages have had for years. Now it's here, for dbt Core.",
-	"version": "0.1.12",
+	"version": "0.1.13",
 	"publisher": "nickeolofsson",
 	"license": "MIT",
 	"icon": "resources/icons/dbt-studio-128.png",
@@ -707,7 +707,11 @@
 					"dbt-studio.mcp.registration": {
 						"type": "string",
 						"default": "auto",
-						"enum": ["auto", "enabled", "disabled"],
+						"enum": [
+							"auto",
+							"enabled",
+							"disabled"
+						],
 						"enumDescriptions": [
 							"Register MCP tools automatically when Claude Code is detected (recommended).",
 							"Always register MCP tools, even if Claude Code is not detected.",
@@ -744,7 +748,10 @@
 						"markdownDescription": "Ordered list of **data layers** for your project (e.g. `raw → bronze → silver → gold → marts`). Order defines ordinality — index 0 is the upstream-most layer. Layers are a dbt Studio-local concept used for classification, grouping, and architectural rules; they are never written to `manifest.json` or passed to the dbt CLI.\n\nEach entry has a `name` and a `match` rule. First match wins, top-down. Models matching no layer remain unclassified.\n\n**Scope**: only dbt **models** (plus seeds, snapshots, analyses) are classified. `source:` definitions from `schema.yml` are _not_ matched — they sit conceptually upstream of every layer. If you want sources to show up as `raw`, classify the staging models that wrap them (e.g. by tag or folder) instead of adding a `sources` layer.\n\nExample:\n```json\n[\n  { \"name\": \"raw\",     \"match\": { \"folder\": \"models/raw\" } },\n  { \"name\": \"bronze\",  \"match\": { \"tag\": \"bronze\" } },\n  { \"name\": \"silver\",  \"match\": { \"namePrefix\": \"slv_\" } },\n  { \"name\": \"gold\",    \"match\": { \"any\": [ { \"folder\": \"models/gold\" }, { \"tag\": \"gold\" } ] } },\n  { \"name\": \"marts\",   \"match\": { \"folder\": \"models/marts\" } }\n]\n```",
 						"items": {
 							"type": "object",
-							"required": ["name", "match"],
+							"required": [
+								"name",
+								"match"
+							],
 							"additionalProperties": false,
 							"properties": {
 								"name": {
@@ -774,7 +781,15 @@
 										},
 										"materialization": {
 											"type": "string",
-											"enum": ["view", "table", "incremental", "ephemeral", "materialized_view", "seed", "snapshot"],
+											"enum": [
+												"view",
+												"table",
+												"incremental",
+												"ephemeral",
+												"materialized_view",
+												"seed",
+												"snapshot"
+											],
 											"description": "Model materialization."
 										},
 										"any": {
@@ -784,17 +799,47 @@
 												"type": "object",
 												"additionalProperties": false,
 												"properties": {
-													"folder": { "type": "string", "description": "Folder prefix relative to the project directory." },
-													"namePrefix": { "type": "string", "description": "Case-insensitive model name prefix." },
-													"nameRegex": { "type": "string", "description": "Regex tested against the model name." },
-													"tag": { "type": "string", "description": "Model tag (exact match)." },
+													"folder": {
+														"type": "string",
+														"description": "Folder prefix relative to the project directory."
+													},
+													"namePrefix": {
+														"type": "string",
+														"description": "Case-insensitive model name prefix."
+													},
+													"nameRegex": {
+														"type": "string",
+														"description": "Regex tested against the model name."
+													},
+													"tag": {
+														"type": "string",
+														"description": "Model tag (exact match)."
+													},
 													"materialization": {
 														"type": "string",
-														"enum": ["view", "table", "incremental", "ephemeral", "materialized_view", "seed", "snapshot"],
+														"enum": [
+															"view",
+															"table",
+															"incremental",
+															"ephemeral",
+															"materialized_view",
+															"seed",
+															"snapshot"
+														],
 														"description": "Model materialization."
 													},
-													"any": { "type": "array", "items": { "type": "object" } },
-													"all": { "type": "array", "items": { "type": "object" } }
+													"any": {
+														"type": "array",
+														"items": {
+															"type": "object"
+														}
+													},
+													"all": {
+														"type": "array",
+														"items": {
+															"type": "object"
+														}
+													}
 												}
 											}
 										},
@@ -805,17 +850,47 @@
 												"type": "object",
 												"additionalProperties": false,
 												"properties": {
-													"folder": { "type": "string", "description": "Folder prefix relative to the project directory." },
-													"namePrefix": { "type": "string", "description": "Case-insensitive model name prefix." },
-													"nameRegex": { "type": "string", "description": "Regex tested against the model name." },
-													"tag": { "type": "string", "description": "Model tag (exact match)." },
+													"folder": {
+														"type": "string",
+														"description": "Folder prefix relative to the project directory."
+													},
+													"namePrefix": {
+														"type": "string",
+														"description": "Case-insensitive model name prefix."
+													},
+													"nameRegex": {
+														"type": "string",
+														"description": "Regex tested against the model name."
+													},
+													"tag": {
+														"type": "string",
+														"description": "Model tag (exact match)."
+													},
 													"materialization": {
 														"type": "string",
-														"enum": ["view", "table", "incremental", "ephemeral", "materialized_view", "seed", "snapshot"],
+														"enum": [
+															"view",
+															"table",
+															"incremental",
+															"ephemeral",
+															"materialized_view",
+															"seed",
+															"snapshot"
+														],
 														"description": "Model materialization."
 													},
-													"any": { "type": "array", "items": { "type": "object" } },
-													"all": { "type": "array", "items": { "type": "object" } }
+													"any": {
+														"type": "array",
+														"items": {
+															"type": "object"
+														}
+													},
+													"all": {
+														"type": "array",
+														"items": {
+															"type": "object"
+														}
+													}
 												}
 											}
 										}
@@ -956,7 +1031,9 @@
 					},
 					"dbt-studio.ninja.disabledRules": {
 						"type": "array",
-						"items": { "type": "string" },
+						"items": {
+							"type": "string"
+						},
 						"default": [],
 						"markdownDescription": "Rule IDs that are completely disabled — no diagnostic, no autofix. Use the rule editor UI to manage this list. To silence a rule while keeping its autofix, use `mute` in `#dbt-studio.ninja.rules#` instead."
 					},
@@ -1058,7 +1135,11 @@
 					"dbt-studio.ninja.format.preset": {
 						"type": "string",
 						"default": "sqlfmt",
-						"enum": ["sqlfmt", "dbt-labs", "custom"],
+						"enum": [
+							"sqlfmt",
+							"dbt-labs",
+							"custom"
+						],
 						"enumDescriptions": [
 							"sqlfmt style: 88-char lines, lowercase, trailing commas.",
 							"dbt Labs style guide: 120-char lines, lowercase, leading commas.",
@@ -1851,7 +1932,12 @@
 						},
 						"severity": {
 							"type": "string",
-							"enum": ["error", "warning", "info", "hint"],
+							"enum": [
+								"error",
+								"warning",
+								"info",
+								"hint"
+							],
 							"description": "Filter by severity"
 						},
 						"source": {
@@ -1888,7 +1974,9 @@
 							"description": "Maximum number of symbols to return (default 100)"
 						}
 					},
-					"required": ["query"]
+					"required": [
+						"query"
+					]
 				}
 			},
 			{
@@ -1919,7 +2007,13 @@
 						},
 						"kind": {
 							"type": "string",
-							"enum": ["definition", "references", "implementations", "type_definition", "declaration"],
+							"enum": [
+								"definition",
+								"references",
+								"implementations",
+								"type_definition",
+								"declaration"
+							],
 							"description": "Which kind of navigation to perform"
 						},
 						"max_results": {
@@ -1927,7 +2021,12 @@
 							"description": "Maximum number of locations to return (default 200)"
 						}
 					},
-					"required": ["path", "line", "character", "kind"]
+					"required": [
+						"path",
+						"line",
+						"character",
+						"kind"
+					]
 				}
 			}
 		],
