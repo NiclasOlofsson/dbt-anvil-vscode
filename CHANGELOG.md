@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.13
+
+The headline for this release is the new Ninja linter and the FTL parser. Ninja is now an AST-driven SQL style engine with around fifty rules, a proper rule editor, and a reflow-based formatter — `Format Document` on a SQL file does something genuinely useful now. FTL is an in-process Pyodide/sqlglot parser that replaces the Python bridge for document parsing, which is why the editor feels noticeably faster on every keystroke. There's also a long tail of improvements across the debugger, lineage, MCP, and startup.
+
+> **Heads up:** this is a large release and may have introduced instabilities. Every feature area can be turned on or off individually from Settings — completions, hover, diagnostics, the Ninja linter, auto-fix on save, and the rest — so if something misbehaves you can disable just that piece while keeping everything else running. If you hit a problem, please open an issue at [github.com/NiclasOlofsson/dbt-studio/issues](https://github.com/NiclasOlofsson/dbt-studio/issues).
+
+- **Ninja linter** — A from-the-ground-up rewrite of the SQL linter. Around fifty rules now, organised across capitalisation, layout, spacing, conventions, ambiguity, aliasing, and structure. Rules are AST-aware (no more regex false positives) and Jinja-aware (conditional blocks and macro calls don't trip them up). Severity and autofix are split, so you can downgrade a rule's diagnostic without losing its quick-fix, or vice versa. A new **Ninja Rule Editor** view lets you toggle, mute, and tune rules without editing JSON. Workspace diagnostics persist across restarts.
+- **Format Document for SQL** — `Shift+Alt+F` now reflows your SQL through the Ninja layout engine: indentation, comma position, operator position, indented joins/CTEs/THEN/ON, and configurable max line length. Auto-fix on save and auto-fix on format are independently controllable, with per-rule overrides. dbt Studio offers to register itself as the default SQL formatter on first run.
+- **User-configurable data layers** — The Model Explorer now classifies models by user-defined layers (staging, intermediate, marts, and so on) instead of a hard-coded scheme. Configure folder patterns and naming prefixes per project, and the explorer and lineage graph follow.
+- **FTL parser** — Document parsing has been moved out of the Python bridge and into an in-process Pyodide worker pool running sqlglot. This is the path that drives every keystroke — diagnostics, hover, completion, lineage. It is faster than the bridge round-trip, fully multithreaded, and has no subprocess startup cost. Column lineage has also been re-implemented on top of FTL with proper AST-based scope resolution for `resolveTableRefs`.
+- **Debugger: UNION-aware decomposition** — Models that use `UNION` / `UNION ALL` at the top level are now decomposed correctly, with each branch labelled by clause. The debugger also no longer writes `.vscode/launch.json` on activation, which was surprising in clean checkouts.
+- **MCP integration with Claude Code** — dbt Studio's tools are now registered with Claude Code over MCP, in addition to the existing Copilot integration. Both surfaces share the same registry so schemas never drift.
+- **Faster startup** — dbt and Python environment validation now runs off the activation critical path, so the extension activates and starts indexing immediately. A missing or broken Python environment surfaces a notification rather than blocking activation. `pipenv` / `uv` / `poetry` projects are auto-bootstrapped when their lockfile is present but the venv is missing.
+- **Lineage polish** — Column lineage v2 produces cleaner graphs with viewport-proportional column wrapping and a relaxation pass for layout. The lineage side panel docks with center-preserving resize, and lineage graph state and layout are persisted per project.
+- **Tools** — `relation_name` and `alias` are surfaced in the MCP and Copilot resource tools. Structured dbt execution events now carry job context, which is what feeds the new event console.
+- **Fix: duplicate Ninja diagnostics** — Diagnostics no longer duplicate when a file is opened during a workspace scan, and stale diagnostics are cleared on file delete.
+- **Fix: workspace scanner robustness** — Negative-character offsets in heavily Jinja'd files no longer crash the scanner. String literals are masked in capitalisation and spacing rules so SQL inside string constants isn't linted.
+
 ## 0.1.12
 
 This is primarily a stability release, with improved startup resilience and several debugger enhancements.
