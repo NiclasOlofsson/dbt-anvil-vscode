@@ -20,6 +20,10 @@ const commonOptions: esbuild.BuildOptions = {
 	target: 'node18',
 	format: 'cjs',
 	keepNames: true,
+	// Prefer ESM entries: some deps (e.g. jsonc-parser) ship a UMD `main` that
+	// wraps `require()` in a factory arg, which esbuild can't statically follow
+	// and leaves as a runtime require that fails at load time.
+	mainFields: ['module', 'main'],
 	plugins: [vscodeExternalPlugin],
 	external: ['vscode', '@duckdb/*', '*.node', 'pyodide'],
 };

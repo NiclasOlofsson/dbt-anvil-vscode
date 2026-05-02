@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import type { DbtManifest, DbtMacroArgument, DbtNode, DbtSource, ResourceType } from '../dbt/manifest-types';
 import { ManifestLoader } from '../dbt/manifest-loader';
 import type { ILogger } from '../types/logger';
+import { classifyLayer, type LayerConfig, type LayerInfo } from './layer-classifier';
 
 /**
  * Map a dbt adapter type to the canonical sqlglot dialect name.
@@ -39,6 +40,8 @@ export interface IndexedModel {
 	tags: string[];
 	materialisation: string;
 	description?: string;
+	/** Resolved layer (dbt Studio-local classification). Undefined if no configured layer matches. */
+	layer?: LayerInfo;
 }
 
 export interface IndexedSource {
@@ -100,10 +103,30 @@ export class ManifestIndexer {
 	/** The load result from the last successful build, used to detect no-change reloads. */
 	private _lastLoadResult: import('../dbt/manifest-loader').ManifestLoadResult | null = null;
 
+	private _layerConfigs: LayerConfig[] = [];
+
 	constructor(
 		private readonly loader: ManifestLoader,
 		private readonly logger: ILogger,
 	) { }
+
+	/**
+	 * Replace the layer configuration and re-classify all indexed models in-place.
+	 * Safe to call any time; triggers no manifest reload.
+	 */
+	setLayerConfigs(configs: LayerConfig[]): void {
+		this._layerConfigs = configs;
+		if (!this._index) return;
+		const projectDir = this.loader.projectDir;
+		for (const model of this._index.models.values()) {
+			model.layer = classifyLayer(model, configs, { projectDir });
+		}
+		this.logger.info(`Layer classification refreshed for ${this._index.models.size} models (${configs.length} layers configured)`);
+	}
+
+	getLayerConfigs(): LayerConfig[] {
+		return this._layerConfigs;
+	}
 
 	/**
 	 * The raw dbt adapter type from the manifest or profiles.yml.
@@ -159,13 +182,14 @@ export class ManifestIndexer {
 		const nodesByName = new Map<string, string[]>();
 
 		// Index nodes (models, seeds, snapshots, analyses)
+		const projectDir = this.loader.projectDir;
 		for (const [uid, node] of Object.entries(manifest.nodes)) {
 			if (isIndexableNode(node.resource_type)) {
 				const indexed: IndexedModel = {
 					uniqueId: uid,
 					name: node.name,
 					packageName: node.package_name,
-					path: path.join(this.loader.projectDir, node.original_file_path),
+					path: path.join(projectDir, node.original_file_path),
 					schema: node.schema,
 					database: node.database,
 					alias: node.alias,
@@ -174,6 +198,7 @@ export class ManifestIndexer {
 					materialisation: node.config?.materialized ?? 'view',
 					description: node.description,
 				};
+				indexed.layer = classifyLayer(indexed, this._layerConfigs, { projectDir });
 				models.set(uid, indexed);
 
 				// Build name lookup
