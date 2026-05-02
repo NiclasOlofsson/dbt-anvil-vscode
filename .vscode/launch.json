@@ -2,7 +2,20 @@
 	"version": "0.2.0",
 	"configurations": [
 		{
-			"name": "Run Extension (oatanalytics)",
+			"name": "Run Extension (oatanalytics-CHEP)",
+			"type": "extensionHost",
+			"request": "launch",
+			"internalConsoleOptions": "neverOpen",
+			"args": [
+				"c:/Development/oatly/worktrees/chep_outgoing_pallets",
+				"--extensionDevelopmentPath=${workspaceFolder}"
+			],
+			"outFiles": [
+				"${workspaceFolder}/dist/**/*.js"
+			]
+		},
+		{
+			"name": "Run Extension (oatanalytics-TEST)",
 			"type": "extensionHost",
 			"request": "launch",
 			"internalConsoleOptions": "neverOpen",
