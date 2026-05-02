@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as vscode from 'vscode';
-import { VSCodeLogger } from './types/logger';
+import { VSCodeLogger, type ILogger } from './types/logger';
 import { ServiceContainer } from './types/service-container';
 import { ManifestService } from './indexing/manifest-service';
 import { detectPythonEnvironment, validatePythonEnvironment, dbtPackagesExist, checkEnvManagerAvailable, getBootstrapCommand, validateDbtInstalled } from './dbt/env-detector';
@@ -15,6 +15,8 @@ import { DbtPathResolver } from './dbt/dbt-path-resolver';
 import { createDatabaseProvider } from './providers/database/database-provider-factory';
 import { ColumnStorePersistence } from './indexing/column-store-persistence';
 import { ContentHashPersistence } from './indexing/content-hash-persistence';
+import { validateLayerConfig, type LayerConfig } from './indexing/layer-classifier';
+import { LayersCompletionProvider } from './providers/settings/layers-completion-provider';
 import { registerLanguageModelTools } from './tools';
 import { McpSubsystem } from './mcp/host';
 import { GetColumnLineageTool } from './tools/get-column-lineage';
@@ -246,6 +248,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const columnStorePersistence = new ColumnStorePersistence(context, logger);
 	// Restore before first build so _diffAndInvalidate only evicts changed nodes
 	columnStorePersistence.restore(manifestIndexer);
+
+	// -------- Layer configuration --------
+	// Load user-configured layers before the first build so models are classified on index.
+	manifestIndexer.setLayerConfigs(loadLayerConfigs(logger));
 
 	// Try to build index on activation if manifest exists
 	if (manifestLoader.manifestExists()) {
@@ -1423,7 +1429,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				workspaceScanner.invalidateAllCaches();
 				void workspaceScanner.scanAll();
 			}
+			if (e.affectsConfiguration('dbt-studio.layers')) {
+				manifestIndexer.setLayerConfigs(loadLayerConfigs(logger));
+			}
 		}),
+		vscode.languages.registerCompletionItemProvider(
+			[{ language: 'json' }, { language: 'jsonc' }],
+			new LayersCompletionProvider(manifestIndexer),
+			'"', ':', '[', '{', ',', ' ',
+		),
 	);
 
 	logger.info(`dbt Studio v${version} activated.`);
@@ -1445,6 +1459,22 @@ async function _runBootstrap(cmd: string[], projectDir: string, envVars?: Record
 		child.on('error', () => resolve(false));
 		child.on('close', (code) => resolve(code === 0));
 	});
+}
+
+/**
+ * Read `dbt-studio.layers` from workspace configuration, validate it, and return
+ * the resolved array. Invalid entries are dropped and logged; a totally invalid
+ * config yields an empty array so indexing continues unaffected.
+ */
+function loadLayerConfigs(logger: ILogger): LayerConfig[] {
+	const raw = vscode.workspace.getConfiguration('dbt-studio').get<unknown>('layers');
+	if (raw === undefined || raw === null) return [];
+	const errors = validateLayerConfig(raw);
+	if (errors.length > 0) {
+		logger.warn(`dbt-studio.layers has ${errors.length} validation error(s): ${errors.join('; ')}`);
+		return [];
+	}
+	return raw as LayerConfig[];
 }
 
 function getActiveModelName(): string | undefined {

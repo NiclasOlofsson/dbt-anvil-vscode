@@ -23,7 +23,9 @@ export class GroupItem extends vscode.TreeItem {
 export class ModelItem extends vscode.TreeItem {
 	constructor(public readonly model: IndexedModel) {
 		super(model.name, vscode.TreeItemCollapsibleState.None);
-		this.description = model.materialisation;
+		this.description = model.layer
+			? `${model.layer.name} · ${model.materialisation}`
+			: model.materialisation;
 		this.tooltip = `${model.uniqueId}\n${model.description ?? ''}`.trim();
 		this.contextValue = 'modelItem';
 		this.iconPath = materializationIcon(model.materialisation);

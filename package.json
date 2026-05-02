@@ -735,6 +735,98 @@
 				}
 			},
 			{
+				"id": "dbt-studio.layers",
+				"title": "Layers",
+				"properties": {
+					"dbt-studio.layers": {
+						"type": "array",
+						"default": [],
+						"markdownDescription": "Ordered list of **data layers** for your project (e.g. `raw → bronze → silver → gold → marts`). Order defines ordinality — index 0 is the upstream-most layer. Layers are a dbt Studio-local concept used for classification, grouping, and architectural rules; they are never written to `manifest.json` or passed to the dbt CLI.\n\nEach entry has a `name` and a `match` rule. First match wins, top-down. Models matching no layer remain unclassified.\n\n**Scope**: only dbt **models** (plus seeds, snapshots, analyses) are classified. `source:` definitions from `schema.yml` are _not_ matched — they sit conceptually upstream of every layer. If you want sources to show up as `raw`, classify the staging models that wrap them (e.g. by tag or folder) instead of adding a `sources` layer.\n\nExample:\n```json\n[\n  { \"name\": \"raw\",     \"match\": { \"folder\": \"models/raw\" } },\n  { \"name\": \"bronze\",  \"match\": { \"tag\": \"bronze\" } },\n  { \"name\": \"silver\",  \"match\": { \"namePrefix\": \"slv_\" } },\n  { \"name\": \"gold\",    \"match\": { \"any\": [ { \"folder\": \"models/gold\" }, { \"tag\": \"gold\" } ] } },\n  { \"name\": \"marts\",   \"match\": { \"folder\": \"models/marts\" } }\n]\n```",
+						"items": {
+							"type": "object",
+							"required": ["name", "match"],
+							"additionalProperties": false,
+							"properties": {
+								"name": {
+									"type": "string",
+									"description": "Display name for the layer (e.g. \"bronze\", \"gold\")."
+								},
+								"match": {
+									"type": "object",
+									"description": "Match rule. Leaf fields (folder, namePrefix, nameRegex, tag, materialization) are ANDed together. Use `any` for OR, or `all` for explicit AND over nested matchers.",
+									"additionalProperties": false,
+									"properties": {
+										"folder": {
+											"type": "string",
+											"description": "Folder prefix relative to the project directory (e.g. \"models/gold\"). Matches if the model file path starts with this segment."
+										},
+										"namePrefix": {
+											"type": "string",
+											"description": "Case-insensitive model name prefix (e.g. \"slv_\")."
+										},
+										"nameRegex": {
+											"type": "string",
+											"description": "Regex tested against the model name. Anchor with ^/$ if needed."
+										},
+										"tag": {
+											"type": "string",
+											"description": "Model tag (exact match)."
+										},
+										"materialization": {
+											"type": "string",
+											"enum": ["view", "table", "incremental", "ephemeral", "materialized_view", "seed", "snapshot"],
+											"description": "Model materialization."
+										},
+										"any": {
+											"type": "array",
+											"description": "OR over nested matchers.",
+											"items": {
+												"type": "object",
+												"additionalProperties": false,
+												"properties": {
+													"folder": { "type": "string", "description": "Folder prefix relative to the project directory." },
+													"namePrefix": { "type": "string", "description": "Case-insensitive model name prefix." },
+													"nameRegex": { "type": "string", "description": "Regex tested against the model name." },
+													"tag": { "type": "string", "description": "Model tag (exact match)." },
+													"materialization": {
+														"type": "string",
+														"enum": ["view", "table", "incremental", "ephemeral", "materialized_view", "seed", "snapshot"],
+														"description": "Model materialization."
+													},
+													"any": { "type": "array", "items": { "type": "object" } },
+													"all": { "type": "array", "items": { "type": "object" } }
+												}
+											}
+										},
+										"all": {
+											"type": "array",
+											"description": "AND over nested matchers.",
+											"items": {
+												"type": "object",
+												"additionalProperties": false,
+												"properties": {
+													"folder": { "type": "string", "description": "Folder prefix relative to the project directory." },
+													"namePrefix": { "type": "string", "description": "Case-insensitive model name prefix." },
+													"nameRegex": { "type": "string", "description": "Regex tested against the model name." },
+													"tag": { "type": "string", "description": "Model tag (exact match)." },
+													"materialization": {
+														"type": "string",
+														"enum": ["view", "table", "incremental", "ephemeral", "materialized_view", "seed", "snapshot"],
+														"description": "Model materialization."
+													},
+													"any": { "type": "array", "items": { "type": "object" } },
+													"all": { "type": "array", "items": { "type": "object" } }
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			},
+			{
 				"id": "dbt-studio.lineage",
 				"title": "Lineage",
 				"properties": {
@@ -1966,6 +2058,7 @@
 		"@types/nunjucks": "^3.2.6",
 		"hive-driver": "^1.0.0",
 		"js-yaml": "^4.1.1",
+		"jsonc-parser": "^3.2.0",
 		"node-sql-parser": "^5.3.6",
 		"nunjucks": "^3.2.4",
 		"pyodide": "^0.29.3",
