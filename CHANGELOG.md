@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.14
+
+A packaging hotfix. The `0.1.13` VSIX accidentally bundled the in-progress `experiments/` folder, the GitHub Pages site under `docs/`, and a handful of internal development docs — pushing the install size from a few megabytes to over 200. This release tightens `.vscodeignore` so only what the extension actually needs at runtime ships: `dist/`, `resources/`, `syntaxes/`, the duckdb and pyodide native modules, `README.md`, `CHANGELOG.md`, and `LICENSE`. Functionally identical to `0.1.13`.
+
 ## 0.1.13
 
 The headline for this release is the new Ninja linter and the FTL parser. Ninja is now an AST-driven SQL style engine with around fifty rules, a proper rule editor, and a reflow-based formatter — `Format Document` on a SQL file does something genuinely useful now. FTL is an in-process Pyodide/sqlglot parser that replaces the Python bridge for document parsing, which is why the editor feels noticeably faster on every keystroke. There's also a long tail of improvements across the debugger, lineage, MCP, and startup.
