@@ -114,6 +114,12 @@ export function printDocument(input: PrinterInput): string {
 	// separates SELECT targets at depth 0 inside a SELECT...FROM/WHERE/etc.
 	// range.
 	const selectListCommaOffsets = computeSelectListCommas(stream);
+	// Pre-pass token-stream fallback for predicate AND/OR detection. The AST
+	// path (`enclosing.includes('Where' | 'Having' | 'Join')`) misses ANDs/ORs
+	// when sqlglot's serde drops position metadata on the Where/Having/Join
+	// node — without this fallback the predicate-boolean break never fires,
+	// leaving `where a = 1 and b = 2` un-wrapped.
+	const predicateBooleanOffsets = computePredicateBooleans(stream);
 
 	const parts: string[] = [];
 	const cap = createCapitalisationState(symbols);
@@ -353,8 +359,10 @@ export function printDocument(input: PrinterInput): string {
 		// an expression, not a top-level predicate chain, and breaking
 		// them would scramble CASE readability.
 		const isPredicateBoolean = typeUpper === 'AND' || typeUpper === 'OR'
-			? (enclosing.includes('Where') || enclosing.includes('Having') || enclosing.includes('Join'))
-				&& !hasInnerEnclosureAny(enclosing, ['Where', 'Having', 'Join'], ['Case', 'If'])
+			? (
+				(enclosing.includes('Where') || enclosing.includes('Having') || enclosing.includes('Join'))
+					&& !hasInnerEnclosureAny(enclosing, ['Where', 'Having', 'Join'], ['Case', 'If'])
+			) || predicateBooleanOffsets.has(tok.start)
 			: false;
 
 		// ── Clause/JOIN/set-op newline injection ──────────────────────────
@@ -459,7 +467,24 @@ export function printDocument(input: PrinterInput): string {
 				break;
 			}
 		}
-		parts.push(recaseToken(tok.type, literal, config, cap, nextSqlTypeUpper));
+		// `convention.union-style` parity: rewrite the qualifier after UNION so
+		// the formatter output matches the configured style (e.g. `union all`
+		// when `unionStyle: 'all'`). The rule itself has a surgical fix, but
+		// keeping the reflow output canonical means full-document format runs
+		// don't leave the rule firing on their own output.
+		let emitLiteral = literal;
+		let emitType = tok.type;
+		if (prevTypeUpper === 'UNION' && (typeUpper === 'ALL' || typeUpper === 'DISTINCT')) {
+			const preferred = config.convention.unionStyle === 'all' ? 'ALL' : 'DISTINCT';
+			if (typeUpper !== preferred) {
+				// Preserve literal case via recaseToken below by swapping the
+				// raw text; the token TYPE is updated so recasing uses the
+				// keyword policy on the replacement.
+				emitLiteral = preferred;
+				emitType = preferred;
+			}
+		}
+		parts.push(recaseToken(emitType, emitLiteral, config, cap, nextSqlTypeUpper));
 		atLineStart = false;
 
 		// ── Trailing comments ────────────────────────────────────────────
@@ -776,6 +801,108 @@ function computeSelectListCommas(stream: NinjaSqlToken[]): Set<number> {
 			const top = zones[zones.length - 1];
 			if (parenDepth === top.openedAtDepth && SELECT_LIST_END_KEYWORDS.has(type)) {
 				zones.pop();
+			}
+		}
+	}
+
+	return out;
+}
+
+/**
+ * Token-stream fallback that locates AND/OR tokens which need a forced line
+ * break to satisfy `convention.operator-position`. Returns a set of token
+ * `start` offsets.
+ *
+ * The printer's AST path (`enclosing.includes('Where' | 'Having' | 'Join')`)
+ * fails when sqlglot's serde dump drops position metadata on those nodes —
+ * common for inner statements. Without a fallback the source layout sticks,
+ * even when it violates the configured operator position.
+ *
+ * We intentionally restrict the fallback to operators whose SOURCE position
+ * already crosses a line boundary (the AND/OR sits on a different line than
+ * either its previous or its next SQL token). Single-line predicate chains
+ * — `where a = 1 and b = 2` — are not flagged: they neither violate the
+ * leading-position rule nor the trailing-position rule, so the printer
+ * leaves them inline. This matches the existing behaviour for AST-detected
+ * predicate booleans on single-line WHEREs and avoids regressing
+ * kitchen-sink-style fixtures that expect the inline form.
+ *
+ * Scanning rules:
+ *   - A WHERE / HAVING keyword at depth 0 opens a predicate zone at the
+ *     current paren depth. The zone closes at the next depth-0 clause
+ *     keyword that ends the predicate, or at the matching close-paren.
+ *   - AND/OR at the zone's depth is a candidate predicate boolean.
+ *   - CASE / IF opens an inner zone that suppresses the classification
+ *     until the matching END.
+ *   - A candidate is added only when its source line differs from either
+ *     the previous OR the next SQL token's line.
+ */
+function computePredicateBooleans(stream: NinjaSqlToken[]): Set<number> {
+	const out = new Set<number>();
+	const zones: Array<{ openedAtDepth: number }> = [];
+	let caseDepth = 0;
+	let parenDepth = 0;
+	// SQL tokens (typed) walked alongside the unified stream so we can find
+	// the prev/next SQL token of each candidate without re-filtering.
+	const sqlIdx: number[] = [];
+	for (let i = 0; i < stream.length; i++) {
+		if (stream[i].category === 'sql') sqlIdx.push(i);
+	}
+	// Map from full-stream index → position in sqlIdx for fast prev/next lookup.
+	const sqlPos = new Map<number, number>();
+	for (let k = 0; k < sqlIdx.length; k++) sqlPos.set(sqlIdx[k], k);
+
+	const ZONE_END = new Set([
+		'FROM', 'WHERE', 'GROUP_BY', 'GROUP', 'HAVING', 'ORDER_BY', 'ORDER',
+		'LIMIT', 'OFFSET', 'QUALIFY', 'WINDOW', 'FETCH',
+		'UNION', 'UNION_ALL', 'UNION_DISTINCT', 'INTERSECT', 'EXCEPT',
+		'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'FULL', 'CROSS',
+	]);
+
+	for (let i = 0; i < stream.length; i++) {
+		const tok = stream[i];
+		if (tok.category !== 'sql') continue;
+		const type = tok.type.toUpperCase();
+
+		if (type === 'L_PAREN') { parenDepth++; continue; }
+		if (type === 'R_PAREN') {
+			parenDepth = Math.max(0, parenDepth - 1);
+			while (zones.length > 0 && zones[zones.length - 1].openedAtDepth > parenDepth) {
+				zones.pop();
+			}
+			continue;
+		}
+
+		if (type === 'CASE' || type === 'IF') { caseDepth++; continue; }
+		if (type === 'END' && caseDepth > 0) { caseDepth--; continue; }
+
+		if (type === 'WHERE' || type === 'HAVING') {
+			zones.push({ openedAtDepth: parenDepth });
+			continue;
+		}
+
+		if (zones.length > 0) {
+			const top = zones[zones.length - 1];
+			if (parenDepth === top.openedAtDepth && ZONE_END.has(type)) {
+				zones.pop();
+			}
+		}
+
+		if ((type === 'AND' || type === 'OR') && caseDepth === 0 && zones.length > 0) {
+			const top = zones[zones.length - 1];
+			if (parenDepth !== top.openedAtDepth) continue;
+
+			// Only flag when the SOURCE already spans a line boundary around
+			// this AND/OR — i.e. the inputs is multi-line in a way that the
+			// printer is reflowing. Pure single-line predicate chains stay
+			// inline (matches AST-path behaviour for single-line WHEREs).
+			const k = sqlPos.get(i)!;
+			const prevSql = k > 0 ? stream[sqlIdx[k - 1]] : undefined;
+			const nextSql = k < sqlIdx.length - 1 ? stream[sqlIdx[k + 1]] : undefined;
+			const crossesLineBefore = prevSql && prevSql.line !== tok.line;
+			const crossesLineAfter = nextSql && nextSql.line !== tok.line;
+			if (crossesLineBefore || crossesLineAfter) {
+				out.add(tok.start);
 			}
 		}
 	}
