@@ -587,7 +587,16 @@ const INDENTING_PAREN_PREV = new Set(['ALIAS', 'FROM', 'JOIN', 'EXISTS', 'IN', '
 
 /**
  * Walk the sql-only token stream and return the byte range of every SELECT
- * target list whose single-line rendering would exceed `maxLineLength`.
+ * target list that should be rendered one-target-per-line. Two triggers:
+ *
+ *   1. The list has multiple top-level targets (at least one comma at the
+ *      SELECT's paren depth). Matches `layout.select-targets` / sqlfluff's
+ *      LT09 prescription. Single-target SELECTs (`select foo from t`) stay
+ *      inline.
+ *   2. The single-line rendering would exceed `maxLineLength`. Covers the
+ *      `layout.long-lines` case for single-target SELECTs where the one
+ *      column expression is already too wide (in which case we still emit
+ *      `select\n    <wide-expr>\nfrom ...` for readability).
  *
  * We work from the token stream (not AST `m` ranges) because sqlglot's serde
  * dump frequently omits position metadata on `Select` nodes, especially when
@@ -663,6 +672,7 @@ function computeMustWrapSelects(
 			let widthChars = tok.end - tok.start + 1; // 'select'
 			let tokenCount = 1;
 			let lastEnd = tok.end;
+			let topLevelCommas = 0;
 			let j = i + 1;
 			for (; j < stream.length; j++) {
 				const t = stream[j];
@@ -674,13 +684,17 @@ function computeMustWrapSelects(
 					depth--;
 				}
 				if (depth === 0 && SELECT_LIST_END_KEYWORDS.has(tt)) break;
+				if (depth === 0 && tt === 'COMMA') topLevelCommas++;
 				widthChars += t.end - t.start + 1;
 				tokenCount++;
 				lastEnd = t.end;
 			}
 			// One space between adjacent tokens.
 			const projected = indentLevel * indentWidth + widthChars + Math.max(0, tokenCount - 1);
-			if (projected > maxLineLength) {
+			// Wrap when either (a) there are multiple top-level targets —
+			// LT09 / layout.select-targets prescription — or (b) the single-
+			// line rendering would exceed maxLineLength.
+			if (topLevelCommas >= 1 || projected > maxLineLength) {
 				ranges.push({ start: tok.start, end: lastEnd });
 			}
 			prevSqlType = type;

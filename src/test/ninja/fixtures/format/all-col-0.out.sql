@@ -18,10 +18,22 @@ with base as (
     order by 1 desc
     limit 100
 )
-select a.id, a.name, a.status, a.created_at, a.flag_text, a.cnt
+select
+    a.id,
+    a.name,
+    a.status,
+    a.created_at,
+    a.flag_text,
+    a.cnt,
 from base as a
 left join {{ ref('other') }} as b on a.id = b.id
 where a.cnt is not null
 union all
-select 1, 2, 3, 4, 5, 6
+select
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
 from {{ ref('tail') }}

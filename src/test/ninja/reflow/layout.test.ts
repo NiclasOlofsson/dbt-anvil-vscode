@@ -135,9 +135,12 @@ describe('reflow.layout', () => {
 			sqlTok('VAR', 16, 16, 0, 17),
 		];
 		const result = reflowDocument(doc, model({ sqlTokens: tokens }), cfg());
-		// No space before comma; space after comma preserved.
-		expect(result.edit?.newText).toContain('a, b');
-		expect(result.edit?.newText).not.toContain('a , b');
+		// The multi-target SELECT wraps under the LT09 policy — `a` and `b`
+		// each land on their own indented lines. The invariant under test is
+		// "no space before the comma": `a,` must hug the identifier, and
+		// `a ,` must never appear.
+		expect(result.edit?.newText).toContain('a,');
+		expect(result.edit?.newText).not.toContain('a ,');
 	});
 
 	it('breaks before UNION set operators', () => {

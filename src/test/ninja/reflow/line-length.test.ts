@@ -4,31 +4,31 @@ import { cfg, mockDocument, model, sqlTok } from '../helpers';
 import type { AstPayload } from '../../../ftl/parse-result';
 
 /**
- * maxLineLength wrapping: when a SELECT list would exceed the configured
- * line width, each target goes on its own line. Short SELECT lists stay
- * inline.
+ * maxLineLength wrapping: a SELECT list with multiple targets always wraps
+ * under the LT09 (layout.select-targets) prescription — each target on its
+ * own line — and additionally wraps when the projected single-line width
+ * exceeds maxLineLength. A single-target SELECT stays inline unless it
+ * overflows.
  */
 describe('reflow.line-length', () => {
-	it('keeps a short SELECT list inline when it fits', () => {
-		const sql = 'select a, b from t';
+	it('keeps a single-target SELECT inline when it fits', () => {
+		const sql = 'select a from t';
 		const doc = mockDocument(sql);
 		const tokens = [
 			sqlTok('SELECT', 0, 5, 0, 6),
 			sqlTok('VAR', 7, 7, 0, 8),
-			sqlTok('COMMA', 8, 8, 0, 9),
-			sqlTok('VAR', 10, 10, 0, 11),
-			sqlTok('FROM', 12, 15, 0, 16),
-			sqlTok('VAR', 17, 17, 0, 18),
+			sqlTok('FROM', 9, 12, 0, 13),
+			sqlTok('VAR', 14, 14, 0, 15),
 		];
 		const ast: AstPayload[] = [
-			{ c: 'Select', m: { start: 0, end: 17 } },
+			{ c: 'Select', m: { start: 0, end: 14 } },
 		];
 		const result = reflowDocument(doc, model({ sqlTokens: tokens, ast }), cfg({
 			maxLineLength: 120,
 			layout: { operatorPosition: 'leading', commaPosition: 'trailing' },
 		}));
-		// `select a, b` all on one line.
-		expect(result.edit?.newText).toContain('select a, b');
+		// Single target → SELECT keyword and the target stay on one line.
+		expect(result.edit?.newText).toContain('select a');
 	});
 
 	it('wraps SELECT list onto multiple lines when it would exceed maxLineLength', () => {

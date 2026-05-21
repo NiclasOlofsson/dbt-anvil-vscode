@@ -17,10 +17,22 @@ with base as (
     ORDER BY 1 desc
     limit 100
 )
-select a.id, a.name, a.status, a.created_at, a.flag_text, a.cnt
+select
+    a.id,
+    a.name,
+    a.status,
+    a.created_at,
+    a.flag_text,
+    a.cnt,
 from base a
 left join {{ref('other')}} b on a.id = b.id
 where a.cnt is not null
 union
-select 1, 2, 3, 4, 5, 6
+select
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
 from {{ref('tail')}}
