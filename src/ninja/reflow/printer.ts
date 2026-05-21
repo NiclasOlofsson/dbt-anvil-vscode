@@ -269,7 +269,9 @@ export function printDocument(input: PrinterInput): string {
 		//   - `base AS (...)`    → prev token is ALIAS → CTE body
 		//   - `FROM (...)`       → prev token is FROM → subquery body
 		//   - `JOIN (...)`       → prev token is JOIN → subquery body
-		//   - `WHERE x IN (...)` → prev token is IN → subquery body
+		//   - `WHERE x IN (...)` → prev token is IN, and inner starts with
+		//     SELECT → subquery body. IN-list of scalars (`IN ('a','b')`)
+		//     stays inline (function-call-like paren).
 		//   - `EXISTS (...)`     → prev token is EXISTS → subquery body
 		// Function-call parens (`count(`, `coalesce(`) fail all of these
 		// because their prev token is an identifier, not a keyword.
@@ -278,9 +280,9 @@ export function printDocument(input: PrinterInput): string {
 				|| prevTypeUpper === 'ALIAS'
 				|| prevTypeUpper === 'FROM'
 				|| prevTypeUpper === 'JOIN'
-				|| prevTypeUpper === 'IN'
-				|| prevTypeUpper === 'NOT_IN'
-				|| prevTypeUpper === 'EXISTS');
+				|| prevTypeUpper === 'EXISTS'
+				|| ((prevTypeUpper === 'IN' || prevTypeUpper === 'NOT_IN')
+					&& peekNextSqlTokenType(stream, streamIndex) === 'SELECT'));
 		void innermost;
 		// An R_PAREN that closes the top indenting span needs a newline
 		// BEFORE it so the close sits alone on its own de-indented line.
@@ -582,6 +584,20 @@ function inAnyRange(offset: number, ranges: Array<{ start: number; end: number }
 		if (offset >= r.start && offset <= r.end) return true;
 	}
 	return false;
+}
+
+/**
+ * Peek forward in the token stream past `start` and return the uppercase
+ * `type` of the next SQL token (skipping any jinja tokens). Used to look
+ * inside a paren and decide whether it opens a subquery (`(SELECT ...)`)
+ * or a non-indenting list (`('a', 'b', ...)`) — only the former should
+ * trigger a body indent.
+ */
+function peekNextSqlTokenType(stream: NinjaSqlToken[], start: number): string | undefined {
+	for (let i = start + 1; i < stream.length; i++) {
+		if (stream[i].category === 'sql') return stream[i].type.toUpperCase();
+	}
+	return undefined;
 }
 
 /**
