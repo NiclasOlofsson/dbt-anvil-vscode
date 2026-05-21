@@ -8,7 +8,7 @@ import { runNinja, getRuleFixScopeById } from '../../ninja/engine';
 import { tokenize as tokenizeJinja } from '../../dbt/jinja-tokenizer';
 import { reflowDocument } from '../../ninja/reflow/engine';
 import { mockDocument } from './helpers';
-import { loadFixture, type Fixture } from './fixture-loader';
+import { discoverFixtures, type Fixture } from './fixture-loader';
 
 const PYODIDE_DIR   = path.join(__dirname, '..', '..', '..', 'node_modules', 'pyodide');
 const VENDOR_DIR    = path.join(__dirname, '..', '..', '..', 'resources', 'ftl', 'vendor');
@@ -23,10 +23,21 @@ beforeAll(async () => {
 }, 60_000);
 
 describe('rule parity harness', () => {
-	it('trailing-newline fixture passes all four assertions', async () => {
-		const fx = loadFixture(path.join(FIXTURES_ROOT, 'ninja.layout.trailing-newline'));
-		await runFixture(fx);
-	});
+	const fixtures = discoverFixtures(FIXTURES_ROOT);
+
+	if (fixtures.length === 0) {
+		it('no fixtures yet', () => {
+			// Intentional placeholder so the suite doesn't report "no tests".
+		});
+		return;
+	}
+
+	for (const fx of fixtures) {
+		const label = fx.variantName ? `${fx.ruleId} [${fx.variantName}]` : fx.ruleId;
+		it(label, async () => {
+			await runFixture(fx);
+		});
+	}
 });
 
 async function runFixture(fx: Fixture): Promise<void> {
