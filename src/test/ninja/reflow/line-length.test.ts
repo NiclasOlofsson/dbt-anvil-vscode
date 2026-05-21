@@ -57,7 +57,10 @@ describe('reflow.line-length', () => {
 			layout: { operatorPosition: 'leading', commaPosition: 'trailing' },
 		}));
 		const rendered = result.edit?.newText ?? '';
-		// Expect each target on its own line when the list doesn't fit.
-		expect(rendered).toMatch(/select aaaaa,\n\s+bbbbb,/);
+		// Expect each target on its own line when the list doesn't fit —
+		// SELECT keyword alone on a line, every target indented under it.
+		// This is the dbt-labs/sqlfmt convention and keeps the wrap shape
+		// uniform regardless of which target triggers the overflow.
+		expect(rendered).toMatch(/select\n\s+aaaaa,\n\s+bbbbb,/);
 	});
 });

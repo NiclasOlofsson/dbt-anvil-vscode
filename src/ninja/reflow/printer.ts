@@ -106,7 +106,14 @@ export function printDocument(input: PrinterInput): string {
 	// When that exceeds the limit we force per-comma wrapping for that
 	// Select's targets. Computing this upfront keeps the main walk
 	// deterministic: the same comma either always breaks or never does.
-	const mustWrapSelectRanges = computeMustWrapSelects(ast, stream, config.maxLineLength);
+	const mustWrapSelectRanges = computeMustWrapSelects(stream, config.maxLineLength, policy);
+	// Pre-pass token-stream fallback for SELECT-list comma detection. The AST
+	// path (`enclosing.includes('Select')`) misses commas when the Select node
+	// has no position metadata in sqlglot's serde dump — common for nested
+	// CTE-body selects. This set records the start offset of every comma that
+	// separates SELECT targets at depth 0 inside a SELECT...FROM/WHERE/etc.
+	// range.
+	const selectListCommaOffsets = computeSelectListCommas(stream);
 
 	const parts: string[] = [];
 	const cap = createCapitalisationState(symbols);
@@ -257,10 +264,16 @@ export function printDocument(input: PrinterInput): string {
 				|| (inWithClause && parenDepth === 0)
 			);
 		// A SELECT-list separator comma sits directly under a `Select`
-		// (again not inside a nested enclosure).
+		// (again not inside a nested enclosure). When the AST lacks position
+		// metadata on Select nodes (common for CTE-body selects in sqlglot's
+		// serde dump), fall back to the token-stream pre-pass that classifies
+		// commas by tracking zone openings/closings off SELECT and FROM/WHERE.
 		const isSelectListComma = typeUpper === 'COMMA'
-			&& enclosing.includes('Select')
-			&& !hasInnerEnclosure(enclosing, 'Select', ['Paren', 'Func', 'Subquery', 'Anonymous', 'Where', 'Group', 'Order', 'Having']);
+			&& (
+				(enclosing.includes('Select')
+					&& !hasInnerEnclosure(enclosing, 'Select', ['Paren', 'Func', 'Subquery', 'Anonymous', 'Where', 'Group', 'Order', 'Having']))
+				|| selectListCommaOffsets.has(tok.start)
+			);
 		// An L_PAREN opens an "indenting" span when it's a CTE body or a
 		// subquery — those deserve their body on a new indented line.
 		// Detection is token-stream-first (robust against AST variations
@@ -347,6 +360,23 @@ export function printDocument(input: PrinterInput): string {
 		// ── Clause/JOIN/set-op newline injection ──────────────────────────
 		if (nonIndentingParenDepth === 0 && parts.length > 0) {
 			if (MAJOR_CLAUSES.has(typeUpper)) {
+				// Trailing-comma policy: when the SELECT list wrapped (each target
+				// on its own line) and we're about to emit the clause keyword that
+				// ends the list, inject a trailing comma after the last target so
+				// `convention.trailing-comma` stays clean on formatter output. The
+				// previous token already landed inline; the comma hugs it before
+				// the upcoming newline.
+				if (config.layout.commaPosition === 'trailing'
+					&& prev && prev.category === 'sql'
+					&& prevTypeUpper !== 'COMMA'
+					&& inAnyRange(prev.end, mustWrapSelectRanges)
+				) {
+					parts.push(',');
+				}
+				// Clear any one-shot indent the last target-comma queued —
+				// FROM/WHERE/etc land at the clause's base indent, not the
+				// target-continuation indent.
+				oneShotExtraIndent = 0;
 				pendingNewline = true;
 			} else if (JOIN_START.has(typeUpper) && !JOIN_CONTINUATION_PREV.has(prevTypeUpper)) {
 				pendingNewline = true;
@@ -502,6 +532,14 @@ export function printDocument(input: PrinterInput): string {
 			// AFTER it so the next predicate starts a new indented line.
 			pendingNewline = true;
 			oneShotExtraIndent = 1;
+		} else if (typeUpper === 'SELECT' && inAnyRange(tok.start, mustWrapSelectRanges)) {
+			// Wrap mode: break BEFORE the first target so all targets land
+			// on their own indented lines. Subsequent targets are broken by
+			// the comma path above. Keeps the wrap shape consistent whether
+			// the trigger is line-length overflow or a future explicit
+			// `always wrap` policy.
+			pendingNewline = true;
+			oneShotExtraIndent = 1;
 		}
 
 		prev = tok;
@@ -538,44 +576,197 @@ function hasInnerEnclosure(enclosing: string[], boundary: string, inner: string[
 	return false;
 }
 
+/** Clause keywords (uppercased) that terminate a SELECT target list at depth 0. */
+const SELECT_LIST_END_KEYWORDS = new Set([
+	'FROM', 'WHERE', 'GROUP_BY', 'GROUP', 'HAVING',
+	'ORDER_BY', 'ORDER', 'LIMIT', 'OFFSET', 'QUALIFY', 'WINDOW', 'FETCH',
+]);
+
+/** Previous-token types that mark an L_PAREN as an "indenting" body opener. */
+const INDENTING_PAREN_PREV = new Set(['ALIAS', 'FROM', 'JOIN', 'EXISTS', 'IN', 'NOT_IN']);
+
 /**
- * For each `Select` node in the AST, determine whether keeping its
- * SELECT list on a single line would exceed `maxLineLength`. When yes,
- * the byte range is returned — callers query it to decide whether a
- * SELECT-list comma must force a break.
+ * Walk the sql-only token stream and return the byte range of every SELECT
+ * target list whose single-line rendering would exceed `maxLineLength`.
  *
- * The width estimate is token-literal widths summed with one space
- * between each, plus the current paren/indent column. It's an upper
- * bound on the single-line form, so we may wrap a few borderline cases
- * — acceptable trade-off vs. a complex two-pass simulation.
+ * We work from the token stream (not AST `m` ranges) because sqlglot's serde
+ * dump frequently omits position metadata on `Select` nodes, especially when
+ * they sit inside CTE bodies — without this fallback the wrap heuristic
+ * never fires for nested selects, which is the worst real-world bug.
+ *
+ * Width estimate per SELECT:
+ *   indentColumn (depth-of-indenting-parens * indent unit width)
+ *   + 'select' literal width
+ *   + sum of target-token literal widths
+ *   + one inter-token space per gap
+ * Compared against `maxLineLength`. Conservative — counts a single space
+ * between every token; the printer occasionally omits spaces (around
+ * `.`, `(`, etc.), so a few borderline lines may wrap that would have
+ * just fit. Acceptable vs. a two-pass simulation.
  */
 function computeMustWrapSelects(
-	ast: AstPayload[],
 	stream: NinjaSqlToken[],
 	maxLineLength: number,
+	policy: IndentPolicy,
 ): Array<{ start: number; end: number }> {
-	const selects = ast.filter(n => n.c === 'Select' && n.m?.start !== undefined && n.m?.end !== undefined);
-	if (selects.length === 0) return [];
-
 	const ranges: Array<{ start: number; end: number }> = [];
-	for (const node of selects) {
-		const start = node.m!.start!;
-		const end = node.m!.end!;
-		let width = 0;
-		let count = 0;
-		for (const tok of stream) {
-			if (tok.category !== 'sql') continue;
-			if (tok.start < start || tok.start > end) continue;
-			width += tok.end - tok.start + 1;
-			count++;
+	const indentWidth = policy.at(1).length || 4;
+
+	// Track a synthetic indent level: every L_PAREN whose previous SQL token is
+	// in INDENTING_PAREN_PREV bumps the level by 1; the matching R_PAREN
+	// decrements. Function-call parens (preceded by an identifier) are NOT
+	// indenting. We push the bump onto a stack tagged by paren depth so the
+	// pop on R_PAREN only fires when the matching L_PAREN was indenting.
+	let parenDepth = 0;
+	let indentLevel = 0;
+	const indentingParens: number[] = [];
+	let prevSqlType = '';
+
+	for (let i = 0; i < stream.length; i++) {
+		const tok = stream[i];
+		if (tok.category !== 'sql') continue;
+		const type = tok.type.toUpperCase();
+
+		if (type === 'L_PAREN') {
+			parenDepth++;
+			// Indenting if prev token is ALIAS/FROM/JOIN/EXISTS, OR if it's
+			// IN / NOT_IN followed by a SELECT (subquery, not scalar list).
+			const isIndenting = INDENTING_PAREN_PREV.has(prevSqlType)
+				&& (
+					prevSqlType !== 'IN' && prevSqlType !== 'NOT_IN'
+						? true
+						: peekNextSqlTokenTypeAt(stream, i) === 'SELECT'
+				);
+			if (isIndenting) {
+				indentLevel++;
+				indentingParens.push(parenDepth);
+			}
+			prevSqlType = type;
+			continue;
 		}
-		// Add one space between each token as a rough render estimate.
-		width += Math.max(0, count - 1);
-		if (width > maxLineLength) {
-			ranges.push({ start, end });
+		if (type === 'R_PAREN') {
+			if (indentingParens.length > 0 && indentingParens[indentingParens.length - 1] === parenDepth) {
+				indentingParens.pop();
+				indentLevel = Math.max(0, indentLevel - 1);
+			}
+			parenDepth = Math.max(0, parenDepth - 1);
+			prevSqlType = type;
+			continue;
+		}
+
+		if (type === 'SELECT') {
+			// Scan forward through the target list, stopping at a depth-0
+			// clause keyword. Track tokens that belong to the projected
+			// single line: SELECT itself plus everything up to (but not
+			// including) the clause keyword.
+			let depth = 0;
+			let widthChars = tok.end - tok.start + 1; // 'select'
+			let tokenCount = 1;
+			let lastEnd = tok.end;
+			let j = i + 1;
+			for (; j < stream.length; j++) {
+				const t = stream[j];
+				if (t.category !== 'sql') continue;
+				const tt = t.type.toUpperCase();
+				if (tt === 'L_PAREN') { depth++; }
+				else if (tt === 'R_PAREN') {
+					if (depth === 0) break; // unmatched close — bail
+					depth--;
+				}
+				if (depth === 0 && SELECT_LIST_END_KEYWORDS.has(tt)) break;
+				widthChars += t.end - t.start + 1;
+				tokenCount++;
+				lastEnd = t.end;
+			}
+			// One space between adjacent tokens.
+			const projected = indentLevel * indentWidth + widthChars + Math.max(0, tokenCount - 1);
+			if (projected > maxLineLength) {
+				ranges.push({ start: tok.start, end: lastEnd });
+			}
+			prevSqlType = type;
+			continue;
+		}
+
+		prevSqlType = type;
+	}
+
+	return ranges;
+}
+
+function peekNextSqlTokenTypeAt(stream: NinjaSqlToken[], start: number): string | undefined {
+	for (let i = start + 1; i < stream.length; i++) {
+		if (stream[i].category === 'sql') return stream[i].type.toUpperCase();
+	}
+	return undefined;
+}
+
+/**
+ * Token-stream fallback that classifies every comma which separates targets
+ * of a SELECT at depth 0 (i.e. not inside a function call, IN list, or
+ * nested subquery's own SELECT). Returns a set of comma `start` offsets.
+ *
+ * Used by the printer when the AST has no position metadata on `Select`
+ * nodes (sqlglot's serde drops `m` on inner Selects under CTE bodies for
+ * some dialects), which would otherwise leave nested SELECT-list commas
+ * unrecognized — defeating the must-wrap path.
+ *
+ * Scanning rules:
+ *   - Each SELECT opens a target-list "zone" at the current paren depth.
+ *   - Every depth-0 comma inside the zone is a select-list comma.
+ *   - The zone closes at the first depth-0 clause keyword (FROM/WHERE/etc).
+ *   - A nested SELECT inside parens opens a *new* zone at its own depth;
+ *     the outer zone resumes once the parens close.
+ */
+function computeSelectListCommas(stream: NinjaSqlToken[]): Set<number> {
+	const out = new Set<number>();
+	// Stack of active SELECT zones: { parenDepth: depth at which this SELECT
+	// was opened }. The top of the stack is the innermost active zone; depth-0
+	// commas relative to that zone's paren depth are its target separators.
+	const zones: Array<{ openedAtDepth: number }> = [];
+	let parenDepth = 0;
+
+	for (let i = 0; i < stream.length; i++) {
+		const tok = stream[i];
+		if (tok.category !== 'sql') continue;
+		const type = tok.type.toUpperCase();
+
+		if (type === 'L_PAREN') {
+			parenDepth++;
+			continue;
+		}
+		if (type === 'R_PAREN') {
+			// Closing a paren may close any zones opened deeper than the new depth.
+			parenDepth = Math.max(0, parenDepth - 1);
+			while (zones.length > 0 && zones[zones.length - 1].openedAtDepth > parenDepth) {
+				zones.pop();
+			}
+			continue;
+		}
+
+		if (type === 'SELECT') {
+			zones.push({ openedAtDepth: parenDepth });
+			continue;
+		}
+
+		// Comma at the active zone's depth => select-list separator.
+		if (type === 'COMMA' && zones.length > 0) {
+			const top = zones[zones.length - 1];
+			if (parenDepth === top.openedAtDepth) {
+				out.add(tok.start);
+			}
+			continue;
+		}
+
+		// Clause keyword at the active zone's depth closes that zone.
+		if (zones.length > 0) {
+			const top = zones[zones.length - 1];
+			if (parenDepth === top.openedAtDepth && SELECT_LIST_END_KEYWORDS.has(type)) {
+				zones.pop();
+			}
 		}
 	}
-	return ranges;
+
+	return out;
 }
 
 /** True when `offset` falls inside any of the provided byte ranges. */

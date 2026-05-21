@@ -2,7 +2,13 @@
 -- Everything starts at column 0. The formatter's depth rules have to
 -- indent structure from a flat baseline.
 with base as (
-    select a.id, a.name, a.status, a.created_at, case when a.flag = 1 then 'yes' when a.flag = 0 then 'no' end as flag_text, count(*) as cnt
+    select
+        a.id,
+        a.name,
+        a.status,
+        a.created_at,
+        case when a.flag = 1 then 'yes' when a.flag = 0 then 'no' end as flag_text,
+        count(*) as cnt,
     from {{ ref('src_b') }} as a
     left join {{ ref('src_c') }} as b on a.id = b.id
     inner join {{ ref('src_d') }} as c on a.x = c.x
