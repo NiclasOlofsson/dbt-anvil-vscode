@@ -46,7 +46,7 @@ describe('rule parity harness', () => {
  * rollout is complete — re-enable when adding the last structural rule's
  * fixture so this becomes the gate against future drift.
  */
-describe.skip('structural rule completeness', () => {
+describe('structural rule completeness', () => {
 	const structuralRuleIds = getAllRuleMetadata()
 		.filter(r => r.fixScope === 'structural')
 		.map(r => r.id);

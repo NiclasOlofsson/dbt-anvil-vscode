@@ -43,6 +43,11 @@ function walk(dir: string, acc: string[]): void {
 	}
 }
 
+// TODO: re-enable when the formatter handles the remaining bug categories
+// surfaced by this gate: long-line wrapping for nested CASE / wide predicates,
+// Jinja statement-block + `with` collision, UNION ALL token ordering, blank
+// line preservation between adjacent CTEs in jinja-wrapped shapes, and
+// comment-CRLF leakage through the printer.
 describe.skip('corpus parity', () => {
 	const files = findModelFiles();
 
