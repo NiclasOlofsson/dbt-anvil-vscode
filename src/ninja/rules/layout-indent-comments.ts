@@ -32,9 +32,12 @@ export const indentCommentsRule: LayoutRule = {
 		const violations: NinjaViolation[] = [];
 
 		// Lines that sit INSIDE a multi-line jinja token — these follow
-		// jinja's own formatting, not SQL indent conventions.
+		// jinja's own formatting, not SQL indent conventions. 'text' tokens
+		// are plain SQL between jinja constructs, not jinja interiors, so
+		// they must not mark their middle lines as internal.
 		const jinjaInternal = new Set<number>();
 		for (const tok of ctx.jinjaTokens) {
+			if (tok.type === 'text') continue;
 			const startLine = ctx.document.positionAt(tok.start).line;
 			const endLine = ctx.document.positionAt(tok.end).line;
 			for (let l = startLine + 1; l < endLine; l++) jinjaInternal.add(l);

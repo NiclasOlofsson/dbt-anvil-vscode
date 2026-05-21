@@ -28,9 +28,12 @@ export const indentRule: LayoutRule = {
 		const unit = ctx.config.indentation.unit;
 		const size = ctx.config.indentation.size;
 
-		// Build a set of line indices that start inside a jinja token (skip these)
+		// Build a set of line indices that start inside a jinja token (skip these).
+		// 'text' tokens are plain SQL between jinja constructs, not jinja interiors,
+		// so they must not mark their middle lines as internal.
 		const jinjaLines = new Set<number>();
 		for (const tok of ctx.jinjaTokens) {
+			if (tok.type === 'text') continue;
 			const startLine = ctx.document.positionAt(tok.start).line;
 			const endLine = ctx.document.positionAt(tok.end).line;
 			// Lines between start and end are "inside" jinja (not the first/last if they have SQL too)
