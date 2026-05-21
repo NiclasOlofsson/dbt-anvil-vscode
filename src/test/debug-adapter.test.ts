@@ -2188,6 +2188,43 @@ describe('SqlDebugAdapter', () => {
 				expect(harness.events('terminated')).toHaveLength(1);
 			});
 		});
+
+		it('executes analysis file via compileCache and calls executeSql with compiled SQL', async () => {
+			const qr = mockQueryRunner();
+			const compileCache = {
+				ensureCompiled: vi.fn().mockResolvedValue('SELECT customer_id FROM stg_orders'),
+			} as unknown as CompileCache;
+			const pathResolver = mockPathResolver('analysis');
+			setActiveEditor('SELECT customer_id FROM {{ ref(\'stg_orders\') }}', '/analyses/test_analysis.sql');
+			harness = new DapHarness({ queryRunner: qr, pathResolver, compileCache });
+			harness.send('initialize');
+			harness.send('launch', { noDebug: true });
+
+			await vi.waitFor(() => {
+				expect(harness.events('terminated')).toHaveLength(1);
+			});
+
+			expect(compileCache.ensureCompiled).toHaveBeenCalled();
+			expect(qr.executeSql).toHaveBeenCalledWith('SELECT customer_id FROM stg_orders', expect.any(Number));
+		});
+
+		it('analysis: silently bails when compileCache.ensureCompiled returns undefined', async () => {
+			const qr = mockQueryRunner();
+			const compileCache = {
+				ensureCompiled: vi.fn().mockResolvedValue(undefined),
+			} as unknown as CompileCache;
+			const pathResolver = mockPathResolver('analysis');
+			setActiveEditor('SELECT 1', '/analyses/test_analysis.sql');
+			harness = new DapHarness({ queryRunner: qr, pathResolver, compileCache });
+			harness.send('initialize');
+			harness.send('launch', { noDebug: true });
+
+			await vi.waitFor(() => {
+				expect(harness.events('terminated')).toHaveLength(1);
+			});
+
+			expect(qr.executeSql).not.toHaveBeenCalled();
+		});
 	});
 
 	// ──────────────────────────────────────────────────────────────

@@ -59,7 +59,6 @@ import { SqlDebugAdapter } from './dbt/debug-adapter';
 import { SqlDebugConfigProvider } from './dbt/debug-config-provider';
 import { DataPipelineProvider } from './dbt/debug-pipeline-provider';
 import { SymbolSqlProvider } from './providers/symbol-sql-provider';
-import { splitStatements } from './dbt/statement-splitter';
 import { WorkspaceDiagnosticsScanner } from './ninja/diagnostics/scanner';
 import { WorkspaceDiagnosticsPersistence } from './ninja/diagnostics/persistence';
 import { NinjaEditorPanel } from './ninja/editor';
@@ -1183,7 +1182,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				void vscode.window.showInformationMessage('Use the Run / Compile CodeLens to execute model files.');
 				return;
 			}
-			await vscode.debug.startDebugging(undefined, { type: 'dbt-sql', request: 'launch', name: 'Run SQL', scope: 'cursor' });
+			await vscode.debug.startDebugging(undefined, { type: 'dbt-sql', request: 'launch', name: 'Run SQL', scope: 'cursor', noDebug: true });
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.executeAll', async () => {
@@ -1197,14 +1196,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				void vscode.window.showInformationMessage('Use the Run / Compile CodeLens to execute model files.');
 				return;
 			}
-			const stmts = splitStatements(editor.document.getText());
-			if (stmts.length <= 1) {
-				await vscode.debug.startDebugging(undefined, { type: 'dbt-sql', request: 'launch', name: 'Run All SQL', scope: 'all' });
-			} else {
-				await Promise.all(stmts.map(stmt =>
-					vscode.debug.startDebugging(undefined, { type: 'dbt-sql', request: 'launch', name: 'Run SQL', sql: stmt.sql }),
-				));
-			}
+			await vscode.debug.startDebugging(undefined, { type: 'dbt-sql', request: 'launch', name: 'Run All SQL', scope: 'all', noDebug: true });
 		}),
 
 		vscode.commands.registerCommand('dbt-studio.executeStatement', async (sql: string) => {
