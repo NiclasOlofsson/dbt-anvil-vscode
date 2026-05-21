@@ -118,6 +118,14 @@ export function printDocument(input: PrinterInput): string {
 	// close paren we pop and decrement, so nested function calls inside a
 	// CTE body don't touch indent.
 	const indentingParens: number[] = [];
+	// True between a top-level `WITH` token and the trailing top-level
+	// `SELECT` that consumes the WITH clause. Used as a token-stream
+	// fallback for CTE-separator-comma detection when the AST doesn't
+	// propagate positions to the `With` node — sqlglot's serde leaves
+	// `With.m` empty in current dumps, so byte-range queries can't see
+	// it. The flag flips off the first SELECT we see at parenDepth==0
+	// after opening the WITH (the final SELECT after all CTEs).
+	let inWithClause = false;
 	// Function-call / non-indenting paren depth. Major clauses break on
 	// newlines only when this is zero — inside a function call we keep
 	// everything on one line, but inside a CTE body (indenting paren)
@@ -234,9 +242,20 @@ export function printDocument(input: PrinterInput): string {
 		// any paren/subquery/function inside the With). We detect by
 		// checking: inside With AND not inside a Paren / Func / Subquery
 		// ancestor that's a closer enclosure.
+		//
+		// AST fallback — sqlglot's serde leaves the outer `With` node's
+		// `m` empty, so `enclosing.includes('With')` is false for real
+		// parsed documents. We supplement with a token-stream flag
+		// (`inWithClause`) that tracks "we've seen a top-level WITH but
+		// not yet the final top-level SELECT", and require parenDepth==0
+		// so commas inside CTE bodies / function calls / IN lists are
+		// not mistaken for CTE separators.
 		const isCteSeparatorComma = typeUpper === 'COMMA'
-			&& enclosing.includes('With')
-			&& !hasInnerEnclosure(enclosing, 'With', ['Paren', 'Func', 'Subquery', 'Anonymous']);
+			&& (
+				(enclosing.includes('With')
+					&& !hasInnerEnclosure(enclosing, 'With', ['Paren', 'Func', 'Subquery', 'Anonymous']))
+				|| (inWithClause && parenDepth === 0)
+			);
 		// A SELECT-list separator comma sits directly under a `Select`
 		// (again not inside a nested enclosure).
 		const isSelectListComma = typeUpper === 'COMMA'
@@ -445,7 +464,19 @@ export function printDocument(input: PrinterInput): string {
 			parenDepth = Math.max(0, parenDepth - 1);
 		} else if (typeUpper === 'SEMICOLON') {
 			pendingNewline = true;
-		} else if (isCteSeparatorComma) {
+		}
+
+		// Track top-level WITH ... SELECT scope for the CTE-separator
+		// fallback. Done after the emit so the current token sees the
+		// pre-transition state (irrelevant for WITH/SELECT themselves
+		// since neither is a comma).
+		if (typeUpper === 'WITH' && parenDepth === 0) {
+			inWithClause = true;
+		} else if (typeUpper === 'SELECT' && parenDepth === 0 && inWithClause) {
+			inWithClause = false;
+		}
+
+		if (isCteSeparatorComma) {
 			// Insert a blank line between CTE definitions: emit an extra
 			// newline immediately, then queue the regular pendingNewline
 			// so the next CTE's name lands on a fresh indented line after

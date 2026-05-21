@@ -36,13 +36,23 @@ export const cteBracketRule: TokenRule = {
 			}
 
 			// The body spans multiple lines. Check whether there is any
-			// non-whitespace content before the ) on closingLine.
+			// non-whitespace content before OR after the ) on closingLine.
+			// Both directions matter: text before means the body's last token
+			// shares the line with the close paren; text after means the
+			// next CTE (or the final select) starts on the same line as the
+			// close paren — e.g. `), b as (`. Either way the ) is not alone.
 			if (closingLine >= document.lineCount) continue;
 			const lineText = document.lineAt(closingLine).text;
 			const endCol = cte.endCol ?? lineText.length;
 			// Text on the closing-paren line before the )
 			const before = lineText.slice(0, endCol - 1).trimEnd();
-			if (before.length > 0) {
+			// Text on the closing-paren line after the ) — comma, whitespace,
+			// and the next CTE's leading tokens count. A bare comma is also
+			// a violation because the canonical form keeps the comma on its
+			// own line (or, equivalently, on the close-paren line so long as
+			// nothing else follows).
+			const after = lineText.slice(endCol).replace(/^\s*,?\s*/, '').trimEnd();
+			if (before.length > 0 || after.length > 0) {
 				const range = new vscode.Range(closingLine, endCol - 1, closingLine, endCol);
 				violations.push({
 					rule: 'ninja.layout.cte-bracket',

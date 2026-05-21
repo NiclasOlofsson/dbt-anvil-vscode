@@ -56,10 +56,22 @@ export const trailingCommaRule: TokenRule = {
 			const selectLine = tokens[si].line;
 
 			// Gather the SELECT-clause window: tokens from SELECT up to (but not
-			// including) the next top-level CLAUSE_TYPES keyword or end of stream.
+			// including) the next top-level CLAUSE_TYPES keyword, the close paren
+			// that ends the enclosing query (CTE body / subquery), or end of stream.
+			// Tracking paren depth from the SELECT prevents the walk from crossing
+			// into the next CTE's body, where its own SELECT-list commas would
+			// otherwise be misread as belonging to this SELECT.
 			let endIdx = tokens.length;
+			let depth = 0;
 			for (let k = si + 1; k < tokens.length; k++) {
-				if (CLAUSE_TYPES.has(tokens[k].type)) { endIdx = k; break; }
+				const t = tokens[k].type;
+				if (t === 'L_PAREN') { depth++; continue; }
+				if (t === 'R_PAREN') {
+					if (depth === 0) { endIdx = k; break; }
+					depth--;
+					continue;
+				}
+				if (depth === 0 && CLAUSE_TYPES.has(t)) { endIdx = k; break; }
 			}
 
 			// Skip single-line SELECT lists.
