@@ -4,7 +4,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { initPyodide } from '../../ftl/pyodide-loader';
 import { PyodideSqlParser } from '../../ftl/pyodide-sql-parser';
 import { FtlDocumentParser } from '../../ftl/ftl-document-parser';
-import { runNinja, getRuleFixScopeById } from '../../ninja/engine';
+import { runNinja, getRuleFixScopeById, getAllRuleMetadata } from '../../ninja/engine';
 import { tokenize as tokenizeJinja } from '../../dbt/jinja-tokenizer';
 import { reflowDocument } from '../../ninja/reflow/engine';
 import { mockDocument } from './helpers';
@@ -36,6 +36,25 @@ describe('rule parity harness', () => {
 		const label = fx.variantName ? `${fx.ruleId} [${fx.variantName}]` : fx.ruleId;
 		it(label, async () => {
 			await runFixture(fx);
+		});
+	}
+});
+
+/**
+ * Every structural rule MUST have at least one fixture directory (bare or
+ * variant) under `src/test/ninja/fixtures/rules/`. Skipped until the initial
+ * rollout is complete — re-enable when adding the last structural rule's
+ * fixture so this becomes the gate against future drift.
+ */
+describe.skip('structural rule completeness', () => {
+	const structuralRuleIds = getAllRuleMetadata()
+		.filter(r => r.fixScope === 'structural')
+		.map(r => r.id);
+	const present = new Set(discoverFixtures(FIXTURES_ROOT).map(f => f.ruleId));
+
+	for (const ruleId of structuralRuleIds) {
+		it(`${ruleId} has at least one fixture`, () => {
+			expect(present.has(ruleId), `Missing fixture directory: src/test/ninja/fixtures/rules/${ruleId}/`).toBe(true);
 		});
 	}
 });
