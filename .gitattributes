@@ -1,0 +1,8 @@
+# SQL fixtures must be byte-identical to formatter output, so force LF on
+# every platform. Without this, Windows checkout converts the committed LF
+# bytes to CRLF in the working tree and the formatter's LF output never
+# matches the on-disk fixture.
+*.sql text eol=lf
+
+# JSON test fixtures (rule-parity config.json, etc.) — same reasoning.
+*.json text eol=lf

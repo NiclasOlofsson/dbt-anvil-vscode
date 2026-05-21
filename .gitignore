@@ -28,6 +28,9 @@ src/fixtures/**/*.duckdb
 src/fixtures/**/dbt_packages/
 src/fixtures/**/logs/
 src/fixtures/**/.user.yml
+
+# Format-roundtrip diff artifacts (written when actual != expected)
+src/test/ninja/fixtures/format/*.actual.sql
 src/fixtures/**/target/compiled/
 src/fixtures/**/target/run/
 src/fixtures/**/target/graph.gpickle
