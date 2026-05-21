@@ -46,11 +46,10 @@ export const cteBracketRule: TokenRule = {
 			const endCol = cte.endCol ?? lineText.length;
 			// Text on the closing-paren line before the )
 			const before = lineText.slice(0, endCol - 1).trimEnd();
-			// Text on the closing-paren line after the ) — comma, whitespace,
-			// and the next CTE's leading tokens count. A bare comma is also
-			// a violation because the canonical form keeps the comma on its
-			// own line (or, equivalently, on the close-paren line so long as
-			// nothing else follows).
+			// After the close-paren we tolerate optional ws + a single `,` + optional ws —
+			// that's the canonical CTE separator (`),` on the close-paren line). Anything
+			// else after the regex strip (next CTE's name, a comment, `;`, etc.) is a
+			// violation: the close-paren must own its line modulo the separator comma.
 			const after = lineText.slice(endCol).replace(/^\s*,?\s*/, '').trimEnd();
 			if (before.length > 0 || after.length > 0) {
 				const range = new vscode.Range(closingLine, endCol - 1, closingLine, endCol);
