@@ -61,7 +61,11 @@ describe.skip('corpus parity', () => {
 			const violationModel = await documentParser.parse(sql);
 			const violationDoc   = mockDocument(sql);
 			const reflow = reflowDocument(violationDoc, violationModel, DEFAULT_CONFIG, symbols);
-			const formatted = reflow.edit ? reflow.edit.newText : sql;
+			expect(
+				reflow.edit,
+				`reflowDocument returned null on ${label} (reason: ${reflow.reason ?? 'unknown'})`,
+			).not.toBeNull();
+			const formatted = reflow.edit!.newText;
 
 			const outputModel = await documentParser.parse(formatted);
 			const outputDoc   = mockDocument(formatted);
