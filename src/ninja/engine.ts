@@ -339,7 +339,7 @@ const FIX_SCOPE_TABLE: Record<string, FixScope> = {
 	'ninja.layout.binary-operator-spacing': 'structural',
 	'ninja.layout.clause-keyword': 'structural',
 	'ninja.layout.comma-spacing': 'structural',
-	'ninja.layout.function-spacing': 'structural',
+	'ninja.layout.function_spacing': 'structural',
 	'ninja.layout.spacing': 'structural',
 	'ninja.layout.indent': 'structural',
 	'ninja.layout.indent-body': 'structural',
