@@ -1,0 +1,77 @@
+import * as fs from 'fs';
+import * as path from 'path';
+import { describe, it, expect, beforeAll } from 'vitest';
+
+import { initPyodide } from '../../ftl/pyodide-loader';
+import { PyodideSqlParser } from '../../ftl/pyodide-sql-parser';
+import { FtlDocumentParser } from '../../ftl/ftl-document-parser';
+import { runNinja, getRuleFixScopeById } from '../../ninja/engine';
+import { tokenize as tokenizeJinja } from '../../dbt/jinja-tokenizer';
+import { reflowDocument } from '../../ninja/reflow/engine';
+import { DEFAULT_CONFIG } from '../../ninja/config';
+import { mockDocument } from './helpers';
+
+const PYODIDE_DIR  = path.join(__dirname, '..', '..', '..', 'node_modules', 'pyodide');
+const VENDOR_DIR   = path.join(__dirname, '..', '..', '..', 'resources', 'ftl', 'vendor');
+const SCRIPTS_DIR  = path.join(__dirname, '..', '..', '..', 'resources', 'ftl');
+const SAMPLES_ROOT = path.join(__dirname, '..', '..', '..', 'samples');
+
+let documentParser: FtlDocumentParser;
+
+beforeAll(async () => {
+	const runtime = await initPyodide(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR);
+	documentParser = new FtlDocumentParser(PyodideSqlParser.create(runtime.pyodide), { adapterType: 'duckdb' });
+}, 60_000);
+
+function findModelFiles(): string[] {
+	const out: string[] = [];
+	if (!fs.existsSync(SAMPLES_ROOT)) return out;
+	for (const project of fs.readdirSync(SAMPLES_ROOT)) {
+		const modelsDir = path.join(SAMPLES_ROOT, project, 'models');
+		if (!fs.existsSync(modelsDir)) continue;
+		walk(modelsDir, out);
+	}
+	return out;
+}
+
+function walk(dir: string, acc: string[]): void {
+	for (const entry of fs.readdirSync(dir)) {
+		const full = path.join(dir, entry);
+		const stat = fs.statSync(full);
+		if (stat.isDirectory()) walk(full, acc);
+		else if (entry.endsWith('.sql')) acc.push(full);
+	}
+}
+
+describe.skip('corpus parity', () => {
+	const files = findModelFiles();
+
+	if (files.length === 0) {
+		it('no sample models found', () => {
+			// Skip when samples are absent (e.g. CI without sample data).
+		});
+		return;
+	}
+
+	for (const file of files) {
+		const label = path.relative(SAMPLES_ROOT, file);
+		it(`formatter output is lint-clean: ${label}`, async () => {
+			const sql = fs.readFileSync(file, 'utf8');
+			const symbols = await documentParser.getDialectSymbols();
+			const violationModel = await documentParser.parse(sql);
+			const violationDoc   = mockDocument(sql);
+			const reflow = reflowDocument(violationDoc, violationModel, DEFAULT_CONFIG, symbols);
+			const formatted = reflow.edit ? reflow.edit.newText : sql;
+
+			const outputModel = await documentParser.parse(formatted);
+			const outputDoc   = mockDocument(formatted);
+			const outputResult = runNinja(outputDoc, outputModel, tokenizeJinja(formatted), DEFAULT_CONFIG, symbols);
+			const structural = outputResult.violations.filter(v => getRuleFixScopeById(v.rule) === 'structural');
+
+			expect(
+				structural.map(v => `${v.rule}@${v.range.start.line + 1}:${v.range.start.character + 1}`),
+				`structural rules must be clean on formatter output of ${label}`,
+			).toEqual([]);
+		});
+	}
+});
