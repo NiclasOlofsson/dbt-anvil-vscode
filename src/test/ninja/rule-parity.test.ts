@@ -5,6 +5,7 @@ import { initPyodide } from '../../ftl/pyodide-loader';
 import { PyodideSqlParser } from '../../ftl/pyodide-sql-parser';
 import { FtlDocumentParser } from '../../ftl/ftl-document-parser';
 import { runNinja, getRuleFixScopeById } from '../../ninja/engine';
+import { tokenize as tokenizeJinja } from '../../dbt/jinja-tokenizer';
 import { reflowDocument } from '../../ninja/reflow/engine';
 import { mockDocument } from './helpers';
 import { loadFixture, type Fixture } from './fixture-loader';
@@ -34,7 +35,7 @@ async function runFixture(fx: Fixture): Promise<void> {
 	// Assertion 1: rule fires on violation
 	const violationModel  = await documentParser.parse(fx.violation);
 	const violationDoc    = mockDocument(fx.violation);
-	const violationResult = runNinja(violationDoc, violationModel, violationModel.jinjaTokens ?? [], fx.config, symbols);
+	const violationResult = runNinja(violationDoc, violationModel, tokenizeJinja(fx.violation), fx.config, symbols);
 	const targetViolations = violationResult.violations.filter(v => v.rule === fx.ruleId);
 	expect(targetViolations.length, `assertion 1: ${fx.ruleId} should fire on violation.sql`).toBeGreaterThanOrEqual(1);
 
@@ -46,14 +47,14 @@ async function runFixture(fx: Fixture): Promise<void> {
 	// Assertion 3: rule clean on expected
 	const expectedModel  = await documentParser.parse(fx.expected);
 	const expectedDoc    = mockDocument(fx.expected);
-	const expectedResult = runNinja(expectedDoc, expectedModel, expectedModel.jinjaTokens ?? [], fx.config, symbols);
+	const expectedResult = runNinja(expectedDoc, expectedModel, tokenizeJinja(fx.expected), fx.config, symbols);
 	const expectedViolations = expectedResult.violations.filter(v => v.rule === fx.ruleId);
 	expect(expectedViolations.length, `assertion 3: ${fx.ruleId} should not fire on expected.sql`).toBe(0);
 
 	// Assertion 4: full lint clean on formatter output (every structural rule)
 	const outputModel  = await documentParser.parse(formatted);
 	const outputDoc    = mockDocument(formatted);
-	const outputResult = runNinja(outputDoc, outputModel, outputModel.jinjaTokens ?? [], fx.config, symbols);
+	const outputResult = runNinja(outputDoc, outputModel, tokenizeJinja(formatted), fx.config, symbols);
 	const structural = outputResult.violations.filter(v => getRuleFixScopeById(v.rule) === 'structural');
 	expect(structural.map(v => v.rule), `assertion 4: structural rules must be clean on formatter output`).toEqual([]);
 }
