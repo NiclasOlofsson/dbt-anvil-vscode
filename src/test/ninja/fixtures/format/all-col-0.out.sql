@@ -12,7 +12,8 @@ with base as (
     from {{ ref('src_b') }} as a
     left join {{ ref('src_c') }} as b on a.id = b.id
     inner join {{ ref('src_d') }} as c on a.x = c.x
-    where a.deleted is null and a.flag = 1
+    where a.deleted is null and
+        a.flag = 1
     group by 1, 2, 3, 4
     having count(*) > 1
     order by 1 desc

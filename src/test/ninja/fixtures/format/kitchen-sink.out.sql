@@ -11,7 +11,8 @@ with base as (
     from {{ref( 'src_b' )}} a
     left join {{ref('src_c')}} b on a.id = b.id
     inner join {{ref('src_d')}} c on a.x <> c.x
-    where a.deleted is not null and a.flag != 1
+    where a.deleted is not null and
+        a.flag != 1
     GROUP BY 1, 2, 3, 4, 5
     having count(*) > 1
     ORDER BY 1 desc
