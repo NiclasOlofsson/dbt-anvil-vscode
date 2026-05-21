@@ -21,14 +21,11 @@ export interface Fixture {
  * Read a single fixture from a leaf directory. The directory MUST contain
  * `violation.sql` and `expected.sql`; `config.json` is optional.
  *
- * `ruleId` and `variantName` are inferred from the path. When `dir` sits one
- * level below the rules root the parent name is the rule id and the leaf name
- * is the variant; when it sits at the rules root the leaf name is the rule id
- * and there is no variant.
- *
- * The caller supplies `ruleId` / `variantName` so callers that have already
- * walked the tree don't re-derive them. Used both by `discoverFixtures` and
- * by tests that want a single fixture by path.
+ * `ruleId` defaults to `path.basename(dir)` when not provided. `variantName`
+ * defaults to undefined. Both fields are normally supplied by
+ * {@link discoverFixtures}, which has already walked the tree and knows the
+ * rule/variant distinction; callers loading a single fixture by absolute
+ * path can pass them explicitly or accept the basename default.
  */
 export function loadFixture(dir: string, ruleId?: string, variantName?: string): Fixture {
 	const violationPath = path.join(dir, 'violation.sql');
@@ -88,6 +85,7 @@ export function discoverFixtures(rootDir: string): Fixture[] {
  */
 function deepMerge(base: unknown, override: unknown): unknown {
 	if (override === undefined) return base;
+	if (override === null) return base;
 	if (typeof base !== 'object' || base === null || Array.isArray(base)) return override;
 	if (typeof override !== 'object' || override === null || Array.isArray(override)) return override;
 	const result: Record<string, unknown> = { ...(base as Record<string, unknown>) };
