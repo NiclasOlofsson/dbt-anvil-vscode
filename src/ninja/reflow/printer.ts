@@ -5,6 +5,7 @@ import type { DialectSymbols } from '../../ftl/sql-parser';
 import type { IndentPolicy } from './indent-policy';
 import { createCapitalisationState, recaseToken } from './capitalisation';
 import { createAstIndex } from './ast-index';
+import { normaliseTagSpacing } from '../jinja/tag-formatter';
 
 export interface PrinterInput {
 	stream: NinjaSqlToken[];
@@ -218,7 +219,8 @@ export function printDocument(input: PrinterInput): string {
 			// (which doesn't know about `--` / `/*` delimiters).
 			if (inAnyRange(tok.start, commentRanges)) continue;
 			if (!atLineStart) emitSpace();
-			parts.push(source.slice(tok.start, tok.tagEnd));
+			const rawTag = source.slice(tok.start, tok.tagEnd);
+			parts.push(normaliseTagSpacing(rawTag) ?? rawTag);
 			atLineStart = false;
 			prev = tok;
 			prevTypeUpper = 'JINJA';
