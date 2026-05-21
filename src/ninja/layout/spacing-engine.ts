@@ -125,7 +125,17 @@ export function runSpacingEngine(
 		const posPolicy = spec.configLinePosition?.(config) ?? spec.linePosition;
 		if (posPolicy) {
 			const beforeTok = lineText.slice(0, tokStartCol).trim();
-			const afterTok = lineText.slice(tok.col).trim().replace(/^--.*/, '').trim();
+			// For UNION followed by ALL/DISTINCT on the same line, treat the
+			// pair as a single phrase: the "after" boundary sits past the
+			// qualifier, so `union all\n` counts as trailing/alone for UNION.
+			// sqlglot emits these as two separate tokens for some dialects;
+			// without this hop the rule double-fires on canonical output.
+			let afterAnchorCol = tok.col;
+			if (tok.type === 'UNION' && next && next.line === tok.line
+				&& (next.type === 'ALL' || next.type === 'DISTINCT')) {
+				afterAnchorCol = next.col;
+			}
+			const afterTok = lineText.slice(afterAnchorCol).trim().replace(/^--.*/, '').trim();
 			const isLeading = beforeTok === '';
 			const isTrailing = afterTok === '';
 
