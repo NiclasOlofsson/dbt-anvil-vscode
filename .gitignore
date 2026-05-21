@@ -45,3 +45,4 @@ Thumbs.db
 experiments/
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
+.mcp.json

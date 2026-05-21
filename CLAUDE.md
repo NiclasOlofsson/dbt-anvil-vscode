@@ -6,8 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Development
-npm run watch          # Watch mode: esbuild + TypeScript + ESLint in parallel (primary dev loop)
+npm run watch          # Watch mode: esbuild + tsc --noEmit in parallel (primary dev loop)
+npm run watch:lint     # Optional: run ESLint on save (separate process, opt-in)
 npm run compile        # Single dev build with source maps
+npm run build          # Production build (no source maps)
+npm run clean          # Remove dist/ and out/
 npm run typecheck      # TypeScript type-check only
 
 # Quality
@@ -15,8 +18,10 @@ npm run lint           # Check for lint errors
 npm run lint:fix       # Auto-fix lint errors
 
 # Tests
-npm test               # Run full vitest suite
-npm run test:watch     # Watch mode
+npm test                              # Run full vitest suite
+npm run test:watch                    # Watch mode
+npx vitest run src/path/to/file.test.ts   # Single file
+npx vitest run -t "test name pattern"     # Filter by test name
 
 # Before committing
 npm run lint && npm run typecheck && npm test
@@ -33,7 +38,7 @@ dbt Studio is a VS Code extension (TypeScript + persistent Python subprocess) pr
 
 ### Entry Points
 
-- `src/extension.ts` — `activate()` function; wires up all services and providers (~2200 lines, the authoritative blueprint)
+- `src/extension.ts` — `activate()` function; wires up all services and providers (the authoritative wiring blueprint — read this first when tracing how a feature is hooked up)
 - `src/ftl/pyodide-worker.ts` — Worker pool entry point for WASM-based SQL parsing
 - `src/mcp/proxy/index.ts` — Stdio ↔ HTTP proxy Claude Code spawns as its MCP server
 
@@ -60,7 +65,7 @@ All three are bundled by esbuild (`.esbuild.ts`) into `dist/`.
 | **Language providers** | `src/providers/sql/`, `src/providers/yaml/` | All VS Code language features (completion, hover, definition, rename, diagnostics, code lens). Providers are re-registered dynamically when project paths change |
 | **Ninja linter** | `src/ninja/` | ~40 built-in SQL style/quality rules; full-workspace scanner; separate editor panel |
 | **Views & UI** | `src/views/` | Model Explorer, interactive lineage graph (D3/dagre), test explorer, profiler results, query result panel |
-| **Copilot tools** | `src/tools/` | 14 language model tools in 4 toolsets: Project & Resources, Lineage & Impact, Database, Execution |
+| **Copilot tools** | `src/tools/` | Language model tools in 4 toolsets: Project & Resources, Lineage & Impact, Database, Execution. One file per tool — add new ones via `src/tools/index.ts` |
 | **MCP subsystem** | `src/mcp/` | Exposes the same tools to Claude Code (and any MCP client) via a stdio proxy → in-host HTTP server. Shares the registry with Copilot so schemas never drift |
 | **Debug adapter** | `src/dbt/debug-adapter.ts` | Debug Adapter Protocol for CTE stepping |
 | **Caching** | `src/dbt/compile-cache.ts`, `src/dbt/describe-cache.ts`, persistence files | Compile results, column metadata, and parse results all persisted to disk with mtime/hash validation |
