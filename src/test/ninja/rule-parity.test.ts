@@ -41,7 +41,11 @@ async function runFixture(fx: Fixture): Promise<void> {
 
 	// Assertion 2: formatter produces expected
 	const reflow = reflowDocument(violationDoc, violationModel, fx.config, symbols);
-	const formatted = reflow.edit ? reflow.edit.newText : fx.violation;
+	expect(
+		reflow.edit,
+		`assertion 2 prereq: reflowDocument returned null (reason: ${reflow.reason ?? 'unknown'}) — check model/tokens`,
+	).not.toBeNull();
+	const formatted = reflow.edit!.newText;
 	expect(formatted, `assertion 2: format(violation.sql) === expected.sql`).toBe(fx.expected);
 
 	// Assertion 3: rule clean on expected
