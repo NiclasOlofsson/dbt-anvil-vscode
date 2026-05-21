@@ -1,5 +1,8 @@
 {
 	"recommendations": [
 		"dbaeumer.vscode-eslint"
+	],
+	"unwantedRecommendations": [
+		"nickeolofsson.dbt-studio-vscode"
 	]
 }
