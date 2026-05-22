@@ -42,10 +42,32 @@ export const indentRule: LayoutRule = {
 			}
 		}
 
+		// Lines that sit INSIDE a multi-line `/* ... */` block comment. The
+		// printer copies block-comment bodies verbatim — they're author content,
+		// not formatter-controlled whitespace — so a bullet list indented at 2
+		// spaces survives into the output and trips the "multiple of size"
+		// check. Only interior lines are skipped; the line that holds `/*` and
+		// the line that holds `*/` are still validated since their leading
+		// whitespace is the formatter's own.
+		const blockCommentInteriorLines = new Set<number>();
+		for (let cursor = 0; cursor < ctx.text.length; ) {
+			const open = ctx.text.indexOf('/*', cursor);
+			if (open === -1) break;
+			const close = ctx.text.indexOf('*/', open + 2);
+			if (close === -1) break;
+			const startLine = ctx.document.positionAt(open).line;
+			const endLine   = ctx.document.positionAt(close).line;
+			for (let l = startLine + 1; l < endLine; l++) {
+				blockCommentInteriorLines.add(l);
+			}
+			cursor = close + 2;
+		}
+
 		for (let i = 0; i < ctx.lines.length; i++) {
 			const line = ctx.lines[i];
 			if (line.length === 0 || line.trim().length === 0) continue;
 			if (jinjaLines.has(i)) continue;
+			if (blockCommentInteriorLines.has(i)) continue;
 
 			// Count leading whitespace
 			let spaces = 0;
