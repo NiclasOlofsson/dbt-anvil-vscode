@@ -1,6 +1,6 @@
 import type { NinjaConfig } from '../config';
 import type { NinjaSqlToken } from '../../ftl/ninja-sql-tokens';
-import type { AstPayload } from '../../ftl/parse-result';
+import type { AstPayload, SqlToken } from '../../ftl/parse-result';
 import type { DialectSymbols } from '../../ftl/sql-parser';
 import type { IndentPolicy } from './indent-policy';
 import { createCapitalisationState, recaseToken } from './capitalisation';
@@ -164,6 +164,13 @@ export function printDocument(input: PrinterInput): string {
 	// token receives the deeper indent.
 	let oneShotExtraIndent = 0;
 
+	// One-shot flag: under `commaPosition: 'leading'`, the CTE-separator
+	// comma's iteration peeks forward to drain the leading comments of the
+	// next SQL token (so the comment block sits BETWEEN the CTEs and the
+	// comma leads the identifier on the same line). The next token must
+	// then SKIP its own leading-comment drain to avoid double-emission.
+	let skipNextTokenLeadingComments = false;
+
 	const emitNewline = (): void => {
 		if (atLineStart && parts.length === 0) return;
 		parts.push('\n');
@@ -243,7 +250,11 @@ export function printDocument(input: PrinterInput): string {
 		// by sqlglot's tokenizer as "leading" — they belong ABOVE this
 		// token in the output. Drain them now before the clause/spacing
 		// logic runs, so they inherit the current indent level.
-		if (tok.comments?.length) {
+		//
+		// Exception: when the prior CTE-separator-comma iteration (leading
+		// mode) already drained THIS token's leading comments so they could
+		// sit BETWEEN the CTEs, skip them here to avoid double-emission.
+		if (tok.comments?.length && !skipNextTokenLeadingComments) {
 			for (const c of tok.comments) {
 				if (c.start < tok.start) {
 					emitComment(source.slice(c.start, c.end), 'before');
@@ -254,6 +265,7 @@ export function printDocument(input: PrinterInput): string {
 				pendingNewline = false;
 			}
 		}
+		skipNextTokenLeadingComments = false;
 
 		// ── AST-informed role queries ─────────────────────────────────────
 		// These answer "what is this token's structural role?" using byte-
@@ -430,9 +442,37 @@ export function printDocument(input: PrinterInput): string {
 		// WITH's top paren — that's the whole reason we need AST context
 		// over pure paren-depth tracking.
 		if (isCteSeparatorComma) {
-			// Comma itself stays flush against the preceding token; newline
-			// fires AFTER the comma so the next CTE name starts fresh.
-			// Handled post-emit below.
+			if (config.layout.commaPosition === 'leading') {
+				// Leading mode: break BEFORE the comma so it leads the next
+				// CTE definition (`)\n\n, next_cte as (...)`). Push a literal
+				// `\n` first to insert the blank-line between CTEs.
+				parts.push('\n');
+				// If the next SQL token carries leading comments (e.g. `--
+				// comment\n next_cte as (`), drain those FIRST so the block
+				// sits between the CTEs and the comma lands on the same line
+				// as the identifier. Without this, `, ` would land alone on
+				// a line and the comment would push the identifier off-line,
+				// re-triggering `convention.comma-position`.
+				const nextSqlTok = peekNextSqlToken(stream, streamIndex);
+				if (nextSqlTok?.comments?.length) {
+					for (const c of nextSqlTok.comments) {
+						if (c.start < nextSqlTok.start) {
+							emitComment(source.slice(c.start, c.end), 'before');
+						}
+					}
+					// pendingNewline may have been set by emitComment; clear
+					// it so we don't double-break before the comma. The next
+					// emitNewline below puts the comma on a fresh line.
+					pendingNewline = false;
+					skipNextTokenLeadingComments = true;
+				}
+				// Queue the regular newline so the comma lands flush at the
+				// outer indent on a fresh line. Post-emit blank-line
+				// injection is suppressed below.
+				pendingNewline = true;
+			}
+			// Trailing mode: comma stays flush against the preceding `)` token;
+			// blank line + newline for the next CTE name fire AFTER the emit.
 		}
 
 		// Leading-comma mode: when a SELECT list must wrap, emit a newline
@@ -443,6 +483,32 @@ export function printDocument(input: PrinterInput): string {
 			&& config.layout.commaPosition === 'leading'
 			&& inAnyRange(tok.start, mustWrapSelectRanges)
 		) {
+			// If the next target carries leading comments (block or `--`),
+			// drain them BEFORE the comma so the comma stays adjacent to the
+			// identifier: `\n    -- comment\n    , next_target`. Otherwise
+			// the comment would land between the comma and the target,
+			// stranding the comma at the end of its line and re-triggering
+			// `convention.comma-position`. Mirrors the CTE-separator
+			// handling above.
+			const nextSqlTok = peekNextSqlToken(stream, streamIndex);
+			if (nextSqlTok?.comments?.length && nextSqlTok.comments.some(c => c.start < nextSqlTok.start)) {
+				// Open the continuation line for the comment first so it
+				// sits at the +1-indented target column.
+				pendingNewline = true;
+				oneShotExtraIndent = 1;
+				emitNewline();
+				for (const c of nextSqlTok.comments) {
+					if (c.start < nextSqlTok.start) {
+						emitComment(source.slice(c.start, c.end), 'before');
+					}
+				}
+				skipNextTokenLeadingComments = true;
+				// emitComment will have queued its own pendingNewline; clear
+				// it so the comma below sits on a fresh line via our own
+				// emitNewline call (and so trailing-line comments don't
+				// double-break).
+				pendingNewline = false;
+			}
 			pendingNewline = true;
 			oneShotExtraIndent = 1;
 		}
@@ -550,13 +616,17 @@ export function printDocument(input: PrinterInput): string {
 		}
 
 		if (isCteSeparatorComma) {
-			// Insert a blank line between CTE definitions: emit an extra
-			// newline immediately, then queue the regular pendingNewline
-			// so the next CTE's name lands on a fresh indented line after
-			// the blank. Common dbt style — makes large WITH blocks
-			// readable.
-			parts.push('\n');
-			pendingNewline = true;
+			if (config.layout.commaPosition !== 'leading') {
+				// Trailing mode: insert a blank line between CTE definitions
+				// — emit an extra newline immediately, then queue the regular
+				// pendingNewline so the next CTE's name lands on a fresh
+				// indented line after the blank. Common dbt style — makes
+				// large WITH blocks readable. Under leading mode the blank
+				// line + newline already fired BEFORE the comma (see pre-emit
+				// branch), so this would double-break.
+				parts.push('\n');
+				pendingNewline = true;
+			}
 		} else if (isSelectListComma) {
 			// Break only when the Select will overflow the line. Short
 			// `select a, b from t` stays on one line; long SELECT lists wrap.
@@ -1075,6 +1145,20 @@ function inAnyRange(offset: number, ranges: Array<{ start: number; end: number }
 function peekNextSqlTokenType(stream: NinjaSqlToken[], start: number): string | undefined {
 	for (let i = start + 1; i < stream.length; i++) {
 		if (stream[i].category === 'sql') return stream[i].type.toUpperCase();
+	}
+	return undefined;
+}
+
+/**
+ * Like {@link peekNextSqlTokenType} but returns the full token (so the caller
+ * can inspect attached comments, position, etc.). The return type is narrowed
+ * to the sql-category branch of the {@link NinjaSqlToken} union, so callers
+ * have direct access to {@link SqlToken} fields like `comments`.
+ */
+function peekNextSqlToken(stream: NinjaSqlToken[], start: number): ({ category: 'sql' } & SqlToken) | undefined {
+	for (let i = start + 1; i < stream.length; i++) {
+		const t = stream[i];
+		if (t.category === 'sql') return t;
 	}
 	return undefined;
 }
