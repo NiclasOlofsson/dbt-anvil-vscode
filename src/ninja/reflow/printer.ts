@@ -245,6 +245,24 @@ export function printDocument(input: PrinterInput): string {
 		const typeUpper = tok.type.toUpperCase();
 		const literal = source.slice(tok.start, tok.end + 1);
 
+		// Trailing-operator hoist: under `operatorPosition: 'trailing'` an
+		// AND/OR with a leading line comment would normally land on its own
+		// line after the comment (`'tournament'\n-- note\nand case ...`),
+		// which fails the trailing-position rule (`and` is at line start).
+		// Hoist the AND/OR to trail the previous predicate's line FIRST,
+		// then emit the leading comments, then let the operand continue on
+		// a new indented line. We defer the comment drain below by flagging
+		// it here; the post-emit branch reads the same flag to insert the
+		// drained comments after the operator.
+		const hasLeadingLineComment = tok.comments?.some(c =>
+			c.start < tok.start && (source.slice(c.start, c.end).startsWith('--') || source.slice(c.start, c.end).startsWith('//')),
+		) ?? false;
+		const isPotentialPredicateBoolHoist =
+			(typeUpper === 'AND' || typeUpper === 'OR')
+			&& config.layout.operatorPosition === 'trailing'
+			&& hasLeadingLineComment
+			&& !skipNextTokenLeadingComments;
+
 		// ── Leading comments ──────────────────────────────────────────────
 		// Comments whose byte range precedes the owning token were attached
 		// by sqlglot's tokenizer as "leading" — they belong ABOVE this
@@ -254,7 +272,9 @@ export function printDocument(input: PrinterInput): string {
 		// Exception: when the prior CTE-separator-comma iteration (leading
 		// mode) already drained THIS token's leading comments so they could
 		// sit BETWEEN the CTEs, skip them here to avoid double-emission.
-		if (tok.comments?.length && !skipNextTokenLeadingComments) {
+		// Also skip when we're hoisting a trailing-mode AND/OR — the comment
+		// drain runs post-emit so the comments land below the operator.
+		if (tok.comments?.length && !skipNextTokenLeadingComments && !isPotentialPredicateBoolHoist) {
 			for (const c of tok.comments) {
 				if (c.start < tok.start) {
 					emitComment(source.slice(c.start, c.end), 'before');
@@ -395,13 +415,16 @@ export function printDocument(input: PrinterInput): string {
 
 		// ── Clause/JOIN/set-op newline injection ──────────────────────────
 		if (nonIndentingParenDepth === 0 && parts.length > 0) {
-			if (MAJOR_CLAUSES.has(typeUpper)) {
+			if (MAJOR_CLAUSES.has(typeUpper) || SET_OPERATOR.has(typeUpper)) {
 				// Trailing-comma policy: when the SELECT list wrapped (each target
 				// on its own line) and we're about to emit the clause keyword that
 				// ends the list, inject a trailing comma after the last target so
 				// `convention.trailing-comma` stays clean on formatter output. The
 				// previous token already landed inline; the comma hugs it before
-				// the upcoming newline.
+				// the upcoming newline. SET_OPERATOR keywords (UNION/INTERSECT/
+				// EXCEPT) end a SELECT list the same way major clauses do, so the
+				// injection fires there too — required for FROM-first selects
+				// where UNION is the only boundary after the targets.
 				if (config.layout.commaPosition === 'trailing'
 					&& prev && prev.category === 'sql'
 					&& prevTypeUpper !== 'COMMA'
@@ -417,8 +440,6 @@ export function printDocument(input: PrinterInput): string {
 			} else if (JOIN_START.has(typeUpper) && !JOIN_CONTINUATION_PREV.has(prevTypeUpper)) {
 				pendingNewline = true;
 				if (isIndentedJoinStart) oneShotExtraIndent = 1;
-			} else if (SET_OPERATOR.has(typeUpper)) {
-				pendingNewline = true;
 			}
 		}
 		// AST-driven line breaks that can fire at ANY paren depth because
@@ -523,6 +544,13 @@ export function printDocument(input: PrinterInput): string {
 				indentLevel = Math.max(0, indentLevel - 1);
 			}
 			pendingNewline = true;
+		}
+
+		// Hoist: suppress the pre-emit newline so AND/OR trails the previous
+		// predicate's line. We'll emit the deferred leading comments after
+		// the operator and let post-emit logic break before the operand.
+		if (isPotentialPredicateBoolHoist) {
+			pendingNewline = false;
 		}
 
 		if (pendingNewline) {
@@ -638,9 +666,26 @@ export function printDocument(input: PrinterInput): string {
 				// Indent continuation targets so they sit under the first one.
 				oneShotExtraIndent = 1;
 			}
-		} else if (isPredicateBoolean && config.layout.operatorPosition === 'trailing') {
-			// Trailing mode: the AND/OR already landed inline; break
-			// AFTER it so the next predicate starts a new indented line.
+		} else if ((isPredicateBoolean || isPotentialPredicateBoolHoist) && config.layout.operatorPosition === 'trailing') {
+			// Trailing mode: the AND/OR already landed inline at the end of
+			// the previous predicate's line; break AFTER it so the next
+			// predicate starts a new indented line.
+			//
+			// Hoist case: leading-line comments that were deferred (so AND/OR
+			// could trail the prev line) get drained here, between the
+			// operator and the operand. The comments land below AND/OR but
+			// above the operand at the operand's continuation indent.
+			if (isPotentialPredicateBoolHoist && tok.comments?.length) {
+				pendingNewline = true;
+				oneShotExtraIndent = 1;
+				emitNewline();
+				pendingNewline = false;
+				for (const c of tok.comments) {
+					if (c.start < tok.start) {
+						emitComment(source.slice(c.start, c.end), 'before');
+					}
+				}
+			}
 			pendingNewline = true;
 			oneShotExtraIndent = 1;
 		} else if (typeUpper === 'SELECT' && inAnyRange(tok.start, mustWrapSelectRanges)) {
@@ -691,10 +736,18 @@ function hasInnerEnclosure(enclosing: string[], boundary: string, inner: string[
 	return false;
 }
 
-/** Clause keywords (uppercased) that terminate a SELECT target list at depth 0. */
+/**
+ * Clause keywords (uppercased) that terminate a SELECT target list at depth 0.
+ * Includes set operators (UNION/INTERSECT/EXCEPT and their variants) because a
+ * SELECT list also ends at the boundary of its branch — without this the
+ * must-wrap range scan would walk past the set operator and pull tokens from
+ * the next branch into the wrap range, which in turn mis-anchors the
+ * trailing-comma injection point.
+ */
 const SELECT_LIST_END_KEYWORDS = new Set([
 	'FROM', 'WHERE', 'GROUP_BY', 'GROUP', 'HAVING',
 	'ORDER_BY', 'ORDER', 'LIMIT', 'OFFSET', 'QUALIFY', 'WINDOW', 'FETCH',
+	'UNION', 'UNION_ALL', 'UNION_DISTINCT', 'INTERSECT', 'EXCEPT',
 ]);
 
 /** Previous-token types that mark an L_PAREN as an "indenting" body opener. */
