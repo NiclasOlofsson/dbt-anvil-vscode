@@ -413,6 +413,16 @@ export function printDocument(input: PrinterInput): string {
 				|| inAnyRange(tok.start, multiPredicateJoinOnRanges)
 			: false;
 
+		// ── Jinja → WITH boundary ─────────────────────────────────────────
+		// A top-level `{{ ... }}` followed inline by `with` collides with the
+		// CTE extractor (which scans the first `(` from line start and picks
+		// up the Jinja paren) and triggers `ninja.layout.cte-bracket` on the
+		// formatter's own output. Force a newline so the `with` clause owns
+		// its line whenever a Jinja tag immediately precedes it at top level.
+		if (typeUpper === 'WITH' && prevTypeUpper === 'JINJA' && parenDepth === 0 && !atLineStart) {
+			pendingNewline = true;
+		}
+
 		// ── Clause/JOIN/set-op newline injection ──────────────────────────
 		if (nonIndentingParenDepth === 0 && parts.length > 0) {
 			if (MAJOR_CLAUSES.has(typeUpper) || SET_OPERATOR.has(typeUpper)) {
