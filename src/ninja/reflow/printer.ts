@@ -594,6 +594,10 @@ export function printDocument(input: PrinterInput): string {
 	// Collapse trailing whitespace on each line — the only line-level trivia
 	// worth enforcing unconditionally.
 	output = output.replace(/[ \t]+$/gm, '');
+	// Normalize any CRLF that leaked through (from comment-token source text)
+	// — the printer emits its own breaks as LF, so a mixed-EOL output trips
+	// the trailing-newline rule's EOL-detection heuristic.
+	output = output.replace(/\r\n/g, '\n');
 	// Always end with a single trailing newline.
 	if (!output.endsWith('\n')) output += '\n';
 	return output;
