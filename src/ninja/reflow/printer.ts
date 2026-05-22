@@ -162,6 +162,10 @@ export function printDocument(input: PrinterInput): string {
 	// between CTE definitions doesn't swallow the blank — the blank lands
 	// before the NEXT CTE name regardless of the Jinja in between.
 	let pendingBlankLine = false;
+	// Index in `parts` where the most recent SQL token's literal was pushed.
+	// Used by the end-of-stream trailing-comma injection to insert the comma
+	// between the last SQL token and any trailing comments attached to it.
+	let lastSqlPartsIdx = -1;
 
 	// One-shot extra indent used for `indented_on` / `indented_then` /
 	// `indented_joins`: consumed by the next `emitNewline()` and then
@@ -645,6 +649,7 @@ export function printDocument(input: PrinterInput): string {
 			}
 		}
 		parts.push(recaseToken(emitType, emitLiteral, config, cap, nextSqlTypeUpper));
+		lastSqlPartsIdx = parts.length - 1;
 		atLineStart = false;
 
 		// ── Trailing comments ────────────────────────────────────────────
@@ -751,6 +756,23 @@ export function printDocument(input: PrinterInput): string {
 
 		prev = tok;
 		prevTypeUpper = typeUpper;
+	}
+
+	// End-of-stream trailing-comma injection. The in-loop trailing-comma logic
+	// anchors on the major-clause / set-operator that follows the SELECT list
+	// (FROM, WHERE, UNION, ...). When the SELECT list runs to end-of-stream
+	// (no clause keyword after — e.g. a FROM-first SELECT whose last branch
+	// is the final statement), there's no anchor and the last target lands
+	// without its comma. Splice the comma immediately after the last SQL
+	// token's literal so it lands BEFORE any trailing comments attached to
+	// that token.
+	if (config.layout.commaPosition === 'trailing'
+		&& prev && prev.category === 'sql'
+		&& prevTypeUpper !== 'COMMA'
+		&& lastSqlPartsIdx >= 0
+		&& inAnyRange(prev.end, mustWrapSelectRanges)
+	) {
+		parts.splice(lastSqlPartsIdx + 1, 0, ',');
 	}
 
 	void indentLevel;
