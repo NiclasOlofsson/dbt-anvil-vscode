@@ -61,13 +61,23 @@ export function loadFixture(dir: string, ruleId?: string, variantName?: string):
 export function discoverFixtures(rootDir: string): Fixture[] {
 	if (!fs.existsSync(rootDir)) return [];
 	const out: Fixture[] = [];
-	for (const ruleName of fs.readdirSync(rootDir).sort()) {
-		const ruleDir = path.join(rootDir, ruleName);
+	for (const dirName of fs.readdirSync(rootDir).sort()) {
+		const ruleDir = path.join(rootDir, dirName);
 		if (!fs.statSync(ruleDir).isDirectory()) continue;
+
+		// Sibling-suffix form: `<rule-id>--<variant>` at the top level encodes
+		// an alternate-config branch of an existing rule. Split the suffix off
+		// so the fixture's `ruleId` is the real rule id (used by assertions 1/3
+		// to filter violations by `v.rule`) and `variantName` is preserved for
+		// the test label. Without this split, assertion 1 looks for a rule id
+		// that no rule emits and always fails.
+		const dashDashIdx = dirName.indexOf('--');
+		const ruleName = dashDashIdx >= 0 ? dirName.slice(0, dashDashIdx) : dirName;
+		const variantSuffix = dashDashIdx >= 0 ? dirName.slice(dashDashIdx + 2) : undefined;
 
 		const hasBareViolation = fs.existsSync(path.join(ruleDir, 'violation.sql'));
 		if (hasBareViolation) {
-			out.push(loadFixture(ruleDir, ruleName, undefined));
+			out.push(loadFixture(ruleDir, ruleName, variantSuffix));
 		}
 		for (const child of fs.readdirSync(ruleDir).sort()) {
 			const childDir = path.join(ruleDir, child);
