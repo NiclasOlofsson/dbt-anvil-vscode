@@ -135,6 +135,12 @@ export function printDocument(input: PrinterInput): string {
 	// matching CASE and emit per-WHEN / per-ELSE / per-END breaks, restoring
 	// indent at END.
 	const mustWrapCaseStarts = computeMustWrapCases(stream, config.maxLineLength, policy);
+	// Pre-pass: locate `over (...)` window-function parens whose contained
+	// SELECT target would overflow `maxLineLength` on a single line. Set of
+	// L_PAREN start offsets for the offending `(`s. When the walker hits
+	// one, the paren becomes "indenting" and PARTITION_BY / ORDER_BY inside
+	// break onto their own indented lines.
+	const mustWrapWindowParenStarts = computeMustWrapWindows(stream, config.maxLineLength, policy);
 
 	const parts: string[] = [];
 	const cap = createCapitalisationState(symbols);
@@ -154,6 +160,11 @@ export function printDocument(input: PrinterInput): string {
 	// the consumed extra-indent of the opener's line here and add it to
 	// `indentLevel` on open; the matching close subtracts the same delta.
 	const indentingParenExtras: number[] = [];
+	// Parallel stack: true when the indenting paren is a wide `over (...)`
+	// window. Drives the R_PAREN-emit indent restore — only wide windows
+	// close at the opener's continuation column; CTE bodies / subqueries /
+	// IN-subqueries close at the outer base.
+	const indentingParenIsWindow: boolean[] = [];
 	// Extra-indent currently in effect on the line being built. Set by
 	// `emitNewline()` from whatever `oneShotExtraIndent` it just consumed,
 	// then read by the L_PAREN path to decide whether the next indenting
@@ -490,7 +501,12 @@ export function printDocument(input: PrinterInput): string {
 				|| prevTypeUpper === 'JOIN'
 				|| prevTypeUpper === 'EXISTS'
 				|| ((prevTypeUpper === 'IN' || prevTypeUpper === 'NOT_IN')
-					&& peekNextSqlTokenType(stream, streamIndex) === 'SELECT'));
+					&& peekNextSqlTokenType(stream, streamIndex) === 'SELECT')
+				// Wide `over (...)` window: indent the body so PARTITION BY
+				// and ORDER BY land on their own lines. The matching R_PAREN
+				// closes back to the outer column via the same indenting-
+				// paren machinery used by CTE bodies.
+				|| (prevTypeUpper === 'OVER' && mustWrapWindowParenStarts.has(tok.start)));
 		void innermost;
 		// An R_PAREN that closes the top indenting span needs a newline
 		// BEFORE it so the close sits alone on its own de-indented line.
@@ -585,7 +601,7 @@ export function printDocument(input: PrinterInput): string {
 				if (config.layout.commaPosition === 'trailing'
 					&& prev && prev.category === 'sql'
 					&& prevTypeUpper !== 'COMMA'
-					&& inAnyRange(prev.end, mustWrapSelectRanges)
+					&& isSelectListBoundary(prev.end, parenDepth, mustWrapSelectRanges)
 				) {
 					parts.push(',');
 				}
@@ -739,7 +755,17 @@ export function printDocument(input: PrinterInput): string {
 			if (top === parenDepth) {
 				indentingParens.pop();
 				const extra = indentingParenExtras.pop() ?? 0;
+				const wasWindow = indentingParenIsWindow.pop() ?? false;
 				indentLevel = Math.max(0, indentLevel - 1 - extra);
+				// Wide-window `over (...)` close lands at the SAME column as
+				// the `over (` line (the select-list-continuation column),
+				// not the outer base. Restoring `+extra` for the R_PAREN's
+				// emit produces the canonical sqlfluff layout where `) as
+				// alias` aligns with the function call's `over`. Other
+				// indenting parens (CTE bodies, subqueries, IN-subqueries)
+				// close at the outer base regardless of the opener's
+				// continuation indent — that's the established convention.
+				if (wasWindow && extra > 0) oneShotExtraIndent = extra;
 			}
 			pendingNewline = true;
 		}
@@ -826,6 +852,9 @@ export function printDocument(input: PrinterInput): string {
 				indentLevel += 1 + extra;
 				indentingParens.push(parenDepth);
 				indentingParenExtras.push(extra);
+				indentingParenIsWindow.push(
+					prevTypeUpper === 'OVER' && mustWrapWindowParenStarts.has(tok.start),
+				);
 				pendingNewline = true;
 			} else {
 				// Function call, grouping, IN list — suppresses clause breaks
@@ -953,7 +982,7 @@ export function printDocument(input: PrinterInput): string {
 		&& prev && prev.category === 'sql'
 		&& prevTypeUpper !== 'COMMA'
 		&& lastSqlPartsIdx >= 0
-		&& inAnyRange(prev.end, mustWrapSelectRanges)
+		&& isSelectListBoundary(prev.end, parenDepth, mustWrapSelectRanges)
 	) {
 		parts.splice(lastSqlPartsIdx + 1, 0, ',');
 	}
@@ -1172,6 +1201,152 @@ function computeMustWrapCases(
 }
 
 /**
+ * Token-stream pass that locates `over (...)` window-function parens
+ * whose containing SELECT target would overflow `maxLineLength` on a
+ * single line. Returns a set of L_PAREN `start` offsets (the `(` right
+ * after `OVER`). When membership matches at walk time, the paren is
+ * treated as an indenting paren so the window body wraps onto its own
+ * indented lines with breaks before PARTITION_BY and ORDER_BY.
+ *
+ * Same SELECT-target width measurement as `computeMustWrapCases`: each
+ * SELECT opens a target accumulator; the OVER-paren is marked when the
+ * accumulator at separator time exceeds the line limit.
+ */
+function computeMustWrapWindows(
+	stream: NinjaSqlToken[],
+	maxLineLength: number,
+	policy: IndentPolicy,
+): Set<number> {
+	const out = new Set<number>();
+	const indentWidth = policy.at(1).length || 4;
+
+	let parenDepth = 0;
+	let indentLevel = 0;
+	const indentingParens: number[] = [];
+	let prevSqlType = '';
+
+	type Zone = {
+		openedAtDepth: number;
+		baseIndentLevel: number;
+		curWidth: number;
+		curTokenCount: number;
+		// L_PAREN starts that are window `(` (preceded by OVER) within the
+		// current target. Multiple windows per target is rare but allowed.
+		curWindowParens: number[];
+	};
+	const zones: Zone[] = [];
+
+	const flushTarget = (zone: Zone): void => {
+		if (zone.curWindowParens.length > 0) {
+			const projected = (zone.baseIndentLevel + 1) * indentWidth
+				+ zone.curWidth
+				+ Math.max(0, zone.curTokenCount - 1);
+			if (projected > maxLineLength) {
+				for (const p of zone.curWindowParens) out.add(p);
+			}
+		}
+		zone.curWidth = 0;
+		zone.curTokenCount = 0;
+		zone.curWindowParens = [];
+	};
+
+	for (let i = 0; i < stream.length; i++) {
+		const tok = stream[i];
+		if (tok.category === 'jinja') {
+			if (tok.tagEnd === undefined) continue;
+			const litWidth = tok.tagEnd - tok.start;
+			if (zones.length > 0) {
+				const z = zones[zones.length - 1];
+				z.curWidth += litWidth;
+				z.curTokenCount++;
+			}
+			continue;
+		}
+		const type = tok.type.toUpperCase();
+
+		if (type === 'L_PAREN') {
+			parenDepth++;
+			const isIndenting = INDENTING_PAREN_PREV.has(prevSqlType)
+				&& (
+					prevSqlType !== 'IN' && prevSqlType !== 'NOT_IN'
+						? true
+						: peekNextSqlTokenTypeAt(stream, i) === 'SELECT'
+				);
+			if (isIndenting) {
+				indentLevel++;
+				indentingParens.push(parenDepth);
+			}
+			if (zones.length > 0) {
+				const z = zones[zones.length - 1];
+				z.curWidth += tok.end - tok.start + 1;
+				z.curTokenCount++;
+				if (prevSqlType === 'OVER') z.curWindowParens.push(tok.start);
+			}
+			prevSqlType = type;
+			continue;
+		}
+		if (type === 'R_PAREN') {
+			parenDepth = Math.max(0, parenDepth - 1);
+			while (zones.length > 0 && zones[zones.length - 1].openedAtDepth > parenDepth) {
+				flushTarget(zones[zones.length - 1]);
+				zones.pop();
+			}
+			if (indentingParens.length > 0 && indentingParens[indentingParens.length - 1] === parenDepth + 1) {
+				indentingParens.pop();
+				indentLevel = Math.max(0, indentLevel - 1);
+			}
+			if (zones.length > 0) {
+				const z = zones[zones.length - 1];
+				z.curWidth += tok.end - tok.start + 1;
+				z.curTokenCount++;
+			}
+			prevSqlType = type;
+			continue;
+		}
+
+		if (type === 'SELECT') {
+			zones.push({
+				openedAtDepth: parenDepth,
+				baseIndentLevel: indentLevel,
+				curWidth: 0,
+				curTokenCount: 0,
+				curWindowParens: [],
+			});
+			prevSqlType = type;
+			continue;
+		}
+
+		if (zones.length > 0) {
+			const z = zones[zones.length - 1];
+			if (parenDepth === z.openedAtDepth) {
+				if (type === 'COMMA') {
+					flushTarget(z);
+					prevSqlType = type;
+					continue;
+				}
+				if (SELECT_LIST_END_KEYWORDS.has(type)) {
+					flushTarget(z);
+					zones.pop();
+					prevSqlType = type;
+					continue;
+				}
+			}
+			z.curWidth += tok.end - tok.start + 1;
+			z.curTokenCount++;
+		}
+
+		prevSqlType = type;
+	}
+
+	while (zones.length > 0) {
+		flushTarget(zones[zones.length - 1]);
+		zones.pop();
+	}
+
+	return out;
+}
+
+/**
  * True when `enclosing` contains any class from `inner` AFTER the first
  * occurrence of `boundary`. Used to distinguish e.g. a comma that sits
  * directly under a `With` from one that sits under a `With > Paren > Func`
@@ -1238,8 +1413,8 @@ function computeMustWrapSelects(
 	stream: NinjaSqlToken[],
 	maxLineLength: number,
 	policy: IndentPolicy,
-): Array<{ start: number; end: number }> {
-	const ranges: Array<{ start: number; end: number }> = [];
+): Array<{ start: number; end: number; openedAtDepth: number }> {
+	const ranges: Array<{ start: number; end: number; openedAtDepth: number }> = [];
 	const indentWidth = policy.at(1).length || 4;
 
 	// Track a synthetic indent level: every L_PAREN whose previous SQL token is
@@ -1316,7 +1491,7 @@ function computeMustWrapSelects(
 			// LT09 / layout.select-targets prescription — or (b) the single-
 			// line rendering would exceed maxLineLength.
 			if (topLevelCommas >= 1 || projected > maxLineLength) {
-				ranges.push({ start: tok.start, end: lastEnd });
+				ranges.push({ start: tok.start, end: lastEnd, openedAtDepth: parenDepth });
 			}
 			prevSqlType = type;
 			continue;
@@ -1637,6 +1812,28 @@ function computeMultiPredicateJoinOnRanges(stream: NinjaSqlToken[]): Array<{ sta
 function inAnyRange(offset: number, ranges: Array<{ start: number; end: number }>): boolean {
 	for (const r of ranges) {
 		if (offset >= r.start && offset <= r.end) return true;
+	}
+	return false;
+}
+
+/**
+ * True when the previous token (at byte `offset`, paren depth `parenDepth`)
+ * is the last token of a wrapped SELECT-list target — used by the
+ * trailing-comma injection to anchor the comma after the final target.
+ *
+ * The match requires the offset to fall inside the SELECT's wrap range AND
+ * the current paren depth to equal the SELECT's own depth. The depth check
+ * prevents false positives from clause keywords inside nested indenting
+ * parens — e.g. `order by` inside an `over (partition by ... order by ...)`
+ * window would otherwise be mistaken for the outer SELECT's terminator.
+ */
+function isSelectListBoundary(
+	offset: number,
+	parenDepth: number,
+	ranges: Array<{ start: number; end: number; openedAtDepth: number }>,
+): boolean {
+	for (const r of ranges) {
+		if (offset >= r.start && offset <= r.end && parenDepth === r.openedAtDepth) return true;
 	}
 	return false;
 }
