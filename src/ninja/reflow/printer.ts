@@ -616,8 +616,21 @@ export function printDocument(input: PrinterInput): string {
 					&& prev && prev.category === 'sql'
 					&& prevTypeUpper !== 'COMMA'
 					&& isSelectListBoundary(prev.end, parenDepth, mustWrapSelectRanges)
+					&& lastSqlPartsIdx >= 0
 				) {
-					parts.push(',');
+					// Splice immediately after the last SQL token's literal slot
+					// (NOT plain push) so a leading comment attached to the
+					// upcoming clause keyword — already drained into `parts` by
+					// the leading-comment loop above — doesn't get separated
+					// from its target token. Otherwise:
+					//     last_target
+					//     /* trailing block comment */
+					//     ,
+					// would result, re-triggering `convention.comma-position`
+					// on the formatter's own output. With splice, the comma
+					// lands on the same line as `last_target` before the
+					// comment continues on its own line.
+					parts.splice(lastSqlPartsIdx + 1, 0, ',');
 				}
 				// Clear any one-shot indent the last target-comma queued —
 				// FROM/WHERE/etc land at the clause's base indent, not the
