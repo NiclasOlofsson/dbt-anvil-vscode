@@ -76,7 +76,7 @@ async function runFixture(fx: Fixture): Promise<void> {
 		`assertion 2 prereq: reflowDocument returned null (reason: ${reflow.reason ?? 'unknown'}) — check model/tokens`,
 	).not.toBeNull();
 	const formatted = reflow.edit!.newText;
-	expect(formatted, `assertion 2: format(violation.sql) === expected.sql`).toBe(fx.expected);
+	expect(formatted, 'assertion 2: format(violation.sql) === expected.sql').toBe(fx.expected);
 
 	// Assertion 3: rule clean on expected
 	const expectedModel  = await documentParser.parse(fx.expected);
@@ -90,5 +90,5 @@ async function runFixture(fx: Fixture): Promise<void> {
 	const outputDoc    = mockDocument(formatted);
 	const outputResult = runNinja(outputDoc, outputModel, tokenizeJinja(formatted), fx.config, symbols);
 	const structural = outputResult.violations.filter(v => getRuleFixScopeById(v.rule) === 'structural');
-	expect(structural.map(v => v.rule), `assertion 4: structural rules must be clean on formatter output`).toEqual([]);
+	expect(structural.map(v => v.rule), 'assertion 4: structural rules must be clean on formatter output').toEqual([]);
 }
