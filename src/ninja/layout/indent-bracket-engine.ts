@@ -68,6 +68,15 @@ interface ParenScope {
 	anchorCol: number;
 	/** True once we've seen a clause keyword inside this scope — hands off to indent-body. */
 	clauseSeen: boolean;
+	/**
+	 * True when the opening `(` has non-trivial content following it on the
+	 * same line (e.g. `on ((a = b and\n   c = d)`). Continuation lines inside
+	 * such a paren are a natural predicate/expression wrap, not a "body
+	 * opened on a new line", so the +indent rule doesn't apply to them.
+	 * Only true paren-at-end-of-line shapes (`in (\n    select ...)`) require
+	 * the deeper indent that this engine enforces.
+	 */
+	hasContentAfterOpen: boolean;
 }
 
 export function runBracketIndentEngine(
@@ -92,15 +101,30 @@ export function runBracketIndentEngine(
 
 	const parenStack: ParenScope[] = [];
 
-	for (const tok of sqlTokens) {
+	for (let i = 0; i < sqlTokens.length; i++) {
+		const tok = sqlTokens[i];
 		const type = tok.type;
 
 		if (isLParen(type)) {
 			const opener = firstOnLine.get(tok.line) ?? tok;
+			// Peek ahead on the same line: does any non-comma, non-paren
+			// content follow this `(` before EOL? If so, this is an inline
+			// grouping paren — its content already started on the opener's
+			// line, so subsequent wrapped continuations don't need a +indent.
+			let hasContentAfter = false;
+			for (let j = i + 1; j < sqlTokens.length; j++) {
+				const nx = sqlTokens[j];
+				if (nx.line !== tok.line) break;
+				if (isRParen(nx.type)) continue; // bare `()` doesn't count
+				if (nx.type === 'COMMA' || nx.type === 'SEMICOLON') continue;
+				hasContentAfter = true;
+				break;
+			}
 			parenStack.push({
 				parenLine: tok.line,
 				anchorCol: tokenStartCol(opener),
 				clauseSeen: false,
+				hasContentAfterOpen: hasContentAfter,
 			});
 			continue;
 		}
@@ -132,6 +156,12 @@ export function runBracketIndentEngine(
 		if (SKIP_ANCHOR_TYPES.has(type)) continue;
 		if (scope.parenLine === tok.line) continue; // content on opener's line
 		if (jinjaLines.has(tok.line)) continue;     // jinja-leading line: don't clobber the tag
+		// Inline grouping paren (content followed `(` on the opener's line):
+		// the wrap that produced this line is a predicate/expression
+		// continuation, not a body opening. The printer naturally keeps
+		// continuations at the SAME indent as the opener; enforcing +indent
+		// here would diverge from that and fight the formatter.
+		if (scope.hasContentAfterOpen) continue;
 
 		const expectedCol = scope.anchorCol + indentSize;
 		const actualCol = tokenStartCol(tok);

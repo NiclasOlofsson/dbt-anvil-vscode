@@ -157,6 +157,34 @@ describe('ninja.layout.indent-bracket', () => {
 		expect(check(sql, toks)).toHaveLength(0);
 	});
 
+	it('does not flag predicate continuation inside inline grouping paren', () => {
+		// `on ((a = b and\n   c = d) or ...)` — the outer `(` opens with
+		// content (`(a = b and`) on the same line, so the wrapped
+		// continuation `c = d)` is a natural predicate wrap, not a body
+		// opening. The bracket rule must NOT fire here (the printer wraps
+		// these at the same indent as the opener, which matches how SQL
+		// formatters handle inline grouping parens).
+		//
+		//     on ((a = b and
+		//     c = d))
+		const sql = '    on ((a = b and\n    c = d))';
+		const toks: SqlToken[] = [
+			sqlTok('ON',       4,  5, 0, 5),    // col 4 (first-on-line)
+			sqlTok('L_PAREN',  7,  7, 0, 8),    // outer `(` — has content after
+			sqlTok('L_PAREN',  8,  8, 0, 9),    // inner `(` — has content after
+			sqlTok('VAR',      9,  9, 0, 10),   // 'a'
+			sqlTok('EQ',      11, 11, 0, 12),
+			sqlTok('VAR',     13, 13, 0, 14),   // 'b'
+			sqlTok('AND',     15, 17, 0, 16),
+			sqlTok('VAR',     23, 23, 1, 5),    // 'c' on continuation line col 4
+			sqlTok('EQ',      25, 25, 1, 7),
+			sqlTok('VAR',     27, 27, 1, 9),    // 'd'
+			sqlTok('R_PAREN', 28, 28, 1, 10),
+			sqlTok('R_PAREN', 29, 29, 1, 11),
+		];
+		expect(check(sql, toks)).toHaveLength(0);
+	});
+
 	it('no violations without sqlTokens', () => {
 		const doc = mockDocument('(\nselect *\n)');
 		const m = model({});
