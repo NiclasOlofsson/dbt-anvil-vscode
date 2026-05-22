@@ -170,8 +170,13 @@ export function runSpacingEngine(
 			const gapLen = gapEnd - gapStart;
 			const expectedSpace = spec.spaceBefore === 'space';
 			const actualSpace = gapLen > 0;
+			// Skip when the gap contains non-whitespace content (e.g. a Jinja
+			// `{{ ... }}` or `{% ... %}` blob between the two SQL tokens) —
+			// the rule is about literal SQL spacing, not about content the
+			// jinja-aware token stream filtered out.
+			const gapHasNonWs = gapLen > 0 && text.slice(gapStart, gapEnd).trim().length > 0;
 
-			if (expectedSpace !== actualSpace) {
+			if (expectedSpace !== actualSpace && !gapHasNonWs) {
 				const range = actualSpace
 					? new vscode.Range(document.positionAt(gapStart), document.positionAt(gapEnd))
 					: new vscode.Range(document.positionAt(gapEnd), document.positionAt(gapEnd));
@@ -193,8 +198,11 @@ export function runSpacingEngine(
 			const gapLen = gapEnd - gapStart;
 			const expectedSpace = spec.spaceAfter === 'space';
 			const actualSpace = gapLen > 0;
+			// Same gap-must-be-whitespace guard as space-before: if the gap
+			// holds Jinja or other non-SQL content the rule doesn't apply.
+			const gapHasNonWs = gapLen > 0 && text.slice(gapStart, gapEnd).trim().length > 0;
 
-			if (expectedSpace !== actualSpace) {
+			if (expectedSpace !== actualSpace && !gapHasNonWs) {
 				const range = actualSpace
 					? new vscode.Range(document.positionAt(gapStart), document.positionAt(gapEnd))
 					: new vscode.Range(document.positionAt(gapEnd), document.positionAt(gapEnd));
