@@ -228,8 +228,16 @@ export function printDocument(input: PrinterInput): string {
 			// Force the token-that-follows onto a new line too.
 			pendingNewline = true;
 		} else {
-			// After: hug the preceding token with a single space.
-			emitSpace();
+			// After: hug the preceding token with a single space. If the
+			// previous emit left a pendingNewline (e.g. the prior comment
+			// was a line comment), break first so consecutive trailing line
+			// comments land one per line instead of concatenating.
+			if (pendingNewline) {
+				emitNewline();
+				pendingNewline = false;
+			} else {
+				emitSpace();
+			}
 			parts.push(raw);
 			atLineStart = false;
 			if (isLineComment) pendingNewline = true;

@@ -33,6 +33,24 @@ export const jinjaArgumentSpacingRule: TokenRule = {
 		const tokens = ctx.model.ninjaSqlTokens ?? [];
 		const text = ctx.document.getText();
 
+		// Pre-compute SQL comment byte ranges. The jinja tokenizer is
+		// comment-agnostic and happily flags `{{ ... }}` patterns that appear
+		// inside `-- ...` or `/* ... */` SQL comments — but the formatter
+		// emits those comments verbatim (and never re-normalises the embedded
+		// Jinja). Flagging would produce ghost violations on the formatter's
+		// own output.
+		const commentRanges: Array<{ start: number; end: number }> = [];
+		for (const tok of tokens) {
+			if (tok.category !== 'sql' || !tok.comments?.length) continue;
+			for (const c of tok.comments) commentRanges.push({ start: c.start, end: c.end });
+		}
+		const isInsideComment = (offset: number): boolean => {
+			for (const r of commentRanges) {
+				if (offset >= r.start && offset < r.end) return true;
+			}
+			return false;
+		};
+
 		for (const token of tokens) {
 			if (token.category !== 'jinja') continue;
 
@@ -47,6 +65,11 @@ export const jinjaArgumentSpacingRule: TokenRule = {
 
 			const tagEnd = token.tagEnd;
 			if (tagEnd === undefined) continue;
+
+			// Skip Jinja tags whose span sits inside a SQL comment — the
+			// formatter emits the comment verbatim and never re-normalises
+			// the embedded Jinja, so the rule would fire on its own output.
+			if (isInsideComment(token.start)) continue;
 
 			// Extract the full raw tag text from the document source.
 			const raw = text.slice(token.start, tagEnd);
