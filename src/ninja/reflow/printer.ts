@@ -319,12 +319,25 @@ export function printDocument(input: PrinterInput): string {
 		// Also skip when we're hoisting a trailing-mode AND/OR — the comment
 		// drain runs post-emit so the comments land below the operator.
 		if (tok.comments?.length && !skipNextTokenLeadingComments && !isPotentialPredicateBoolHoist) {
+			// Snapshot the one-shot extra indent queued by the previous
+			// iteration (e.g. a select-list continuation comma sets
+			// `oneShotExtraIndent = 1` so the next target lands at the +1
+			// column). The first emitNewline inside emitComment consumes and
+			// clears that value, so the post-drain emitNewline below would
+			// otherwise land the SQL token at the base indent — exactly the
+			// `indent-body` shape where a `-- comment` between projection
+			// columns dedents the next column.
+			const carriedExtraIndent = oneShotExtraIndent;
 			for (const c of tok.comments) {
 				if (c.start < tok.start) {
 					emitComment(source.slice(c.start, c.end), 'before');
 				}
 			}
 			if (pendingNewline) {
+				// Restore the queued one-shot indent so the SQL token that
+				// follows the comments lands at the SAME column the comments
+				// themselves did, not at the base indent.
+				oneShotExtraIndent = carriedExtraIndent;
 				emitNewline();
 				pendingNewline = false;
 			}
