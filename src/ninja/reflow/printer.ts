@@ -148,6 +148,12 @@ export function printDocument(input: PrinterInput): string {
 	// one, the paren becomes "indenting" and PARTITION_BY / ORDER_BY inside
 	// break onto their own indented lines.
 	const mustWrapWindowParenStarts = computeMustWrapWindows(stream, config.maxLineLength, policy);
+	// Pre-pass: locate top-level arithmetic operators inside SELECT targets
+	// whose single-line projection would exceed `maxLineLength` and that
+	// have no CASE/window/scalar-subquery (those have their own dedicated
+	// wraps). Set of operator-token start offsets. When the walker emits
+	// the operator, it breaks before (leading) or after (trailing) it.
+	const mustWrapWideExprOps = computeMustWrapWideExpressions(stream, config.maxLineLength, policy);
 
 	const parts: string[] = [];
 	const cap = createCapitalisationState(symbols);
@@ -658,6 +664,14 @@ export function printDocument(input: PrinterInput): string {
 			// own indent.
 			pendingNewline = true;
 			oneShotExtraIndent = 1;
+		} else if (mustWrapWideExprOps.has(tok.start) && config.layout.operatorPosition === 'leading') {
+			// Wide-expression arithmetic break (leading): break BEFORE the
+			// top-level operator so it leads the continuation line. +1
+			// indent puts the operand under the target's first line.
+			// Triggered only when the target has no CASE/window/subquery
+			// — those have their own wraps.
+			pendingNewline = true;
+			oneShotExtraIndent = 1;
 		}
 		// A CTE separator comma always breaks, even when nested inside the
 		// WITH's top paren — that's the whole reason we need AST context
@@ -1005,6 +1019,13 @@ export function printDocument(input: PrinterInput): string {
 			// the comma path above. Keeps the wrap shape consistent whether
 			// the trigger is line-length overflow or a future explicit
 			// `always wrap` policy.
+			pendingNewline = true;
+			oneShotExtraIndent = 1;
+		} else if (mustWrapWideExprOps.has(tok.start) && config.layout.operatorPosition === 'trailing') {
+			// Wide-expression arithmetic break (trailing): the operator
+			// already landed inline at the end of the previous line; break
+			// AFTER it so the next operand starts a fresh continuation
+			// line at +1 indent.
 			pendingNewline = true;
 			oneShotExtraIndent = 1;
 		}
@@ -1546,6 +1567,206 @@ function computeMustWrapWindows(
 					continue;
 				}
 			}
+			z.curWidth += tok.end - tok.start + 1;
+			z.curTokenCount++;
+		}
+
+		prevSqlType = type;
+	}
+
+	while (zones.length > 0) {
+		flushTarget(zones[zones.length - 1]);
+		zones.pop();
+	}
+
+	return out;
+}
+
+/**
+ * Locate SELECT targets whose single-line projection exceeds `maxLineLength`
+ * and that consist of a single arithmetic expression (no CASE, no window,
+ * no scalar subquery). For each such target, pick the lowest-precedence
+ * top-level binary operator (PLUS/MINUS preferred over STAR/SLASH) and
+ * return its token start offset. The printer then breaks the line before
+ * (or after, per `operatorPosition`) that single operator.
+ *
+ * Same SELECT-target width measurement as `computeMustWrapCases` /
+ * `computeMustWrapWindows`. "Top-level" means: at the target's base paren
+ * depth — operators inside parenthesized sub-expressions don't qualify.
+ *
+ * This is the residual long-line case: targets like
+ *   `((a - b) * floor(...)) + ((c - d) * floor(...)) as alias`
+ * which are too wide for one line but have no inner construct (CASE,
+ * window, subquery) to wrap. Breaking at the outer `+` produces the
+ * canonical two-line shape.
+ */
+function computeMustWrapWideExpressions(
+	stream: NinjaSqlToken[],
+	maxLineLength: number,
+	policy: IndentPolicy,
+): Set<number> {
+	const out = new Set<number>();
+	const indentWidth = policy.at(1).length || 4;
+
+	let parenDepth = 0;
+	let indentLevel = 0;
+	const indentingParens: number[] = [];
+	let prevSqlType = '';
+
+	type OpEntry = { start: number; type: string };
+	type Zone = {
+		openedAtDepth: number;
+		baseIndentLevel: number;
+		curWidth: number;
+		curTokenCount: number;
+		// Top-level operator candidates within the current target.
+		// `PLUS`/`MINUS` are lowest-precedence; `STAR`/`SLASH` are
+		// fall-back. Indices store both type and start offset so the
+		// flush can pick a low-precedence one if any exist.
+		curArithmeticOps: OpEntry[];
+		// Disqualifiers: targets containing a CASE, a wide-window-eligible
+		// `over (`, or a subquery (`L_PAREN` immediately following SELECT)
+		// are handled by their own dedicated must-wrap passes. Skip them
+		// here to avoid double-wrapping.
+		curHasCase: boolean;
+		curHasWindow: boolean;
+		curHasSubquery: boolean;
+	};
+	const zones: Zone[] = [];
+
+	const flushTarget = (zone: Zone): void => {
+		if (zone.curHasCase || zone.curHasWindow || zone.curHasSubquery) {
+			// Reset and skip; other passes handle these shapes.
+			zone.curWidth = 0;
+			zone.curTokenCount = 0;
+			zone.curArithmeticOps = [];
+			zone.curHasCase = false;
+			zone.curHasWindow = false;
+			zone.curHasSubquery = false;
+			return;
+		}
+		if (zone.curArithmeticOps.length === 0) {
+			zone.curWidth = 0;
+			zone.curTokenCount = 0;
+			return;
+		}
+		const projected = (zone.baseIndentLevel + 1) * indentWidth
+			+ zone.curWidth
+			+ Math.max(0, zone.curTokenCount - 1);
+		if (projected > maxLineLength) {
+			// Prefer lowest precedence (`+`/`-`); fall back to `*`/`/`.
+			const low = zone.curArithmeticOps.find(o => o.type === 'PLUS' || o.type === 'DASH' || o.type === 'MINUS');
+			const pick = low ?? zone.curArithmeticOps[0];
+			out.add(pick.start);
+		}
+		zone.curWidth = 0;
+		zone.curTokenCount = 0;
+		zone.curArithmeticOps = [];
+	};
+
+	for (let i = 0; i < stream.length; i++) {
+		const tok = stream[i];
+		if (tok.category === 'jinja') {
+			if (tok.tagEnd === undefined) continue;
+			const litWidth = tok.tagEnd - tok.start;
+			if (zones.length > 0) {
+				const z = zones[zones.length - 1];
+				z.curWidth += litWidth;
+				z.curTokenCount++;
+			}
+			continue;
+		}
+		const type = tok.type.toUpperCase();
+
+		if (type === 'L_PAREN') {
+			parenDepth++;
+			const isIndenting = isIndentingParenOpen(stream, i, prevSqlType);
+			if (isIndenting) {
+				indentLevel++;
+				indentingParens.push(parenDepth);
+			}
+			if (zones.length > 0) {
+				const z = zones[zones.length - 1];
+				z.curWidth += tok.end - tok.start + 1;
+				z.curTokenCount++;
+				if (prevSqlType === 'OVER') z.curHasWindow = true;
+				// Indenting paren immediately after a comparison op / IN /
+				// EXISTS means a scalar subquery is opening — let that pass
+				// handle the wrap.
+				if (isIndenting && prevSqlType !== 'ALIAS' && prevSqlType !== 'FROM' && prevSqlType !== 'JOIN') {
+					z.curHasSubquery = true;
+				}
+			}
+			prevSqlType = type;
+			continue;
+		}
+		if (type === 'R_PAREN') {
+			parenDepth = Math.max(0, parenDepth - 1);
+			while (zones.length > 0 && zones[zones.length - 1].openedAtDepth > parenDepth) {
+				flushTarget(zones[zones.length - 1]);
+				zones.pop();
+			}
+			if (indentingParens.length > 0 && indentingParens[indentingParens.length - 1] === parenDepth + 1) {
+				indentingParens.pop();
+				indentLevel = Math.max(0, indentLevel - 1);
+			}
+			if (zones.length > 0) {
+				const z = zones[zones.length - 1];
+				z.curWidth += tok.end - tok.start + 1;
+				z.curTokenCount++;
+			}
+			prevSqlType = type;
+			continue;
+		}
+
+		if (type === 'SELECT') {
+			zones.push({
+				openedAtDepth: parenDepth,
+				baseIndentLevel: indentLevel,
+				curWidth: 0,
+				curTokenCount: 0,
+				curArithmeticOps: [],
+				curHasCase: false,
+				curHasWindow: false,
+				curHasSubquery: false,
+			});
+			prevSqlType = type;
+			continue;
+		}
+
+		if (zones.length > 0) {
+			const z = zones[zones.length - 1];
+			if (parenDepth === z.openedAtDepth) {
+				if (type === 'COMMA') {
+					flushTarget(z);
+					prevSqlType = type;
+					continue;
+				}
+				if (SELECT_LIST_END_KEYWORDS.has(type)) {
+					flushTarget(z);
+					zones.pop();
+					prevSqlType = type;
+					continue;
+				}
+				// Top-level arithmetic operator candidates land at the
+				// target's base paren depth — operators nested inside
+				// parens don't qualify (they're inside sub-expressions).
+				if (type === 'PLUS' || type === 'DASH' || type === 'MINUS' || type === 'STAR' || type === 'SLASH') {
+					// A `-` used as unary (start of target, or right after
+					// another operator / `(` / comma) is not a binary
+					// break point. Same for `+`. Guard with a simple
+					// previous-token check.
+					const prevIsOperand = prevSqlType !== '' && prevSqlType !== 'L_PAREN'
+						&& prevSqlType !== 'COMMA' && prevSqlType !== 'SELECT'
+						&& prevSqlType !== 'PLUS' && prevSqlType !== 'DASH'
+						&& prevSqlType !== 'MINUS' && prevSqlType !== 'STAR'
+						&& prevSqlType !== 'SLASH';
+					if (prevIsOperand) {
+						z.curArithmeticOps.push({ start: tok.start, type });
+					}
+				}
+			}
+			if (type === 'CASE') z.curHasCase = true;
 			z.curWidth += tok.end - tok.start + 1;
 			z.curTokenCount++;
 		}
