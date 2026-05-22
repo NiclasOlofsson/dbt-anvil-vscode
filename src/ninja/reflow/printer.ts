@@ -140,6 +140,19 @@ export function printDocument(input: PrinterInput): string {
 	// close paren we pop and decrement, so nested function calls inside a
 	// CTE body don't touch indent.
 	const indentingParens: number[] = [];
+	// Parallel stack of "extra base indent" deltas for each indenting paren.
+	// When an indenting paren opens on a continuation line (the line consumed
+	// `oneShotExtraIndent > 0` at its newline — e.g. an `in (` at the tail of
+	// an AND-chain inside a JOIN ON), the body inside that paren needs to land
+	// deeper than `indentLevel + 1` to clear the continuation column. We push
+	// the consumed extra-indent of the opener's line here and add it to
+	// `indentLevel` on open; the matching close subtracts the same delta.
+	const indentingParenExtras: number[] = [];
+	// Extra-indent currently in effect on the line being built. Set by
+	// `emitNewline()` from whatever `oneShotExtraIndent` it just consumed,
+	// then read by the L_PAREN path to decide whether the next indenting
+	// paren needs an extended base inside.
+	let currentLineExtraIndent = 0;
 	// True between a top-level `WITH` token and the trailing top-level
 	// `SELECT` that consumes the WITH clause. Used as a token-stream
 	// fallback for CTE-separator-comma detection when the AST doesn't
@@ -193,6 +206,7 @@ export function printDocument(input: PrinterInput): string {
 			parts.push('\n');
 		}
 		parts.push(policy.at(indentLevel + oneShotExtraIndent));
+		currentLineExtraIndent = oneShotExtraIndent;
 		oneShotExtraIndent = 0;
 		atLineStart = true;
 	};
@@ -281,6 +295,14 @@ export function printDocument(input: PrinterInput): string {
 			const rawTag = source.slice(tok.start, tok.tagEnd);
 			parts.push(normaliseTagSpacing(rawTag) ?? rawTag);
 			atLineStart = false;
+			// Multi-line `{# ... #}` jinja comments end with `#}` on a fresh
+			// line of the source, but the printer's verbatim emission leaves
+			// us mid-line (the next SQL token would otherwise glue to `#}`,
+			// e.g. `#} customer_agg as (`). Force a newline before the next
+			// non-jinja token at top level so the SQL keeps its own line.
+			if (tok.type === 'jinja_comment_open' && rawTag.includes('\n') && parenDepth === 0) {
+				pendingNewline = true;
+			}
 			prev = tok;
 			prevTypeUpper = 'JINJA';
 			continue;
@@ -288,6 +310,14 @@ export function printDocument(input: PrinterInput): string {
 
 		const typeUpper = tok.type.toUpperCase();
 		const literal = source.slice(tok.start, tok.end + 1);
+
+		// ── AST-informed role queries (hoisted) ───────────────────────────
+		// `enclosing` is needed by the leading-comment drain below (to
+		// detect tokens that will trigger a `+1` continuation indent) AND
+		// by the per-shape role checks further down. Computing it once up
+		// here is cheap (pure AST lookup) and avoids ordering hazards.
+		const innermost = astIndex.empty ? undefined : astIndex.innermostClass(tok.start);
+		const enclosing = astIndex.empty ? [] : astIndex.enclosingClasses(tok.start);
 
 		// Trailing-operator hoist: under `operatorPosition: 'trailing'` an
 		// AND/OR with a leading line comment would normally land on its own
@@ -327,9 +357,46 @@ export function printDocument(input: PrinterInput): string {
 			// otherwise land the SQL token at the base indent — exactly the
 			// `indent-body` shape where a `-- comment` between projection
 			// columns dedents the next column.
-			const carriedExtraIndent = oneShotExtraIndent;
+			//
+			// When the upcoming token will itself trigger a `+1` continuation
+			// indent (a leading-mode AND/OR in a predicate position, an
+			// `indented_on`/`indented_then` keyword, etc.), the in-source
+			// snapshot is 0 — pre-detect those shapes and treat them as if
+			// the +1 had already been queued, so leading comments above the
+			// continuation token sit at the SAME column as the continuation
+			// itself rather than dropping back to the clause's base indent.
+			const willBePredicateBool = (typeUpper === 'AND' || typeUpper === 'OR')
+				&& (
+					(
+						(enclosing.includes('Where') || enclosing.includes('Having') || enclosing.includes('Join'))
+						&& !hasInnerEnclosureAny(enclosing, ['Where', 'Having', 'Join'], ['Case', 'If'])
+					)
+					|| predicateBooleanOffsets.has(tok.start)
+					|| inAnyRange(tok.start, multiPredicateJoinOnRanges)
+				);
+			const willBeJoinOnOrUsing = (typeUpper === 'ON' || typeUpper === 'USING') && policy.indentedOn
+				&& (
+					(enclosing.includes('Join') && (() => {
+						const join = astIndex.findEnclosing(tok.start, 'Join');
+						return !!join && astIndex.containsAny(join.start, join.end, ['And', 'Or']);
+					})())
+					|| inAnyRange(tok.start, multiPredicateJoinOnRanges)
+				);
+			const willTriggerContinuationIndent =
+				(willBePredicateBool && config.layout.operatorPosition === 'leading')
+				|| willBeJoinOnOrUsing
+				|| (typeUpper === 'THEN'
+					&& (enclosing.includes('Case') || enclosing.includes('If'))
+					&& policy.indentedThen);
+			const carriedExtraIndent = oneShotExtraIndent || (willTriggerContinuationIndent ? 1 : 0);
 			for (const c of tok.comments) {
 				if (c.start < tok.start) {
+					// Restore the one-shot indent BEFORE each comment emit so
+					// every line in a multi-line comment block lands at the
+					// same column — the prior iteration's emitNewline consumed
+					// the value, and without restoring it the second comment
+					// drops back to the base indent.
+					oneShotExtraIndent = carriedExtraIndent;
 					emitComment(source.slice(c.start, c.end), 'before');
 				}
 			}
@@ -345,11 +412,8 @@ export function printDocument(input: PrinterInput): string {
 		skipNextTokenLeadingComments = false;
 
 		// ── AST-informed role queries ─────────────────────────────────────
-		// These answer "what is this token's structural role?" using byte-
-		// range ancestry. Empty index (no AST) falls through to pure
-		// token-stream heuristics below.
-		const innermost = astIndex.empty ? undefined : astIndex.innermostClass(tok.start);
-		const enclosing = astIndex.empty ? [] : astIndex.enclosingClasses(tok.start);
+		// `innermost`/`enclosing` are computed above the leading-comment
+		// drain; the per-shape detections below depend on them.
 		// A CTE separator comma sits directly under a `With` (not inside
 		// any paren/subquery/function inside the With). We detect by
 		// checking: inside With AND not inside a Paren / Func / Subquery
@@ -587,6 +651,12 @@ export function printDocument(input: PrinterInput): string {
 				emitNewline();
 				for (const c of nextSqlTok.comments) {
 					if (c.start < nextSqlTok.start) {
+						// Each comment line needs the +1 continuation indent
+						// re-applied — the previous emitComment's internal
+						// emitNewline consumed the one-shot, so without
+						// restoring it the next comment would drop back to
+						// the base indent.
+						oneShotExtraIndent = 1;
 						emitComment(source.slice(c.start, c.end), 'before');
 					}
 				}
@@ -608,7 +678,8 @@ export function printDocument(input: PrinterInput): string {
 			const top = indentingParens[indentingParens.length - 1];
 			if (top === parenDepth) {
 				indentingParens.pop();
-				indentLevel = Math.max(0, indentLevel - 1);
+				const extra = indentingParenExtras.pop() ?? 0;
+				indentLevel = Math.max(0, indentLevel - 1 - extra);
 			}
 			pendingNewline = true;
 		}
@@ -681,8 +752,20 @@ export function printDocument(input: PrinterInput): string {
 		if (typeUpper === 'L_PAREN') {
 			parenDepth++;
 			if (parenOpensIndent) {
-				indentLevel++;
+				// If the line carrying this `(` was already a continuation
+				// (e.g. an `in (` at the tail of a multi-AND JOIN ON chain
+				// inside a CTE body — that line consumed
+				// `oneShotExtraIndent = 1` at its newline), the body inside
+				// the paren needs to land DEEPER than `indentLevel + 1` —
+				// otherwise the body's first line lines up with the
+				// continuation AND/OR siblings rather than nesting under
+				// them. Carry the consumed continuation indent into the
+				// scope so it adds to the body's base column. The matching
+				// close subtracts the same delta.
+				const extra = currentLineExtraIndent;
+				indentLevel += 1 + extra;
 				indentingParens.push(parenDepth);
+				indentingParenExtras.push(extra);
 				pendingNewline = true;
 			} else {
 				// Function call, grouping, IN list — suppresses clause breaks
