@@ -8,7 +8,6 @@ const PROJECT_DIR = path.resolve('/repo/proj');
 function model(overrides: Partial<IndexedModel> & Pick<IndexedModel, 'name'>): IndexedModel {
 	return {
 		uniqueId: `model.pkg.${overrides.name}`,
-		name: overrides.name,
 		packageName: 'pkg',
 		path: path.join(PROJECT_DIR, 'models', `${overrides.name}.sql`),
 		tags: [],
