@@ -10,6 +10,7 @@ function makeRule(id: string, overrides: Partial<RuleViewModel> = {}): RuleViewM
 		description: `Test rule ${id}`,
 		defaultSeverity: 'warning',
 		type: 'token',
+		fixScope: 'none',
 		...overrides,
 	};
 }
