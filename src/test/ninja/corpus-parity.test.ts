@@ -8,8 +8,20 @@ import { FtlDocumentParser } from '../../ftl/ftl-document-parser';
 import { runNinja, getRuleFixScopeById } from '../../ninja/engine';
 import { tokenize as tokenizeJinja } from '../../dbt/jinja-tokenizer';
 import { reflowDocument } from '../../ninja/reflow/engine';
-import { DEFAULT_CONFIG } from '../../ninja/config';
+import { DEFAULT_CONFIG, type NinjaConfig } from '../../ninja/config';
 import { mockDocument } from './helpers';
+
+const CONFIG_VARIANTS: Array<{ name: string; config: NinjaConfig }> = [
+	{ name: 'default', config: DEFAULT_CONFIG },
+	{
+		name: 'alternate',
+		config: {
+			...DEFAULT_CONFIG,
+			layout: { ...DEFAULT_CONFIG.layout, commaPosition: 'leading', operatorPosition: 'trailing' },
+			convention: { ...DEFAULT_CONFIG.convention, unionStyle: 'distinct' },
+		},
+	},
+];
 
 const PYODIDE_DIR  = path.join(__dirname, '..', '..', '..', 'node_modules', 'pyodide');
 const VENDOR_DIR   = path.join(__dirname, '..', '..', '..', 'resources', 'ftl', 'vendor');
@@ -58,29 +70,33 @@ describe.skip('corpus parity', () => {
 		return;
 	}
 
-	for (const file of files) {
-		const label = path.relative(SAMPLES_ROOT, file);
-		it(`formatter output is lint-clean: ${label}`, async () => {
-			const sql = fs.readFileSync(file, 'utf8');
-			const symbols = await documentParser.getDialectSymbols();
-			const violationModel = await documentParser.parse(sql);
-			const violationDoc   = mockDocument(sql);
-			const reflow = reflowDocument(violationDoc, violationModel, DEFAULT_CONFIG, symbols);
-			expect(
-				reflow.edit,
-				`reflowDocument returned null on ${label} (reason: ${reflow.reason ?? 'unknown'})`,
-			).not.toBeNull();
-			const formatted = reflow.edit!.newText;
+	for (const variant of CONFIG_VARIANTS) {
+		describe(`[config: ${variant.name}]`, () => {
+			for (const file of files) {
+				const label = path.relative(SAMPLES_ROOT, file);
+				it(`formatter output is lint-clean: ${label}`, async () => {
+					const sql = fs.readFileSync(file, 'utf8');
+					const symbols = await documentParser.getDialectSymbols();
+					const violationModel = await documentParser.parse(sql);
+					const violationDoc   = mockDocument(sql);
+					const reflow = reflowDocument(violationDoc, violationModel, variant.config, symbols);
+					expect(
+						reflow.edit,
+						`reflowDocument returned null on ${label} (reason: ${reflow.reason ?? 'unknown'})`,
+					).not.toBeNull();
+					const formatted = reflow.edit!.newText;
 
-			const outputModel = await documentParser.parse(formatted);
-			const outputDoc   = mockDocument(formatted);
-			const outputResult = runNinja(outputDoc, outputModel, tokenizeJinja(formatted), DEFAULT_CONFIG, symbols);
-			const structural = outputResult.violations.filter(v => getRuleFixScopeById(v.rule) === 'structural');
+					const outputModel = await documentParser.parse(formatted);
+					const outputDoc   = mockDocument(formatted);
+					const outputResult = runNinja(outputDoc, outputModel, tokenizeJinja(formatted), variant.config, symbols);
+					const structural = outputResult.violations.filter(v => getRuleFixScopeById(v.rule) === 'structural');
 
-			expect(
-				structural.map(v => `${v.rule}@${v.range.start.line + 1}:${v.range.start.character + 1}`),
-				`structural rules must be clean on formatter output of ${label}`,
-			).toEqual([]);
+					expect(
+						structural.map(v => `${v.rule}@${v.range.start.line + 1}:${v.range.start.character + 1}`),
+						`structural rules must be clean on formatter output of ${label} under config ${variant.name}`,
+					).toEqual([]);
+				});
+			}
 		});
 	}
 });
