@@ -121,6 +121,14 @@ export function printDocument(input: PrinterInput): string {
 	// node — without this fallback the predicate-boolean break never fires,
 	// leaving `where a = 1 and b = 2` un-wrapped.
 	const predicateBooleanOffsets = computePredicateBooleans(stream);
+	// Pre-pass token-stream fallback for multi-predicate JOIN-ON detection.
+	// sqlglot's serde leaves `Join.m` empty, so `findEnclosing(... 'Join')`
+	// returns a node with no byte range and `containsAny(... 'And'|'Or')`
+	// can't walk children that also lack ranges. Without this fallback the
+	// `indented_on` multi-predicate split never fires on real parser output,
+	// collapsing `... on a.x = b.x and a.y = b.y and ...` to a single
+	// mega-line.
+	const multiPredicateJoinOnRanges = computeMultiPredicateJoinOnRanges(stream);
 
 	const parts: string[] = [];
 	const cap = createCapitalisationState(symbols);
@@ -325,13 +333,18 @@ export function printDocument(input: PrinterInput): string {
 		// common preference. Respects the config toggle so users who want
 		// ON always on its own line can set `indentedOn: true` and get
 		// the legacy behavior, while the default stays compact.
+		// `indented_on` multi-predicate split: AST path covers hand-built
+		// fixtures where Join/And carry byte ranges; the token-stream
+		// fallback covers real sqlglot output where Join.m is empty.
 		let isJoinOnOrUsing = false;
-		if ((typeUpper === 'ON' || typeUpper === 'USING')
-			&& enclosing.includes('Join')
-			&& policy.indentedOn
-		) {
-			const join = astIndex.findEnclosing(tok.start, 'Join');
-			if (join && astIndex.containsAny(join.start, join.end, ['And', 'Or'])) {
+		if ((typeUpper === 'ON' || typeUpper === 'USING') && policy.indentedOn) {
+			if (enclosing.includes('Join')) {
+				const join = astIndex.findEnclosing(tok.start, 'Join');
+				if (join && astIndex.containsAny(join.start, join.end, ['And', 'Or'])) {
+					isJoinOnOrUsing = true;
+				}
+			}
+			if (!isJoinOnOrUsing && inAnyRange(tok.start, multiPredicateJoinOnRanges)) {
 				isJoinOnOrUsing = true;
 			}
 		}
@@ -365,6 +378,7 @@ export function printDocument(input: PrinterInput): string {
 				(enclosing.includes('Where') || enclosing.includes('Having') || enclosing.includes('Join'))
 					&& !hasInnerEnclosureAny(enclosing, ['Where', 'Having', 'Join'], ['Case', 'If'])
 			) || predicateBooleanOffsets.has(tok.start)
+				|| inAnyRange(tok.start, multiPredicateJoinOnRanges)
 			: false;
 
 		// ── Clause/JOIN/set-op newline injection ──────────────────────────
@@ -910,6 +924,133 @@ function computePredicateBooleans(stream: NinjaSqlToken[]): Set<number> {
 	}
 
 	return out;
+}
+
+/**
+ * Token-stream fallback that locates every JOIN-ON / JOIN-USING region whose
+ * predicate chain contains at least one AND/OR. Returns byte ranges spanning
+ * from the `ON` (or `USING`) token's `start` to the start of the token that
+ * terminates the predicate chain (exclusive boundary, captured as
+ * `end = chain-end-token.start - 1` so `inAnyRange` works).
+ *
+ * Why this exists: sqlglot's serde leaves `Join.m` empty in real parser
+ * output, so the AST path
+ * (`findEnclosing(... 'Join')` + `containsAny(... 'And'|'Or')`) returns
+ * false even when the source clearly has multi-predicate ONs. Without this
+ * fallback, `indented_on` collapses to a single mega-line:
+ *   `inner join u as so on a.x = b.x and a.y = b.y and a.z = b.z`
+ *
+ * Scanning rules (paren-depth aware):
+ *   - A JOIN-cluster start (`JOIN`/`LEFT`/`RIGHT`/`INNER`/`OUTER`/`FULL`/
+ *     `CROSS`) at the current `parenDepth` enters "scanning join" state.
+ *   - The first `ON` or `USING` at the join's paren depth opens the
+ *     predicate chain.
+ *   - Inside the chain, any AND/OR at the same paren depth flips the
+ *     "has predicate operator" flag.
+ *   - The chain closes at the next JOIN-cluster start, the next
+ *     MAJOR_CLAUSES keyword, or when paren depth drops below the join's
+ *     depth (end of enclosing query / function). End of stream also
+ *     closes.
+ *   - If the chain had AND/OR, the range from the ON-token's start to the
+ *     terminator's prev-token end is emitted.
+ *
+ * The chain end byte is set to `terminator.start - 1` so an AND/OR token
+ * sitting AT the chain terminator wouldn't accidentally fall inside.
+ * (Won't happen in practice — terminators are JOIN/MAJOR keywords —
+ * but the boundary stays clean either way.)
+ */
+function computeMultiPredicateJoinOnRanges(stream: NinjaSqlToken[]): Array<{ start: number; end: number }> {
+	const ranges: Array<{ start: number; end: number }> = [];
+	let parenDepth = 0;
+	let prevTypeUpper = '';
+	// Active join chain state. null when not inside a JOIN-ON/USING chain.
+	let chain: { joinDepth: number; onStart: number; hasAndOr: boolean; lastTokEnd: number } | null = null;
+	// `scanningJoin` is true after a JOIN-cluster start has been seen at
+	// `joinDepth` but before its ON/USING. We use it to bind the ON to the
+	// most recent JOIN cluster rather than to any random ON in source order.
+	let scanningJoin: { joinDepth: number } | null = null;
+
+	const closeChain = (): void => {
+		if (chain && chain.hasAndOr) {
+			// `lastTokEnd` was the end byte of the last token in the chain;
+			// the terminator is the current token. The range covers the ON
+			// keyword's start to the byte just before the terminator.
+			ranges.push({ start: chain.onStart, end: chain.lastTokEnd });
+		}
+		chain = null;
+	};
+
+	for (let i = 0; i < stream.length; i++) {
+		const tok = stream[i];
+		if (tok.category !== 'sql') continue;
+		const type = tok.type.toUpperCase();
+
+		if (type === 'L_PAREN') {
+			parenDepth++;
+			prevTypeUpper = type;
+			continue;
+		}
+		if (type === 'R_PAREN') {
+			parenDepth = Math.max(0, parenDepth - 1);
+			// If the closing paren drops us below the active chain's depth,
+			// the chain is done.
+			if (chain && parenDepth < chain.joinDepth) closeChain();
+			if (scanningJoin && parenDepth < scanningJoin.joinDepth) scanningJoin = null;
+			prevTypeUpper = type;
+			continue;
+		}
+
+		// JOIN-cluster start at paren depth 0 (or the join's depth) terminates
+		// any active chain and opens a new scanning state.
+		if (JOIN_START.has(type) && !JOIN_CONTINUATION_PREV.has(prevTypeUpper)) {
+			if (chain && parenDepth === chain.joinDepth) closeChain();
+			scanningJoin = { joinDepth: parenDepth };
+			prevTypeUpper = type;
+			continue;
+		}
+
+		// MAJOR_CLAUSES at the active chain's paren depth closes the chain.
+		if (chain && parenDepth === chain.joinDepth && MAJOR_CLAUSES.has(type)) {
+			closeChain();
+			scanningJoin = null;
+			prevTypeUpper = type;
+			continue;
+		}
+
+		// ON / USING after a JOIN-cluster start opens the predicate chain.
+		if ((type === 'ON' || type === 'USING')
+			&& scanningJoin
+			&& parenDepth === scanningJoin.joinDepth
+		) {
+			// Close any previously open chain (shouldn't happen normally
+			// since JOIN_START already closed it, but defensive).
+			if (chain) closeChain();
+			chain = {
+				joinDepth: parenDepth,
+				onStart: tok.start,
+				hasAndOr: false,
+				lastTokEnd: tok.end,
+			};
+			scanningJoin = null;
+			prevTypeUpper = type;
+			continue;
+		}
+
+		// Inside an open chain, track AND/OR at the chain's depth.
+		if (chain) {
+			if ((type === 'AND' || type === 'OR') && parenDepth === chain.joinDepth) {
+				chain.hasAndOr = true;
+			}
+			chain.lastTokEnd = tok.end;
+		}
+
+		prevTypeUpper = type;
+	}
+
+	// End of stream closes any open chain.
+	if (chain) closeChain();
+
+	return ranges;
 }
 
 /** True when `offset` falls inside any of the provided byte ranges. */
