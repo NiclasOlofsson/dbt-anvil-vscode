@@ -135,6 +135,13 @@ export function printDocument(input: PrinterInput): string {
 	// matching CASE and emit per-WHEN / per-ELSE / per-END breaks, restoring
 	// indent at END.
 	const mustWrapCaseStarts = computeMustWrapCases(stream, config.maxLineLength, policy);
+	// Pre-pass: inside an already-wide CASE, locate THEN tokens whose result
+	// expression keeps the `when COND then RESULT` line over `maxLineLength`.
+	// Returns a set of THEN-token start offsets. When the walker emits the
+	// token that follows such a THEN, it forces a newline and bumps indent
+	// one level so the RESULT lands on its own indented line.
+	const mustBreakAfterThenOffsets = computeMustBreakAfterThens(
+		stream, mustWrapCaseStarts, config.maxLineLength, policy);
 	// Pre-pass: locate `over (...)` window-function parens whose contained
 	// SELECT target would overflow `maxLineLength` on a single line. Set of
 	// L_PAREN start offsets for the offending `(`s. When the walker hits
@@ -738,6 +745,22 @@ export function printDocument(input: PrinterInput): string {
 		if (isInsideWideCase && (typeUpper === 'WHEN' || typeUpper === 'ELSE')) {
 			pendingNewline = true;
 		}
+		// Wide-THEN body wrap: when the just-emitted THEN's start is in
+		// `mustBreakAfterThenOffsets`, the result expression follows on its
+		// own line one indent deeper than THEN's column. Fires for the
+		// FIRST token after THEN (the start of the result expression);
+		// subsequent tokens flow inline until the next WHEN/ELSE/END break.
+		// Skip when the next token IS the closing keyword (defensive: would
+		// otherwise insert an empty indented line before WHEN/ELSE/END,
+		// although in practice a THEN with empty body shouldn't trigger
+		// the must-break heuristic).
+		if (prev && prev.category === 'sql' && prevTypeUpper === 'THEN'
+			&& mustBreakAfterThenOffsets.has(prev.start)
+			&& typeUpper !== 'WHEN' && typeUpper !== 'ELSE' && typeUpper !== 'END'
+		) {
+			pendingNewline = true;
+			oneShotExtraIndent = 1;
+		}
 		// END for a wide CASE: pop the stack BEFORE the newline so the END
 		// lands at CASE's column. The depth check ensures we only pop when
 		// the END matches the current wide level (nested non-wide CASEs pop
@@ -1197,6 +1220,188 @@ function computeMustWrapCases(
 	while (zones.length > 0) {
 		flushTarget(zones[zones.length - 1]);
 		zones.pop();
+	}
+
+	return out;
+}
+
+/**
+ * Token-stream pass that finds THEN keywords inside already-wrapped CASE
+ * expressions whose `when COND then RESULT` line would still overflow
+ * `maxLineLength`. Returns a set of THEN `start` offsets. The walker uses
+ * this to force a newline + extra indent before the result expression so
+ * it lands on its own line under THEN.
+ *
+ * Algorithm: maintain a stack of open CASE byte ranges with the paren
+ * depth at which the CASE opened. For each THEN whose enclosing CASE start
+ * is in `mustWrapCaseStarts`:
+ *
+ *   1. Walk backward from THEN to the previous WHEN (or CASE for the
+ *      first WHEN) at the same paren depth as THEN. Sum literal widths +
+ *      one space per inter-token gap. That's the prefix.
+ *   2. Walk forward from THEN to the next WHEN/ELSE/END at the same paren
+ *      depth. Sum literal widths + spaces. That's the result expression.
+ *   3. Approximate indent column as `policy.size * 2` — the SELECT-target
+ *      column plus one CASE-body indent. (The actual column may differ for
+ *      deeply nested cases but the approximation is conservative; the
+ *      printer's wide-CASE pass already pushed CASE itself onto its own
+ *      line, so we are measuring relative to that body indent.)
+ *   4. Total = indent + prefix + ` then ` + result. If > maxLineLength,
+ *      mark THEN's start offset.
+ */
+function computeMustBreakAfterThens(
+	stream: NinjaSqlToken[],
+	mustWrapCaseStarts: Set<number>,
+	maxLineLength: number,
+	policy: IndentPolicy,
+): Set<number> {
+	const out = new Set<number>();
+	if (mustWrapCaseStarts.size === 0) return out;
+	const indentWidth = policy.at(1).length || 4;
+
+	// Sqlglot's tokenizer emits `THEN` (or `ELSE`/`END`) at any paren depth
+	// the source uses. We track paren depth and the stack of currently-open
+	// CASEs (start offset + paren depth where CASE opened + whether the
+	// `indent-body` engine would consider the surrounding scope "governed"
+	// by a clause keyword). A given THEN belongs to the innermost open CASE
+	// whose openDepth matches the THEN's current paren depth.
+	//
+	// `clauseAtDepth` mirrors `indent-body-engine.ts`'s `clauseStack`:
+	// L_PAREN pushes an empty entry (undefined), R_PAREN pops, and CLAUSE
+	// keywords overwrite the entry at the current depth. If a CASE opens
+	// while the top-of-stack is defined (e.g. SELECT in scope without a
+	// sheltering inner paren), breaking-after-THEN would place result
+	// content at a column the indent-body engine doesn't expect, producing
+	// a false `indent-body` violation on the formatter's own output. The
+	// `hasClauseGovernor` flag captured at CASE open is used to gate the
+	// break.
+	const clauseAtDepth: Array<boolean> = [false];
+	const caseStack: Array<{ start: number; depth: number; hasClauseGovernor: boolean }> = [];
+	let parenDepth = 0;
+
+	const CLAUSE_KEYWORDS = new Set([
+		'SELECT', 'FROM', 'WHERE', 'HAVING',
+		'GROUP_BY', 'GROUP', 'ORDER_BY', 'ORDER',
+		'LIMIT', 'OFFSET', 'QUALIFY', 'WINDOW',
+	]);
+
+	const litWidth = (i: number): number => {
+		const t = stream[i];
+		if (t.category === 'jinja') {
+			return t.tagEnd === undefined ? 0 : t.tagEnd - t.start;
+		}
+		return t.end - t.start + 1;
+	};
+
+	for (let i = 0; i < stream.length; i++) {
+		const tok = stream[i];
+		if (tok.category === 'jinja') continue;
+		const type = tok.type.toUpperCase();
+
+		if (type === 'L_PAREN') {
+			parenDepth++;
+			clauseAtDepth.push(false);
+			continue;
+		}
+		if (type === 'R_PAREN') {
+			parenDepth = Math.max(0, parenDepth - 1);
+			if (clauseAtDepth.length > 1) clauseAtDepth.pop();
+			continue;
+		}
+		if (CLAUSE_KEYWORDS.has(type)) {
+			clauseAtDepth[clauseAtDepth.length - 1] = true;
+		}
+		if (type === 'CASE') {
+			caseStack.push({
+				start: tok.start,
+				depth: parenDepth,
+				hasClauseGovernor: clauseAtDepth[clauseAtDepth.length - 1],
+			});
+			continue;
+		}
+		if (type === 'END') {
+			if (caseStack.length > 0) caseStack.pop();
+			continue;
+		}
+		if (type !== 'THEN') continue;
+
+		// Find the innermost open CASE at this THEN's paren depth.
+		let enclosing: { start: number; depth: number; hasClauseGovernor: boolean } | undefined;
+		for (let k = caseStack.length - 1; k >= 0; k--) {
+			if (caseStack[k].depth === parenDepth) {
+				enclosing = caseStack[k];
+				break;
+			}
+		}
+		if (!enclosing || !mustWrapCaseStarts.has(enclosing.start)) continue;
+		// Gate: only break-after-THEN when the enclosing CASE opened at a
+		// paren level WITHOUT an active clause governor (i.e. inside `round(`
+		// or `(` directly under FROM, etc., where `indent-body-engine`'s
+		// clauseStack top is `undefined`). For a CASE opened directly under
+		// a clause keyword like SELECT, the broken result expression would
+		// land at col `selectCol + 3*indentSize` — three indents deep — but
+		// `ninja.layout.indent-body` expects clause-body content at
+		// `selectCol + 1`, producing a false violation on formatter output.
+		if (enclosing.hasClauseGovernor) continue;
+
+		// Walk backward to previous WHEN (or CASE) at the SAME paren depth.
+		// Track a synthetic depth tracker because we're scanning across an
+		// arbitrary range that may itself contain nested parens.
+		let prefixWidth = 0;
+		let prefixTokens = 0;
+		{
+			let depth = parenDepth;
+			for (let j = i - 1; j >= 0; j--) {
+				const t = stream[j];
+				if (t.category === 'jinja') {
+					prefixWidth += litWidth(j);
+					prefixTokens++;
+					continue;
+				}
+				const tt = t.type.toUpperCase();
+				if (tt === 'R_PAREN') { depth++; }
+				else if (tt === 'L_PAREN') { depth = Math.max(0, depth - 1); }
+				if (depth === parenDepth && (tt === 'WHEN' || tt === 'CASE')) break;
+				prefixWidth += litWidth(j);
+				prefixTokens++;
+			}
+		}
+
+		// Walk forward to next WHEN/ELSE/END at the same paren depth.
+		let resultWidth = 0;
+		let resultTokens = 0;
+		{
+			let depth = parenDepth;
+			for (let j = i + 1; j < stream.length; j++) {
+				const t = stream[j];
+				if (t.category === 'jinja') {
+					resultWidth += litWidth(j);
+					resultTokens++;
+					continue;
+				}
+				const tt = t.type.toUpperCase();
+				if (tt === 'L_PAREN') { depth++; }
+				else if (tt === 'R_PAREN') { depth = Math.max(0, depth - 1); }
+				if (depth === parenDepth && (tt === 'WHEN' || tt === 'ELSE' || tt === 'END')) break;
+				resultWidth += litWidth(j);
+				resultTokens++;
+			}
+		}
+
+		// Indent column for the WHEN-line inside a wide CASE: SELECT-target
+		// (+1) plus CASE-body (+1) = 2 indent steps. Conservative — the
+		// actual column may be deeper for nested cases but we only need a
+		// floor to know "this line definitely overflows".
+		const indent = indentWidth * 2;
+		const whenLit = 4; // "when"
+		const thenLit = 4; // "then"
+		// `when <prefix> then <result>` — inter-token spaces:
+		// 1 between "when" and prefix, (prefixTokens - 1) inside prefix,
+		// 1 between prefix and "then", 1 between "then" and result,
+		// (resultTokens - 1) inside result.
+		const spaces = 1 + Math.max(0, prefixTokens - 1) + 1 + 1 + Math.max(0, resultTokens - 1);
+		const total = indent + whenLit + prefixWidth + thenLit + resultWidth + spaces;
+		if (total > maxLineLength) out.add(tok.start);
 	}
 
 	return out;
