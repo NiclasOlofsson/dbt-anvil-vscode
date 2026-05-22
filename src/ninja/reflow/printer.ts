@@ -129,6 +129,12 @@ export function printDocument(input: PrinterInput): string {
 	// collapsing `... on a.x = b.x and a.y = b.y and ...` to a single
 	// mega-line.
 	const multiPredicateJoinOnRanges = computeMultiPredicateJoinOnRanges(stream);
+	// Pre-pass: locate CASE...END spans whose single-line projected width would
+	// exceed `maxLineLength`. The set of CASE token start offsets identifies
+	// the entries — during the walk we push CASE state on a stack at each
+	// matching CASE and emit per-WHEN / per-ELSE / per-END breaks, restoring
+	// indent at END.
+	const mustWrapCaseStarts = computeMustWrapCases(stream, config.maxLineLength, policy);
 
 	const parts: string[] = [];
 	const cap = createCapitalisationState(symbols);
@@ -185,6 +191,26 @@ export function printDocument(input: PrinterInput): string {
 	// reset to 0, so only the single line introduced by the trigger
 	// token receives the deeper indent.
 	let oneShotExtraIndent = 0;
+
+	// Stack of active wide-CASE wraps. Each entry records the state to
+	// restore at the matching END: the `indentLevel` BEFORE the CASE bumped
+	// it, and the line-extra-indent that the CASE-bearing line carried (so
+	// END lands at exactly CASE's column, not the base indent).
+	// `paren` is the paren depth at which CASE opened — used so nested
+	// non-wide CASEs inside a wide CASE don't accidentally consume the
+	// outer's END.
+	const caseStack: Array<{ savedIndent: number; savedExtra: number }> = [];
+	// Parallel depth tracker: every CASE token (wide or not) pushes onto
+	// this counter; every END pops. Lets us identify which END matches a
+	// wide CASE: a wide CASE pushes `caseStack` AND `nestedCaseDepth`, while
+	// a non-wide CASE only pushes `nestedCaseDepth`. The matching END pops
+	// `caseStack` only when `caseStack.length === nestedCaseDepth` (i.e. the
+	// current CASE level corresponds to the top wide-CASE entry).
+	let nestedCaseDepth = 0;
+	// Mirror stack of "is this CASE level wide". Tracks whether each open
+	// CASE was registered as wide, so the matching END knows whether to
+	// pop `caseStack`. Indexed by CASE nesting depth.
+	const caseIsWide: boolean[] = [];
 
 	// One-shot flag: under `commaPosition: 'leading'`, the CTE-separator
 	// comma's iteration peeks forward to drain the leading comments of the
@@ -671,6 +697,40 @@ export function printDocument(input: PrinterInput): string {
 			oneShotExtraIndent = 1;
 		}
 
+		// ── Wide-CASE expression wrap ──────────────────────────────────────
+		// CASE expressions whose flat single-line projection exceeds the
+		// configured max length are rendered with `when`/`else`/`end` on
+		// their own lines (each WHEN/ELSE one indent deeper than CASE; END
+		// flush with CASE). Triggered by `computeMustWrapCases`. The actual
+		// indent bump happens in the post-emit branch for CASE; here we
+		// just queue the per-keyword breaks.
+		//
+		// `caseStack.length === nestedCaseDepth` means the current open CASE
+		// level corresponds to the top wide-CASE entry. WHEN/ELSE inside a
+		// wide CASE break before the keyword; nested non-wide CASE keywords
+		// stay inline because their level has no matching stack entry.
+		const isInsideWideCase = caseStack.length > 0
+			&& nestedCaseDepth > 0
+			&& caseIsWide[nestedCaseDepth - 1] === true;
+		if (isInsideWideCase && (typeUpper === 'WHEN' || typeUpper === 'ELSE')) {
+			pendingNewline = true;
+		}
+		// END for a wide CASE: pop the stack BEFORE the newline so the END
+		// lands at CASE's column. The depth check ensures we only pop when
+		// the END matches the current wide level (nested non-wide CASEs pop
+		// `nestedCaseDepth` but not `caseStack`).
+		const closesWideCase = typeUpper === 'END'
+			&& nestedCaseDepth > 0
+			&& caseIsWide[nestedCaseDepth - 1] === true;
+		if (closesWideCase) {
+			const restore = caseStack.pop()!;
+			caseIsWide.pop();
+			nestedCaseDepth--;
+			indentLevel = restore.savedIndent;
+			oneShotExtraIndent = restore.savedExtra;
+			pendingNewline = true;
+		}
+
 		// Close-paren for a CTE body / subquery gets its own line at the
 		// outer indent. We decrement `indentLevel` BEFORE the newline so
 		// the paren lands flush with the CTE's `as`, not with its body.
@@ -782,6 +842,33 @@ export function printDocument(input: PrinterInput): string {
 			parenDepth = Math.max(0, parenDepth - 1);
 		} else if (typeUpper === 'SEMICOLON') {
 			pendingNewline = true;
+		} else if (typeUpper === 'CASE') {
+			// Open a new CASE level. If the pre-pass flagged THIS CASE as
+			// wide, push state onto `caseStack` and bump indent so the
+			// upcoming WHEN/ELSE land one level deeper than CASE. The first
+			// WHEN's break comes from the pendingNewline below; subsequent
+			// WHEN/ELSE break via the `isInsideWideCase` pre-emit logic.
+			//
+			// `savedExtra = currentLineExtraIndent` captures the +1
+			// continuation that select-list wrap put on the CASE-bearing
+			// line. We add it to the indent bump so WHEN lands one deeper
+			// than CASE's effective column, and we restore it on END so
+			// END lands at CASE's column (not the SELECT body's base).
+			nestedCaseDepth++;
+			const wide = mustWrapCaseStarts.has(tok.start);
+			caseIsWide.push(wide);
+			if (wide) {
+				const savedExtra = currentLineExtraIndent;
+				caseStack.push({ savedIndent: indentLevel, savedExtra });
+				indentLevel += 1 + savedExtra;
+				pendingNewline = true;
+			}
+		} else if (typeUpper === 'END' && nestedCaseDepth > 0 && !closesWideCase) {
+			// Non-wide CASE: pop the nesting counter alone — `caseStack` was
+			// never pushed for this level. (Wide-case END is handled fully
+			// in the pre-emit branch above, which pops all three.)
+			nestedCaseDepth--;
+			caseIsWide.pop();
 		}
 
 		// Track top-level WITH ... SELECT scope for the CTE-separator
@@ -885,6 +972,203 @@ export function printDocument(input: PrinterInput): string {
 	// Always end with a single trailing newline.
 	if (!output.endsWith('\n')) output += '\n';
 	return output;
+}
+
+/**
+ * Token-stream pass that locates every CASE...END expression that sits in
+ * a context where the surrounding SELECT-list target would overflow
+ * `maxLineLength` if rendered on a single line. Returns a set of
+ * CASE-token `start` offsets — the printer checks membership at the CASE
+ * emit point to decide whether to enter wide-CASE mode (one WHEN/ELSE per
+ * line, END flush with CASE).
+ *
+ * Why a token-stream pass rather than AST: sqlglot's serde frequently drops
+ * `m` (position metadata) on `Case` nodes inside expressions, so
+ * `findEnclosing(... 'Case')` can't recover the CASE's byte range. The
+ * token stream has every CASE/WHEN/END token with its source position
+ * intact, which is sufficient for a width estimate.
+ *
+ * ## Why target-width, not CASE-width
+ *
+ * Measuring just the CASE...END span underestimates the actual line width
+ * because the SELECT target wraps each column onto its own line:
+ *   `        , case when X then Y else Z end as some_column_alias`
+ * The CASE-only width may fit, but the rendered line (indent + comma
+ * prefix + CASE...END + ` as alias`) overflows. We instead measure the
+ * full SELECT target containing the CASE.
+ *
+ * ## Algorithm
+ *
+ *   1. Track SELECT zones (same logic as computeSelectListCommas): each
+ *      SELECT opens a zone at its paren depth; commas at that depth are
+ *      target separators; clause keywords / R_PAREN close the zone.
+ *   2. Inside a zone, accumulate per-target width since the last separator
+ *      (or zone start). Record every CASE-token start offset seen.
+ *   3. At each separator (comma or clause-keyword close), if the target's
+ *      projected width (indent + width + inter-token spaces) exceeds
+ *      `maxLineLength`, mark all the CASEs in that target as wide.
+ *
+ * Nested CASE: a wide outer CASE that contains a non-wide inner CASE will
+ * have BOTH marked wide — they share a target. That's the desired
+ * behaviour: once we're wrapping the outer CASE, wrapping the inner one
+ * too keeps the readability proportional to depth.
+ */
+function computeMustWrapCases(
+	stream: NinjaSqlToken[],
+	maxLineLength: number,
+	policy: IndentPolicy,
+): Set<number> {
+	const out = new Set<number>();
+	const indentWidth = policy.at(1).length || 4;
+
+	// Same indent-tracking heuristic as computeMustWrapSelects.
+	let parenDepth = 0;
+	let indentLevel = 0;
+	const indentingParens: number[] = [];
+	let prevSqlType = '';
+
+	// Stack of active SELECT zones. Each tracks the target accumulator: the
+	// CASE-starts seen since the last separator, plus the running width.
+	// `baseIndentLevel` is the indent at the zone's SELECT — since the
+	// printer's select-list wrap adds +1 to that for each target, we use
+	// `baseIndentLevel + 1` as the column reference for the target width.
+	type Zone = {
+		openedAtDepth: number;
+		baseIndentLevel: number;
+		// In-progress accumulator for the current target (resets at each
+		// separator).
+		curWidth: number;
+		curTokenCount: number;
+		curCaseStarts: number[];
+	};
+	const zones: Zone[] = [];
+
+	const flushTarget = (zone: Zone): void => {
+		if (zone.curCaseStarts.length === 0) {
+			zone.curWidth = 0;
+			zone.curTokenCount = 0;
+			return;
+		}
+		const projected = (zone.baseIndentLevel + 1) * indentWidth
+			+ zone.curWidth
+			+ Math.max(0, zone.curTokenCount - 1);
+		if (projected > maxLineLength) {
+			for (const s of zone.curCaseStarts) out.add(s);
+		}
+		zone.curWidth = 0;
+		zone.curTokenCount = 0;
+		zone.curCaseStarts = [];
+	};
+
+	for (let i = 0; i < stream.length; i++) {
+		const tok = stream[i];
+		// Jinja regions are emitted verbatim by the printer, so they
+		// contribute to line width — accumulate them into the current
+		// SELECT target. Only `*_open` jinja tokens carry `tagEnd` (the
+		// other categories are members of the open's span); we use the
+		// open-to-close character delta as the width contribution.
+		if (tok.category === 'jinja') {
+			if (tok.tagEnd === undefined) continue;
+			const litWidth = tok.tagEnd - tok.start;
+			if (zones.length > 0) {
+				const z = zones[zones.length - 1];
+				z.curWidth += litWidth;
+				z.curTokenCount++;
+			}
+			continue;
+		}
+		const type = tok.type.toUpperCase();
+
+		if (type === 'L_PAREN') {
+			parenDepth++;
+			const isIndenting = INDENTING_PAREN_PREV.has(prevSqlType)
+				&& (
+					prevSqlType !== 'IN' && prevSqlType !== 'NOT_IN'
+						? true
+						: peekNextSqlTokenTypeAt(stream, i) === 'SELECT'
+				);
+			if (isIndenting) {
+				indentLevel++;
+				indentingParens.push(parenDepth);
+			}
+			// Accumulate the paren into the innermost zone's current target.
+			if (zones.length > 0) {
+				const z = zones[zones.length - 1];
+				z.curWidth += tok.end - tok.start + 1;
+				z.curTokenCount++;
+			}
+			prevSqlType = type;
+			continue;
+		}
+		if (type === 'R_PAREN') {
+			// A close-paren may close any zones whose openedAtDepth is now
+			// deeper than the outer paren depth — flush each first.
+			parenDepth = Math.max(0, parenDepth - 1);
+			while (zones.length > 0 && zones[zones.length - 1].openedAtDepth > parenDepth) {
+				flushTarget(zones[zones.length - 1]);
+				zones.pop();
+			}
+			if (indentingParens.length > 0 && indentingParens[indentingParens.length - 1] === parenDepth + 1) {
+				indentingParens.pop();
+				indentLevel = Math.max(0, indentLevel - 1);
+			}
+			// Accumulate into the (now possibly-different) innermost zone.
+			if (zones.length > 0) {
+				const z = zones[zones.length - 1];
+				z.curWidth += tok.end - tok.start + 1;
+				z.curTokenCount++;
+			}
+			prevSqlType = type;
+			continue;
+		}
+
+		if (type === 'SELECT') {
+			zones.push({
+				openedAtDepth: parenDepth,
+				baseIndentLevel: indentLevel,
+				curWidth: 0,
+				curTokenCount: 0,
+				curCaseStarts: [],
+			});
+			prevSqlType = type;
+			continue;
+		}
+
+		if (zones.length > 0) {
+			const z = zones[zones.length - 1];
+			// Target boundary at the active zone's depth: flush, then start a
+			// new target. The clause-keyword case ALSO closes the zone.
+			if (parenDepth === z.openedAtDepth) {
+				if (type === 'COMMA') {
+					flushTarget(z);
+					prevSqlType = type;
+					continue;
+				}
+				if (SELECT_LIST_END_KEYWORDS.has(type)) {
+					flushTarget(z);
+					zones.pop();
+					prevSqlType = type;
+					continue;
+				}
+			}
+			// Otherwise, accumulate the token into the current target.
+			z.curWidth += tok.end - tok.start + 1;
+			z.curTokenCount++;
+			if (type === 'CASE') {
+				z.curCaseStarts.push(tok.start);
+			}
+		}
+
+		prevSqlType = type;
+	}
+
+	// End-of-stream: flush whatever's still pending.
+	while (zones.length > 0) {
+		flushTarget(zones[zones.length - 1]);
+		zones.pop();
+	}
+
+	return out;
 }
 
 /**
