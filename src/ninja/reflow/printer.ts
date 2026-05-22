@@ -502,6 +502,13 @@ export function printDocument(input: PrinterInput): string {
 				|| prevTypeUpper === 'EXISTS'
 				|| ((prevTypeUpper === 'IN' || prevTypeUpper === 'NOT_IN')
 					&& peekNextSqlTokenType(stream, streamIndex) === 'SELECT')
+				// Scalar subquery after a comparison operator —
+				// `where x = (select ...)`. Same shape as `IN (select ...)`:
+				// the body deserves its own indented lines because the inner
+				// SELECT can be arbitrarily wide. Gated on the next SQL token
+				// being SELECT so `x = (1 + 2)` parens stay inline.
+				|| (COMPARISON_OPS.has(prevTypeUpper)
+					&& peekNextSqlTokenType(stream, streamIndex) === 'SELECT')
 				// Wide `over (...)` window: indent the body so PARTITION BY
 				// and ORDER BY land on their own lines. The matching R_PAREN
 				// closes back to the outer column via the same indenting-
@@ -1110,12 +1117,7 @@ function computeMustWrapCases(
 
 		if (type === 'L_PAREN') {
 			parenDepth++;
-			const isIndenting = INDENTING_PAREN_PREV.has(prevSqlType)
-				&& (
-					prevSqlType !== 'IN' && prevSqlType !== 'NOT_IN'
-						? true
-						: peekNextSqlTokenTypeAt(stream, i) === 'SELECT'
-				);
+			const isIndenting = isIndentingParenOpen(stream, i, prevSqlType);
 			if (isIndenting) {
 				indentLevel++;
 				indentingParens.push(parenDepth);
@@ -1266,12 +1268,7 @@ function computeMustWrapWindows(
 
 		if (type === 'L_PAREN') {
 			parenDepth++;
-			const isIndenting = INDENTING_PAREN_PREV.has(prevSqlType)
-				&& (
-					prevSqlType !== 'IN' && prevSqlType !== 'NOT_IN'
-						? true
-						: peekNextSqlTokenTypeAt(stream, i) === 'SELECT'
-				);
+			const isIndenting = isIndentingParenOpen(stream, i, prevSqlType);
 			if (isIndenting) {
 				indentLevel++;
 				indentingParens.push(parenDepth);
@@ -1378,8 +1375,37 @@ const SELECT_LIST_END_KEYWORDS = new Set([
 	'UNION', 'UNION_ALL', 'UNION_DISTINCT', 'INTERSECT', 'EXCEPT',
 ]);
 
-/** Previous-token types that mark an L_PAREN as an "indenting" body opener. */
-const INDENTING_PAREN_PREV = new Set(['ALIAS', 'FROM', 'JOIN', 'EXISTS', 'IN', 'NOT_IN']);
+/**
+ * Comparison-operator token types. When a `(` appears immediately after one of
+ * these AND the inside begins with `SELECT`, the parens enclose a scalar
+ * subquery — `where x = (select max(...) from ...)` — and the body should
+ * indent like any other subquery body. Plain `=`-followed-by-literal stays
+ * inline because we gate on the next SQL token being `SELECT`.
+ */
+const COMPARISON_OPS = new Set(['EQ', 'NEQ', 'LT', 'LTE', 'GT', 'GTE']);
+
+/**
+ * Shared paren-indent classifier used by the helper passes (must-wrap CASE,
+ * must-wrap window, must-wrap select). Mirrors the main walker's decision at
+ * `printer.ts` line ~497 so the helpers' indent tracking matches the printer
+ * exactly: ALIAS/FROM/JOIN/EXISTS always indent; IN/NOT_IN and comparison
+ * operators indent only when followed by SELECT (subquery, not scalar list).
+ * OVER-indented windows are handled by their own `mustWrapWindowParenStarts`
+ * check inside the helpers that need it.
+ */
+function isIndentingParenOpen(
+	stream: NinjaSqlToken[],
+	openIdx: number,
+	prevSqlType: string,
+): boolean {
+	if (prevSqlType === 'ALIAS' || prevSqlType === 'FROM' || prevSqlType === 'JOIN' || prevSqlType === 'EXISTS') {
+		return true;
+	}
+	if (prevSqlType === 'IN' || prevSqlType === 'NOT_IN' || COMPARISON_OPS.has(prevSqlType)) {
+		return peekNextSqlTokenTypeAt(stream, openIdx) === 'SELECT';
+	}
+	return false;
+}
 
 /**
  * Walk the sql-only token stream and return the byte range of every SELECT
@@ -1435,13 +1461,9 @@ function computeMustWrapSelects(
 		if (type === 'L_PAREN') {
 			parenDepth++;
 			// Indenting if prev token is ALIAS/FROM/JOIN/EXISTS, OR if it's
-			// IN / NOT_IN followed by a SELECT (subquery, not scalar list).
-			const isIndenting = INDENTING_PAREN_PREV.has(prevSqlType)
-				&& (
-					prevSqlType !== 'IN' && prevSqlType !== 'NOT_IN'
-						? true
-						: peekNextSqlTokenTypeAt(stream, i) === 'SELECT'
-				);
+			// IN / NOT_IN / comparison-op followed by a SELECT (subquery, not
+			// scalar list).
+			const isIndenting = isIndentingParenOpen(stream, i, prevSqlType);
 			if (isIndenting) {
 				indentLevel++;
 				indentingParens.push(parenDepth);
