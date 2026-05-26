@@ -6,6 +6,7 @@ import { toolResult, formatBridgeResult } from './tool-helpers';
 interface SnapshotModelsInput {
 	select?: string;
 	exclude?: string;
+	confirm_all_resources?: boolean;
 }
 
 export class SnapshotModelsTool implements vscode.LanguageModelTool<SnapshotModelsInput> {
@@ -18,7 +19,15 @@ export class SnapshotModelsTool implements vscode.LanguageModelTool<SnapshotMode
 		options: vscode.LanguageModelToolInvocationOptions<SnapshotModelsInput>,
 		token: vscode.CancellationToken,
 	): Promise<vscode.LanguageModelToolResult> {
-		const { select, exclude } = options.input;
+		const { select, exclude, confirm_all_resources } = options.input;
+
+		if (!select && confirm_all_resources !== true) {
+			return toolResult({
+				success: false,
+				error: 'snapshot_models requires either `select` or `confirm_all_resources: true` (explicit opt-in to run every snapshot in the project).',
+			});
+		}
+
 		this.logger.info(`LM Tool: snapshotModels select="${select ?? 'all'}"`);
 
 		const args = ['snapshot'];

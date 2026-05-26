@@ -11,6 +11,7 @@ interface RunModelsInput {
 	cache_selected_only?: boolean;
 	select_state_modified?: boolean;
 	select_state_modified_plus_downstream?: boolean;
+	confirm_all_resources?: boolean;
 }
 
 export class RunModelsTool implements vscode.LanguageModelTool<RunModelsInput> {
@@ -28,7 +29,15 @@ export class RunModelsTool implements vscode.LanguageModelTool<RunModelsInput> {
 			select, exclude, full_refresh, fail_fast,
 			cache_selected_only = true,
 			select_state_modified, select_state_modified_plus_downstream,
+			confirm_all_resources,
 		} = options.input;
+
+		if (!select && !select_state_modified && confirm_all_resources !== true) {
+			return toolResult({
+				success: false,
+				error: 'run_models requires one of: `select` (node selection expression), `select_state_modified: true`, or `confirm_all_resources: true` (explicit opt-in to run every model in the project).',
+			});
+		}
 
 		const { selector, stateArgs } = buildStateSelector(
 			select_state_modified, select_state_modified_plus_downstream, this.stateDir, select,

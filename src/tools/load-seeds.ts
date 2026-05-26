@@ -10,6 +10,7 @@ interface LoadSeedsInput {
 	show?: boolean;
 	select_state_modified?: boolean;
 	select_state_modified_plus_downstream?: boolean;
+	confirm_all_resources?: boolean;
 }
 
 export class LoadSeedsTool implements vscode.LanguageModelTool<LoadSeedsInput> {
@@ -26,7 +27,15 @@ export class LoadSeedsTool implements vscode.LanguageModelTool<LoadSeedsInput> {
 		const {
 			select, exclude, full_refresh, show,
 			select_state_modified, select_state_modified_plus_downstream,
+			confirm_all_resources,
 		} = options.input;
+
+		if (!select && !select_state_modified && confirm_all_resources !== true) {
+			return toolResult({
+				success: false,
+				error: 'load_seeds requires one of: `select`, `select_state_modified: true`, or `confirm_all_resources: true` (explicit opt-in to load every seed; with `full_refresh: true` this drops + recreates all seed tables).',
+			});
+		}
 
 		const { selector, stateArgs } = buildStateSelector(
 			select_state_modified, select_state_modified_plus_downstream, this.stateDir, select,

@@ -1445,10 +1445,11 @@
 				],
 				"inputSchema": {
 					"type": "object",
+					"additionalProperties": false,
 					"properties": {
 						"select": {
 							"type": "string",
-							"description": "Node selection expression (e.g., 'my_model', 'tag:marketing', 'path/to/models'). Optional when using state selection."
+							"description": "Node selection expression (e.g., 'my_model', 'tag:marketing', 'path/to/models'). Optional when using state selection or confirm_all_resources."
 						},
 						"exclude": {
 							"type": "string",
@@ -1473,8 +1474,18 @@
 						"select_state_modified_plus_downstream": {
 							"type": "boolean",
 							"description": "When select_state_modified is true, also include downstream of modified models (state:modified+)"
+						},
+						"confirm_all_resources": {
+							"type": "boolean",
+							"const": true,
+							"description": "Explicit opt-in to run EVERY model in the project. Required when neither `select` nor `select_state_modified` is provided. Set to true only when the user has clearly asked to run the entire project."
 						}
-					}
+					},
+					"anyOf": [
+						{ "required": ["select"] },
+						{ "required": ["select_state_modified"] },
+						{ "required": ["confirm_all_resources"] }
+					]
 				}
 			},
 			{
@@ -1490,6 +1501,7 @@
 				],
 				"inputSchema": {
 					"type": "object",
+					"additionalProperties": false,
 					"properties": {
 						"select": {
 							"type": "string",
@@ -1534,6 +1546,7 @@
 				],
 				"inputSchema": {
 					"type": "object",
+					"additionalProperties": false,
 					"properties": {
 						"select": {
 							"type": "string",
@@ -1589,6 +1602,7 @@
 				],
 				"inputSchema": {
 					"type": "object",
+					"additionalProperties": false,
 					"properties": {
 						"model": {
 							"type": "string",
@@ -1613,6 +1627,7 @@
 				],
 				"inputSchema": {
 					"type": "object",
+					"additionalProperties": false,
 					"properties": {
 						"name": {
 							"type": "string",
@@ -1654,6 +1669,7 @@
 				],
 				"inputSchema": {
 					"type": "object",
+					"additionalProperties": false,
 					"properties": {
 						"model": {
 							"type": "string",
@@ -1696,6 +1712,7 @@
 				],
 				"inputSchema": {
 					"type": "object",
+					"additionalProperties": false,
 					"properties": {
 						"select": {
 							"type": "string",
@@ -1730,6 +1747,7 @@
 				],
 				"inputSchema": {
 					"type": "object",
+					"additionalProperties": false,
 					"properties": {
 						"name": {
 							"type": "string",
@@ -1762,6 +1780,7 @@
 				],
 				"inputSchema": {
 					"type": "object",
+					"additionalProperties": false,
 					"properties": {
 						"run_debug": {
 							"type": "boolean",
@@ -1783,6 +1802,7 @@
 				],
 				"inputSchema": {
 					"type": "object",
+					"additionalProperties": false,
 					"properties": {
 						"sql": {
 							"type": "string",
@@ -1815,6 +1835,7 @@
 				],
 				"inputSchema": {
 					"type": "object",
+					"additionalProperties": false,
 					"properties": {}
 				}
 			},
@@ -1831,6 +1852,7 @@
 				],
 				"inputSchema": {
 					"type": "object",
+					"additionalProperties": false,
 					"properties": {
 						"name": {
 							"type": "string",
@@ -1859,10 +1881,11 @@
 				],
 				"inputSchema": {
 					"type": "object",
+					"additionalProperties": false,
 					"properties": {
 						"select": {
 							"type": "string",
-							"description": "Seed selection (optional, loads all if omitted)"
+							"description": "Seed selection. Required unless select_state_modified or confirm_all_resources is set."
 						},
 						"exclude": {
 							"type": "string",
@@ -1883,8 +1906,18 @@
 						"select_state_modified_plus_downstream": {
 							"type": "boolean",
 							"description": "Also include downstream of modified seeds"
+						},
+						"confirm_all_resources": {
+							"type": "boolean",
+							"const": true,
+							"description": "Explicit opt-in to load EVERY seed in the project (with full_refresh this drops + recreates all seed tables). Required when neither `select` nor `select_state_modified` is provided. Set to true only when the user has clearly asked to load all seeds."
 						}
-					}
+					},
+					"anyOf": [
+						{ "required": ["select"] },
+						{ "required": ["select_state_modified"] },
+						{ "required": ["confirm_all_resources"] }
+					]
 				}
 			},
 			{
@@ -1900,16 +1933,26 @@
 				],
 				"inputSchema": {
 					"type": "object",
+					"additionalProperties": false,
 					"properties": {
 						"select": {
 							"type": "string",
-							"description": "Snapshot selection (optional, runs all if omitted)"
+							"description": "Snapshot selection. Required unless confirm_all_resources is set."
 						},
 						"exclude": {
 							"type": "string",
 							"description": "Snapshots to exclude"
+						},
+						"confirm_all_resources": {
+							"type": "boolean",
+							"const": true,
+							"description": "Explicit opt-in to run EVERY snapshot in the project. Required when `select` is not provided. Set to true only when the user has clearly asked to snapshot everything."
 						}
-					}
+					},
+					"anyOf": [
+						{ "required": ["select"] },
+						{ "required": ["confirm_all_resources"] }
+					]
 				}
 			},
 			{
@@ -1925,6 +1968,7 @@
 				],
 				"inputSchema": {
 					"type": "object",
+					"additionalProperties": false,
 					"properties": {
 						"path": {
 							"type": "string",
@@ -1964,6 +2008,7 @@
 				],
 				"inputSchema": {
 					"type": "object",
+					"additionalProperties": false,
 					"properties": {
 						"query": {
 							"type": "string",
@@ -1992,6 +2037,7 @@
 				],
 				"inputSchema": {
 					"type": "object",
+					"additionalProperties": false,
 					"properties": {
 						"path": {
 							"type": "string",
