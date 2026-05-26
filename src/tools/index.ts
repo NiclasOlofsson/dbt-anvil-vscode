@@ -29,6 +29,7 @@ import { NavigateSymbolTool } from './navigate-symbol';
 
 interface ToolSchema {
 	name: string;
+	displayName?: string;
 	modelDescription?: string;
 	userDescription?: string;
 	inputSchema?: Record<string, unknown>;
@@ -88,6 +89,7 @@ export function registerLanguageModelTools(
 			const schema = schemasByName.get(name);
 			mcpRegistry.register({
 				name,
+				title: schema?.displayName,
 				description: schema?.modelDescription ?? schema?.userDescription ?? '',
 				inputSchema: schema?.inputSchema ?? { type: 'object', properties: {} },
 				tool,

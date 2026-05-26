@@ -9,6 +9,7 @@ import type { McpToolCallResult, McpToolDescriptor } from '../shared/protocol';
  */
 export interface RegistryEntry<TInput = unknown> {
 	name: string;
+	title?: string;
 	description: string;
 	inputSchema: Record<string, unknown>;
 	tool: vscode.LanguageModelTool<TInput>;
@@ -37,6 +38,7 @@ export class McpToolRegistry {
 	describe(): McpToolDescriptor[] {
 		return this.list().map(e => ({
 			name: e.name,
+			...(e.title ? { title: e.title } : {}),
 			description: e.description,
 			inputSchema: e.inputSchema,
 		}));

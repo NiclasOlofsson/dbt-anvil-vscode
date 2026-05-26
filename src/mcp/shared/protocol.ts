@@ -50,6 +50,7 @@ export type JsonRpcMessage = JsonRpcRequest | JsonRpcNotification | JsonRpcRespo
 /** MCP tool descriptor returned by `tools/list`. */
 export interface McpToolDescriptor {
 	name: string;
+	title?: string;
 	description?: string;
 	inputSchema: Record<string, unknown>;
 }
