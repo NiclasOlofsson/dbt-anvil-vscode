@@ -713,11 +713,11 @@
 							"disabled"
 						],
 						"enumDescriptions": [
-							"Register MCP tools automatically when Claude Code is detected (recommended).",
-							"Always register MCP tools, even if Claude Code is not detected.",
-							"Never register MCP tools or write .mcp.json / ~/.claude.json entries."
+							"Start the MCP server and register tools automatically when Claude Code is detected (recommended).",
+							"Always start the MCP server and register tools, even if Claude Code is not detected.",
+							"Never start the MCP server or write .mcp.json / ~/.claude.json entries."
 						],
-						"markdownDescription": "Controls whether dbt Studio registers its tools as an MCP server for Claude Code. In `auto` mode the extension checks whether Claude Code is installed before writing any config files."
+						"markdownDescription": "Controls whether dbt Studio runs its MCP subsystem for Claude Code. In `auto` mode the extension only starts the local MCP server and writes config files when Claude Code is installed; otherwise the subsystem stays dormant."
 					},
 					"dbt-studio.profilesDir": {
 						"type": "string",

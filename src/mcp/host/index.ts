@@ -53,6 +53,11 @@ export class McpSubsystem implements vscode.Disposable {
 			return null;
 		}
 
+		if (!shouldRegisterMcp()) {
+			this.logger.info('MCP subsystem skipped (dbt-studio.mcp.registration = disabled or Claude Code not detected) — no server, no discovery file, no config writes');
+			return { configChanged: false };
+		}
+
 		// Use the raw fsPath as the ~/.claude.json key so it matches whatever
 		// path Claude Code derives from cwd when it runs in this workspace.
 		// Discovery file naming uses workspaceHash() internally, which normalises
@@ -80,11 +85,6 @@ export class McpSubsystem implements vscode.Disposable {
 
 		const proxyScriptPath = path.join(context.extensionPath, 'dist', 'mcp-proxy.js');
 		const input = { workspacePath: this.workspacePath, nodePath: 'node', proxyScriptPath };
-
-		if (!shouldRegisterMcp()) {
-			this.logger.info('MCP registration skipped (dbt-studio.mcp.registration = disabled or Claude Code not detected)');
-			return { configChanged: false };
-		}
 
 		// .mcp.json  → VS Code extension reads this (projects[path] in ~/.claude.json is CLI-only)
 		// ~/.claude.json → CLI reads this (claude mcp / terminal usage)
