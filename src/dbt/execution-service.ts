@@ -59,6 +59,15 @@ const CANCELLABLE_TYPES = new Set<DbtJobType>([
 ]);
 
 /**
+ * Job types where an *active* job can be cancelled by hard-killing and
+ * respawning the bridge. Reserved for long-running user-visible commands
+ * where a kill is worth the bridge restart cost.
+ */
+const HARD_CANCEL_TYPES = new Set<DbtJobType>([
+	'run', 'build', 'test', 'seed', 'snapshot', 'deps',
+]);
+
+/**
  * Types where at most one job per unique key may sit in the queue at a time.
  * When a conflict is found, the higher-priority job survives; on a tie the
  * incoming job replaces the existing one (latest wins for idempotent ops).
@@ -108,9 +117,13 @@ export class DbtExecutionService implements vscode.Disposable {
 		return job.args ? job.type + ':' + job.args.join('\0') : job.type;
 	}
 
-	submit(request: DbtJobRequest): Promise<DbtCommandResult> {
+	submit(request: DbtJobRequest, token?: vscode.CancellationToken): Promise<DbtCommandResult> {
 		if (this._disposed) {
 			return Promise.reject(new Error('Execution service is disposed'));
+		}
+
+		if (token?.isCancellationRequested) {
+			return Promise.reject(new Error('Job cancelled before submission'));
 		}
 
 		return new Promise<DbtCommandResult>((resolve, reject) => {
@@ -155,10 +168,39 @@ export class DbtExecutionService implements vscode.Disposable {
 			if (insertIdx === -1) insertIdx = this._queue.length;
 			this._queue.splice(insertIdx, 0, job);
 
+			if (token) {
+				const tokenSub = token.onCancellationRequested(() => {
+					if (this.cancel(job.id)) return;
+					this.cancelActive(job.id);
+				});
+				const origResolve = job.resolve;
+				const origReject = job.reject;
+				job.resolve = (r) => { tokenSub.dispose(); origResolve(r); };
+				job.reject = (e) => { tokenSub.dispose(); origReject(e); };
+			}
+
 			this.logger.info(`Job queued: [${job.id}] ${job.label} (priority=${job.priority}, origin=${job.origin})`);
 			this._onQueueChanged.fire(this._queue.length);
 			this._processNext();
 		});
+	}
+
+	/**
+	 * Cancel an active job by hard-killing the bridge process. Only effective
+	 * for job types in {@link HARD_CANCEL_TYPES}; for fast in-process work the
+	 * restart cost outweighs the benefit and the call is a no-op.
+	 *
+	 * Returns true when the kill was issued. The job's promise will resolve
+	 * via the bridge's pending-request fail path (not reject).
+	 */
+	cancelActive(jobId: number): boolean {
+		if (!this._activeJob || this._activeJob.id !== jobId) return false;
+		if (!HARD_CANCEL_TYPES.has(this._activeJob.type)) {
+			this.logger.info(`Active job [${jobId}] ${this._activeJob.type} is not hard-cancellable; ignoring cancel`);
+			return false;
+		}
+		this.logger.info(`Hard-cancelling active job [${jobId}] ${this._activeJob.label}`);
+		return this.bridge.killActive(`Job cancelled: ${this._activeJob.label}`);
 	}
 
 	cancel(jobId: number): boolean {

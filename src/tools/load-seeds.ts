@@ -21,7 +21,7 @@ export class LoadSeedsTool implements vscode.LanguageModelTool<LoadSeedsInput> {
 
 	async invoke(
 		options: vscode.LanguageModelToolInvocationOptions<LoadSeedsInput>,
-		_token: vscode.CancellationToken,
+		token: vscode.CancellationToken,
 	): Promise<vscode.LanguageModelToolResult> {
 		const {
 			select, exclude, full_refresh, show,
@@ -49,7 +49,7 @@ export class LoadSeedsTool implements vscode.LanguageModelTool<LoadSeedsInput> {
 			priority: Priority.Tool,
 			origin: 'copilot',
 			label: `seed ${selector ?? 'all'}`,
-		});
+		}, token);
 		return toolResult(formatBridgeResult(result));
 	}
 

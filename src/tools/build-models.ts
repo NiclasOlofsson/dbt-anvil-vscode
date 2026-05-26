@@ -23,7 +23,7 @@ export class BuildModelsTool implements vscode.LanguageModelTool<BuildModelsInpu
 
 	async invoke(
 		options: vscode.LanguageModelToolInvocationOptions<BuildModelsInput>,
-		_token: vscode.CancellationToken,
+		token: vscode.CancellationToken,
 	): Promise<vscode.LanguageModelToolResult> {
 		const {
 			select, exclude, full_refresh, resource_types, fail_fast,
@@ -62,7 +62,7 @@ export class BuildModelsTool implements vscode.LanguageModelTool<BuildModelsInpu
 			priority: Priority.Tool,
 			origin: 'copilot',
 			label: `build ${selector ?? 'all'}`,
-		});
+		}, token);
 
 		return toolResult(formatBridgeResult(result));
 	}

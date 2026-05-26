@@ -22,7 +22,7 @@ export class RunModelsTool implements vscode.LanguageModelTool<RunModelsInput> {
 
 	async invoke(
 		options: vscode.LanguageModelToolInvocationOptions<RunModelsInput>,
-		_token: vscode.CancellationToken,
+		token: vscode.CancellationToken,
 	): Promise<vscode.LanguageModelToolResult> {
 		const {
 			select, exclude, full_refresh, fail_fast,
@@ -56,7 +56,7 @@ export class RunModelsTool implements vscode.LanguageModelTool<RunModelsInput> {
 			priority: Priority.Tool,
 			origin: 'copilot',
 			label: `run ${selector ?? 'all'}`,
-		});
+		}, token);
 
 		return toolResult(formatBridgeResult(result));
 	}

@@ -21,7 +21,7 @@ export class TestModelsTool implements vscode.LanguageModelTool<TestModelsInput>
 
 	async invoke(
 		options: vscode.LanguageModelToolInvocationOptions<TestModelsInput>,
-		_token: vscode.CancellationToken,
+		token: vscode.CancellationToken,
 	): Promise<vscode.LanguageModelToolResult> {
 		const {
 			select, exclude, fail_fast,
@@ -38,7 +38,7 @@ export class TestModelsTool implements vscode.LanguageModelTool<TestModelsInput>
 					priority: Priority.Tool,
 					origin: 'copilot',
 					label: 'generate CTE tests',
-				});
+				}, token);
 				if (genResult.success) {
 					this.logger.info('CTE tests generated before test run');
 				}
@@ -67,7 +67,7 @@ export class TestModelsTool implements vscode.LanguageModelTool<TestModelsInput>
 			priority: Priority.Tool,
 			origin: 'copilot',
 			label: `test ${selector ?? 'all'}`,
-		});
+		}, token);
 		return toolResult(formatBridgeResult(result));
 	}
 

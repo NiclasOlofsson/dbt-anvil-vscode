@@ -402,6 +402,36 @@ export class BridgeRunner {
 		}
 	}
 
+	/**
+	 * Hard-kill the bridge process while a command is in-flight. Resolves the
+	 * pending request with a failure result before killing so callers don't
+	 * hang. The next invoke will respawn the bridge via ensureStarted().
+	 *
+	 * Returns false if there is no in-flight command to cancel.
+	 */
+	killActive(reason = 'Cancelled by user'): boolean {
+		if (!this._process || !this._pendingResolve) return false;
+
+		const resolve = this._pendingResolve;
+		const proc = this._process;
+
+		this._pendingResolve = null;
+		this._process = null;
+		this._ready = false;
+
+		this.logger.info(`Killing bridge process: ${reason}`);
+
+		resolve({
+			success: false,
+			stdout: this._stdoutLines.join('\n'),
+			stderr: this._stderrLines.join('\n'),
+			error: new Error(reason),
+		});
+
+		proc.kill('SIGKILL');
+		return true;
+	}
+
 	get isRunning(): boolean {
 		return this._process !== null && this._ready;
 	}

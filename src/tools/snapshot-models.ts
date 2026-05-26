@@ -16,7 +16,7 @@ export class SnapshotModelsTool implements vscode.LanguageModelTool<SnapshotMode
 
 	async invoke(
 		options: vscode.LanguageModelToolInvocationOptions<SnapshotModelsInput>,
-		_token: vscode.CancellationToken,
+		token: vscode.CancellationToken,
 	): Promise<vscode.LanguageModelToolResult> {
 		const { select, exclude } = options.input;
 		this.logger.info(`LM Tool: snapshotModels select="${select ?? 'all'}"`);
@@ -31,7 +31,7 @@ export class SnapshotModelsTool implements vscode.LanguageModelTool<SnapshotMode
 			priority: Priority.Tool,
 			origin: 'copilot',
 			label: `snapshot ${select ?? 'all'}`,
-		});
+		}, token);
 		return toolResult(formatBridgeResult(result));
 	}
 

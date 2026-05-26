@@ -11,7 +11,7 @@ export class InstallDepsTool implements vscode.LanguageModelTool<Record<string, 
 
 	async invoke(
 		_options: vscode.LanguageModelToolInvocationOptions<Record<string, never>>,
-		_token: vscode.CancellationToken,
+		token: vscode.CancellationToken,
 	): Promise<vscode.LanguageModelToolResult> {
 		this.logger.info('LM Tool: installDeps');
 
@@ -21,7 +21,7 @@ export class InstallDepsTool implements vscode.LanguageModelTool<Record<string, 
 			priority: Priority.Tool,
 			origin: 'copilot',
 			label: 'install deps',
-		});
+		}, token);
 		return toolResult(formatBridgeResult(result));
 	}
 
