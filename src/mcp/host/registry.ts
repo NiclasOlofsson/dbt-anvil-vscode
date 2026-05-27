@@ -1,5 +1,5 @@
 import type * as vscode from 'vscode';
-import type { McpToolCallResult, McpToolDescriptor } from '../shared/protocol';
+import type { McpToolAnnotations, McpToolCallResult, McpToolDescriptor } from '../shared/protocol';
 
 /**
  * A single registry entry. The handler is intentionally the existing
@@ -12,6 +12,7 @@ export interface RegistryEntry<TInput = unknown> {
 	title?: string;
 	description: string;
 	inputSchema: Record<string, unknown>;
+	annotations?: McpToolAnnotations;
 	tool: vscode.LanguageModelTool<TInput>;
 }
 
@@ -41,6 +42,7 @@ export class McpToolRegistry {
 			...(e.title ? { title: e.title } : {}),
 			description: e.description,
 			inputSchema: e.inputSchema,
+			...(e.annotations ? { annotations: e.annotations } : {}),
 		}));
 	}
 

@@ -9,6 +9,7 @@ import type { DescribeCache } from '../dbt/describe-cache';
 import type { DbtQueryService } from '../services/dbt-query-service';
 import type { FtlDocumentParser } from '../ftl/ftl-document-parser';
 import type { McpToolRegistry } from '../mcp/host/registry';
+import type { McpToolAnnotations } from '../mcp/shared/protocol';
 import { RunModelsTool } from './run-models';
 import { TestModelsTool } from './test-models';
 import { BuildModelsTool } from './build-models';
@@ -34,6 +35,44 @@ interface ToolSchema {
 	userDescription?: string;
 	inputSchema?: Record<string, unknown>;
 }
+
+const READ_ONLY: McpToolAnnotations = {
+	readOnlyHint: true,
+	idempotentHint: true,
+	destructiveHint: false,
+};
+
+const DESTRUCTIVE: McpToolAnnotations = {
+	readOnlyHint: false,
+	destructiveHint: true,
+	idempotentHint: false,
+};
+
+const DESTRUCTIVE_IDEMPOTENT: McpToolAnnotations = {
+	readOnlyHint: false,
+	destructiveHint: true,
+	idempotentHint: true,
+};
+
+const TOOL_ANNOTATIONS: Record<string, McpToolAnnotations> = {
+	run_models: DESTRUCTIVE,
+	test_models: READ_ONLY,
+	build_models: DESTRUCTIVE,
+	compile_model: READ_ONLY,
+	get_lineage: READ_ONLY,
+	get_column_lineage: READ_ONLY,
+	list_resources: READ_ONLY,
+	get_resource_info: READ_ONLY,
+	get_project_info: READ_ONLY,
+	query_database: READ_ONLY,
+	install_deps: DESTRUCTIVE_IDEMPOTENT,
+	analyze_impact: READ_ONLY,
+	load_seeds: DESTRUCTIVE,
+	snapshot_models: DESTRUCTIVE,
+	get_diagnostics: READ_ONLY,
+	workspace_symbols: READ_ONLY,
+	navigate_symbol: READ_ONLY,
+};
 
 export function registerLanguageModelTools(
 	context: vscode.ExtensionContext,
@@ -87,11 +126,16 @@ export function registerLanguageModelTools(
 
 		if (mcpRegistry) {
 			const schema = schemasByName.get(name);
+			const behaviour = TOOL_ANNOTATIONS[name];
+			const annotations = behaviour
+				? (schema?.displayName ? { title: schema.displayName, ...behaviour } : behaviour)
+				: undefined;
 			mcpRegistry.register({
 				name,
 				title: schema?.displayName,
 				description: schema?.modelDescription ?? schema?.userDescription ?? '',
 				inputSchema: schema?.inputSchema ?? { type: 'object', properties: {} },
+				annotations,
 				tool,
 			});
 		}

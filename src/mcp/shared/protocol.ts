@@ -47,12 +47,26 @@ export interface JsonRpcErrorResponse {
 export type JsonRpcResponse = JsonRpcSuccessResponse | JsonRpcErrorResponse;
 export type JsonRpcMessage = JsonRpcRequest | JsonRpcNotification | JsonRpcResponse;
 
+/**
+ * Behavioural hints clients can use to render tools with appropriate
+ * affordances (e.g. confirmation prompts on destructive ops, richer display
+ * on read-only ones). All fields optional per the MCP spec.
+ */
+export interface McpToolAnnotations {
+	title?: string;
+	readOnlyHint?: boolean;
+	destructiveHint?: boolean;
+	idempotentHint?: boolean;
+	openWorldHint?: boolean;
+}
+
 /** MCP tool descriptor returned by `tools/list`. */
 export interface McpToolDescriptor {
 	name: string;
 	title?: string;
 	description?: string;
 	inputSchema: Record<string, unknown>;
+	annotations?: McpToolAnnotations;
 }
 
 /** MCP tool result returned by `tools/call`. */
