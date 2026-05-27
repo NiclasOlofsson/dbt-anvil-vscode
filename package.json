@@ -1478,14 +1478,9 @@
 						"confirm_all_resources": {
 							"type": "boolean",
 							"const": true,
-							"description": "Explicit opt-in to run EVERY model in the project. Required when neither `select` nor `select_state_modified` is provided. Set to true only when the user has clearly asked to run the entire project."
+							"description": "Explicit opt-in to run EVERY model in the project. REQUIRED when neither `select` nor `select_state_modified` is provided — the tool will reject the call otherwise. Set to true only when the user has clearly asked to run the entire project."
 						}
-					},
-					"anyOf": [
-						{ "required": ["select"] },
-						{ "required": ["select_state_modified"] },
-						{ "required": ["confirm_all_resources"] }
-					]
+					}
 				}
 			},
 			{
@@ -1910,14 +1905,9 @@
 						"confirm_all_resources": {
 							"type": "boolean",
 							"const": true,
-							"description": "Explicit opt-in to load EVERY seed in the project (with full_refresh this drops + recreates all seed tables). Required when neither `select` nor `select_state_modified` is provided. Set to true only when the user has clearly asked to load all seeds."
+							"description": "Explicit opt-in to load EVERY seed in the project (with full_refresh this drops + recreates all seed tables). REQUIRED when neither `select` nor `select_state_modified` is provided — the tool will reject the call otherwise. Set to true only when the user has clearly asked to load all seeds."
 						}
-					},
-					"anyOf": [
-						{ "required": ["select"] },
-						{ "required": ["select_state_modified"] },
-						{ "required": ["confirm_all_resources"] }
-					]
+					}
 				}
 			},
 			{
@@ -1946,13 +1936,9 @@
 						"confirm_all_resources": {
 							"type": "boolean",
 							"const": true,
-							"description": "Explicit opt-in to run EVERY snapshot in the project. Required when `select` is not provided. Set to true only when the user has clearly asked to snapshot everything."
+							"description": "Explicit opt-in to run EVERY snapshot in the project. REQUIRED when `select` is not provided — the tool will reject the call otherwise. Set to true only when the user has clearly asked to snapshot everything."
 						}
-					},
-					"anyOf": [
-						{ "required": ["select"] },
-						{ "required": ["confirm_all_resources"] }
-					]
+					}
 				}
 			},
 			{
