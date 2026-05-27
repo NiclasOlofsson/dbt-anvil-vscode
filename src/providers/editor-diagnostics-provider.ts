@@ -124,7 +124,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		this._disposables.push(
 			vscode.workspace.onDidOpenTextDocument((doc) => {
 				if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) return;
-				this._validateDocument(doc);
+				void this._validateDocument(doc);
 				this._runNinjaDirect(doc);
 			}),
 			vscode.workspace.onDidChangeTextDocument((e) => {
@@ -150,7 +150,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 					} else {
 						for (const doc of vscode.workspace.textDocuments) {
 							if (doc.languageId !== 'jinja-sql') continue;
-							this._validateDocument(doc);
+							void this._validateDocument(doc);
 							this._runNinjaDirect(doc);
 						}
 					}
@@ -201,7 +201,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 					});
 					for (const uri of staleRefUris) this._refCollection.delete(uri);
 					for (const doc of openSqlDocs) {
-						this._validateRefsOnly(doc);					// Re-validate column diagnostics too — per-doc debounce ensures
+						void this._validateRefsOnly(doc);					// Re-validate column diagnostics too — per-doc debounce ensures
 						// each file gets its own timer, so no file cancels another.
 						if (this.parseService) this._validateColumnsDebounced(doc);
 					}
@@ -269,7 +269,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		// Validate all currently open editors
 		for (const editor of vscode.window.visibleTextEditors) {
 			if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) break;
-			this._validateDocument(editor.document);
+			void this._validateDocument(editor.document);
 			this._runNinjaDirect(editor.document);
 		}
 	}
@@ -281,7 +281,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 
 		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) return;
 		for (const editor of vscode.window.visibleTextEditors) {
-			this._validateDocument(editor.document);
+			void this._validateDocument(editor.document);
 			this._runNinjaDirect(editor.document);
 		}
 	}
@@ -291,21 +291,16 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 	private _validateDocumentDebounced(document: vscode.TextDocument): void {
 		if (!this._startupReady) return;
 		if (this._debounceTimer) clearTimeout(this._debounceTimer);
-		this._debounceTimer = setTimeout(() => this._validateDocument(document), 250);
+		this._debounceTimer = setTimeout(() => { void this._validateDocument(document); }, 250);
 	}
 
-	private _validateDocument(document: vscode.TextDocument): void {
+	private async _validateDocument(document: vscode.TextDocument): Promise<void> {
 		if (!this._startupReady) return;
 		if (document.languageId !== 'jinja-sql') return;
 		if (!this.indexer.index) return;
 
-		const text = document.getText();
-		const commentRanges = computeCommentRanges(text);
-		const diagnostics: vscode.Diagnostic[] = [];
-
-		this._validateRefs(document, text, commentRanges, diagnostics);
-		this._validateSources(document, text, commentRanges, diagnostics);
-
+		const diagnostics = await this._buildRefSourceDiagnostics(document);
+		if (diagnostics === undefined) return;
 		this._refCollection.set(document.uri, diagnostics);
 		this._updateStatusBar();
 
@@ -313,96 +308,104 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		if (this.parseService) {
 			this._validateColumnsDebounced(document);
 		}
-
 	}
 
 	/** Re-validate only ref/source diagnostics (no column validation). Used by onIndexRebuild. */
-	private _validateRefsOnly(document: vscode.TextDocument): void {
+	private async _validateRefsOnly(document: vscode.TextDocument): Promise<void> {
 		if (document.languageId !== 'jinja-sql') return;
 		if (!this.indexer.index) return;
 
-		const text = document.getText();
-		const commentRanges = computeCommentRanges(text);
-		const diagnostics: vscode.Diagnostic[] = [];
-
-		this._validateRefs(document, text, commentRanges, diagnostics);
-		this._validateSources(document, text, commentRanges, diagnostics);
-
+		const diagnostics = await this._buildRefSourceDiagnostics(document);
+		if (diagnostics === undefined) return;
 		this._refCollection.set(document.uri, diagnostics);
 		this.logger.debug(`[diagnostics] ref validation: ${diagnostics.length} issues in ${path.basename(document.fileName)}`);
 	}
 
+	/**
+	 * Build the unknown-ref / unknown-source diagnostic list for a document.
+	 * Returns undefined when no parse model is available (e.g. parseService not
+	 * wired or the document failed to parse) — caller leaves the existing
+	 * collection in place rather than wiping it with a regex fallback that
+	 * couldn't keep up with multi-line tags or jinja conditionals anyway.
+	 */
+	private async _buildRefSourceDiagnostics(
+		document: vscode.TextDocument,
+	): Promise<vscode.Diagnostic[] | undefined> {
+		if (!this.parseService) return undefined;
+		const model = await this.parseService.getDocumentModel(document);
+		if (!model) return undefined;
+
+		const text = document.getText();
+		const commentRanges = computeCommentRanges(text);
+		const diagnostics: vscode.Diagnostic[] = [];
+		this._validateRefs(document, model, commentRanges, diagnostics);
+		this._validateSources(document, model, commentRanges, diagnostics);
+		return diagnostics;
+	}
+
 	private _validateRefs(
 		document: vscode.TextDocument,
-		text: string,
+		model: DocumentModel,
 		commentRanges: CommentRange[],
 		diagnostics: vscode.Diagnostic[],
 	): void {
-		const refRe = /ref\(\s*['"]([^'"]+)['"]\s*\)/g;
-		let match;
-		while ((match = refRe.exec(text)) !== null) {
-			if (isOffsetInComment(match.index, commentRanges)) continue;
-			const modelName = match[1];
-			const models = this.indexer.findModelsByName(modelName);
-			if (models.length === 0) {
-				const nameStart = match.index + match[0].indexOf(modelName);
-				const range = new vscode.Range(
-					document.positionAt(nameStart),
-					document.positionAt(nameStart + modelName.length),
-				);
-				const diag = new vscode.Diagnostic(
-					range,
-					`Model '${modelName}' not found in dbt manifest`,
-					vscode.DiagnosticSeverity.Error,
-				);
-				diag.source = 'dbt';
-				diag.code = 'unknown-ref';
-				diagnostics.push(diag);
-			}
+		for (const ref of model.refs) {
+			const refOffset = document.offsetAt(new vscode.Position(ref.line, ref.col));
+			if (isOffsetInComment(refOffset, commentRanges)) continue;
+			const models = this.indexer.findModelsByName(ref.model);
+			if (models.length > 0) continue;
+			// Prefer the precise model-name span when the extractor recorded it;
+			// fall back to the ref() identifier when not (older parses).
+			const range = ref.modelCol !== undefined && ref.modelEndCol !== undefined
+				? new vscode.Range(ref.line, ref.modelCol, ref.line, ref.modelEndCol)
+				: new vscode.Range(ref.line, ref.col, ref.line, ref.col + 3);
+			const diag = new vscode.Diagnostic(
+				range,
+				`Model '${ref.model}' not found in dbt manifest`,
+				vscode.DiagnosticSeverity.Error,
+			);
+			diag.source = 'dbt';
+			diag.code = 'unknown-ref';
+			diagnostics.push(diag);
 		}
 	}
 
 	private _validateSources(
 		document: vscode.TextDocument,
-		text: string,
+		model: DocumentModel,
 		commentRanges: CommentRange[],
 		diagnostics: vscode.Diagnostic[],
 	): void {
 		const index = this.indexer.index;
 		if (!index) return;
 
-		const sourceRe = /source\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*\)/g;
-		let match;
-		while ((match = sourceRe.exec(text)) !== null) {
-			if (isOffsetInComment(match.index, commentRanges)) continue;
-			const sourceName = match[1];
-			const tableName = match[2];
+		for (const src of model.sources) {
+			const srcOffset = document.offsetAt(new vscode.Position(src.line, src.col));
+			if (isOffsetInComment(srcOffset, commentRanges)) continue;
+			const sourceName = src.sourceName;
+			const tableName = src.tableName;
 
-			// Check all source entries for a match on sourceName + tableName
 			let found = false;
-			for (const src of index.sources.values()) {
-				if (src.sourceName === sourceName && src.name === tableName) {
+			for (const indexedSrc of index.sources.values()) {
+				if (indexedSrc.sourceName === sourceName && indexedSrc.name === tableName) {
 					found = true;
 					break;
 				}
 			}
+			if (found) continue;
 
-			if (!found) {
-				const matchStart = match.index + match[0].indexOf(sourceName);
-				const matchEnd = match.index + match[0].lastIndexOf(tableName) + tableName.length;
-				const range = new vscode.Range(
-					document.positionAt(matchStart),
-					document.positionAt(matchEnd),
-				);
-				const diag = new vscode.Diagnostic(
-					range,
-					`Source '${sourceName}.${tableName}' not found in dbt manifest`,
-					vscode.DiagnosticSeverity.Warning,
-				);
-				diag.source = 'dbt';
-				diag.code = 'unknown-source';
-				diagnostics.push(diag);
-			}
+			// Use the source-name span when recorded, else the source() identifier.
+			const range = src.sourceNameCol !== undefined && src.tableNameEndCol !== undefined
+				? new vscode.Range(src.line, src.sourceNameCol, src.line, src.tableNameEndCol)
+				: new vscode.Range(src.line, src.col, src.line, src.col + 6);
+			const diag = new vscode.Diagnostic(
+				range,
+				`Source '${sourceName}.${tableName}' not found in dbt manifest`,
+				vscode.DiagnosticSeverity.Warning,
+			);
+			diag.source = 'dbt';
+			diag.code = 'unknown-source';
+			diagnostics.push(diag);
 		}
 	}
 

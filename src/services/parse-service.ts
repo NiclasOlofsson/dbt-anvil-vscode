@@ -74,6 +74,44 @@ export interface SourceInfo {
 	jinjaEndCol?: number;
 }
 
+export interface MacroCallArgInfo {
+	/** 0-based line of the argument */
+	line: number;
+	/** 0-based start column of the argument expression */
+	col: number;
+	/** 0-based exclusive end column of the argument expression */
+	endCol: number;
+}
+
+export interface MacroCallInfo {
+	/** Bare macro name (e.g. `pivot` in `{{ dbt_utils.pivot() }}`) */
+	name: string;
+	/** Package qualifier when called as `package.name(...)` */
+	packageName?: string;
+	/** 0-based line of the bare macro identifier */
+	line: number;
+	/** 0-based start column of the bare macro identifier */
+	col: number;
+	/** 0-based exclusive end column of the bare macro identifier */
+	endCol: number;
+	/** 0-based start column of the package qualifier identifier (when present) */
+	packageCol?: number;
+	/** 0-based exclusive end column of the package qualifier identifier */
+	packageEndCol?: number;
+	/** 0-based column start of the full enclosing jinja tag (`{{` or `{%`) */
+	jinjaCol: number;
+	/** 0-based exclusive column end of the full enclosing jinja tag */
+	jinjaEndCol: number;
+	/** 0-based line of the enclosing jinja tag opener */
+	jinjaLine: number;
+	/** 0-based column of the opening paren */
+	argsCol?: number;
+	/** 0-based exclusive column of the closing paren (when complete) */
+	argsEndCol?: number;
+	/** Per-argument spans, in source order. Empty when no args or call is incomplete. */
+	args: MacroCallArgInfo[];
+}
+
 export interface ColumnRefToken {
 	type: 'column_ref';
 	name: string;
@@ -222,6 +260,12 @@ export interface DocumentModel {
 	ctes: CteInfo[];
 	refs: RefInfo[];
 	sources: SourceInfo[];
+	/**
+	 * User-defined macro call sites discovered in jinja `{{ }}` and `{% %}`
+	 * tags. Populated by `extractMacroCalls`; absent (rather than empty) only
+	 * on synthetic / test fixture models. Real parser output always sets it.
+	 */
+	macroCalls?: MacroCallInfo[];
 	finalColumns: ColumnInfo[];
 	/** Rich positional data for the final SELECT (replaces finalColumns over time). */
 	finalSelect?: FinalSelectInfo;
@@ -343,6 +387,17 @@ export function mergeModels(models: DocumentModel[]): DocumentModel {
 		}
 	}
 
+	// macroCalls: dedup by name:line:col (packageName included to keep
+	// `dbt_utils.pivot` distinct from a same-named bare `pivot`)
+	const macroKeys = new Set<string>();
+	const macroCalls: MacroCallInfo[] = [];
+	for (const m of models) {
+		for (const mc of (m.macroCalls ?? [])) {
+			const k = (mc.packageName ?? '') + ':' + mc.name + ':' + mc.line + ':' + mc.col;
+			if (!macroKeys.has(k)) { macroKeys.add(k); macroCalls.push(mc); }
+		}
+	}
+
 	// tokens: dedup by type:line:col
 	const tokKeys = new Set<string>();
 	const tokens: TokenInfo[] = [];
@@ -438,7 +493,7 @@ export function mergeModels(models: DocumentModel[]): DocumentModel {
 		}
 	}
 
-	return { ctes: [...cteMap.values()], refs, sources, finalColumns, finalSelect, tokens, timing, sqlglotWarnings, aliases,
+	return { ctes: [...cteMap.values()], refs, sources, macroCalls, finalColumns, finalSelect, tokens, timing, sqlglotWarnings, aliases,
 		pivotVirtualColumns: Object.keys(pivotVirtualColumns).length > 0 ? pivotVirtualColumns : undefined,
 		jinjaTokens,
 		ninjaSqlTokens,

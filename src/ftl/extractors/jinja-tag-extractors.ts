@@ -1,6 +1,28 @@
 import type { ParseWarning } from '../parse-result';
 import type { JinjaToken } from '../jinja-tokenizer';
-import type { RefInfo, SourceInfo, SqlglotWarning } from '../../services/parse-service';
+import type { MacroCallInfo, MacroCallArgInfo, RefInfo, SourceInfo, SqlglotWarning } from '../../services/parse-service';
+
+/**
+ * Jinja keywords and dbt globals that may appear as `identifier(` but are NOT
+ * user-defined macro calls. `ref` and `source` have dedicated extractors;
+ * the rest are control flow, statement keywords, or jinja built-ins.
+ */
+const NOT_MACRO_CALLS = new Set([
+	'ref', 'source',
+	'if', 'elif', 'else', 'endif',
+	'for', 'endfor', 'in',
+	'block', 'endblock',
+	'macro', 'endmacro',
+	'call', 'endcall',
+	'set', 'endset', 'do',
+	'with', 'endwith',
+	'filter', 'endfilter',
+	'from', 'import', 'as', 'include', 'extends',
+	'raw', 'endraw',
+	'not', 'and', 'or', 'is',
+	'none', 'None', 'true', 'True', 'false', 'False',
+	'config', 'var', 'env_var',
+]);
 
 /**
  * Walk the jinja token stream and pick out `{{ ref('name') }}` calls.
@@ -93,6 +115,128 @@ export function extractSources(jinjaTokens: JinjaToken[]): SourceInfo[] {
 		}
 	}
 	return sources;
+}
+
+/**
+ * Walk the jinja token stream and pick out user-defined macro call sites:
+ *   `{{ my_macro(...) }}`
+ *   `{{ dbt_utils.pivot(...) }}`
+ *   `{% set x = my_macro(...) %}`
+ *   `{% if my_macro(...) %}`
+ *   `{% call my_macro() %}...{% endcall %}`
+ *
+ * Tag-scoped: scans every `jinja_expression_open` and `jinja_block_open`
+ * region, terminated by the open's `tagEnd`. Multi-line tags work naturally
+ * because token offsets are absolute.
+ *
+ * A call site is `identifier paren_open`, optionally prefixed by
+ * `identifier dot` (package qualifier). The bare identifier is rejected
+ * when it is in `NOT_MACRO_CALLS` (jinja keywords, dbt globals, ref/source
+ * which have dedicated extractors) or when the previous token is the
+ * keyword `macro` (definition site, not a call).
+ *
+ * Argument spans are recorded for signature-help: each arg is the inclusive
+ * range from its first token to the token before the next top-level comma
+ * (or the closing paren). Nested parens are tracked so commas inside them
+ * don't split args.
+ */
+export function extractMacroCalls(jinjaTokens: JinjaToken[]): MacroCallInfo[] {
+	const calls: MacroCallInfo[] = [];
+
+	for (let i = 0; i < jinjaTokens.length; i++) {
+		const open = jinjaTokens[i];
+		if (
+			(open.type !== 'jinja_expression_open' && open.type !== 'jinja_block_open') ||
+			open.tagEnd === undefined
+		) continue;
+
+		const tagEnd = open.tagEnd;
+
+		// Tokens inside this tag (exclusive of the close)
+		let j = i + 1;
+		while (j < jinjaTokens.length && jinjaTokens[j].start < tagEnd) {
+			const lparen = jinjaTokens[j];
+			if (lparen.type !== 'jinja_paren_open') { j++; continue; }
+
+			const nameTok = jinjaTokens[j - 1];
+			if (!nameTok || nameTok.type !== 'jinja_identifier') { j++; continue; }
+
+			// Skip jinja keywords / ref / source / dbt globals
+			if (NOT_MACRO_CALLS.has(nameTok.value)) { j++; continue; }
+
+			// Skip `{% macro foo() %}` definition site: the name is preceded by
+			// the keyword `macro`, optionally with no other tokens between.
+			const prevTok = jinjaTokens[j - 2];
+			if (prevTok?.type === 'jinja_identifier' && prevTok.value === 'macro') { j++; continue; }
+
+			// Detect `package.name(` — packageTok is `jinja_identifier`, sep is `jinja_dot`
+			let packageTok: JinjaToken | undefined;
+			if (prevTok?.type === 'jinja_dot') {
+				const pkg = jinjaTokens[j - 3];
+				if (pkg?.type === 'jinja_identifier' && !NOT_MACRO_CALLS.has(pkg.value)) {
+					packageTok = pkg;
+				}
+			}
+
+			// Walk args: track nested paren depth; split on top-level commas.
+			const args: MacroCallArgInfo[] = [];
+			let depth = 1;
+			let argStart = j + 1;
+			let k = j + 1;
+			let closeIdx = -1;
+			for (; k < jinjaTokens.length && jinjaTokens[k].start < tagEnd; k++) {
+				const t = jinjaTokens[k];
+				if (t.type === 'jinja_paren_open') { depth++; continue; }
+				if (t.type === 'jinja_paren_close') {
+					depth--;
+					if (depth === 0) {
+						if (k > argStart) {
+							const first = jinjaTokens[argStart];
+							const last = jinjaTokens[k - 1];
+							args.push({ line: first.line, col: first.col, endCol: last.col + (last.end - last.start) });
+						}
+						closeIdx = k;
+						break;
+					}
+					continue;
+				}
+				if (t.type === 'jinja_comma' && depth === 1) {
+					if (k > argStart) {
+						const first = jinjaTokens[argStart];
+						const last = jinjaTokens[k - 1];
+						args.push({ line: first.line, col: first.col, endCol: last.col + (last.end - last.start) });
+					}
+					argStart = k + 1;
+				}
+			}
+
+			calls.push({
+				name: nameTok.value,
+				...(packageTok ? { packageName: packageTok.value } : {}),
+				line: nameTok.line,
+				col: nameTok.col,
+				endCol: nameTok.col + (nameTok.end - nameTok.start),
+				...(packageTok ? {
+					packageCol: packageTok.col,
+					packageEndCol: packageTok.col + (packageTok.end - packageTok.start),
+				} : {}),
+				jinjaCol: open.col,
+				jinjaEndCol: open.col + (tagEnd - open.start),
+				jinjaLine: open.line,
+				argsCol: lparen.col,
+				...(closeIdx >= 0 ? {
+					argsEndCol: jinjaTokens[closeIdx].col + (jinjaTokens[closeIdx].end - jinjaTokens[closeIdx].start),
+				} : {}),
+				args,
+			});
+
+			// Advance one token. Nested calls (`outer(inner(...))`) are picked
+			// up when the outer iteration reaches the inner `(`.
+			j++;
+		}
+	}
+
+	return calls;
 }
 
 export function mapWarnings(warnings: ParseWarning[]): SqlglotWarning[] {

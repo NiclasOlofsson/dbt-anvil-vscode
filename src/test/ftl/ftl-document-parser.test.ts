@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { AstPayload, ParseResult } from '../../ftl/parse-result';
 import type { SqlParser } from '../../ftl/sql-parser';
-import { extractRefs, extractSources, mapWarnings, extractCtes, extractSubqueries, extractFinalColumns, extractFinalSelect, extractTokens, resolveTableRefs, FtlDocumentParser } from '../../ftl/ftl-document-parser';
+import { extractRefs, extractSources, extractMacroCalls, mapWarnings, extractCtes, extractSubqueries, extractFinalColumns, extractFinalSelect, extractTokens, resolveTableRefs, FtlDocumentParser } from '../../ftl/ftl-document-parser';
 import { tokenizeJinja } from '../../ftl/jinja-tokenizer';
 import type { TableRefToken, ColumnRefToken } from '../../services/parse-service';
 
@@ -72,6 +72,113 @@ describe('extractSources', () => {
 
 	it('returns empty array when there are no jinja tokens', () => {
 		expect(extractSources([])).toEqual([]);
+	});
+});
+
+describe('extractMacroCalls', () => {
+	it('captures a simple {{ macro() }} expression call', () => {
+		const sql = 'select {{ my_macro(\'a\') }} from t';
+		const result = extractMacroCalls(tokenizeJinja(sql));
+		expect(result).toHaveLength(1);
+		expect(result[0]).toMatchObject({
+			name: 'my_macro',
+			line: 0,
+			args: [{ line: 0, col: 19, endCol: 22 }],
+		});
+		expect(sql.slice(result[0].col, result[0].endCol)).toBe('my_macro');
+		expect(sql.slice(result[0].jinjaCol, result[0].jinjaEndCol)).toBe('{{ my_macro(\'a\') }}');
+	});
+
+	it('captures a multi-line {{ ... }} call (the original bug)', () => {
+		const sql = 'select {{\n  my_macro(\'a\')\n}} from t';
+		const result = extractMacroCalls(tokenizeJinja(sql));
+		expect(result).toHaveLength(1);
+		expect(result[0].name).toBe('my_macro');
+		expect(result[0].line).toBe(1);     // identifier on line 1
+		expect(result[0].jinjaLine).toBe(0); // {{ on line 0
+	});
+
+	it('captures package-qualified calls', () => {
+		const sql = 'select {{ dbt_utils.pivot(\'col\', [\'a\']) }} from t';
+		const result = extractMacroCalls(tokenizeJinja(sql));
+		expect(result).toHaveLength(1);
+		expect(result[0]).toMatchObject({
+			name: 'pivot',
+			packageName: 'dbt_utils',
+		});
+	});
+
+	it('captures calls inside {% set %} blocks', () => {
+		const sql = '{% set rows = my_macro(\'a\') %}\nselect 1';
+		const result = extractMacroCalls(tokenizeJinja(sql));
+		expect(result).toHaveLength(1);
+		expect(result[0].name).toBe('my_macro');
+	});
+
+	it('captures calls inside {% if %} blocks', () => {
+		const sql = '{% if my_macro(\'x\') %}select 1{% endif %}';
+		const result = extractMacroCalls(tokenizeJinja(sql));
+		expect(result.map(r => r.name)).toContain('my_macro');
+	});
+
+	it('captures the callee in {% call my_macro() %}', () => {
+		const sql = '{% call my_macro() %}body{% endcall %}\nselect 1';
+		const result = extractMacroCalls(tokenizeJinja(sql));
+		expect(result.map(r => r.name)).toEqual(['my_macro']);
+	});
+
+	it('skips {% macro foo() %} definition sites', () => {
+		const sql = '{% macro foo(x) %}select 1{% endmacro %}';
+		expect(extractMacroCalls(tokenizeJinja(sql))).toEqual([]);
+	});
+
+	it('skips ref() and source() — handled by their own extractors', () => {
+		const sql = 'select * from {{ ref(\'a\') }}, {{ source(\'s\', \'t\') }}';
+		expect(extractMacroCalls(tokenizeJinja(sql))).toEqual([]);
+	});
+
+	it('skips jinja keywords with parens (if, for, set)', () => {
+		const sql = '{% if (x and y) %}select 1{% endif %}';
+		expect(extractMacroCalls(tokenizeJinja(sql))).toEqual([]);
+	});
+
+	it('skips config() / var() / env_var() globals', () => {
+		const sql = '{{ config(materialized=\'view\') }}\nselect {{ var(\'x\') }}';
+		expect(extractMacroCalls(tokenizeJinja(sql))).toEqual([]);
+	});
+
+	it('records per-argument spans split on top-level commas', () => {
+		const sql = 'select {{ my_macro(\'a\', \'b\', \'c\') }} from t';
+		const result = extractMacroCalls(tokenizeJinja(sql));
+		expect(result).toHaveLength(1);
+		expect(result[0].args).toHaveLength(3);
+	});
+
+	it('does not split args on commas inside nested parens', () => {
+		const sql = 'select {{ outer(inner(1, 2), \'x\') }} from t';
+		const result = extractMacroCalls(tokenizeJinja(sql));
+		const outer = result.find(r => r.name === 'outer');
+		expect(outer).toBeDefined();
+		expect(outer!.args).toHaveLength(2);
+	});
+
+	it('captures nested calls separately', () => {
+		const sql = 'select {{ outer(inner(1)) }} from t';
+		const names = extractMacroCalls(tokenizeJinja(sql)).map(r => r.name).sort();
+		expect(names).toEqual(['inner', 'outer']);
+	});
+
+	it('handles an in-progress call with no closing paren (mid-typing)', () => {
+		const sql = 'select {{ my_macro(\'a\',  from t';
+		const result = extractMacroCalls(tokenizeJinja(sql));
+		// In-progress: depending on tokenizer behavior may or may not emit;
+		// at minimum should not throw.
+		expect(Array.isArray(result)).toBe(true);
+	});
+
+	it('returns empty for files with no jinja', () => {
+		expect(extractMacroCalls([])).toEqual([]);
+		expect(extractMacroCalls(tokenizeJinja('select 1'))).toEqual([]);
 	});
 });
 

@@ -7,6 +7,7 @@ import {
 	extractCtes,
 	extractFinalColumns,
 	extractFinalSelect,
+	extractMacroCalls,
 	extractPivotVirtualColumns,
 	extractRefs,
 	extractSources,
@@ -26,6 +27,7 @@ export {
 	extractCtes,
 	extractFinalColumns,
 	extractFinalSelect,
+	extractMacroCalls,
 	extractPivotVirtualColumns,
 	extractRefs,
 	extractSources,
@@ -122,12 +124,14 @@ export class FtlDocumentParser implements DocumentParser {
 		resolveTableRefs(tokens);
 		const refs = extractRefs(result.jinjaTokens ?? []);
 		const sources = extractSources(result.jinjaTokens ?? []);
+		const macroCalls = extractMacroCalls(result.jinjaTokens ?? []);
 		enrichTokensWithJinjaSpans(tokens, refs, sources);
 		const pivotVirtualColumns = extractPivotVirtualColumns(result.ast);
 
 		return {
 			refs,
 			sources,
+			macroCalls,
 			ctes: [...ctes, ...subqueries],
 			finalColumns: extractFinalColumns(result.ast),
 			finalSelect: extractFinalSelect(result.ast, sql),

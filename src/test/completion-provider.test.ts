@@ -9,9 +9,15 @@ import { createMockLogger } from './helpers';
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 function mockDocument(lines: string[], version = 1) {
+	const text = lines.join('\n');
 	return {
-		getText: () => lines.join('\n'),
+		getText: () => text,
 		lineAt: (line: number) => ({ text: lines[line] ?? '' }),
+		offsetAt: ({ line, character }: { line: number; character: number }) => {
+			let offset = 0;
+			for (let i = 0; i < line; i++) offset += (lines[i]?.length ?? 0) + 1; // +1 for \n
+			return offset + character;
+		},
 		uri: { toString: () => 'file:///test.sql' },
 		version,
 	};

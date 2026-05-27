@@ -2,7 +2,7 @@ export { extractCtes, extractSubqueries } from './cte-extractor';
 export { extractTokens, resolveTableRefs } from './tokens-extractor';
 export { extractFinalColumns, extractFinalSelect } from './final-select-extractor';
 export { extractPivotVirtualColumns } from './pivot-extractor';
-export { extractRefs, extractSources, mapWarnings } from './jinja-tag-extractors';
+export { extractRefs, extractSources, extractMacroCalls, mapWarnings } from './jinja-tag-extractors';
 export { enrichTokensWithJinjaSpans } from './jinja-token-enrichment';
 export {
 	walkLineageTree,

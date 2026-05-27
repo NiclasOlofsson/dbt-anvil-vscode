@@ -4,6 +4,7 @@ import type { ILogger } from '../../types/logger';
 import { ParseService } from '../../services/parse-service';
 import { isLinePositionInComment } from '../common/comment-utils';
 import { DbtCompletionKind } from '../common/icons';
+import { isCursorInsideOpenJinjaTag } from './jinja-cursor';
 
 /**
  * Completions for ref(), source(), macros, columns, and CTE/table names
@@ -51,8 +52,12 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 			return items;
 		}
 
-		// Inside {{ ... }} — complete macro names
-		if (/\{\{[^}]*$/.test(linePrefix) && !/(?:ref|source)\(\s*['"]/.test(linePrefix)) {
+		// Inside {{ ... }} — complete macro names. Cross-line aware: walks the
+		// whole document text so a `{{` on a previous line still counts.
+		const cursorOffset = document.offsetAt(position);
+		const docText = document.getText();
+		if (isCursorInsideOpenJinjaTag(docText, cursorOffset)
+			&& !/(?:ref|source)\(\s*['"]/.test(linePrefix)) {
 			const items = this._completeMacros();
 			this.logger.debug(`Completion: macro → ${items.length} macros`);
 			return items;
@@ -86,8 +91,8 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 		// Bare word in SQL context — offer all in-scope columns merged from all aliases
 		// Match after whitespace/open-paren with zero or more word chars (covers empty trigger)
 		if (/(?:^|[\s,(])\w*$/.test(linePrefix)) {
-			// Skip if inside an unclosed Jinja expression
-			const insideJinja = /\{\{[^}]*$/.test(linePrefix) || /\{%[^%]*$/.test(linePrefix);
+			// Skip if inside an unclosed jinja expression/block (multi-line aware)
+			const insideJinja = isCursorInsideOpenJinjaTag(docText, cursorOffset);
 			// After a table keyword — offer CTE names and model names (plain name or start of FQN)
 			const afterTableKeyword = /\b(?:from|join|into|update|table)\s+\w*$/i.test(linePrefix);
 			if (!insideJinja && afterTableKeyword) {
