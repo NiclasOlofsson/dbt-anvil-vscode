@@ -132,8 +132,15 @@ export function printDocument(input: PrinterInput): string {
 	const {
 		ranges: multiPredicateJoinOnRanges,
 		breakOffsets: multiPredicateJoinOnBreakOffsets,
-		wrapParenStarts: multiPredicateJoinOnWrapParens,
 	} = computeMultiPredicateJoinOnRanges(stream);
+	// General-case logical predicate paren detection (applies in WHERE,
+	// HAVING, JOIN ON, CASE WHEN, anywhere `(` contains an AND/OR chain).
+	// Subsumes the JOIN-ON-specific wrapParens handling — any paren with
+	// logical content that's source-multi-line or width-overflowing opens
+	// as an indenting body.
+	const { parenStarts: logicalPredicateParens, breakOffsets: logicalPredicateBreakOffsets }
+		= computeLogicalPredicateParens(stream, config.maxLineLength);
+	for (const off of logicalPredicateBreakOffsets) predicateBooleanOffsets.add(off);
 	// Pre-pass: locate CASE...END spans whose single-line projected width would
 	// exceed `maxLineLength`. The set of CASE token start offsets identifies
 	// the entries — during the walk we push CASE state on a stack at each
@@ -707,12 +714,12 @@ export function printDocument(input: PrinterInput): string {
 				// closes back to the outer column via the same indenting-
 				// paren machinery used by CTE bodies.
 				|| (prevTypeUpper === 'OVER' && mustWrapWindowParenStarts.has(tok.start))
-				// `(` after ON that wraps the ENTIRE multi-predicate JOIN-ON
-				// chain: open as indenting so the body wraps onto its own
-				// lines and `)` closes on its own line, mirroring the CTE-
-				// body shape. Sibling-paren cases (`on (a or b) and c`) are
-				// excluded — their `(` is just grouping, not a body.
-				|| (prevTypeUpper === 'ON' && multiPredicateJoinOnWrapParens.has(tok.start)));
+				// Any `(` that wraps a logical (AND/OR) predicate group — in
+				// WHERE, HAVING, JOIN ON, CASE WHEN, or anywhere else —
+				// opens as an indenting body when the body is source-multi-
+				// line or width-overflowing. Subsumes the older JOIN-ON-
+				// specific wrap-paren handling.
+				|| logicalPredicateParens.has(tok.start));
 		void innermost;
 		// An R_PAREN that closes the top indenting span needs a newline
 		// BEFORE it so the close sits alone on its own de-indented line.
@@ -1098,9 +1105,7 @@ export function printDocument(input: PrinterInput): string {
 				indentingParenIsWindow.push(
 					prevTypeUpper === 'OVER' && mustWrapWindowParenStarts.has(tok.start),
 				);
-				indentingParenIsOn.push(
-					prevTypeUpper === 'ON' && multiPredicateJoinOnWrapParens.has(tok.start),
-				);
+				indentingParenIsOn.push(logicalPredicateParens.has(tok.start));
 				pendingNewline = true;
 			} else {
 				// Function call, grouping, IN list — suppresses clause breaks
@@ -2552,6 +2557,120 @@ function peekNextSqlTokenTypeAt(stream: NinjaSqlToken[], start: number): string 
 }
 
 /**
+ * General-case detection for parentheses that wrap a logical (AND/OR)
+ * predicate group — applies in WHERE, HAVING, JOIN ON, CASE WHEN
+ * conditions, or anywhere else a `(` contains an AND/OR chain at its body
+ * depth.
+ *
+ * A `(` qualifies when:
+ *   - Structural: the body contains AND/OR at depth 0 relative to the
+ *     paren (not deeper inside nested parens — those are sub-groups).
+ *   - Not a function-call paren (prev SQL token is not VAR/IDENTIFIER).
+ *   - Not a subquery (the body's first SQL token isn't SELECT).
+ *   - Trigger: at least one of those AND/ORs is on a different source line
+ *     than its neighbours (already in `predicateBooleanOffsets`), OR the
+ *     collapsed body would overflow `maxLineLength`.
+ *
+ * Returns:
+ *   - `parenStarts`: L_PAREN offsets that should open as an indenting
+ *     body (printer emits `(`, newline + indented body, `)` on its own
+ *     line at the opener's column).
+ *   - `breakOffsets`: AND/OR offsets inside those parens that should fire
+ *     predicate-boolean breaks (merged into the printer's
+ *     `predicateBooleanOffsets` so the operator-position machinery wraps
+ *     each predicate onto its own line).
+ */
+function computeLogicalPredicateParens(
+	stream: NinjaSqlToken[],
+	maxLineLength: number,
+): { parenStarts: Set<number>; breakOffsets: Set<number> } {
+	const parenStarts = new Set<number>();
+	const breakOffsets = new Set<number>();
+
+	// Index of SQL tokens for fast prev/next neighbour lookup (used for
+	// source-line crossing detection on candidate AND/ORs).
+	const sqlIdx: number[] = [];
+	for (let i = 0; i < stream.length; i++) {
+		if (stream[i].category === 'sql') sqlIdx.push(i);
+	}
+	const sqlPos = new Map<number, number>();
+	for (let k = 0; k < sqlIdx.length; k++) sqlPos.set(sqlIdx[k], k);
+
+	for (let i = 0; i < stream.length; i++) {
+		const tok = stream[i];
+		if (tok.category !== 'sql') continue;
+		if (tok.type.toUpperCase() !== 'L_PAREN') continue;
+
+		// Skip function-call parens — `coalesce(a and b, c)` is not a
+		// logical group; the parens belong to the function call.
+		let prevSqlType = '';
+		for (let j = i - 1; j >= 0; j--) {
+			if (stream[j].category === 'sql') { prevSqlType = stream[j].type.toUpperCase(); break; }
+		}
+		if (prevSqlType === 'VAR' || prevSqlType === 'IDENTIFIER') continue;
+
+		// Find matching ).
+		let d = 1;
+		let matchIdx = -1;
+		for (let k = i + 1; k < stream.length; k++) {
+			if (stream[k].category !== 'sql') continue;
+			const t = stream[k].type.toUpperCase();
+			if (t === 'L_PAREN') d++;
+			else if (t === 'R_PAREN') { d--; if (d === 0) { matchIdx = k; break; } }
+		}
+		if (matchIdx < 0) continue;
+
+		// Skip subqueries — body starts with SELECT. Those are already
+		// handled by the CTE/subquery indenting paren path.
+		let firstBodySqlType = '';
+		for (let k = i + 1; k < matchIdx; k++) {
+			if (stream[k].category === 'sql') { firstBodySqlType = stream[k].type.toUpperCase(); break; }
+		}
+		if (firstBodySqlType === 'SELECT') continue;
+
+		// Scan body for AND/OR at body depth (depth 0 relative to opener),
+		// collecting them and projecting collapsed body width. For each
+		// candidate also check whether its source position crosses a line
+		// boundary — that's the signal we use to decide "wrap me."
+		let bd = 0;
+		const bodyAndOr: number[] = [];
+		let sourceMultiLineAndOr = false;
+		let widthChars = 0;
+		let tokenCount = 0;
+		for (let k = i + 1; k < matchIdx; k++) {
+			const t = stream[k];
+			if (t.category !== 'sql') continue;
+			const tt = t.type.toUpperCase();
+			if (tt === 'L_PAREN') { bd++; widthChars += t.end - t.start + 1; tokenCount++; continue; }
+			if (tt === 'R_PAREN') { bd--; widthChars += t.end - t.start + 1; tokenCount++; continue; }
+			if (bd === 0 && (tt === 'AND' || tt === 'OR')) {
+				bodyAndOr.push(t.start);
+				// Source-line cross check, same shape as
+				// computePredicateBooleans uses.
+				const kk = sqlPos.get(k)!;
+				const prev = kk > 0 ? stream[sqlIdx[kk - 1]] : undefined;
+				const next = kk < sqlIdx.length - 1 ? stream[sqlIdx[kk + 1]] : undefined;
+				if ((prev && prev.line !== t.line) || (next && next.line !== t.line)) {
+					sourceMultiLineAndOr = true;
+				}
+			}
+			widthChars += t.end - t.start + 1;
+			tokenCount++;
+		}
+		if (bodyAndOr.length === 0) continue;
+
+		const projected = widthChars + Math.max(0, tokenCount - 1);
+		const triggerWrap = sourceMultiLineAndOr || projected > maxLineLength;
+		if (!triggerWrap) continue;
+
+		parenStarts.add(tok.start);
+		for (const off of bodyAndOr) breakOffsets.add(off);
+	}
+
+	return { parenStarts, breakOffsets };
+}
+
+/**
  * Token-stream fallback that classifies every comma which separates targets
  * of a SELECT at depth 0 (i.e. not inside a function call, IN list, or
  * nested subquery's own SELECT). Returns a set of comma `start` offsets.
@@ -2688,7 +2807,7 @@ function computePredicateBooleans(stream: NinjaSqlToken[]): Set<number> {
 		if (type === 'CASE' || type === 'IF') { caseDepth++; continue; }
 		if (type === 'END' && caseDepth > 0) { caseDepth--; continue; }
 
-		if (type === 'WHERE' || type === 'HAVING') {
+		if (type === 'WHERE' || type === 'HAVING' || type === 'ON') {
 			zones.push({ openedAtDepth: parenDepth });
 			continue;
 		}
