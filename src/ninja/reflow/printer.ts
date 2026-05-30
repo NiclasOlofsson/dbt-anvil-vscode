@@ -482,6 +482,56 @@ export function printDocument(input: PrinterInput): string {
 			&& hasLeadingLineComment
 			&& !skipNextTokenLeadingComments;
 
+		// EOL comment reclassification: sqlglot may attribute a comment that
+		// was originally at end-of-line of the previous token to this token
+		// as a leading comment. Detect that (the comment's source line
+		// matches `prev.line`) and place it inline AFTER the previous
+		// token's literal — preserving the source's EOL placement instead
+		// of demoting the comment to its own line below the code.
+		//
+		// When the inline placement would push the line past
+		// `maxLineLength`, promote the comment to a leading line ABOVE the
+		// previous token's line (matching the prev line's indent). Never
+		// demote below — comments lead code, not trail it.
+		//
+		// `partsLengthAtIterStart` is the splice point: the end of `parts`
+		// at this iteration's start, which is just past the previous
+		// token's trailing emissions. Captured before any leading-drain
+		// emission so the splice lands in the right place.
+		const partsLengthAtIterStart = parts.length;
+		const handledEolCommentStarts = new Set<number>();
+		if (tok.comments?.length && !skipNextTokenLeadingComments && !isPotentialPredicateBoolHoist
+			&& prev && prev.category === 'sql'
+		) {
+			for (const c of tok.comments) {
+				if (c.start >= tok.start) continue;
+				const cLine = lineOfOffset(c.start);
+				if (cLine !== prev.line) continue;
+				const raw = source.slice(c.start, c.end);
+				const isLineComment = raw.startsWith('--') || raw.startsWith('//');
+				// Inline candidate. Measure projected line length first.
+				const lineStart = (() => {
+					for (let i = partsLengthAtIterStart - 1; i >= 0; i--) {
+						if (parts[i] === '\n') return i + 1;
+					}
+					return 0;
+				})();
+				let lineLen = ' '.length + raw.length;
+				for (let i = lineStart; i < partsLengthAtIterStart; i++) lineLen += parts[i].length;
+				if (lineLen <= config.maxLineLength) {
+					parts.splice(partsLengthAtIterStart, 0, ' ' + raw);
+				} else {
+					// Promote to leading-above prev's line. Splice
+					// `<indent><comment>\n` right at the start of prev's
+					// line so the comment leads (without removing prev).
+					const indentEntry = parts[lineStart] ?? '';
+					parts.splice(lineStart, 0, indentEntry, raw, '\n');
+				}
+				handledEolCommentStarts.add(c.start);
+				if (isLineComment) pendingNewline = true;
+			}
+		}
+
 		// ── Leading comments ──────────────────────────────────────────────
 		// Comments whose byte range precedes the owning token were attached
 		// by sqlglot's tokenizer as "leading" — they belong ABOVE this
@@ -535,7 +585,7 @@ export function printDocument(input: PrinterInput): string {
 					&& policy.indentedThen);
 			const carriedExtraIndent = oneShotExtraIndent || (willTriggerContinuationIndent ? 1 : 0);
 			for (const c of tok.comments) {
-				if (c.start < tok.start) {
+				if (c.start < tok.start && !handledEolCommentStarts.has(c.start)) {
 					// Restore the one-shot indent BEFORE each comment emit so
 					// every line in a multi-line comment block lands at the
 					// same column — the prior iteration's emitNewline consumed
