@@ -1245,15 +1245,47 @@ function computeMustWrapCases(
 	const out = new Set<number>();
 	const indentWidth = policy.at(1).length || 4;
 
-	// `alwaysWrap.case`: force-flag every CASE-start regardless of width. We
-	// still walk the stream below to maintain the SELECT-zone accounting for
-	// the width-driven path, but a forced pass up front catches CASEs the
-	// width-driven pass would otherwise skip (e.g. ones outside SELECT
-	// zones).
+	// `alwaysWrap.case`: force-flag every TOP-LEVEL CASE-start regardless of
+	// width. We still walk the stream below to maintain the SELECT-zone
+	// accounting for the width-driven path, but a forced pass up front
+	// catches CASEs the width-driven pass would otherwise skip (e.g. ones
+	// outside SELECT zones).
+	//
+	// Scoping: a CASE that lives inside a function-call paren (e.g.
+	// `max(case when ... end)`) is an embedded expression — its parent
+	// SELECT target is the function call, not the CASE. Force-wrapping it
+	// mangles short inline CASEs into multi-line monsters and cascades
+	// breaks through the outer expression. Skip those; the width-driven
+	// pass below still catches them when they would actually overflow.
 	if (alwaysWrapCase) {
-		for (const tok of stream) {
+		const funcParenStack: number[] = [];
+		let scanParenDepth = 0;
+		let scanPrevSqlType = '';
+		for (let i = 0; i < stream.length; i++) {
+			const tok = stream[i];
 			if (tok.category !== 'sql') continue;
-			if (tok.type.toUpperCase() === 'CASE') out.add(tok.start);
+			const type = tok.type.toUpperCase();
+			if (type === 'L_PAREN') {
+				scanParenDepth++;
+				if (!isIndentingParenOpen(stream, i, scanPrevSqlType)) {
+					funcParenStack.push(scanParenDepth);
+				}
+				scanPrevSqlType = type;
+				continue;
+			}
+			if (type === 'R_PAREN') {
+				if (funcParenStack.length > 0
+					&& funcParenStack[funcParenStack.length - 1] === scanParenDepth) {
+					funcParenStack.pop();
+				}
+				scanParenDepth = Math.max(0, scanParenDepth - 1);
+				scanPrevSqlType = type;
+				continue;
+			}
+			if (type === 'CASE' && funcParenStack.length === 0) {
+				out.add(tok.start);
+			}
+			scanPrevSqlType = type;
 		}
 	}
 
@@ -1276,6 +1308,11 @@ function computeMustWrapCases(
 		curWidth: number;
 		curTokenCount: number;
 		curCaseStarts: number[];
+		// CASEs in the target that are NOT inside a function-call / grouping
+		// paren — those are candidates the outer wrap can break apart so
+		// inner CASEs (function arguments) stay inline. Always a subset of
+		// `curCaseStarts`.
+		curTopLevelCaseStarts: number[];
 	};
 	const zones: Zone[] = [];
 
@@ -1289,11 +1326,20 @@ function computeMustWrapCases(
 			+ zone.curWidth
 			+ Math.max(0, zone.curTokenCount - 1);
 		if (projected > maxLineLength) {
-			for (const s of zone.curCaseStarts) out.add(s);
+			// Prefer wrapping only the outer CASE(s) so inner CASEs nested
+			// inside function calls (`max(case ... end)`) can stay inline.
+			// Fall back to flagging every CASE when no outer CASE exists —
+			// that's the lone-inner-CASE-in-function-call shape, and the
+			// inner has to wrap itself or the line stays too long.
+			const toFlag = zone.curTopLevelCaseStarts.length > 0
+				? zone.curTopLevelCaseStarts
+				: zone.curCaseStarts;
+			for (const s of toFlag) out.add(s);
 		}
 		zone.curWidth = 0;
 		zone.curTokenCount = 0;
 		zone.curCaseStarts = [];
+		zone.curTopLevelCaseStarts = [];
 	};
 
 	for (let i = 0; i < stream.length; i++) {
@@ -1360,6 +1406,7 @@ function computeMustWrapCases(
 				curWidth: 0,
 				curTokenCount: 0,
 				curCaseStarts: [],
+				curTopLevelCaseStarts: [],
 			});
 			prevSqlType = type;
 			continue;
@@ -1387,6 +1434,13 @@ function computeMustWrapCases(
 			z.curTokenCount++;
 			if (type === 'CASE') {
 				z.curCaseStarts.push(tok.start);
+				// Track top-level CASEs separately. `parenDepth ===
+				// indentingParens.length` means we're not inside any
+				// function-call / grouping paren — only inside CTE bodies
+				// / subqueries, which are indenting.
+				if (parenDepth === indentingParens.length) {
+					z.curTopLevelCaseStarts.push(tok.start);
+				}
 			}
 		}
 
