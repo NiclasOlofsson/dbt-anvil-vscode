@@ -7,5 +7,4 @@ with cte as (
         c
     from t
 )
-select *
-from cte
+select * from cte

@@ -11,5 +11,4 @@ b as (
 c as (
     select 3 as x
 )
-select *
-from c
+select * from c

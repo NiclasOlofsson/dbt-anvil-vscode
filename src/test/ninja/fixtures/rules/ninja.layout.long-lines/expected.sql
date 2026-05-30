@@ -6,5 +6,4 @@ with t as (
         very_long_column_name_four
     from x
 )
-select *
-from t
+select * from t

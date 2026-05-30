@@ -264,6 +264,13 @@ export function printDocument(input: PrinterInput): string {
 	// token receives the deeper indent.
 	let oneShotExtraIndent = 0;
 
+	// Stack tracking whether each currently-open SELECT was force-wrapped
+	// onto multiple lines. When FROM follows a non-wrapped SELECT it stays
+	// inline (`select * from t`); otherwise it goes on its own line. The
+	// stack handles nested SELECTs — inner subqueries push their own
+	// state, FROM pops it, so the outer SELECT's state isn't clobbered.
+	const selectWrappedStack: boolean[] = [];
+
 	// Stack of active wide-CASE wraps. Each entry records the state to
 	// restore at the matching END: the `indentLevel` BEFORE the CASE bumped
 	// it, and the line-extra-indent that the CASE-bearing line carried (so
@@ -716,11 +723,6 @@ export function printDocument(input: PrinterInput): string {
 		// ── Clause/JOIN/set-op newline injection ──────────────────────────
 		if (nonIndentingParenDepth === 0 && parts.length > 0) {
 			if (MAJOR_CLAUSES.has(typeUpper) || SET_OPERATOR.has(typeUpper)) {
-				// Trailing-comma policy: when the SELECT list wrapped (each target
-				// on its own line) and we're about to emit the clause keyword that
-				// ends the list, inject a trailing comma after the last target so
-				// `convention.trailing-comma` stays clean on formatter output. The
-				// previous token already landed inline; the comma hugs it before
 				// (Previous versions also injected a trailing comma here after
 				// the last SELECT target — that behavior matched neither sqlfmt
 				// nor the current dbt-labs style guide, both of which leave the
@@ -730,7 +732,22 @@ export function printDocument(input: PrinterInput): string {
 				// FROM/WHERE/etc land at the clause's base indent, not the
 				// target-continuation indent.
 				oneShotExtraIndent = 0;
-				pendingNewline = true;
+				// FROM stays inline with the preceding SELECT when that SELECT
+				// didn't wrap (single short target fit on one line). Avoids
+				// the unconditional `select <x>\nfrom <y>` split for trivial
+				// queries like `select * from t`. All other major clauses
+				// (WHERE, GROUP BY, ORDER BY, etc.) always break.
+				let inlineWithSelect = false;
+				if (typeUpper === 'FROM' && selectWrappedStack.length > 0) {
+					const wrapped = selectWrappedStack.pop()!;
+					inlineWithSelect = !wrapped;
+				}
+				if (!inlineWithSelect) {
+					pendingNewline = true;
+				}
+				if (typeUpper === 'SELECT') {
+					selectWrappedStack.push(inAnyRange(tok.start, mustWrapSelectRanges));
+				}
 			} else if (JOIN_START.has(typeUpper) && !JOIN_CONTINUATION_PREV.has(prevTypeUpper)) {
 				pendingNewline = true;
 				if (isIndentedJoinStart) oneShotExtraIndent = 1;

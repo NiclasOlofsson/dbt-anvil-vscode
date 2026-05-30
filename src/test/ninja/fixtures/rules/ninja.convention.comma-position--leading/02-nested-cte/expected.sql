@@ -14,5 +14,4 @@ with base as (
     from base
 )
 
-select *
-from final
+select * from final

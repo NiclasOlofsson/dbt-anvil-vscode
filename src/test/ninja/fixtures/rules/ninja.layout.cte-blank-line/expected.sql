@@ -6,6 +6,5 @@ b as (
     select 2 as x
 )
 
-select *
-from a
+select * from a
 join b on a.x = b.x
