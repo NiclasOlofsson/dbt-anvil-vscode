@@ -60,6 +60,46 @@ const SET_OPERATOR = new Set(['UNION', 'INTERSECT', 'EXCEPT']);
 const NO_SPACE_BEFORE = new Set(['COMMA', 'R_PAREN', 'R_BRACKET', 'DOT', 'SEMICOLON', 'DCOLON']);
 
 /**
+ * SQL builtins that sqlglot tokenises as keyword-typed tokens (not VAR /
+ * IDENTIFIER) but which still function syntactically as function calls.
+ * The dialect-symbol path catches most builtins, but these ones are
+ * absent from common dialect function sets (DuckDB, Snowflake) so we
+ * pin them here. Match against the token's UPPERCASED type.
+ */
+const KEYWORD_FUNCTION_TOKENS = new Set([
+	'ISNULL',
+	'IIF',
+	'IF',
+	'CAST', // some dialects emit CAST as a keyword
+	'EXTRACT',
+	'POSITION',
+	'SUBSTRING',
+	'TRIM',
+	'OVERLAY',
+	'CONVERT',
+]);
+
+/**
+ * Prev-token types that are categorically NOT a function name. Used as a
+ * deny-list when checking whether `(` is a function-call paren — dialect
+ * function sets can wrongly contain operator words like `and` / `or` /
+ * `not`, so we hard-exclude them by token type before consulting the
+ * function set.
+ */
+const NOT_FUNCTION_PREV_TYPES = new Set([
+	'AND', 'OR', 'NOT', 'IN', 'NOT_IN', 'IS', 'BETWEEN', 'LIKE', 'ILIKE', 'GLOB', 'SIMILAR_TO',
+	'EXISTS', 'WHEN', 'THEN', 'ELSE', 'END', 'ON', 'USING', 'CASE', 'AS', 'ALIAS',
+	'WHERE', 'HAVING', 'GROUP_BY', 'GROUP', 'ORDER_BY', 'ORDER', 'BY', 'FROM',
+	'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'FULL', 'CROSS', 'NATURAL',
+	'UNION', 'UNION_ALL', 'UNION_DISTINCT', 'INTERSECT', 'EXCEPT',
+	'WITH', 'SELECT', 'DISTINCT', 'ALL', 'TOP', 'LIMIT', 'OFFSET', 'QUALIFY', 'FETCH', 'WINDOW',
+	'L_PAREN', 'R_PAREN', 'L_BRACKET', 'R_BRACKET', 'COMMA', 'SEMICOLON', 'DOT', 'DCOLON',
+	'EQ', 'NEQ', 'LT', 'GT', 'LTE', 'GTE', 'PLUS', 'DASH', 'STAR', 'SLASH', 'PERCENT', 'CARET',
+	'PIPE', 'DPIPE', 'AMP', 'TILDA', 'COLON', 'COLON_EQ', 'ARROW', 'DARROW', 'FARROW',
+	'INTERVAL', 'PARTITION_BY', 'PARTITION', 'OVER', 'INTO', 'VALUES', 'SET', 'UPDATE', 'INSERT', 'DELETE',
+]);
+
+/**
  * Token types whose text must not take a space on its right. The open
  * paren hugs the identifier before it for function calls and hugs the
  * next token for grouping. `.` in qualified names works the same way.
@@ -727,12 +767,25 @@ export function printDocument(input: PrinterInput): string {
 			&& indentingParens.length > 0
 			&& indentingParens[indentingParens.length - 1] === parenDepth;
 		// An L_PAREN that follows an identifier is a function-call paren
-		// and must hug the identifier (no space). The same rule applies
-		// when the AST says we're inside a Func node: sqlglot tags those
-		// parens explicitly.
+		// and must hug the identifier (no space). Four detection paths:
+		//   1. Prev SQL token type is VAR / IDENTIFIER (generic name).
+		//   2. AST classifies the paren's innermost enclosing node as
+		//      Func or Anonymous.
+		//   3. Prev token's literal matches the active dialect's function
+		//      name set (catches `coalesce`, `nullif`, `cast`, etc.).
+		//   4. Prev token's TYPE is a known keyword-builtin that sqlglot
+		//      tokenizes specially (`ISNULL`, `IIF`, `IF`, etc.) — these
+		//      function syntactically as function calls regardless of
+		//      what sqlglot's AST classifies them as.
+		const prevLiteralLower = prev && prev.category === 'sql'
+			? source.slice(prev.start, prev.end + 1).toLowerCase()
+			: '';
 		const functionCallParen = typeUpper === 'L_PAREN'
+			&& !NOT_FUNCTION_PREV_TYPES.has(prevTypeUpper)
 			&& (prevTypeUpper === 'VAR' || prevTypeUpper === 'IDENTIFIER'
-				|| innermost === 'Func' || innermost === 'Anonymous');
+				|| innermost === 'Func' || innermost === 'Anonymous'
+				|| (symbols?.functions.has(prevLiteralLower) ?? false)
+				|| KEYWORD_FUNCTION_TOKENS.has(prevTypeUpper));
 		// `indented_on` / `indented_using` — an ON or USING keyword whose
 		// enclosing node is a Join sits on a new indented line when the
 		// predicate chain justifies it: multi-predicate ONs (containing
@@ -2770,7 +2823,7 @@ function computeSelectListCommas(stream: NinjaSqlToken[]): Set<number> {
  */
 function computePredicateBooleans(stream: NinjaSqlToken[]): Set<number> {
 	const out = new Set<number>();
-	const zones: Array<{ openedAtDepth: number }> = [];
+	const zones: Array<{ openedAtDepth: number; openerType: string }> = [];
 	let caseDepth = 0;
 	let parenDepth = 0;
 	// SQL tokens (typed) walked alongside the unified stream so we can find
@@ -2807,9 +2860,15 @@ function computePredicateBooleans(stream: NinjaSqlToken[]): Set<number> {
 		if (type === 'CASE' || type === 'IF') { caseDepth++; continue; }
 		if (type === 'END' && caseDepth > 0) { caseDepth--; continue; }
 
-		if (type === 'WHERE' || type === 'HAVING' || type === 'ON') {
-			zones.push({ openedAtDepth: parenDepth });
+		if (type === 'WHERE' || type === 'HAVING' || type === 'ON' || type === 'WHEN') {
+			zones.push({ openedAtDepth: parenDepth, openerType: type });
 			continue;
+		}
+		// THEN closes the WHEN's predicate zone — the AND/OR after THEN
+		// is no longer predicate-related (it's a value expression).
+		if (type === 'THEN' && zones.length > 0) {
+			const top = zones[zones.length - 1];
+			if (parenDepth === top.openedAtDepth && top.openerType === 'WHEN') zones.pop();
 		}
 
 		if (zones.length > 0) {
@@ -2819,9 +2878,13 @@ function computePredicateBooleans(stream: NinjaSqlToken[]): Set<number> {
 			}
 		}
 
-		if ((type === 'AND' || type === 'OR') && caseDepth === 0 && zones.length > 0) {
+		if ((type === 'AND' || type === 'OR') && zones.length > 0) {
 			const top = zones[zones.length - 1];
 			if (parenDepth !== top.openedAtDepth) continue;
+			// AND/OR inside a CASE branch (then/else) is a value expression,
+			// not a predicate — suppress. EXCEPT when the active zone is a
+			// WHEN condition itself (its AND/OR IS the predicate chain).
+			if (caseDepth > 0 && top.openerType !== 'WHEN') continue;
 
 			// Only flag when the SOURCE already spans a line boundary around
 			// this AND/OR — i.e. the inputs is multi-line in a way that the
