@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mockDocument, cfg, model, sqlTok, applyEditsToText } from './helpers';
+import { mockDocument, cfg, model, sqlTok } from './helpers';
 import { trailingCommaRule } from '../../ninja/rules/convention-trailing-comma';
 import { FixAction } from '../../ninja/violation';
 import type { SqlToken } from '../../ftl/parse-result';
@@ -51,34 +51,9 @@ describe(RULE, () => {
 		expect(check(sql, toks, 'trailing')).toHaveLength(0);
 	});
 
-	it('flags missing trailing comma in trailing mode', () => {
-		// select
-		//   a,
-		//   b
-		// from t
-		const sql = 'select\n  a,\n  b\nfrom t';
-		// Token offsets (0-based):
-		// 'select' = 0-5  line 0
-		// 'a'      = 9    line 1
-		// ','      = 10   line 1
-		// 'b'      = 14   line 2
-		// 'from'   = 16   line 3
-		const toks: SqlToken[] = [
-			sqlTok('SELECT', 0, 5, 0, 6),
-			sqlTok('VAR', 9, 9, 1, 2),
-			sqlTok('COMMA', 10, 10, 1, 3),
-			sqlTok('VAR', 14, 14, 2, 2),
-			sqlTok('FROM', 16, 19, 3, 4),
-		];
-		const v = check(sql, toks, 'trailing');
-		expect(v).toHaveLength(1);
-		expect(v[0].rule).toBe(RULE);
-		expect(v[0].message).toContain('trailing comma');
-		expect(v[0].action).toBeDefined();
-		expect((v[0].action as FixAction).ops[0]).toMatchObject({ text: ',' });
-	});
-
-	it('autofix inserts comma after last column token', () => {
+	it('does not flag a missing trailing comma in trailing mode (rule is leading-only)', () => {
+		// Neither sqlfmt nor the current dbt-labs guide require a trailing
+		// comma after the last target. The rule no longer enforces it.
 		const sql = 'select\n  a,\n  b\nfrom t';
 		const toks: SqlToken[] = [
 			sqlTok('SELECT', 0, 5, 0, 6),
@@ -87,29 +62,7 @@ describe(RULE, () => {
 			sqlTok('VAR', 14, 14, 2, 2),
 			sqlTok('FROM', 16, 19, 3, 4),
 		];
-		const v = check(sql, toks, 'trailing');
-		expect(v).toHaveLength(1);
-		const ops = (v[0].action as FixAction).ops;
-		const fixed = applyEditsToText(sql, ops);
-		expect(fixed).toContain('b,');
-	});
-
-	it('autofix inserts comma before trailing whitespace, not after it', () => {
-		// Source has a trailing space after 'b' — comma must land as 'b,' not 'b ,'
-		const sql = 'select\n  a,\n  b \nfrom t';
-		const toks: SqlToken[] = [
-			sqlTok('SELECT', 0, 5, 0, 6),
-			sqlTok('VAR', 9, 9, 1, 2),
-			sqlTok('COMMA', 10, 10, 1, 3),
-			sqlTok('VAR', 14, 14, 2, 2),
-			sqlTok('FROM', 17, 20, 3, 4),
-		];
-		const v = check(sql, toks, 'trailing');
-		expect(v).toHaveLength(1);
-		const ops = (v[0].action as FixAction).ops;
-		const fixed = applyEditsToText(sql, ops);
-		expect(fixed).toContain('b,');
-		expect(fixed).not.toContain('b ,');
+		expect(check(sql, toks, 'trailing')).toHaveLength(0);
 	});
 
 	// ── Leading-comma policy ───────────────────────────────────────────────

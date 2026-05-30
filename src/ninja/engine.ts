@@ -332,7 +332,7 @@ const FIX_SCOPE_TABLE: Record<string, FixScope> = {
 	// ── Structural: reflow owns the fix ─────────────────────────────────────
 	'ninja.convention.comma-position': 'structural',
 	'ninja.convention.operator-position': 'structural',
-	'ninja.convention.trailing-comma': 'structural',
+	'ninja.convention.trailing-comma': 'surgical',
 	'ninja.convention.union-style': 'structural',
 	'ninja.jinja.padding': 'structural',
 	'ninja.jinja.argument-spacing': 'structural',

@@ -1027,7 +1027,12 @@
 					"dbt-studio.ninja.enabled": {
 						"type": "boolean",
 						"default": true,
-						"markdownDescription": "**Enabled**: Run the built-in Ninja linter on SQL files and show violations in the Problems panel."
+						"markdownDescription": "Master switch for the Ninja subsystem. When off, **all** of these are disabled: diagnostics (Problems panel), Format Document, auto-fix on save, and code actions. To silence diagnostics only while keeping formatting and code actions, use `#dbt-studio.ninja.diagnostics.enabled#` instead."
+					},
+					"dbt-studio.ninja.diagnostics.enabled": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "Show Ninja violations in the Problems panel. Turn off to hide diagnostics while keeping **Format Document** and code actions working. Requires `#dbt-studio.ninja.enabled#`."
 					},
 					"dbt-studio.ninja.disabledRules": {
 						"type": "array",
@@ -1138,14 +1143,56 @@
 						"enum": [
 							"sqlfmt",
 							"dbt-labs",
+							"dbt-studio",
 							"custom"
 						],
 						"enumDescriptions": [
 							"sqlfmt style: 88-char lines, lowercase, trailing commas.",
 							"dbt Labs style guide: 120-char lines, lowercase, leading commas.",
+							"dbt Studio house style: leading commas + operators, plus forced multi-line wrapping for GROUP BY, ORDER BY, OVER window, CASE, and WHERE/HAVING boolean chains.",
 							"No preset — all settings use their explicit values or defaults."
 						],
 						"markdownDescription": "Named style preset. Provides defaults for unset config keys; explicit overrides always win. **New installs** default to `sqlfmt`; existing users whose settings are already configured see no change."
+					},
+					"dbt-studio.ninja.layout.alwaysWrap.select": {
+						"type": "boolean",
+						"default": true,
+						"markdownDescription": "Always wrap multi-target SELECT lists onto multiple lines (one target per line), regardless of whether the collapsed form would fit within `#dbt-studio.ninja.maxLineLength#`. Single-target SELECTs stay inline. Default `true` matches sqlfmt and dbt Labs conventions — set `false` to keep short multi-target SELECTs on one line."
+					},
+					"dbt-studio.ninja.layout.alwaysWrap.groupBy": {
+						"type": "boolean",
+						"default": false,
+						"markdownDescription": "Always wrap top-level GROUP BY clauses with 2+ targets onto multiple lines (one target per line), regardless of width. Single-target `group by x` stays inline."
+					},
+					"dbt-studio.ninja.layout.alwaysWrap.orderBy": {
+						"type": "boolean",
+						"default": false,
+						"markdownDescription": "Always wrap top-level ORDER BY clauses with 2+ targets onto multiple lines (one target per line), regardless of width. Single-target `order by x` stays inline."
+					},
+					"dbt-studio.ninja.layout.alwaysWrap.windowPartitionBy": {
+						"type": "boolean",
+						"default": false,
+						"markdownDescription": "Always put `PARTITION BY` inside an `OVER(...)` window on its own line with 2+ targets each on their own line, regardless of width. The OVER paren opens an indented block."
+					},
+					"dbt-studio.ninja.layout.alwaysWrap.windowOrderBy": {
+						"type": "boolean",
+						"default": false,
+						"markdownDescription": "Always put `ORDER BY` inside an `OVER(...)` window on its own line with 2+ targets each on their own line, regardless of width."
+					},
+					"dbt-studio.ninja.layout.alwaysWrap.case": {
+						"type": "boolean",
+						"default": false,
+						"markdownDescription": "Always wrap `CASE` expressions with 2+ WHEN branches across multiple lines (one branch per line), regardless of width. Single-branch CASE stays inline."
+					},
+					"dbt-studio.ninja.layout.alwaysWrap.where": {
+						"type": "boolean",
+						"default": false,
+						"markdownDescription": "Always put `WHERE` on its own line and indent every predicate (including the first) onto its own line, when the WHERE has 2+ predicates joined by `AND`/`OR`. Single-predicate WHEREs stay inline (`where x = 1`)."
+					},
+					"dbt-studio.ninja.layout.alwaysWrap.having": {
+						"type": "boolean",
+						"default": false,
+						"markdownDescription": "Always put `HAVING` on its own line and indent every predicate (including the first) onto its own line, when the HAVING has 2+ predicates joined by `AND`/`OR`. Single-predicate HAVINGs stay inline."
 					},
 					"dbt-studio.ninja.autoFix.applyOnFormat": {
 						"type": "boolean",

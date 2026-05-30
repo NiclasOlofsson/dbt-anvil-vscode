@@ -1,5 +1,5 @@
 select
     a,
     b,
-    c,
+    c
 from t

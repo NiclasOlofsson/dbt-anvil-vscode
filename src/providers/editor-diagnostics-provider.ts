@@ -443,7 +443,11 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		if (!this._startupReady) return;
 		if (document.languageId !== 'jinja-sql') return;
 		const config = this._cachedNinjaConfig ??= loadConfig();
-		if (!config.enabled) {
+		if (!config.enabled || !config.diagnostics.enabled) {
+			// Either the master switch is off, or diagnostics specifically have
+			// been silenced — clear the Problems panel either way. Formatting
+			// and code actions remain wired (they consult `config.enabled` and
+			// `config.autoFix.applyOnFormat` independently).
 			this._ninjaCollection.delete(document.uri);
 			this._ninjaResults.delete(document.uri.toString());
 			return;

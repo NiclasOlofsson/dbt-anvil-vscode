@@ -7,8 +7,35 @@ export type OperatorPosition = 'trailing' | 'leading';
 export type NotEqualStyle = '!=' | '<>';
 export type UnionStyle = 'all' | 'distinct';
 
+export interface AlwaysWrapPolicy {
+	/** SELECT lists: multi-target → each target on own line. */
+	select: boolean;
+	/** Top-level GROUP BY targets each on own line. */
+	groupBy: boolean;
+	/** Top-level ORDER BY targets each on own line. */
+	orderBy: boolean;
+	/** PARTITION BY inside an OVER(...) window on own line. */
+	windowPartitionBy: boolean;
+	/** ORDER BY inside an OVER(...) window on own line. */
+	windowOrderBy: boolean;
+	/** CASE: each WHEN/THEN/ELSE on own line. */
+	case: boolean;
+	/** WHERE keyword on own line, predicates indented (including the first). */
+	where: boolean;
+	/** HAVING keyword on own line, predicates indented (including the first). */
+	having: boolean;
+}
+
 export interface NinjaConfig {
 	enabled: boolean;
+	/**
+	 * Sub-gate for the Problems panel only. Formatting and code actions are
+	 * unaffected by this flag — use `enabled: false` to turn the whole
+	 * subsystem off.
+	 */
+	diagnostics: {
+		enabled: boolean;
+	};
 	format: {
 		/** Named style preset. When set, provides defaults for unset config keys. */
 		preset: FormatPreset;
@@ -46,6 +73,15 @@ export interface NinjaConfig {
 	layout: {
 		commaPosition: CommaPosition;
 		operatorPosition: OperatorPosition;
+		/**
+		 * Per-clause "always wrap" toggles. When `true`, the clause emits one
+		 * item per line whenever it has 2+ items — regardless of whether the
+		 * collapsed form would fit within `maxLineLength`. Single-item clauses
+		 * stay inline.
+		 *
+		 * Default: all `false` (width-gated wrapping only).
+		 */
+		alwaysWrap: AlwaysWrapPolicy;
 	};
 	structure: {
 		allowStarInCte: boolean;
@@ -62,6 +98,7 @@ export interface NinjaConfig {
 
 export const DEFAULT_CONFIG: NinjaConfig = {
 	enabled: true,
+	diagnostics: { enabled: true },
 	format: { preset: 'sqlfmt' },
 	rules: {},
 	disabledRules: [],
@@ -89,6 +126,21 @@ export const DEFAULT_CONFIG: NinjaConfig = {
 	layout: {
 		commaPosition: 'trailing',
 		operatorPosition: 'leading',
+		alwaysWrap: {
+			// SELECT is the historical default — sqlfmt/dbt-labs both prescribe
+			// "always wrap multi-target SELECTs", and the prior printer hard-
+			// wired that behavior. Keeping the default `true` preserves it
+			// while making the toggle a user-facing knob. The remaining flags
+			// default `false` (opt-in vertical layout per clause).
+			select: true,
+			groupBy: false,
+			orderBy: false,
+			windowPartitionBy: false,
+			windowOrderBy: false,
+			case: false,
+			where: false,
+			having: false,
+		},
 	},
 	structure: {
 		allowStarInCte: false,

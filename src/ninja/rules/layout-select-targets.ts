@@ -20,6 +20,13 @@ export const selectTargetsRule: TokenRule = {
 	description: 'Each target in a multi-column SELECT should be on its own line (LT09)',
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
+		// The rule mirrors the formatter's `alwaysWrap.select` toggle —
+		// without the toggle on, short multi-target SELECTs are allowed
+		// inline and there is nothing to flag. Gating here keeps the rule
+		// and the reflow engine in lockstep so "format then lint" stays
+		// clean under either policy.
+		if (!ctx.config.layout.alwaysWrap.select) return [];
+
 		const sqlTokens = sqlOnly(ctx.model.ninjaSqlTokens);
 		if (sqlTokens.length === 0) return [];
 

@@ -6,13 +6,25 @@ import type { DialectSymbols } from '../../ftl/sql-parser';
 import { mergeSqlAndJinjaTokens } from '../../ftl/ninja-sql-tokens';
 import * as vscode from 'vscode';
 
-type ConfigOverride = Omit<Partial<NinjaConfig>, 'indentation'> & {
+type ConfigOverride = Omit<Partial<NinjaConfig>, 'indentation' | 'layout'> & {
 	indentation?: Partial<NinjaConfig['indentation']>;
+	layout?: Partial<Omit<NinjaConfig['layout'], 'alwaysWrap'>> & {
+		alwaysWrap?: Partial<NinjaConfig['layout']['alwaysWrap']>;
+	};
 };
 
 /** Build a minimal NinjaConfig with optional overrides. */
 export function cfg(overrides: ConfigOverride = {}): NinjaConfig {
-	return { ...DEFAULT_CONFIG, ...overrides, indentation: { ...DEFAULT_CONFIG.indentation, ...overrides.indentation } };
+	return {
+		...DEFAULT_CONFIG,
+		...overrides,
+		indentation: { ...DEFAULT_CONFIG.indentation, ...overrides.indentation },
+		layout: {
+			...DEFAULT_CONFIG.layout,
+			...overrides.layout,
+			alwaysWrap: { ...DEFAULT_CONFIG.layout.alwaysWrap, ...overrides.layout?.alwaysWrap },
+		},
+	};
 }
 
 /** Build a minimal mock vscode.TextDocument from SQL text. */

@@ -2,16 +2,21 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { FixAction, type NinjaViolation } from '../violation';
-import { replaceOp, deleteOp } from '../fix-op';
+import { deleteOp } from '../fix-op';
 import { lineOffset } from '../token-utils';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 /**
  * CV03 — Trailing comma on the last SELECT column.
  *
- * When `commaPosition === 'trailing'`, the last column in a multi-line SELECT
- * list MUST have a trailing comma (dbt-labs style). When `commaPosition ===
- * 'leading'`, no trailing comma should exist on the last item.
+ * When `commaPosition === 'leading'`, no trailing comma should exist on
+ * the last item. The rule flags any trailing comma it finds.
+ *
+ * When `commaPosition === 'trailing'`, the rule is a no-op — neither
+ * sqlfmt's style guide nor the current dbt-labs style guide require a
+ * trailing comma after the final SELECT target, and the printer no longer
+ * injects one. (Some dialects — Snowflake, BigQuery, DuckDB — permit it
+ * syntactically, but no popular style guide makes it the default.)
  *
  * "Last item" is defined as the last COMMA found before the next top-level
  * clause keyword (FROM / WHERE / GROUP / HAVING / ORDER / LIMIT / QUALIFY /
@@ -100,61 +105,34 @@ export const trailingCommaRule: TokenRule = {
 				break;
 			}
 
-			const commaPosition = config.layout.commaPosition;
+			// Trailing-comma mode no longer enforces a trailing comma on the
+			// last target — see the rule's docblock. Only the leading-comma
+			// mode has anything to flag here.
+			if (config.layout.commaPosition === 'trailing') continue;
 
-			if (commaPosition === 'trailing') {
-				// Trailing mode: the last comma MUST be followed by value tokens
-				// (i.e. there is no trailing comma on the last item). Flag when the
-				// last comma is NOT followed by any value token.
-				if (!hasValueAfterLastComma) {
-					// Last comma IS a trailing comma — that's correct in trailing mode.
-					// No violation.
-					continue;
-				}
-				// The last column item has no trailing comma. We need to insert one
-				// after the last value token before the clause boundary.
-				// Use the trimmed end of the token's line to avoid placing the comma
-				// after any trailing whitespace.
-				const insertAfter = tokens[endIdx - 1];
-				const lineText = document.lineAt(insertAfter.line).text;
-				const insertCol = lineText.trimEnd().length;
-				const insertPos = new vscode.Position(insertAfter.line, insertCol);
-				const insertRange = new vscode.Range(insertPos, insertPos);
-				violations.push({
-					rule: 'ninja.convention.trailing-comma',
-					message: 'Last SELECT column should have a trailing comma.',
-					range: insertRange,
-					action: {
-						type: FixAction.TYPE,
-						ops: [replaceOp(insertRange, ',')],
-						autoFix: true,
-					},
-				});
-			} else {
-				// Leading mode: no trailing comma on the last item. Flag when the
-				// last comma IS NOT followed by any value token (i.e. it IS a
-				// trailing comma).
-				if (hasValueAfterLastComma) {
-					// Last comma has value tokens after it — not a trailing comma.
-					continue;
-				}
-				// The last comma is a trailing comma — flag it.
-				const lo = lineOffset(text, lastComma.line);
-				const range = new vscode.Range(
-					lastComma.line, lastComma.start - lo,
-					lastComma.line, lastComma.end + 1 - lo,
-				);
-				violations.push({
-					rule: 'ninja.convention.trailing-comma',
-					message: 'Trailing comma after last SELECT column is not allowed (leading comma style).',
-					range,
-					action: {
-						type: FixAction.TYPE,
-						ops: [deleteOp(range)],
-						autoFix: true,
-					},
-				});
+			// Leading mode: no trailing comma on the last item. Flag when the
+			// last comma IS NOT followed by any value token (i.e. it IS a
+			// trailing comma).
+			if (hasValueAfterLastComma) {
+				// Last comma has value tokens after it — not a trailing comma.
+				continue;
 			}
+			// The last comma is a trailing comma — flag it.
+			const lo = lineOffset(text, lastComma.line);
+			const range = new vscode.Range(
+				lastComma.line, lastComma.start - lo,
+				lastComma.line, lastComma.end + 1 - lo,
+			);
+			violations.push({
+				rule: 'ninja.convention.trailing-comma',
+				message: 'Trailing comma after last SELECT column is not allowed (leading comma style).',
+				range,
+				action: {
+					type: FixAction.TYPE,
+					ops: [deleteOp(range)],
+					autoFix: true,
+				},
+			});
 		}
 
 		return violations;

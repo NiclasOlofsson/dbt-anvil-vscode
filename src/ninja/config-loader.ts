@@ -27,6 +27,9 @@ export function loadConfig(): NinjaConfig {
 
 	return {
 		enabled: cfg.get<boolean>('enabled', DEFAULT_CONFIG.enabled),
+		diagnostics: {
+			enabled: cfg.get<boolean>('diagnostics.enabled', DEFAULT_CONFIG.diagnostics.enabled),
+		},
 		format: { preset: formatPreset },
 		rules: cfg.get<Record<string, NinjaSeverity>>('rules', DEFAULT_CONFIG.rules),
 		disabledRules: cfg.get<string[]>('disabledRules', DEFAULT_CONFIG.disabledRules),
@@ -54,6 +57,16 @@ export function loadConfig(): NinjaConfig {
 		layout: {
 			commaPosition: get<CommaPosition>('layout.commaPosition', preset.layout?.commaPosition, DEFAULT_CONFIG.layout.commaPosition),
 			operatorPosition: get<OperatorPosition>('layout.operatorPosition', preset.layout?.operatorPosition, DEFAULT_CONFIG.layout.operatorPosition),
+			alwaysWrap: {
+				select: get<boolean>('layout.alwaysWrap.select', preset.layout?.alwaysWrap?.select, DEFAULT_CONFIG.layout.alwaysWrap.select),
+				groupBy: get<boolean>('layout.alwaysWrap.groupBy', preset.layout?.alwaysWrap?.groupBy, DEFAULT_CONFIG.layout.alwaysWrap.groupBy),
+				orderBy: get<boolean>('layout.alwaysWrap.orderBy', preset.layout?.alwaysWrap?.orderBy, DEFAULT_CONFIG.layout.alwaysWrap.orderBy),
+				windowPartitionBy: get<boolean>('layout.alwaysWrap.windowPartitionBy', preset.layout?.alwaysWrap?.windowPartitionBy, DEFAULT_CONFIG.layout.alwaysWrap.windowPartitionBy),
+				windowOrderBy: get<boolean>('layout.alwaysWrap.windowOrderBy', preset.layout?.alwaysWrap?.windowOrderBy, DEFAULT_CONFIG.layout.alwaysWrap.windowOrderBy),
+				case: get<boolean>('layout.alwaysWrap.case', preset.layout?.alwaysWrap?.case, DEFAULT_CONFIG.layout.alwaysWrap.case),
+				where: get<boolean>('layout.alwaysWrap.where', preset.layout?.alwaysWrap?.where, DEFAULT_CONFIG.layout.alwaysWrap.where),
+				having: get<boolean>('layout.alwaysWrap.having', preset.layout?.alwaysWrap?.having, DEFAULT_CONFIG.layout.alwaysWrap.having),
+			},
 		},
 		structure: {
 			allowStarInCte: cfg.get<boolean>('structure.allowStarInCte', DEFAULT_CONFIG.structure.allowStarInCte),

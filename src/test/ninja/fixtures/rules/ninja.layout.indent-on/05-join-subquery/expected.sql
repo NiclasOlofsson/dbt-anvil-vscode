@@ -3,7 +3,7 @@ from t
 left join (
     select
         id,
-        name,
+        name
     from u
     where active
 ) as sub

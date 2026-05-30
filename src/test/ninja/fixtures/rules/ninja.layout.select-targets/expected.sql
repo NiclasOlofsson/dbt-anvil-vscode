@@ -1,5 +1,5 @@
 select
     foo,
     bar,
-    baz,
+    baz
 from t

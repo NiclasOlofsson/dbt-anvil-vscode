@@ -1,4 +1,4 @@
 select
     a,
-    b,
+    b
 from t

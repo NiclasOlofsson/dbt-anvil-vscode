@@ -1,9 +1,9 @@
 select
     a,
-    b,
+    b
 from t1
 union all
 select
     c,
-    d,
+    d
 from t2

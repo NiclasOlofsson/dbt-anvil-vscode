@@ -4,7 +4,7 @@ with cte as (
         b,
         -- two-line comment header
         -- second line was dedented
-        c,
+        c
     from t
 )
 select *

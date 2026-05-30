@@ -40,7 +40,11 @@ function buildConfig(preset: FormatPreset = 'sqlfmt'): NinjaConfig {
 		format: { preset },
 		capitalisation: { ...DEFAULT_CONFIG.capitalisation, ...p.capitalisation },
 		indentation: { ...DEFAULT_CONFIG.indentation, ...p.indentation },
-		layout: { ...DEFAULT_CONFIG.layout, ...p.layout },
+		layout: {
+			...DEFAULT_CONFIG.layout,
+			...p.layout,
+			alwaysWrap: { ...DEFAULT_CONFIG.layout.alwaysWrap, ...p.layout?.alwaysWrap },
+		},
 		convention: { ...DEFAULT_CONFIG.convention, ...p.convention },
 		structure: { ...DEFAULT_CONFIG.structure, ...p.structure },
 		maxLineLength: p.maxLineLength ?? DEFAULT_CONFIG.maxLineLength,
@@ -73,9 +77,19 @@ const FIXTURES = fs.readdirSync(FIXTURES_DIR)
 	.filter(f => f.endsWith('.in.sql'))
 	.map(f => f.replace(/\.in\.sql$/, ''));
 
-describe('Ninja formatter roundtrip', () => {
-	const config = buildConfig('sqlfmt');
+/**
+ * A fixture can opt into a non-default preset by adding a sibling
+ * `<name>.preset` file containing the preset name (e.g. `dbt-studio`).
+ * Absent → `sqlfmt`.
+ */
+function fixturePreset(name: string): FormatPreset {
+	const presetPath = path.join(FIXTURES_DIR, `${name}.preset`);
+	if (!fs.existsSync(presetPath)) return 'sqlfmt';
+	const raw = fs.readFileSync(presetPath, 'utf8').trim();
+	return raw as FormatPreset;
+}
 
+describe('Ninja formatter roundtrip', () => {
 	beforeAll(async () => {
 		const runtime = await initPyodide(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR);
 		documentParser = new FtlDocumentParser(PyodideSqlParser.create(runtime.pyodide), { adapterType: 'duckdb' });
@@ -86,6 +100,7 @@ describe('Ninja formatter roundtrip', () => {
 			const inputPath    = path.join(FIXTURES_DIR, `${name}.in.sql`);
 			const expectedPath = path.join(FIXTURES_DIR, `${name}.out.sql`);
 			const actualPath   = path.join(FIXTURES_DIR, `${name}.actual.sql`);
+			const config = buildConfig(fixturePreset(name));
 
 			it('formats to match the expected output', async () => {
 				const input    = fs.readFileSync(inputPath,    'utf8');

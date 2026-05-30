@@ -3,7 +3,7 @@ with cte as (
         a,
         b,
         -- note about the next column
-        c,
+        c
     from t
 )
 select *

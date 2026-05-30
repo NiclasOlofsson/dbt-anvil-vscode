@@ -107,7 +107,8 @@ export function printDocument(input: PrinterInput): string {
 	// When that exceeds the limit we force per-comma wrapping for that
 	// Select's targets. Computing this upfront keeps the main walk
 	// deterministic: the same comma either always breaks or never does.
-	const mustWrapSelectRanges = computeMustWrapSelects(stream, config.maxLineLength, policy);
+	const mustWrapSelectRanges = computeMustWrapSelects(
+		stream, config.maxLineLength, policy, config.layout.alwaysWrap.select);
 	// Pre-pass token-stream fallback for SELECT-list comma detection. The AST
 	// path (`enclosing.includes('Select')`) misses commas when the Select node
 	// has no position metadata in sqlglot's serde dump — common for nested
@@ -134,7 +135,8 @@ export function printDocument(input: PrinterInput): string {
 	// the entries — during the walk we push CASE state on a stack at each
 	// matching CASE and emit per-WHEN / per-ELSE / per-END breaks, restoring
 	// indent at END.
-	const mustWrapCaseStarts = computeMustWrapCases(stream, config.maxLineLength, policy);
+	const mustWrapCaseStarts = computeMustWrapCases(
+		stream, config.maxLineLength, policy, config.layout.alwaysWrap.case);
 	// Pre-pass: inside an already-wide CASE, locate THEN tokens whose result
 	// expression keeps the `when COND then RESULT` line over `maxLineLength`.
 	// Returns a set of THEN-token start offsets. When the walker emits the
@@ -147,13 +149,45 @@ export function printDocument(input: PrinterInput): string {
 	// L_PAREN start offsets for the offending `(`s. When the walker hits
 	// one, the paren becomes "indenting" and PARTITION_BY / ORDER_BY inside
 	// break onto their own indented lines.
-	const mustWrapWindowParenStarts = computeMustWrapWindows(stream, config.maxLineLength, policy);
+	const mustWrapWindowParenStarts = computeMustWrapWindows(
+		stream, config.maxLineLength, policy,
+		config.layout.alwaysWrap.windowPartitionBy,
+		config.layout.alwaysWrap.windowOrderBy,
+	);
 	// Pre-pass: locate top-level arithmetic operators inside SELECT targets
 	// whose single-line projection would exceed `maxLineLength` and that
 	// have no CASE/window/scalar-subquery (those have their own dedicated
 	// wraps). Set of operator-token start offsets. When the walker emits
 	// the operator, it breaks before (leading) or after (trailing) it.
 	const mustWrapWideExprOps = computeMustWrapWideExpressions(stream, config.maxLineLength, policy);
+	// Pre-pass: GROUP BY / ORDER BY clause ranges that must wrap. Width-
+	// driven by default; `alwaysWrap.{groupBy,orderBy}` adds the second
+	// trigger. The matching comma-offset sets identify which commas inside
+	// the stream belong to those clauses, so the main walk can route
+	// list-clause commas through the same wrap path as SELECT-list commas.
+	const mustWrapGroupByRanges = computeMustWrapListClauses(
+		stream, config.maxLineLength, policy, new Set(['GROUP_BY']), config.layout.alwaysWrap.groupBy);
+	const mustWrapOrderByRanges = computeMustWrapListClauses(
+		stream, config.maxLineLength, policy, new Set(['ORDER_BY']), config.layout.alwaysWrap.orderBy);
+	const groupByListCommaOffsets = computeListClauseCommas(stream, new Set(['GROUP_BY']));
+	const orderByListCommaOffsets = computeListClauseCommas(stream, new Set(['ORDER_BY']));
+	// Pre-pass: WHERE / HAVING token offsets that should emit a newline
+	// AFTER the keyword (pushing the first predicate to its own indented
+	// line). Fires only when the toggle is on AND the clause has 2+
+	// predicates joined by AND/OR. Subsequent predicate breaks are still
+	// handled by the operator-position machinery.
+	const whereAlwaysWrap = computeAlwaysWrapPredicateClauses(
+		stream, 'WHERE', config.layout.alwaysWrap.where);
+	const havingAlwaysWrap = computeAlwaysWrapPredicateClauses(
+		stream, 'HAVING', config.layout.alwaysWrap.having);
+	const alwaysWrapWhereStarts = whereAlwaysWrap.keywordStarts;
+	const alwaysWrapHavingStarts = havingAlwaysWrap.keywordStarts;
+	// Merge the always-wrap-forced AND/OR offsets into the predicate-boolean
+	// set so the existing operator-position wrap path picks them up. Without
+	// this merge, the toggle would only break the keyword line — every
+	// AND/OR after the first predicate would stay inline.
+	for (const off of whereAlwaysWrap.forcedBooleans) predicateBooleanOffsets.add(off);
+	for (const off of havingAlwaysWrap.forcedBooleans) predicateBooleanOffsets.add(off);
 
 	const parts: string[] = [];
 	const cap = createCapitalisationState(symbols);
@@ -205,11 +239,6 @@ export function printDocument(input: PrinterInput): string {
 	// between CTE definitions doesn't swallow the blank — the blank lands
 	// before the NEXT CTE name regardless of the Jinja in between.
 	let pendingBlankLine = false;
-	// Index in `parts` where the most recent SQL token's literal was pushed.
-	// Used by the end-of-stream trailing-comma injection to insert the comma
-	// between the last SQL token and any trailing comments attached to it.
-	let lastSqlPartsIdx = -1;
-
 	// One-shot extra indent used for `indented_on` / `indented_then` /
 	// `indented_joins`: consumed by the next `emitNewline()` and then
 	// reset to 0, so only the single line introduced by the trigger
@@ -245,6 +274,21 @@ export function printDocument(input: PrinterInput): string {
 
 	const emitNewline = (): void => {
 		if (atLineStart && parts.length === 0) return;
+		// Idempotent at line start: a redundant call (e.g. leading comments
+		// already broke us onto a fresh line and the downstream predicate-
+		// boolean handler then queues another break) must NOT insert a blank
+		// line. Only `pendingBlankLine` is allowed to push a second `\n`.
+		// If `oneShotExtraIndent` changed since the previous emit, retroactively
+		// fix the indent on the current line by replacing the last indent
+		// entry — keeps continuation indents aligned without doubling newlines.
+		if (atLineStart && !pendingBlankLine) {
+			if (oneShotExtraIndent !== currentLineExtraIndent) {
+				parts[parts.length - 1] = policy.at(indentLevel + oneShotExtraIndent);
+				currentLineExtraIndent = oneShotExtraIndent;
+			}
+			oneShotExtraIndent = 0;
+			return;
+		}
 		if (pendingBlankLine) {
 			// Don't double-blank when the last emission was already a blank-
 			// terminated line (consecutive emitNewlines without intervening
@@ -493,6 +537,25 @@ export function printDocument(input: PrinterInput): string {
 					&& !hasInnerEnclosure(enclosing, 'Select', ['Paren', 'Func', 'Subquery', 'Anonymous', 'Where', 'Group', 'Order', 'Having']))
 				|| selectListCommaOffsets.has(tok.start)
 			);
+		// GROUP BY / ORDER BY list-separator commas — same wrap mechanics as
+		// SELECT-list commas. Detection is token-stream-only since the AST
+		// path's `Group`/`Order` enclosure check would only confirm we're in
+		// the right clause; the comma-zone tracker is sufficient.
+		const isGroupByListComma = typeUpper === 'COMMA'
+			&& groupByListCommaOffsets.has(tok.start);
+		const isOrderByListComma = typeUpper === 'COMMA'
+			&& orderByListCommaOffsets.has(tok.start);
+		const isListClauseComma = isSelectListComma || isGroupByListComma || isOrderByListComma;
+		// Each comma checks only its OWN clause's wrap ranges. Without this
+		// scoping, an inner ORDER BY comma inside a wide outer SELECT would
+		// be misclassified as wrappable because the SELECT range encloses
+		// the entire window paren.
+		const inListClauseWrapRange = isListClauseComma
+			&& (
+				(isSelectListComma && inAnyRange(tok.start, mustWrapSelectRanges))
+				|| (isGroupByListComma && inAnyRange(tok.start, mustWrapGroupByRanges))
+				|| (isOrderByListComma && inAnyRange(tok.start, mustWrapOrderByRanges))
+			);
 		// An L_PAREN opens an "indenting" span when it's a CTE body or a
 		// subquery — those deserve their body on a new indented line.
 		// Detection is token-stream-first (robust against AST variations
@@ -614,30 +677,11 @@ export function printDocument(input: PrinterInput): string {
 				// ends the list, inject a trailing comma after the last target so
 				// `convention.trailing-comma` stays clean on formatter output. The
 				// previous token already landed inline; the comma hugs it before
-				// the upcoming newline. SET_OPERATOR keywords (UNION/INTERSECT/
-				// EXCEPT) end a SELECT list the same way major clauses do, so the
-				// injection fires there too — required for FROM-first selects
-				// where UNION is the only boundary after the targets.
-				if (config.layout.commaPosition === 'trailing'
-					&& prev && prev.category === 'sql'
-					&& prevTypeUpper !== 'COMMA'
-					&& isSelectListBoundary(prev.end, parenDepth, mustWrapSelectRanges)
-					&& lastSqlPartsIdx >= 0
-				) {
-					// Splice immediately after the last SQL token's literal slot
-					// (NOT plain push) so a leading comment attached to the
-					// upcoming clause keyword — already drained into `parts` by
-					// the leading-comment loop above — doesn't get separated
-					// from its target token. Otherwise:
-					//     last_target
-					//     /* trailing block comment */
-					//     ,
-					// would result, re-triggering `convention.comma-position`
-					// on the formatter's own output. With splice, the comma
-					// lands on the same line as `last_target` before the
-					// comment continues on its own line.
-					parts.splice(lastSqlPartsIdx + 1, 0, ',');
-				}
+				// (Previous versions also injected a trailing comma here after
+				// the last SELECT target — that behavior matched neither sqlfmt
+				// nor the current dbt-labs style guide, both of which leave the
+				// final target without a comma. The injection has been removed;
+				// trailing commas now exist only BETWEEN targets.)
 				// Clear any one-shot indent the last target-comma queued —
 				// FROM/WHERE/etc land at the clause's base indent, not the
 				// target-continuation indent.
@@ -710,13 +754,14 @@ export function printDocument(input: PrinterInput): string {
 			// blank line + newline for the next CTE name fire AFTER the emit.
 		}
 
-		// Leading-comma mode: when a SELECT list must wrap, emit a newline
-		// BEFORE the comma so it leads the continuation line. Short lists
-		// stay inline unchanged. One-shot extra indent keeps the commas
-		// visually aligned with subsequent targets.
-		if (isSelectListComma
+		// Leading-comma mode: when a list-clause (SELECT / GROUP BY / ORDER
+		// BY) must wrap, emit a newline BEFORE the comma so it leads the
+		// continuation line. Short lists stay inline unchanged. One-shot
+		// extra indent keeps the commas visually aligned with subsequent
+		// targets.
+		if (isListClauseComma
 			&& config.layout.commaPosition === 'leading'
-			&& inAnyRange(tok.start, mustWrapSelectRanges)
+			&& inListClauseWrapRange
 		) {
 			// If the next target carries leading comments (block or `--`),
 			// drain them BEFORE the comma so the comma stays adjacent to the
@@ -876,7 +921,6 @@ export function printDocument(input: PrinterInput): string {
 			}
 		}
 		parts.push(recaseToken(emitType, emitLiteral, config, cap, nextSqlTypeUpper));
-		lastSqlPartsIdx = parts.length - 1;
 		atLineStart = false;
 
 		// ── Trailing comments ────────────────────────────────────────────
@@ -980,13 +1024,12 @@ export function printDocument(input: PrinterInput): string {
 				pendingBlankLine = true;
 				pendingNewline = true;
 			}
-		} else if (isSelectListComma) {
-			// Break only when the Select will overflow the line. Short
-			// `select a, b from t` stays on one line; long SELECT lists wrap.
+		} else if (isListClauseComma) {
+			// Break only when the clause must wrap. Short forms stay on one
+			// line; wide forms (or alwaysWrap-toggled ones) wrap.
 			// `commaPosition: 'leading'` is handled BEFORE the comma emission
 			// (see earlier in the loop); trailing fires here, after.
-			const mustWrap = inAnyRange(tok.start, mustWrapSelectRanges);
-			if (mustWrap && config.layout.commaPosition === 'trailing') {
+			if (inListClauseWrapRange && config.layout.commaPosition === 'trailing') {
 				pendingNewline = true;
 				// Indent continuation targets so they sit under the first one.
 				oneShotExtraIndent = 1;
@@ -1017,8 +1060,62 @@ export function printDocument(input: PrinterInput): string {
 			// Wrap mode: break BEFORE the first target so all targets land
 			// on their own indented lines. Subsequent targets are broken by
 			// the comma path above. Keeps the wrap shape consistent whether
-			// the trigger is line-length overflow or a future explicit
-			// `always wrap` policy.
+			// the trigger is line-length overflow or the `alwaysWrap.select`
+			// toggle.
+			//
+			// Exception: when SELECT is immediately followed by a modifier
+			// keyword (DISTINCT / ALL), the modifier stays inline with
+			// SELECT — `select distinct` reads as a unit. The wrap fires on
+			// the modifier instead so the first target still lands on a
+			// fresh indented line.
+			const nextType = peekNextSqlTokenType(stream, streamIndex);
+			if (nextType !== 'DISTINCT' && nextType !== 'ALL') {
+				pendingNewline = true;
+				oneShotExtraIndent = 1;
+			}
+		} else if (
+			(typeUpper === 'DISTINCT' || typeUpper === 'ALL')
+			&& prevTypeUpper === 'SELECT'
+			&& inAnyRange(tok.start, mustWrapSelectRanges)
+		) {
+			// SELECT modifier in wrap mode: emit inline (`select distinct`),
+			// then queue the wrap for the next token (the first target).
+			pendingNewline = true;
+			oneShotExtraIndent = 1;
+		} else if (
+			(typeUpper === 'GROUP_BY' || (typeUpper === 'BY' && prevTypeUpper === 'GROUP'))
+			&& inAnyRange(tok.start, mustWrapGroupByRanges)
+			&& !indentingParenIsWindow.some(Boolean)
+		) {
+			// GROUP BY in wrap mode: same shape as SELECT — keyword stays on
+			// its own line, each target lands below at +1 indent. Handles
+			// both the compound `GROUP_BY` token and the bare two-token
+			// `GROUP` + `BY` form. Skipped when nested inside an `OVER(...)`
+			// window — those clauses are governed by `alwaysWrap.window*`,
+			// not the top-level toggle.
+			pendingNewline = true;
+			oneShotExtraIndent = 1;
+		} else if (
+			(typeUpper === 'ORDER_BY' || (typeUpper === 'BY' && prevTypeUpper === 'ORDER'))
+			&& inAnyRange(tok.start, mustWrapOrderByRanges)
+			&& !indentingParenIsWindow.some(Boolean)
+		) {
+			// ORDER BY in wrap mode: same as GROUP BY. The OVER-paren guard
+			// is in the main walk rather than the pre-pass because window
+			// detection relies on the runtime `indentingParenIsWindow`
+			// stack — the stream-level scoping in `computeMustWrapListClauses`
+			// is a best-effort filter, but the runtime stack is authoritative.
+			pendingNewline = true;
+			oneShotExtraIndent = 1;
+		} else if (typeUpper === 'WHERE' && alwaysWrapWhereStarts.has(tok.start)) {
+			// `alwaysWrap.where` with 2+ predicates: push the first predicate
+			// onto its own indented line so WHERE sits alone on its line.
+			// Subsequent predicates are wrapped by the operator-position
+			// machinery (the AND/OR break path).
+			pendingNewline = true;
+			oneShotExtraIndent = 1;
+		} else if (typeUpper === 'HAVING' && alwaysWrapHavingStarts.has(tok.start)) {
+			// Same as WHERE — keyword on own line, predicates indented.
 			pendingNewline = true;
 			oneShotExtraIndent = 1;
 		} else if (mustWrapWideExprOps.has(tok.start) && config.layout.operatorPosition === 'trailing') {
@@ -1034,22 +1131,11 @@ export function printDocument(input: PrinterInput): string {
 		prevTypeUpper = typeUpper;
 	}
 
-	// End-of-stream trailing-comma injection. The in-loop trailing-comma logic
-	// anchors on the major-clause / set-operator that follows the SELECT list
-	// (FROM, WHERE, UNION, ...). When the SELECT list runs to end-of-stream
-	// (no clause keyword after — e.g. a FROM-first SELECT whose last branch
-	// is the final statement), there's no anchor and the last target lands
-	// without its comma. Splice the comma immediately after the last SQL
-	// token's literal so it lands BEFORE any trailing comments attached to
-	// that token.
-	if (config.layout.commaPosition === 'trailing'
-		&& prev && prev.category === 'sql'
-		&& prevTypeUpper !== 'COMMA'
-		&& lastSqlPartsIdx >= 0
-		&& isSelectListBoundary(prev.end, parenDepth, mustWrapSelectRanges)
-	) {
-		parts.splice(lastSqlPartsIdx + 1, 0, ',');
-	}
+	// (Previous versions also injected a trailing comma here, after the
+	// last SELECT target in a FROM-first / end-of-stream SELECT. Removed
+	// for the same reason as the in-loop site above — neither sqlfmt nor
+	// the current dbt-labs guide put a trailing comma after the final
+	// target.)
 
 	void indentLevel;
 
@@ -1110,9 +1196,22 @@ function computeMustWrapCases(
 	stream: NinjaSqlToken[],
 	maxLineLength: number,
 	policy: IndentPolicy,
+	alwaysWrapCase: boolean,
 ): Set<number> {
 	const out = new Set<number>();
 	const indentWidth = policy.at(1).length || 4;
+
+	// `alwaysWrap.case`: force-flag every CASE-start regardless of width. We
+	// still walk the stream below to maintain the SELECT-zone accounting for
+	// the width-driven path, but a forced pass up front catches CASEs the
+	// width-driven pass would otherwise skip (e.g. ones outside SELECT
+	// zones).
+	if (alwaysWrapCase) {
+		for (const tok of stream) {
+			if (tok.category !== 'sql') continue;
+			if (tok.type.toUpperCase() === 'CASE') out.add(tok.start);
+		}
+	}
 
 	// Same indent-tracking heuristic as computeMustWrapSelects.
 	let parenDepth = 0;
@@ -1457,9 +1556,46 @@ function computeMustWrapWindows(
 	stream: NinjaSqlToken[],
 	maxLineLength: number,
 	policy: IndentPolicy,
+	alwaysWrapWindowPartitionBy: boolean,
+	alwaysWrapWindowOrderBy: boolean,
 ): Set<number> {
 	const out = new Set<number>();
 	const indentWidth = policy.at(1).length || 4;
+
+	// Forced-wrap pass: flag any OVER(...) paren whose body contains a
+	// PARTITION (BY) or ORDER (BY) at depth 0, depending on the toggles.
+	// Runs independently of the width-driven pass below so windows outside
+	// SELECT zones (e.g. inside QUALIFY) are still caught.
+	if (alwaysWrapWindowPartitionBy || alwaysWrapWindowOrderBy) {
+		for (let i = 0; i < stream.length; i++) {
+			const tok = stream[i];
+			if (tok.category !== 'sql') continue;
+			if (tok.type.toUpperCase() !== 'L_PAREN') continue;
+			// Find the preceding SQL token; must be OVER.
+			let prevIdx = i - 1;
+			while (prevIdx >= 0 && stream[prevIdx].category !== 'sql') prevIdx--;
+			if (prevIdx < 0 || stream[prevIdx].type.toUpperCase() !== 'OVER') continue;
+			// Scan forward inside the OVER paren, depth-0 relative to it.
+			let depth = 1;
+			let hasPartitionBy = false;
+			let hasOrderBy = false;
+			for (let j = i + 1; j < stream.length; j++) {
+				const t = stream[j];
+				if (t.category !== 'sql') continue;
+				const tt = t.type.toUpperCase();
+				if (tt === 'L_PAREN') { depth++; continue; }
+				if (tt === 'R_PAREN') { depth--; if (depth === 0) break; continue; }
+				if (depth === 1) {
+					if (tt === 'PARTITION_BY' || tt === 'PARTITION') hasPartitionBy = true;
+					else if (tt === 'ORDER_BY' || tt === 'ORDER') hasOrderBy = true;
+				}
+			}
+			if ((alwaysWrapWindowPartitionBy && hasPartitionBy)
+				|| (alwaysWrapWindowOrderBy && hasOrderBy)) {
+				out.add(tok.start);
+			}
+		}
+	}
 
 	let parenDepth = 0;
 	let indentLevel = 0;
@@ -1878,6 +2014,7 @@ function computeMustWrapSelects(
 	stream: NinjaSqlToken[],
 	maxLineLength: number,
 	policy: IndentPolicy,
+	alwaysWrapSelect: boolean,
 ): Array<{ start: number; end: number; openedAtDepth: number }> {
 	const ranges: Array<{ start: number; end: number; openedAtDepth: number }> = [];
 	const indentWidth = policy.at(1).length || 4;
@@ -1948,10 +2085,12 @@ function computeMustWrapSelects(
 			}
 			// One space between adjacent tokens.
 			const projected = indentLevel * indentWidth + widthChars + Math.max(0, tokenCount - 1);
-			// Wrap when either (a) there are multiple top-level targets —
-			// LT09 / layout.select-targets prescription — or (b) the single-
-			// line rendering would exceed maxLineLength.
-			if (topLevelCommas >= 1 || projected > maxLineLength) {
+			// Width-driven by default: wrap only when the collapsed form would
+			// overflow `maxLineLength`. The `alwaysWrap.select` toggle adds a
+			// second trigger: force the wrap whenever the SELECT has 2+ targets,
+			// regardless of width. Same shape either way — the trigger is the
+			// only difference.
+			if (projected > maxLineLength || (alwaysWrapSelect && topLevelCommas >= 1)) {
 				ranges.push({ start: tok.start, end: lastEnd, openedAtDepth: parenDepth });
 			}
 			prevSqlType = type;
@@ -1962,6 +2101,248 @@ function computeMustWrapSelects(
 	}
 
 	return ranges;
+}
+
+/**
+ * Generic list-clause must-wrap, used for GROUP BY and ORDER BY (clauses
+ * shaped as `KEYWORD target1, target2, ...`). Width-driven by default —
+ * produces a range when the collapsed single-line projection exceeds
+ * `maxLineLength`. The `alwaysWrap` flag adds a second trigger: force-wrap
+ * when the clause has 2+ targets, regardless of width.
+ *
+ * `openers` is the set of compound clause-keyword types (e.g. `GROUP_BY`).
+ * The bare two-token form (`GROUP` + `BY`) is recognised when `BY` is seen
+ * with the matching prefix as its previous SQL token.
+ */
+function computeMustWrapListClauses(
+	stream: NinjaSqlToken[],
+	maxLineLength: number,
+	policy: IndentPolicy,
+	openers: Set<string>,
+	alwaysWrap: boolean,
+): Array<{ start: number; end: number }> {
+	const ranges: Array<{ start: number; end: number }> = [];
+	const indentWidth = policy.at(1).length || 4;
+
+	// Bare-prefix mapping: `GROUP_BY` ↔ `GROUP` + `BY` two-token form.
+	const barePrefixes = new Set<string>();
+	for (const k of openers) {
+		if (k.endsWith('_BY')) barePrefixes.add(k.slice(0, -3));
+	}
+
+	let parenDepth = 0;
+	let indentLevel = 0;
+	const indentingParens: number[] = [];
+	let prevSqlType = '';
+	// Track OVER paren spans so we can skip openers inside windows — those
+	// are governed by `alwaysWrap.windowPartitionBy` / `windowOrderBy`, not
+	// by the top-level `alwaysWrap.groupBy` / `orderBy` toggles.
+	const overParenDepths: number[] = [];
+
+	for (let i = 0; i < stream.length; i++) {
+		const tok = stream[i];
+		if (tok.category !== 'sql') continue;
+		const type = tok.type.toUpperCase();
+
+		if (type === 'L_PAREN') {
+			parenDepth++;
+			if (prevSqlType === 'OVER') overParenDepths.push(parenDepth);
+			if (isIndentingParenOpen(stream, i, prevSqlType)) {
+				indentLevel++;
+				indentingParens.push(parenDepth);
+			}
+			prevSqlType = type;
+			continue;
+		}
+		if (type === 'R_PAREN') {
+			if (overParenDepths.length > 0 && overParenDepths[overParenDepths.length - 1] === parenDepth) {
+				overParenDepths.pop();
+			}
+			if (indentingParens.length > 0 && indentingParens[indentingParens.length - 1] === parenDepth) {
+				indentingParens.pop();
+				indentLevel = Math.max(0, indentLevel - 1);
+			}
+			parenDepth = Math.max(0, parenDepth - 1);
+			prevSqlType = type;
+			continue;
+		}
+
+		const isOpener = openers.has(type)
+			|| (type === 'BY' && barePrefixes.has(prevSqlType));
+		if (!isOpener || overParenDepths.length > 0) {
+			prevSqlType = type;
+			continue;
+		}
+
+		// Scan forward through targets, stopping at the next depth-0 clause
+		// boundary (any SELECT_LIST_END_KEYWORDS keyword that is NOT our own
+		// opener — the opener filter prevents a freshly-emitted GROUP/BY
+		// from being mistaken for a boundary).
+		let depth = 0;
+		let widthChars = tok.end - tok.start + 1;
+		let tokenCount = 1;
+		let lastEnd = tok.end;
+		let topLevelCommas = 0;
+		for (let j = i + 1; j < stream.length; j++) {
+			const t = stream[j];
+			if (t.category !== 'sql') continue;
+			const tt = t.type.toUpperCase();
+			if (tt === 'L_PAREN') { depth++; }
+			else if (tt === 'R_PAREN') {
+				if (depth === 0) break;
+				depth--;
+			}
+			if (depth === 0 && SELECT_LIST_END_KEYWORDS.has(tt)
+				&& !openers.has(tt)
+				&& !(tt === 'BY' && barePrefixes.has(stream[j - 1]?.category === 'sql' ? stream[j - 1].type.toUpperCase() : ''))) break;
+			if (depth === 0 && tt === 'COMMA') topLevelCommas++;
+			widthChars += t.end - t.start + 1;
+			tokenCount++;
+			lastEnd = t.end;
+		}
+		const projected = indentLevel * indentWidth + widthChars + Math.max(0, tokenCount - 1);
+		if (topLevelCommas >= 1 && (projected > maxLineLength || alwaysWrap)) {
+			ranges.push({ start: tok.start, end: lastEnd });
+		}
+
+		prevSqlType = type;
+	}
+	return ranges;
+}
+
+/**
+ * Token-stream pass that finds comma offsets inside a list clause
+ * (`GROUP BY` / `ORDER BY`) at the clause's own paren depth. Mirrors
+ * `computeSelectListCommas` for clauses with the same target-list shape.
+ * Used by the main walk to recognise commas that should be wrapped when
+ * the clause is in a must-wrap range.
+ */
+function computeListClauseCommas(stream: NinjaSqlToken[], openers: Set<string>): Set<number> {
+	const out = new Set<number>();
+	const barePrefixes = new Set<string>();
+	for (const k of openers) {
+		if (k.endsWith('_BY')) barePrefixes.add(k.slice(0, -3));
+	}
+	const zones: Array<{ openedAtDepth: number }> = [];
+	const overParenDepths: number[] = [];
+	let parenDepth = 0;
+	let prevType = '';
+
+	for (let i = 0; i < stream.length; i++) {
+		const tok = stream[i];
+		if (tok.category !== 'sql') continue;
+		const type = tok.type.toUpperCase();
+
+		if (type === 'L_PAREN') {
+			parenDepth++;
+			if (prevType === 'OVER') overParenDepths.push(parenDepth);
+			prevType = type;
+			continue;
+		}
+		if (type === 'R_PAREN') {
+			if (overParenDepths.length > 0 && overParenDepths[overParenDepths.length - 1] === parenDepth) {
+				overParenDepths.pop();
+			}
+			parenDepth = Math.max(0, parenDepth - 1);
+			while (zones.length > 0 && zones[zones.length - 1].openedAtDepth > parenDepth) zones.pop();
+			prevType = type;
+			continue;
+		}
+
+		const isOpener = openers.has(type)
+			|| (type === 'BY' && barePrefixes.has(prevType));
+		if (isOpener && overParenDepths.length === 0) {
+			zones.push({ openedAtDepth: parenDepth });
+			prevType = type;
+			continue;
+		}
+
+		if (type === 'COMMA' && zones.length > 0) {
+			const top = zones[zones.length - 1];
+			if (parenDepth === top.openedAtDepth) out.add(tok.start);
+			prevType = type;
+			continue;
+		}
+
+		if (zones.length > 0) {
+			const top = zones[zones.length - 1];
+			if (parenDepth === top.openedAtDepth && SELECT_LIST_END_KEYWORDS.has(type)
+				&& !openers.has(type)
+				&& !(type === 'BY' && barePrefixes.has(prevType))) {
+				zones.pop();
+			}
+		}
+		prevType = type;
+	}
+	return out;
+}
+
+/**
+ * Walks the stream looking for `clauseType` (WHERE / HAVING) keyword tokens
+ * and, for any clause that carries 2+ predicates joined by `AND`/`OR`,
+ * returns:
+ *   - `keywordStarts`: the keyword's start offset (so the printer emits a
+ *     newline AFTER the keyword and pushes the first predicate onto an
+ *     indented line).
+ *   - `forcedBooleans`: the start offsets of every `AND`/`OR` in that
+ *     clause at the clause's own depth. The main walk merges these into
+ *     `predicateBooleanOffsets` so the operator-position machinery wraps
+ *     each predicate onto its own line — even when the source had the
+ *     predicates on a single line (the regular `computePredicateBooleans`
+ *     fallback only flags AND/OR whose source already crossed a line).
+ *
+ * Fires only when `enabled` (the corresponding `alwaysWrap.{where,having}`
+ * toggle). Single-predicate clauses stay inline (`where x = 1`).
+ */
+function computeAlwaysWrapPredicateClauses(
+	stream: NinjaSqlToken[],
+	clauseType: 'WHERE' | 'HAVING',
+	enabled: boolean,
+): { keywordStarts: Set<number>; forcedBooleans: Set<number> } {
+	const keywordStarts = new Set<number>();
+	const forcedBooleans = new Set<number>();
+	if (!enabled) return { keywordStarts, forcedBooleans };
+
+	let parenDepth = 0;
+
+	for (let i = 0; i < stream.length; i++) {
+		const tok = stream[i];
+		if (tok.category !== 'sql') continue;
+		const type = tok.type.toUpperCase();
+
+		if (type === 'L_PAREN') { parenDepth++; continue; }
+		if (type === 'R_PAREN') { parenDepth = Math.max(0, parenDepth - 1); continue; }
+		if (type !== clauseType) continue;
+
+		// Collect AND/OR offsets at the clause's depth before the next
+		// clause boundary. CASE/END inner spans suppress collection so
+		// AND/OR inside a CASE expression don't fool the detection.
+		let innerDepth = 0;
+		let innerCase = 0;
+		const candidateBooleans: number[] = [];
+		for (let j = i + 1; j < stream.length; j++) {
+			const t = stream[j];
+			if (t.category !== 'sql') continue;
+			const tt = t.type.toUpperCase();
+			if (tt === 'L_PAREN') { innerDepth++; continue; }
+			if (tt === 'R_PAREN') {
+				if (innerDepth === 0) break;
+				innerDepth--;
+				continue;
+			}
+			if (tt === 'CASE' || tt === 'IF') { innerCase++; continue; }
+			if (tt === 'END') { if (innerCase > 0) innerCase--; continue; }
+			if (innerDepth === 0 && innerCase === 0 && SELECT_LIST_END_KEYWORDS.has(tt)) break;
+			if (innerDepth === 0 && innerCase === 0 && (tt === 'AND' || tt === 'OR')) {
+				candidateBooleans.push(t.start);
+			}
+		}
+		if (candidateBooleans.length >= 1) {
+			keywordStarts.add(tok.start);
+			for (const s of candidateBooleans) forcedBooleans.add(s);
+		}
+	}
+	return { keywordStarts, forcedBooleans };
 }
 
 function peekNextSqlTokenTypeAt(stream: NinjaSqlToken[], start: number): string | undefined {
@@ -2273,28 +2654,6 @@ function computeMultiPredicateJoinOnRanges(stream: NinjaSqlToken[]): Array<{ sta
 function inAnyRange(offset: number, ranges: Array<{ start: number; end: number }>): boolean {
 	for (const r of ranges) {
 		if (offset >= r.start && offset <= r.end) return true;
-	}
-	return false;
-}
-
-/**
- * True when the previous token (at byte `offset`, paren depth `parenDepth`)
- * is the last token of a wrapped SELECT-list target — used by the
- * trailing-comma injection to anchor the comma after the final target.
- *
- * The match requires the offset to fall inside the SELECT's wrap range AND
- * the current paren depth to equal the SELECT's own depth. The depth check
- * prevents false positives from clause keywords inside nested indenting
- * parens — e.g. `order by` inside an `over (partition by ... order by ...)`
- * window would otherwise be mistaken for the outer SELECT's terminator.
- */
-function isSelectListBoundary(
-	offset: number,
-	parenDepth: number,
-	ranges: Array<{ start: number; end: number; openedAtDepth: number }>,
-): boolean {
-	for (const r of ranges) {
-		if (offset >= r.start && offset <= r.end && parenDepth === r.openedAtDepth) return true;
 	}
 	return false;
 }
