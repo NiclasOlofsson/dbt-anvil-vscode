@@ -23,8 +23,7 @@ export interface IManifestSuppressor {
  */
 export class ManifestWatcher {
 	private _manifestWatcher: vscode.FileSystemWatcher | null = null;
-	private _sqlSaveDisposable: vscode.Disposable | null = null;
-	private _sqlDeleteDisposable: vscode.Disposable | null = null;
+	private _sourceWatcher: vscode.FileSystemWatcher | null = null;
 	private _projectDir: string | null = null;
 	private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
 	private _parseDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -56,61 +55,75 @@ export class ManifestWatcher {
 	start(projectDir: string): void {
 		this._projectDir = projectDir;
 		this._startManifestWatcher();
-
-		// Invalidate column store entries when a SQL model file is saved
-		this._sqlSaveDisposable = vscode.workspace.onDidSaveTextDocument((doc) => {
-			if (doc.languageId !== 'jinja-sql' && !doc.fileName.endsWith('.sql')
-				&& !doc.fileName.endsWith('.yml') && !doc.fileName.endsWith('.yaml')) return;
-
-			// Skip if content hasn't changed since last save
-			const prevHash = this._contentHashes.get(doc.fileName);
-			let currentHash: string;
-			let content: string;
-			try {
-				content = fs.readFileSync(doc.fileName, 'utf8');
-				currentHash = this._simpleHash(content);
-			} catch {
-				return; // unreadable — let parse proceed
-			}
-			if (prevHash === currentHash) {
-				this.logger.trace(`Save without content change, skipping parse: ${doc.fileName}`);
-				return;
-			}
-			this._contentHashes.set(doc.fileName, currentHash);
-
-			// Skip parse if only whitespace changed — dbt parse is expensive
-			const prevNonWsHash = this._nonWsHashes.get(doc.fileName);
-			const currentNonWsHash = this._simpleHash(content.replace(/\s+/g, ''));
-			this._nonWsHashes.set(doc.fileName, currentNonWsHash);
-			if (prevNonWsHash === currentNonWsHash) {
-				this.logger.trace(`Save with whitespace-only change, skipping parse: ${doc.fileName}`);
-				return;
-			}
-
-			const uniqueId = this.indexer.findModelByFilePath(doc.fileName);
-			if (!uniqueId || uniqueId.startsWith('analysis.')) return; // not a project model — skip parse
-
-			this._pendingPivots.add(doc.uri);
-
-			const evicted = this.indexer.invalidateModel(uniqueId);
-			this._onCompileInvalidated.fire(uniqueId);
-			if (evicted.size > 0) {
-				this.logger.info(`Model saved: ${uniqueId} — evicted ${evicted.size} column store entries`);
-				this._onEnrichmentInvalidated.fire(evicted);
-			}
-			this._debouncedParse();
-		});
-
-		// Trigger a background parse when a SQL/YAML project file is deleted so
-		// the manifest no longer references the removed model.
-		this._sqlDeleteDisposable = vscode.workspace.onDidDeleteFiles((e) => {
-			const relevant = e.files.some(({ fsPath }) =>
-				fsPath.endsWith('.sql') || fsPath.endsWith('.yml') || fsPath.endsWith('.yaml'),
-			);
-			if (relevant) this._debouncedParse();
-		});
-
+		this._startSourceWatcher();
 		this.logger.info('ManifestWatcher started');
+	}
+
+	/**
+	 * Invalidation entry point for a single source file. Called from the
+	 * project-scoped FileSystemWatcher on change/create. Reads the file from
+	 * disk, dedups against the previous content hash, evicts column-store and
+	 * compile-cache entries for the affected model, and queues a debounced
+	 * dbt parse.
+	 *
+	 * Exposed for unit testing — the watcher's onDidChange/onDidCreate
+	 * callbacks delegate here, so tests can drive the invalidation path
+	 * directly without standing up a real FileSystemWatcher.
+	 */
+	handleSourceChange(absPath: string, uri: vscode.Uri): void {
+		if (this._isExcludedPath(absPath)) return;
+		if (!absPath.endsWith('.sql') && !absPath.endsWith('.yml') && !absPath.endsWith('.yaml')) return;
+
+		// Skip if content hasn't changed since last invocation
+		const prevHash = this._contentHashes.get(absPath);
+		let currentHash: string;
+		let content: string;
+		try {
+			content = fs.readFileSync(absPath, 'utf8');
+			currentHash = this._simpleHash(content);
+		} catch {
+			return; // unreadable — bail rather than queue work on partial state
+		}
+		if (prevHash === currentHash) {
+			this.logger.trace(`Source unchanged, skipping parse: ${absPath}`);
+			return;
+		}
+		this._contentHashes.set(absPath, currentHash);
+
+		// Skip parse if only whitespace changed — dbt parse is expensive
+		const prevNonWsHash = this._nonWsHashes.get(absPath);
+		const currentNonWsHash = this._simpleHash(content.replace(/\s+/g, ''));
+		this._nonWsHashes.set(absPath, currentNonWsHash);
+		if (prevNonWsHash === currentNonWsHash) {
+			this.logger.trace(`Whitespace-only source change, skipping parse: ${absPath}`);
+			return;
+		}
+
+		const uniqueId = this.indexer.findModelByFilePath(absPath);
+		if (!uniqueId || uniqueId.startsWith('analysis.')) return; // not a project model — skip parse
+
+		this._pendingPivots.add(uri);
+
+		const evicted = this.indexer.invalidateModel(uniqueId);
+		this._onCompileInvalidated.fire(uniqueId);
+		if (evicted.size > 0) {
+			this.logger.info(`Source changed: ${uniqueId} — evicted ${evicted.size} column store entries`);
+			this._onEnrichmentInvalidated.fire(evicted);
+		}
+		this._debouncedParse();
+	}
+
+	private _isExcludedPath(absPath: string): boolean {
+		if (!this._projectDir) return false;
+		const norm = absPath.replace(/\\/g, '/').toLowerCase();
+		const proj = this._projectDir.replace(/\\/g, '/').toLowerCase();
+		// dbt rewrites compiled .sql files under target/ on every run — must not
+		// trigger invalidation/parse cycles. Same for vendored packages.
+		if (norm.startsWith(`${proj}/target/`)) return true;
+		if (norm.startsWith(`${proj}/dbt_packages/`)) return true;
+		if (norm.includes('/node_modules/')) return true;
+		if (norm.includes('/.git/')) return true;
+		return false;
 	}
 
 	/**
@@ -257,6 +270,25 @@ export class ManifestWatcher {
 		this._manifestWatcher.onDidCreate(() => this._debouncedRebuild('manifest created'));
 	}
 
+	/**
+	 * Watch project-scoped source files (.sql/.yml/.yaml) for disk-level
+	 * changes. Replaces the previous onDidSaveTextDocument-only path, which
+	 * missed every write that did not originate from a VS Code editor save —
+	 * external tools, agent file writes, branch switches, formatters.
+	 */
+	private _startSourceWatcher(): void {
+		this._sourceWatcher?.dispose();
+		if (!this._projectDir) return;
+		const pattern = new vscode.RelativePattern(this._projectDir, '**/*.{sql,yml,yaml}');
+		this._sourceWatcher = vscode.workspace.createFileSystemWatcher(pattern);
+		this._sourceWatcher.onDidChange((uri) => this.handleSourceChange(uri.fsPath, uri));
+		this._sourceWatcher.onDidCreate((uri) => this.handleSourceChange(uri.fsPath, uri));
+		this._sourceWatcher.onDidDelete((uri) => {
+			if (this._isExcludedPath(uri.fsPath)) return;
+			this._debouncedParse();
+		});
+	}
+
 	dispose(): void {
 		if (this._debounceTimer) {
 			clearTimeout(this._debounceTimer);
@@ -265,8 +297,7 @@ export class ManifestWatcher {
 			clearTimeout(this._parseDebounceTimer);
 		}
 		this._manifestWatcher?.dispose();
-		this._sqlSaveDisposable?.dispose();
-		this._sqlDeleteDisposable?.dispose();
+		this._sourceWatcher?.dispose();
 		this._onIndexRebuild.dispose();
 		this._onParseRequested.dispose();
 		this._onEnrichmentInvalidated.dispose();

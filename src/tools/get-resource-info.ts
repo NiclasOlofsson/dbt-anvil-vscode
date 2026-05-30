@@ -1,3 +1,5 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { ILogger } from '../types/logger';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
@@ -54,6 +56,16 @@ export class GetResourceInfoTool implements vscode.LanguageModelTool<GetResource
 			);
 		}
 
+		// Read raw_sql from disk rather than manifest. The manifest's raw_code is
+		// stale between parses — agent file writes and external edits bypass dbt
+		// parse, leaving raw_code pinned to whatever dbt last saw. Disk is the
+		// only source that reflects an agent's most recent write.
+		let rawSql: string | undefined;
+		if ('raw_code' in rawNode && rawNode.original_file_path) {
+			rawSql = this._readRawSqlFromDisk(rawNode.original_file_path)
+				?? rawNode.raw_code;
+		}
+
 		const columns = rawNode.columns ?? {};
 		return toolResult({
 			unique_id: rawNode.unique_id,
@@ -76,10 +88,17 @@ export class GetResourceInfoTool implements vscode.LanguageModelTool<GetResource
 				? { relation_name: rawNode.relation_name }
 				: {}),
 			...(compiledSql && include_compiled_sql ? { compiled_sql: compiledSql } : {}),
-			...('raw_code' in rawNode && rawNode.raw_code
-				? { raw_sql: rawNode.raw_code }
-				: {}),
+			...(rawSql ? { raw_sql: rawSql } : {}),
 		});
+	}
+
+	private _readRawSqlFromDisk(originalFilePath: string): string | undefined {
+		try {
+			const absPath = path.join(this.indexer.projectDir, originalFilePath);
+			return fs.readFileSync(absPath, 'utf8');
+		} catch {
+			return undefined;
+		}
 	}
 
 	async prepareInvocation(

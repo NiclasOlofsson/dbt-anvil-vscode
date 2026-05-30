@@ -1,9 +1,11 @@
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { ILogger } from '../types/logger';
 import type { DbtExecutionService } from './execution-service';
 import { Priority } from './execution-service';
 import type { ManifestLoader } from './manifest-loader';
+import type { DbtNode } from './manifest-types';
 
 interface CacheEntry {
 	compiledCode: string;
@@ -76,9 +78,13 @@ export class CompileCache {
 
 		// Warm path — compiled_code already in the manifest (e.g. after full `dbt compile`).
 		// Cache it so it survives a subsequent per-model compile that would wipe the manifest entry.
+		// GATE: only trust manifest.compiled_code when the manifest's node checksum matches
+		// the current on-disk source. Without this gate, an external edit (agent file write,
+		// branch switch) that bypassed onDidSaveTextDocument would let us return pre-edit
+		// compiled SQL and re-stamp it with the new mtime/hash — poisoning the cache.
 		const { manifest } = this.loader.load();
 		const manifestNode = manifest.nodes[uniqueId];
-		if (manifestNode?.compiled_code) {
+		if (manifestNode?.compiled_code && this._manifestNodeMatchesDisk(manifestNode, absPath)) {
 			const hash = this._fileHash(absPath);
 			if (currentMtime !== undefined && hash !== undefined) {
 				this._cache.set(uniqueId, {
@@ -303,5 +309,27 @@ export class CompileCache {
 		} catch {
 			return undefined;
 		}
+	}
+
+	/**
+	 * Returns true when the manifest's node checksum matches the on-disk source.
+	 * dbt records sha256 of the file's UTF-8 bytes in `node.checksum.checksum`.
+	 * Some dbt versions strip leading/trailing whitespace before hashing — try
+	 * both recipes and accept either match. A mismatch means the source has been
+	 * edited since the manifest was generated (so any `compiled_code` it carries
+	 * is for the prior content and must not be trusted).
+	 */
+	private _manifestNodeMatchesDisk(node: DbtNode, absPath: string): boolean {
+		const expected = node.checksum?.checksum;
+		if (!expected || node.checksum?.name !== 'sha256') return false;
+		let content: string;
+		try {
+			content = fs.readFileSync(absPath, 'utf8');
+		} catch {
+			return false;
+		}
+		const sha = (s: string) => crypto.createHash('sha256').update(s, 'utf8').digest('hex');
+		if (sha(content) === expected) return true;
+		return sha(content.trim()) === expected;
 	}
 }
