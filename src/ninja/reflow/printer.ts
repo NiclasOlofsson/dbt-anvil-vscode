@@ -42,13 +42,13 @@ const MAJOR_CLAUSES = new Set([
  * these in a JOIN cluster; subsequent modifier tokens (INNER, OUTER, LEFT,
  * etc.) are emitted on the same line.
  */
-const JOIN_START = new Set(['JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'FULL', 'CROSS']);
+const JOIN_START = new Set(['JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'FULL', 'CROSS', 'NATURAL']);
 /**
  * When the previous token is itself a JOIN modifier, the current JOIN-start
  * token is a continuation of the same JOIN cluster (e.g. `LEFT JOIN`,
  * `FULL OUTER JOIN`) and must not trigger a second newline.
  */
-const JOIN_CONTINUATION_PREV = new Set(['JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'FULL', 'CROSS']);
+const JOIN_CONTINUATION_PREV = new Set(['JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'FULL', 'CROSS', 'NATURAL']);
 
 const SET_OPERATOR = new Set(['UNION', 'INTERSECT', 'EXCEPT']);
 

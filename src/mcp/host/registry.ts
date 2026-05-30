@@ -56,11 +56,17 @@ export class McpToolRegistry {
 		input: unknown,
 		abortSignal: AbortSignal,
 	): Promise<McpToolCallResult> {
+		// Echo the received input as the first content block. Claude Code does
+		// not render tool *inputs*, only results — so without this there is no
+		// way to confirm what arguments a tool actually got. Prepended to every
+		// return path (including errors) so the echo survives failures too.
+		const echo = inputEchoBlock(input);
+
 		const entry = this.entries.get(name);
 		if (!entry) {
 			return {
 				isError: true,
-				content: [{ type: 'text', text: `Unknown tool: ${name}` }],
+				content: [echo, { type: 'text', text: `Unknown tool: ${name}` }],
 			};
 		}
 
@@ -74,19 +80,34 @@ export class McpToolRegistry {
 				token,
 			);
 			if (!result) {
-				return { content: [{ type: 'text', text: '' }] };
+				return { content: [echo] };
 			}
-			return { content: toMcpContent(result) };
+			return { content: [echo, ...toMcpContent(result)] };
 		} catch (err) {
 			return {
 				isError: true,
-				content: [{
+				content: [echo, {
 					type: 'text',
 					text: err instanceof Error ? err.message : String(err),
 				}],
 			};
 		}
 	}
+}
+
+/**
+ * Builds the leading content block that echoes a tool's input back in its
+ * result. Stringified compactly; falls back to a marker if the input is not
+ * JSON-serialisable (e.g. contains a circular reference).
+ */
+function inputEchoBlock(input: unknown): McpToolCallResult['content'][number] {
+	let serialised: string;
+	try {
+		serialised = JSON.stringify(input ?? {});
+	} catch {
+		serialised = '<unserialisable input>';
+	}
+	return { type: 'text', text: `[tool input] ${serialised}` };
 }
 
 /**
