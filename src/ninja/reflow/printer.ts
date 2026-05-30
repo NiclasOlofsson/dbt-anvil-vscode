@@ -129,7 +129,11 @@ export function printDocument(input: PrinterInput): string {
 	// `indented_on` multi-predicate split never fires on real parser output,
 	// collapsing `... on a.x = b.x and a.y = b.y and ...` to a single
 	// mega-line.
-	const multiPredicateJoinOnRanges = computeMultiPredicateJoinOnRanges(stream);
+	const {
+		ranges: multiPredicateJoinOnRanges,
+		breakOffsets: multiPredicateJoinOnBreakOffsets,
+		wrapParenStarts: multiPredicateJoinOnWrapParens,
+	} = computeMultiPredicateJoinOnRanges(stream);
 	// Pre-pass: locate CASE...END spans whose single-line projected width would
 	// exceed `maxLineLength`. The set of CASE token start offsets identifies
 	// the entries — during the walk we push CASE state on a stack at each
@@ -231,6 +235,12 @@ export function printDocument(input: PrinterInput): string {
 	// close at the opener's continuation column; CTE bodies / subqueries /
 	// IN-subqueries close at the outer base.
 	const indentingParenIsWindow: boolean[] = [];
+	// Parallel stack: true when the indenting paren follows `on` in a
+	// multi-predicate JOIN. Used for two things at the matching close:
+	// (1) `)` lands at the column of `on (` instead of the outer base —
+	// mirrors the wide-window restore. (2) AND/OR breaks inside skip the
+	// continuation +1 indent so predicates and operators share an indent.
+	const indentingParenIsOn: boolean[] = [];
 	// Extra-indent currently in effect on the line being built. Set by
 	// `emitNewline()` from whatever `oneShotExtraIndent` it just consumed,
 	// then read by the L_PAREN path to decide whether the next indenting
@@ -560,14 +570,20 @@ export function printDocument(input: PrinterInput): string {
 			// the +1 had already been queued, so leading comments above the
 			// continuation token sit at the SAME column as the continuation
 			// itself rather than dropping back to the clause's base indent.
+			// AST-driven predicate-boolean detection: AND/OR whose nearest
+			// enclosing predicate scope is WHERE/HAVING/JOIN, with no
+			// CASE/IF/Paren shadowing in between. Paren is in the inner-
+			// exclusion list so an AND/OR inside a parenthesized sub-
+			// predicate (`(a and b)` as one of several OR'd groups) stays
+			// inline — only the TOP-level OR between the groups breaks.
 			const willBePredicateBool = (typeUpper === 'AND' || typeUpper === 'OR')
 				&& (
 					(
 						(enclosing.includes('Where') || enclosing.includes('Having') || enclosing.includes('Join'))
-						&& !hasInnerEnclosureAny(enclosing, ['Where', 'Having', 'Join'], ['Case', 'If'])
+						&& !hasInnerEnclosureAny(enclosing, ['Where', 'Having', 'Join'], ['Case', 'If', 'Paren'])
 					)
 					|| predicateBooleanOffsets.has(tok.start)
-					|| inAnyRange(tok.start, multiPredicateJoinOnRanges)
+					|| multiPredicateJoinOnBreakOffsets.has(tok.start)
 				);
 			const willBeJoinOnOrUsing = (typeUpper === 'ON' || typeUpper === 'USING') && policy.indentedOn
 				&& (
@@ -690,7 +706,13 @@ export function printDocument(input: PrinterInput): string {
 				// and ORDER BY land on their own lines. The matching R_PAREN
 				// closes back to the outer column via the same indenting-
 				// paren machinery used by CTE bodies.
-				|| (prevTypeUpper === 'OVER' && mustWrapWindowParenStarts.has(tok.start)));
+				|| (prevTypeUpper === 'OVER' && mustWrapWindowParenStarts.has(tok.start))
+				// `(` after ON that wraps the ENTIRE multi-predicate JOIN-ON
+				// chain: open as indenting so the body wraps onto its own
+				// lines and `)` closes on its own line, mirroring the CTE-
+				// body shape. Sibling-paren cases (`on (a or b) and c`) are
+				// excluded — their `(` is just grouping, not a body.
+				|| (prevTypeUpper === 'ON' && multiPredicateJoinOnWrapParens.has(tok.start)));
 		void innermost;
 		// An R_PAREN that closes the top indenting span needs a newline
 		// BEFORE it so the close sits alone on its own de-indented line.
@@ -755,9 +777,9 @@ export function printDocument(input: PrinterInput): string {
 		const isPredicateBoolean = typeUpper === 'AND' || typeUpper === 'OR'
 			? (
 				(enclosing.includes('Where') || enclosing.includes('Having') || enclosing.includes('Join'))
-					&& !hasInnerEnclosureAny(enclosing, ['Where', 'Having', 'Join'], ['Case', 'If'])
+					&& !hasInnerEnclosureAny(enclosing, ['Where', 'Having', 'Join'], ['Case', 'If', 'Paren'])
 			) || predicateBooleanOffsets.has(tok.start)
-				|| inAnyRange(tok.start, multiPredicateJoinOnRanges)
+				|| multiPredicateJoinOnBreakOffsets.has(tok.start)
 			: false;
 
 		// ── Jinja → WITH boundary ─────────────────────────────────────────
@@ -817,8 +839,16 @@ export function printDocument(input: PrinterInput): string {
 			// ON/WHERE/HAVING line it chains off, keeping the predicate
 			// block visually coherent regardless of the parent clause's
 			// own indent.
+			//
+			// Inside an `on (...)` multi-predicate paren we already added
+			// +1 indent when the paren opened (the body sits at predicate
+			// indent already), so the AND/OR should NOT add another +1 —
+			// otherwise the operator floats one column deeper than its
+			// fellow predicates. Skip the continuation bump in that case.
+			const insideOnParen = indentingParenIsOn.length > 0
+				&& indentingParenIsOn[indentingParenIsOn.length - 1];
 			pendingNewline = true;
-			oneShotExtraIndent = 1;
+			oneShotExtraIndent = insideOnParen ? 0 : 1;
 		} else if (mustWrapWideExprOps.has(tok.start) && config.layout.operatorPosition === 'leading') {
 			// Wide-expression arithmetic break (leading): break BEFORE the
 			// top-level operator so it leads the continuation line. +1
@@ -969,6 +999,7 @@ export function printDocument(input: PrinterInput): string {
 				indentingParens.pop();
 				const extra = indentingParenExtras.pop() ?? 0;
 				const wasWindow = indentingParenIsWindow.pop() ?? false;
+				const wasOn = indentingParenIsOn.pop() ?? false;
 				indentLevel = Math.max(0, indentLevel - 1 - extra);
 				// Wide-window `over (...)` close lands at the SAME column as
 				// the `over (` line (the select-list-continuation column),
@@ -978,7 +1009,7 @@ export function printDocument(input: PrinterInput): string {
 				// indenting parens (CTE bodies, subqueries, IN-subqueries)
 				// close at the outer base regardless of the opener's
 				// continuation indent — that's the established convention.
-				if (wasWindow && extra > 0) oneShotExtraIndent = extra;
+				if ((wasWindow || wasOn) && extra > 0) oneShotExtraIndent = extra;
 			}
 			pendingNewline = true;
 		}
@@ -1066,6 +1097,9 @@ export function printDocument(input: PrinterInput): string {
 				indentingParenExtras.push(extra);
 				indentingParenIsWindow.push(
 					prevTypeUpper === 'OVER' && mustWrapWindowParenStarts.has(tok.start),
+				);
+				indentingParenIsOn.push(
+					prevTypeUpper === 'ON' && multiPredicateJoinOnWrapParens.has(tok.start),
 				);
 				pendingNewline = true;
 			} else {
@@ -2721,12 +2755,33 @@ function computePredicateBooleans(stream: NinjaSqlToken[]): Set<number> {
  * (Won't happen in practice — terminators are JOIN/MAJOR keywords —
  * but the boundary stays clean either way.)
  */
-function computeMultiPredicateJoinOnRanges(stream: NinjaSqlToken[]): Array<{ start: number; end: number }> {
+function computeMultiPredicateJoinOnRanges(
+	stream: NinjaSqlToken[],
+): {
+	ranges: Array<{ start: number; end: number }>;
+	breakOffsets: Set<number>;
+	wrapParenStarts: Set<number>;
+} {
 	const ranges: Array<{ start: number; end: number }> = [];
+	const breakOffsets = new Set<number>();
+	// Offsets of `(` tokens that wrap an ENTIRE multi-predicate JOIN-ON
+	// chain. Only those should be treated as indenting parens — when a
+	// `(` only wraps one of several sibling predicates (`on (a or b) and
+	// c`), the paren is just expression grouping, not an indentable body.
+	const wrapParenStarts = new Set<number>();
 	let parenDepth = 0;
 	let prevTypeUpper = '';
 	// Active join chain state. null when not inside a JOIN-ON/USING chain.
-	let chain: { joinDepth: number; onStart: number; hasAndOr: boolean; lastTokEnd: number } | null = null;
+	// `candidateBreaks` collects AND/OR offsets at the predicate's TOP level
+	// (chain.joinDepth or chain.joinDepth + 1) — those are the operators
+	// that should break onto their own lines when the chain wraps.
+	let chain: {
+		joinDepth: number;
+		onStart: number;
+		hasAndOr: boolean;
+		lastTokEnd: number;
+		candidateBreaks: number[];
+	} | null = null;
 	// `scanningJoin` is true after a JOIN-cluster start has been seen at
 	// `joinDepth` but before its ON/USING. We use it to bind the ON to the
 	// most recent JOIN cluster rather than to any random ON in source order.
@@ -2738,6 +2793,7 @@ function computeMultiPredicateJoinOnRanges(stream: NinjaSqlToken[]): Array<{ sta
 			// the terminator is the current token. The range covers the ON
 			// keyword's start to the byte just before the terminator.
 			ranges.push({ start: chain.onStart, end: chain.lastTokEnd });
+			for (const off of chain.candidateBreaks) breakOffsets.add(off);
 		}
 		chain = null;
 	};
@@ -2792,16 +2848,62 @@ function computeMultiPredicateJoinOnRanges(stream: NinjaSqlToken[]): Array<{ sta
 				onStart: tok.start,
 				hasAndOr: false,
 				lastTokEnd: tok.end,
+				candidateBreaks: [],
 			};
+			// Check whether the next SQL token is `(` and whether the
+			// matching `)` is followed by nothing more in the chain. If
+			// both, the `(` wraps the entire predicate body and qualifies
+			// as an indenting paren.
+			let nextSqlIdx = -1;
+			for (let k = i + 1; k < stream.length; k++) {
+				if (stream[k].category === 'sql') { nextSqlIdx = k; break; }
+			}
+			if (nextSqlIdx >= 0 && stream[nextSqlIdx].type.toUpperCase() === 'L_PAREN') {
+				// Find matching `)`.
+				let d = 1;
+				let matchIdx = -1;
+				for (let k = nextSqlIdx + 1; k < stream.length; k++) {
+					if (stream[k].category !== 'sql') continue;
+					const t = stream[k].type.toUpperCase();
+					if (t === 'L_PAREN') d++;
+					else if (t === 'R_PAREN') { d--; if (d === 0) { matchIdx = k; break; } }
+				}
+				if (matchIdx >= 0) {
+					// After the matching `)`, scan forward at parenDepth ===
+					// chain.joinDepth for content. Anything other than a
+					// chain-ender means there are sibling predicates and the
+					// `(` is NOT a wrap.
+					let isWrap = true;
+					for (let k = matchIdx + 1; k < stream.length; k++) {
+						if (stream[k].category !== 'sql') continue;
+						const t = stream[k].type.toUpperCase();
+						if (JOIN_START.has(t) && !JOIN_CONTINUATION_PREV.has('R_PAREN')) break;
+						if (MAJOR_CLAUSES.has(t)) break;
+						// Any other SQL token at this point is sibling content.
+						isWrap = false;
+						break;
+					}
+					if (isWrap) wrapParenStarts.add(stream[nextSqlIdx].start);
+				}
+			}
 			scanningJoin = null;
 			prevTypeUpper = type;
 			continue;
 		}
 
-		// Inside an open chain, track AND/OR at the chain's depth.
+		// Inside an open chain, track AND/OR at the chain's depth or exactly
+		// one paren deeper. The +1 case catches predicates wrapped in an
+		// outer paren (`on ((... and ...) or (... and ...))`) — the OR
+		// between the two inner parens sits at chain.joinDepth + 1. Deeper
+		// nesting (the AND inside each inner paren) is NOT flagged: those
+		// AND/ORs are inside a single sub-predicate group and should stay
+		// inline.
 		if (chain) {
-			if ((type === 'AND' || type === 'OR') && parenDepth === chain.joinDepth) {
+			if ((type === 'AND' || type === 'OR')
+				&& (parenDepth === chain.joinDepth || parenDepth === chain.joinDepth + 1)
+			) {
 				chain.hasAndOr = true;
+				chain.candidateBreaks.push(tok.start);
 			}
 			chain.lastTokEnd = tok.end;
 		}
@@ -2812,7 +2914,7 @@ function computeMultiPredicateJoinOnRanges(stream: NinjaSqlToken[]): Array<{ sta
 	// End of stream closes any open chain.
 	if (chain) closeChain();
 
-	return ranges;
+	return { ranges, breakOffsets, wrapParenStarts };
 }
 
 /** True when `offset` falls inside any of the provided byte ranges. */
