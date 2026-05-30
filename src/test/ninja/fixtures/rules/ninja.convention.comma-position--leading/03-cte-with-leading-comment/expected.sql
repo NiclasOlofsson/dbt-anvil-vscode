@@ -7,10 +7,12 @@ with base as (
 
 -- second CTE
 , final as (
+
     select
         x
         , y
     from base
 )
+
 select *
 from final

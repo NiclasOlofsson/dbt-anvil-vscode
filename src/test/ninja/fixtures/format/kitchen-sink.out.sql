@@ -18,6 +18,7 @@ with base as (
     ORDER BY 1 desc
     limit 100
 )
+
 select
     a.id,
     a.name,

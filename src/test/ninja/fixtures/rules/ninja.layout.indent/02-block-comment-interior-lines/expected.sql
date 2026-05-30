@@ -12,5 +12,6 @@ cte2 as (
     select *
     from cte
 )
+
 select *
 from cte2

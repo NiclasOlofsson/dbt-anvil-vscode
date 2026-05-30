@@ -10,5 +10,6 @@ b as (
 b as (
     select 2 as x
 )
+
 select *
 from b

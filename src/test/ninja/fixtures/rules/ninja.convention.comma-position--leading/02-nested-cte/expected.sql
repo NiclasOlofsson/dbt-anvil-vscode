@@ -7,10 +7,12 @@ with base as (
 )
 
 , final as (
+
     select
         x
         , y
     from base
 )
+
 select *
 from final

@@ -18,6 +18,7 @@ order by
     a,
     b,
     c;
+
 select
     a,
     row_number() over (
@@ -25,6 +26,7 @@ select
         order by c desc, d desc
     ) as rn
 from t;
+
 select
     case
         when a = 1 then 'one'

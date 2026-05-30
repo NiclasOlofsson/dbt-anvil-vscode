@@ -182,6 +182,25 @@ export function printDocument(input: PrinterInput): string {
 		stream, 'HAVING', config.layout.alwaysWrap.having);
 	const alwaysWrapWhereStarts = whereAlwaysWrap.keywordStarts;
 	const alwaysWrapHavingStarts = havingAlwaysWrap.keywordStarts;
+
+	// Pre-pass: build an offset → line-number index so we can cheaply find
+	// which line a comment's `start` sits on. Used by the source-blank-line
+	// detection below (comments don't carry `line` directly — only SQL
+	// tokens do — so we derive it from the source character stream).
+	const lineForOffset = new Int32Array(source.length + 1);
+	{
+		let l = 0;
+		for (let i = 0; i < source.length; i++) {
+			lineForOffset[i] = l;
+			if (source.charCodeAt(i) === 10 /* '\n' */) l++;
+		}
+		lineForOffset[source.length] = l;
+	}
+	const lineOfOffset = (offset: number): number => {
+		if (offset < 0) return 0;
+		if (offset >= lineForOffset.length) return lineForOffset[lineForOffset.length - 1];
+		return lineForOffset[offset];
+	};
 	// Merge the always-wrap-forced AND/OR offsets into the predicate-boolean
 	// set so the existing operator-position wrap path picks them up. Without
 	// this merge, the toggle would only break the keyword line — every
@@ -404,6 +423,31 @@ export function printDocument(input: PrinterInput): string {
 
 		const typeUpper = tok.type.toUpperCase();
 		const literal = source.slice(tok.start, tok.end + 1);
+
+		// ── Source blank-line preservation ────────────────────────────────
+		// If the source had a blank line between the previous SQL token and
+		// this token's first emission (leading comment OR the token itself),
+		// queue a blank line. Skipped inside indenting parens / function
+		// calls — blank lines in those contexts are almost always source
+		// formatting noise rather than meaningful section separators.
+		if (
+			prev && prev.category === 'sql'
+			&& config.maxBlankLines > 0
+			&& parenDepth === 0
+		) {
+			let firstEmitLine = tok.line;
+			if (tok.comments?.length) {
+				for (const c of tok.comments) {
+					if (c.start < tok.start) {
+						const cLine = lineOfOffset(c.start);
+						if (cLine < firstEmitLine) firstEmitLine = cLine;
+					}
+				}
+			}
+			if (firstEmitLine - prev.line > 1) {
+				pendingBlankLine = true;
+			}
+		}
 
 		// ── AST-informed role queries (hoisted) ───────────────────────────
 		// `enclosing` is needed by the leading-comment drain below (to
