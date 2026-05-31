@@ -4,7 +4,7 @@ select
             - ceiling(sum(case when not is_active then qty end)) >= 10
             and sum(case when not is_active then ceiling(qty) end)
             / nullif(ceiling(sum(case when not is_active then qty end)), 0) >= 2
-        then true
+            then true
         else false
     end as flag
 from t

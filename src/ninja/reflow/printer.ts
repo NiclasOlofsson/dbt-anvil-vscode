@@ -901,13 +901,12 @@ export function printDocument(input: PrinterInput): string {
 			pendingNewline = true;
 			oneShotExtraIndent = 1;
 		} else if (isIndentedThen) {
-			// AST-driven indented_then lands THEN at +1 from the CASE
-			// body's indent (sqlfluff convention). The multiLineWhenThens
-			// fallback wants THEN at the SAME level as WHEN — every break
-			// inside WHEN already lives at +1 (the continuation indent),
-			// so THEN at +0 visually anchors back to WHEN's column.
+			// indented_then: THEN lands one level deeper than WHEN — same
+			// rule sqlfluff uses. THEN is treated as a continuation of the
+			// WHEN branch (the value follows from the condition), so it
+			// indents like any other continuation.
 			pendingNewline = true;
-			oneShotExtraIndent = multiLineWhenThens.has(tok.start) ? 0 : 1;
+			oneShotExtraIndent = 1;
 		} else if (isPredicateBoolean && config.layout.operatorPosition === 'leading') {
 			// Break BEFORE the AND/OR so it leads the continuation line.
 			// +1 indent puts the operator at the same depth as whatever
