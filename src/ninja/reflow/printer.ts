@@ -2010,6 +2010,11 @@ function computeMustWrapWideExpressions(
 
 	type OpEntry = { start: number; type: string };
 	type Zone = {
+		// `'select'` zones treat COMMA as the target boundary; `'predicate'`
+		// zones (WHERE / HAVING / ON / WHEN) treat AND/OR as the boundary.
+		// Same width-driven wrap logic applies either way — each sub-target
+		// gets its own width measurement and arithmetic-break candidate.
+		kind: 'select' | 'predicate';
 		openedAtDepth: number;
 		baseIndentLevel: number;
 		curWidth: number;
@@ -2116,6 +2121,7 @@ function computeMustWrapWideExpressions(
 
 		if (type === 'SELECT') {
 			zones.push({
+				kind: 'select',
 				openedAtDepth: parenDepth,
 				baseIndentLevel: indentLevel,
 				curWidth: 0,
@@ -2129,15 +2135,57 @@ function computeMustWrapWideExpressions(
 			continue;
 		}
 
+		// Predicate zone: WHERE / HAVING / ON / WHEN — each sub-predicate
+		// (separated by top-level AND/OR) is a "target" for the wide-
+		// expression wrap. A predicate whose collapsed form overflows
+		// gets a break inserted at its highest-priority arithmetic
+		// operator, same shape as SELECT-target wrapping.
+		//
+		// Don't push another predicate zone when one is already active —
+		// inner CASE WHENs inside the outer predicate's body should be
+		// counted toward the OUTER predicate's width, not steal it into
+		// their own zone. Without this guard, expressions like
+		// `sum(case when X then Y end) - ceiling(...)` undercount because
+		// the inner WHEN zone "ate" the inner body's tokens.
+		if (type === 'WHERE' || type === 'HAVING' || type === 'ON' || type === 'WHEN') {
+			const insidePredicate = zones.some(z => z.kind === 'predicate');
+			if (!insidePredicate) {
+				zones.push({
+					kind: 'predicate',
+					openedAtDepth: parenDepth,
+					baseIndentLevel: indentLevel,
+					curWidth: 0,
+					curTokenCount: 0,
+					curArithmeticOps: [],
+					curHasCase: false,
+					curHasWindow: false,
+					curHasSubquery: false,
+				});
+			}
+			prevSqlType = type;
+			continue;
+		}
+
 		if (zones.length > 0) {
 			const z = zones[zones.length - 1];
 			if (parenDepth === z.openedAtDepth) {
-				if (type === 'COMMA') {
+				// Target boundary: COMMA for select zones, AND/OR for
+				// predicate zones. Closes the current sub-target and
+				// starts measurement of the next.
+				const isTargetBoundary = z.kind === 'select'
+					? type === 'COMMA'
+					: (type === 'AND' || type === 'OR');
+				if (isTargetBoundary) {
 					flushTarget(z);
 					prevSqlType = type;
 					continue;
 				}
-				if (SELECT_LIST_END_KEYWORDS.has(type)) {
+				// Clause end: closes the zone entirely. THEN closes a WHEN
+				// predicate zone (the THEN-side value isn't a predicate
+				// anymore).
+				const isClauseEnd = SELECT_LIST_END_KEYWORDS.has(type)
+					|| (z.kind === 'predicate' && type === 'THEN');
+				if (isClauseEnd) {
 					flushTarget(z);
 					zones.pop();
 					prevSqlType = type;
@@ -2161,7 +2209,21 @@ function computeMustWrapWideExpressions(
 					}
 				}
 			}
-			if (type === 'CASE') z.curHasCase = true;
+			// SELECT zones: any CASE in the target disqualifies it from
+			// arithmetic-wrap — `mustWrapCases` expands the CASE
+			// vertically, which usually makes the outer expression's
+			// trailing line short again. Wrapping arithmetic on top would
+			// double-wrap.
+			//
+			// Predicate zones: only TOP-LEVEL CASEs disqualify. An inner
+			// CASE inside a function call (`sum(case ... end) > 0`) is an
+			// embedded expression — the outer arithmetic still needs to
+			// wrap on its own because `mustWrapCases` won't help (embedded
+			// CASEs stay inline).
+			if (type === 'CASE') {
+				const caseRelevant = z.kind === 'select' || parenDepth === z.openedAtDepth;
+				if (caseRelevant) z.curHasCase = true;
+			}
 			z.curWidth += tok.end - tok.start + 1;
 			z.curTokenCount++;
 		}
