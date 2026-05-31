@@ -30,6 +30,12 @@ const SQLFMT_PRESET: PresetOverrides = {
 		literals: 'lower',
 		types: 'lower',
 	},
+	indentation: {
+		// sqlfmt keeps THEN inline with WHEN (`when x then y`) rather than
+		// pushing it onto its own indented line. Same for sqlfluff's
+		// default `indented_then: false`.
+		indentedThen: false,
+	},
 	layout: {
 		commaPosition: 'trailing',
 		operatorPosition: 'leading',
@@ -66,6 +72,10 @@ const DBT_LABS_PRESET: PresetOverrides = {
 		literals: 'lower',
 		types: 'lower',
 	},
+	indentation: {
+		// dbt Labs style guide keeps THEN inline with WHEN.
+		indentedThen: false,
+	},
 	layout: {
 		commaPosition: 'trailing',
 		operatorPosition: 'trailing',
@@ -94,6 +104,13 @@ const DBT_STUDIO_PRESET: PresetOverrides = {
 		functions: 'lower',
 		literals: 'lower',
 		types: 'lower',
+	},
+	indentation: {
+		// dbt Studio house style: THEN on its own indented line under
+		// each WHEN — emphasizes the (condition, result) split visually
+		// and matches the broader "every wrap adds an indent" philosophy
+		// the preset uses elsewhere (alwaysWrap.* across most clauses).
+		indentedThen: true,
 	},
 	layout: {
 		commaPosition: 'trailing',
