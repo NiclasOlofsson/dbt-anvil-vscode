@@ -4,6 +4,7 @@ import type { ManifestLoader } from '../../dbt/manifest-loader';
 import type { ILogger } from '../../types/logger';
 import { ParseService } from '../../services/parse-service';
 import type { PositionResolution } from '../../services/parse-service';
+import { buildInFileRenameEdits } from './rename-edits';
 
 /**
  * Rename ref('model') across the workspace using the manifest dependency graph.
@@ -124,9 +125,7 @@ export class DbtRenameProvider implements vscode.RenameProvider {
 			if (docModel) {
 				const resolved = ParseService.resolveAtPosition(docModel, position.line, position.character);
 				if (resolved) {
-					const edit = new vscode.WorkspaceEdit();
-					this._applyTokenRename(resolved, docModel, document.uri, newName, edit);
-					return edit;
+					return buildInFileRenameEdits(resolved, docModel, document.uri, newName);
 				}
 			}
 		}
@@ -255,55 +254,4 @@ export class DbtRenameProvider implements vscode.RenameProvider {
 		return null;
 	}
 
-	/** Apply in-file token-based rename edits to a WorkspaceEdit. */
-	private _applyTokenRename(
-		resolved: PositionResolution,
-		model: import('../../services/parse-service').DocumentModel,
-		uri: vscode.Uri,
-		newName: string,
-		edit: vscode.WorkspaceEdit,
-	): void {
-		const { kind, token } = resolved;
-
-		if (kind === 'column' || kind === 'column_def') {
-			const oldName = token.name;
-			for (const t of model.tokens) {
-				if ((t.type === 'column_ref' || t.type === 'column_def') && t.name === oldName) {
-					edit.replace(uri, new vscode.Range(t.line, t.col, t.line, t.endCol), newName);
-				}
-			}
-			return;
-		}
-
-		const alias = kind === 'table_alias'
-			? token.alias
-			: kind === 'table_qualifier'
-				? (token.resolvedTableRef?.alias ?? token.table)
-				: undefined;
-
-		if (alias !== undefined) {
-			// Update the alias definition site on the table_ref token
-			for (const t of model.tokens) {
-				if (t.type === 'table_ref' && t.alias === alias && t.aliasLine !== undefined && t.aliasCol !== undefined && t.aliasEndCol !== undefined) {
-					edit.replace(uri, new vscode.Range(t.aliasLine, t.aliasCol, t.aliasLine, t.aliasEndCol), newName);
-				}
-				// Update all qualifier spans on column_ref tokens
-				if (t.type === 'column_ref' && t.table === alias && t.tableLine !== undefined && t.tableCol !== undefined && t.tableEndCol !== undefined) {
-					edit.replace(uri, new vscode.Range(t.tableLine, t.tableCol, t.tableLine, t.tableEndCol), newName);
-				}
-			}
-			return;
-		}
-
-		if (kind === 'table_ref') {
-			const cteName = token.name;
-			// Update all table_ref tokens with this name — includes the definition
-			// site token emitted by the bridge, so no separate cteDef edit needed.
-			for (const t of model.tokens) {
-				if (t.type === 'table_ref' && t.name === cteName) {
-					edit.replace(uri, new vscode.Range(t.line, t.col, t.line, t.endCol), newName);
-				}
-			}
-		}
-	}
 }

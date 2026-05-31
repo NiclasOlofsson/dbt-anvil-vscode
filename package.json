@@ -1325,6 +1325,31 @@
 						],
 						"markdownDescription": "Capitalisation policy for SQL datatype keywords (INT, VARCHAR, BOOLEAN, etc.)."
 					},
+					"dbt-studio.ninja.capitalisation.identifiers.style": {
+						"type": "string",
+						"default": "off",
+						"enum": [
+							"off",
+							"snake_case",
+							"camelCase",
+							"PascalCase",
+							"lower",
+							"upper"
+						],
+						"markdownDescription": "Identifier style policy for introduced identifiers (column aliases, CTE names, table aliases). `off` disables the check. Violations are surfaced as diagnostics with a per-site rename code action — never auto-fixed."
+					},
+					"dbt-studio.ninja.capitalisation.identifiers.acronyms": {
+						"type": "array",
+						"items": { "type": "string" },
+						"default": ["ID", "URL", "XML", "SQL", "JSON", "API", "UUID", "CSV", "HTTP", "DB"],
+						"markdownDescription": "Acronyms allowed as a single uppercase run inside camelCase/PascalCase identifiers (e.g. `MyURL` instead of `MyUrl`). Matched case-insensitively. Used both to forgive acronym runs during detection and to preserve them when proposing renames."
+					},
+					"dbt-studio.ninja.capitalisation.identifiers.words": {
+						"type": "array",
+						"items": { "type": "string" },
+						"default": [],
+						"markdownDescription": "Optional whole-word tokens used to segment all-lowercase identifiers that lack visible markers (e.g. `customerid` → `customer_id` when `id` is in the list). Detection-only — without entries here, all-lowercase identifiers are accepted as valid single-word names (same as IntelliJ/VS behaviour)."
+					},
 					"dbt-studio.ninja.indentation.unit": {
 						"type": "string",
 						"default": "space",

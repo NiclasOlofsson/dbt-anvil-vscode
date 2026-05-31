@@ -1,165 +1,168 @@
 import { describe, it, expect } from 'vitest';
-import { mockDocument, cfg, model, sqlTok } from './helpers';
+import { mockDocument, cfg, model, colDef, tableRef } from './helpers';
 import { capIdentifiersRule } from '../../ninja/rules/cap-identifiers';
-import type { SqlToken } from '../../ftl/parse-result';
+import { FixAction } from '../../ninja/violation';
+import type { DocumentModel, TokenInfo } from '../../services/parse-service';
+import type { NinjaConfig } from '../../ninja/config';
 
 const RULE = 'ninja.cap.identifiers';
 
-/**
- * Build a minimal SqlToken for an identifier (VAR type) at the given position.
- */
-function varTok(word: string, line: number, absStart: number): SqlToken {
-	return sqlTok('VAR', absStart, absStart + word.length - 1, line, absStart + word.length);
+function withIdentifierStyle(style: NinjaConfig['capitalisation']['identifiers']['style']): NinjaConfig {
+	return cfg({
+		capitalisation: {
+			...cfg().capitalisation,
+			identifiers: {
+				style,
+				acronyms: ['ID', 'URL'],
+				words: [],
+			},
+		},
+	});
 }
 
-/**
- * Run the rule against a set of explicit tokens.
- * The sql text just needs to contain the words at the expected offsets.
- */
-function check(sql: string, tokens: SqlToken[]) {
-	const doc = mockDocument(sql);
-	const m = model({ sqlTokens: tokens });
-	return capIdentifiersRule.check({ model: m, document: doc, config: cfg() });
+function check(tokens: TokenInfo[], config: NinjaConfig, modelOverrides: Partial<DocumentModel> = {}) {
+	const m = model({ ...modelOverrides, tokens });
+	const doc = mockDocument('');
+	return capIdentifiersRule.check({ model: m, document: doc, config });
 }
 
 describe(RULE, () => {
-	// ── No violations ─────────────────────────────────────────────────────
+	// ── Style off — no violations regardless of input ─────────────────────
 
-	it('passes all-lowercase identifiers', () => {
-		const sql = 'select order_id, customer_id from orders';
-		const tokens: SqlToken[] = [
-			varTok('order_id', 0, 7),
-			varTok('customer_id', 0, 17),
-			varTok('orders', 0, 34),
+	it('emits no violations when identifier style is off', () => {
+		const tokens: TokenInfo[] = [
+			colDef('OrderId', 0, 7),
+			colDef('customer_id', 0, 20),
 		];
-		const v = check(sql, tokens);
+		const v = check(tokens, withIdentifierStyle('off'));
 		expect(v).toHaveLength(0);
 	});
 
-	it('passes all-uppercase identifiers', () => {
-		const sql = 'select ORDER_ID, CUSTOMER_ID from ORDERS';
-		const tokens: SqlToken[] = [
-			varTok('ORDER_ID', 0, 7),
-			varTok('CUSTOMER_ID', 0, 17),
-			varTok('ORDERS', 0, 34),
-		];
-		const v = check(sql, tokens);
+	// ── snake_case policy ─────────────────────────────────────────────────
+
+	it('passes a column alias that matches snake_case', () => {
+		const tokens: TokenInfo[] = [colDef('order_id', 0, 7)];
+		const v = check(tokens, withIdentifierStyle('snake_case'));
 		expect(v).toHaveLength(0);
 	});
 
-	it('passes single-character identifiers regardless of case', () => {
-		// Single-char identifiers (e.g. aliases) are always skipped.
-		const sql = 'select a, b, c from t';
-		const tokens: SqlToken[] = [
-			varTok('a', 0, 7),
-			varTok('b', 0, 10),
-			varTok('c', 0, 13),
-			varTok('t', 0, 20),
-		];
-		const v = check(sql, tokens);
-		expect(v).toHaveLength(0);
-	});
-
-	it('passes empty token stream', () => {
-		const v = check('', []);
-		expect(v).toHaveLength(0);
-	});
-
-	// ── Mixed-case detection ───────────────────────────────────────────────
-
-	it('flags mixed-case identifier', () => {
-		const sql = 'select OrderId from t';
-		const tokens: SqlToken[] = [varTok('OrderId', 0, 7)];
-		const v = check(sql, tokens);
+	it('flags a column alias that violates snake_case', () => {
+		const tokens: TokenInfo[] = [colDef('orderId', 0, 7)];
+		const v = check(tokens, withIdentifierStyle('snake_case'));
 		expect(v).toHaveLength(1);
 		expect(v[0].rule).toBe(RULE);
-		expect(v[0].message).toContain('OrderId');
-		expect(v[0].message).toContain('mixed-case');
+		expect(v[0].message).toContain('orderId');
+		expect(v[0].message).toContain('order_id');           // suggestion appears in message
 	});
 
-	it('flags multiple mixed-case identifiers', () => {
-		const sql = 'select OrderId, CustomerId from t';
-		const tokens: SqlToken[] = [
-			varTok('OrderId', 0, 7),
-			varTok('CustomerId', 0, 16),
-		];
-		const v = check(sql, tokens);
-		expect(v).toHaveLength(2);
+	it('attaches a FixAction with autoFix=false for the violation', () => {
+		const tokens: TokenInfo[] = [colDef('orderId', 0, 7)];
+		const v = check(tokens, withIdentifierStyle('snake_case'));
+		expect(v[0].action?.type).toBe(FixAction.TYPE);
+		const action = v[0].action as FixAction;
+		expect(action.autoFix).toBe(false);
+		expect(action.ops.length).toBeGreaterThan(0);
+		expect(action.ops[0].kind).toBe('replace');
 	});
 
-	// ── Consistency policy ─────────────────────────────────────────────────
-
-	it('flags uppercase identifier when first was lowercase', () => {
-		// First: order_id (lower) → second: CUSTOMER_ID (upper) → violation
-		const sql = 'select order_id, CUSTOMER_ID from t';
-		const tokens: SqlToken[] = [
-			varTok('order_id', 0, 7),
-			varTok('CUSTOMER_ID', 0, 17),
-		];
-		const v = check(sql, tokens);
-		expect(v).toHaveLength(1);
-		expect(v[0].message).toContain('CUSTOMER_ID');
-	});
-
-	it('flags lowercase identifier when first was uppercase', () => {
-		// First: ORDER_ID (upper) → second: customer_id (lower) → violation
-		const sql = 'select ORDER_ID, customer_id from t';
-		const tokens: SqlToken[] = [
-			varTok('ORDER_ID', 0, 7),
-			varTok('customer_id', 0, 17),
-		];
-		const v = check(sql, tokens);
-		expect(v).toHaveLength(1);
-		expect(v[0].message).toContain('customer_id');
-	});
-
-	it('does not flag second identifier when same case as first', () => {
-		const sql = 'select order_id, customer_id from t';
-		const tokens: SqlToken[] = [
-			varTok('order_id', 0, 7),
-			varTok('customer_id', 0, 17),
-		];
-		const v = check(sql, tokens);
+	it('emits NO violation when a single-word identifier conforms trivially', () => {
+		// `order` matches snake_case (single lowercase word). No flag.
+		const tokens: TokenInfo[] = [colDef('order', 0, 7)];
+		const v = check(tokens, withIdentifierStyle('snake_case'));
 		expect(v).toHaveLength(0);
 	});
 
-	// ── Quoted identifiers are skipped ────────────────────────────────────
+	// ── camelCase policy ──────────────────────────────────────────────────
 
-	it('skips QUOTED_IDENTIFIER tokens', () => {
-		const sql = 'select "OrderId" from t';
-		// Quoted identifier — must not be checked.
-		const tokens: SqlToken[] = [sqlTok('QUOTED_IDENTIFIER', 7, 15, 0, 16)];
-		const v = check(sql, tokens);
+	it('passes a column alias that matches camelCase', () => {
+		const tokens: TokenInfo[] = [colDef('orderId', 0, 7)];
+		const v = check(tokens, withIdentifierStyle('camelCase'));
 		expect(v).toHaveLength(0);
 	});
 
-	it('skips BACKTICK tokens', () => {
-		const sql = 'select `OrderId` from t';
-		const tokens: SqlToken[] = [sqlTok('BACKTICK', 7, 15, 0, 16)];
-		const v = check(sql, tokens);
+	it('flags a column alias that violates camelCase', () => {
+		// `id` is in the configured acronym list so the suggestion preserves
+		// it as `ID` — that's the configured behaviour, not a bug.
+		const tokens: TokenInfo[] = [colDef('order_id', 0, 7)];
+		const v = check(tokens, withIdentifierStyle('camelCase'));
+		expect(v).toHaveLength(1);
+		expect(v[0].message).toContain('orderID');
+	});
+
+	it('accepts acronym runs when acronym is in the list', () => {
+		// orderID matches camelCase if ID is a known acronym.
+		const tokens: TokenInfo[] = [colDef('orderID', 0, 7)];
+		const v = check(tokens, withIdentifierStyle('camelCase'));
 		expect(v).toHaveLength(0);
 	});
 
-	// ── Range is correct ──────────────────────────────────────────────────
+	// ── PascalCase policy ─────────────────────────────────────────────────
 
-	it('violation range covers the identifier', () => {
-		const sql = 'select OrderId from t';
-		const tokens: SqlToken[] = [varTok('OrderId', 0, 7)];
-		const v = check(sql, tokens);
+	it('flags a column alias that violates PascalCase', () => {
+		// `id` is in the configured acronym list — suggestion preserves it as `ID`.
+		const tokens: TokenInfo[] = [colDef('order_id', 0, 7)];
+		const v = check(tokens, withIdentifierStyle('PascalCase'));
 		expect(v).toHaveLength(1);
-		expect(v[0].range.start.line).toBe(0);
-		expect(v[0].range.start.character).toBe(7);
-		expect(v[0].range.end.character).toBe(14); // 7 + length('OrderId') = 14
+		expect(v[0].message).toContain('OrderID');
 	});
 
-	it('violation range is correct on a non-zero line', () => {
-		const sql = 'select\n    OrderId\nfrom t';
-		//             line 1, col 4 is 'O'
-		// Absolute offset of 'OrderId' on line 1 col 4 = 7 (select\n) + 4 = 11
-		const tokens: SqlToken[] = [varTok('OrderId', 1, 11)];
-		const v = check(sql, tokens);
+	// ── CTE name violations ──────────────────────────────────────────────
+
+	it('flags a CTE definition name that violates the policy', () => {
+		const cteDef: TokenInfo = {
+			type: 'table_ref',
+			name: 'MyCte',
+			line: 0, col: 5, endCol: 10,
+			cteDefinition: true,
+		};
+		const v = check([cteDef], withIdentifierStyle('snake_case'));
 		expect(v).toHaveLength(1);
-		expect(v[0].range.start.line).toBe(1);
-		expect(v[0].range.start.character).toBe(4);
+		expect(v[0].message).toContain('MyCte');
+		expect(v[0].message).toContain('my_cte');
+	});
+
+	// ── User-written table alias violations ──────────────────────────────
+
+	it('flags a table alias that violates the policy', () => {
+		const ref = tableRef('orders', 0, 5, 'OrdAlias');
+		const v = check([ref], withIdentifierStyle('snake_case'));
+		expect(v).toHaveLength(1);
+		expect(v[0].message).toContain('OrdAlias');
+		expect(v[0].message).toContain('ord_alias');
+	});
+
+	it('does NOT flag a synthesized alias (no source position)', () => {
+		// Synthesized aliases come from qualify() — not user-written, so
+		// not a style violation the user can act on.
+		const ref: TokenInfo = {
+			type: 'table_ref',
+			name: 'orders',
+			line: 0, col: 5, endCol: 11,
+			alias: 'O',
+			synthesized: true,
+		};
+		const v = check([ref], withIdentifierStyle('snake_case'));
+		expect(v).toHaveLength(0);
+	});
+
+	// ── Column references are NOT flagged ────────────────────────────────
+
+	it('does NOT flag column references — only introductions', () => {
+		// column_ref tokens are references to columns defined elsewhere.
+		// The user can't pick their style — that belongs to the source.
+		const colRefTok: TokenInfo = {
+			type: 'column_ref',
+			name: 'OrderId',
+			line: 0, col: 7, endCol: 14,
+		};
+		const v = check([colRefTok], withIdentifierStyle('snake_case'));
+		expect(v).toHaveLength(0);
+	});
+
+	// ── Empty input ──────────────────────────────────────────────────────
+
+	it('emits no violations on an empty token stream', () => {
+		const v = check([], withIdentifierStyle('snake_case'));
+		expect(v).toHaveLength(0);
 	});
 });

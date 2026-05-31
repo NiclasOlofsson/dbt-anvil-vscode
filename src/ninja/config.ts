@@ -2,6 +2,41 @@ import type { NinjaSeverity } from './rule';
 import type { FormatPreset } from './presets';
 
 export type CapitalisationPolicy = 'upper' | 'lower' | 'consistent';
+
+/**
+ * Identifier style policy for introduced identifiers (column aliases, CTE
+ * names, table aliases). `off` disables the rule entirely.
+ *
+ * The four "real" styles all describe the visible shape of the identifier;
+ * `lower`/`upper` are no-separator variants. See `src/ninja/identifier-style.ts`
+ * for the structural definitions.
+ */
+export type IdentifierStylePolicy =
+	| 'off'
+	| 'snake_case'
+	| 'camelCase'
+	| 'PascalCase'
+	| 'lower'
+	| 'upper';
+
+export interface IdentifierCapitalisation {
+	/** Target style for introduced identifiers. `off` disables the check. */
+	style: IdentifierStylePolicy;
+	/**
+	 * Acronyms that may appear as a single uppercase run inside camelCase or
+	 * PascalCase identifiers (e.g. `URL`, `ID`). Matched case-insensitively.
+	 * Used both to forgive acronym runs during detection and to preserve
+	 * them during conversion.
+	 */
+	acronyms: string[];
+	/**
+	 * Optional whole-word tokens used to segment all-lowercase identifiers
+	 * that lack visible markers (e.g. `customerid` → `customer + id` when
+	 * `id` is in the list). Detection-only — does not affect conversion of
+	 * identifiers that already have visible markers.
+	 */
+	words: string[];
+}
 export type CommaPosition = 'trailing' | 'leading';
 export type OperatorPosition = 'trailing' | 'leading';
 export type NotEqualStyle = '!=' | '<>';
@@ -55,6 +90,7 @@ export interface NinjaConfig {
 		functions: CapitalisationPolicy;
 		literals: CapitalisationPolicy;
 		types: CapitalisationPolicy;
+		identifiers: IdentifierCapitalisation;
 	};
 	indentation: {
 		unit: 'space' | 'tab';
@@ -112,6 +148,15 @@ export const DEFAULT_CONFIG: NinjaConfig = {
 		functions: 'lower',
 		literals: 'lower',
 		types: 'lower',
+		identifiers: {
+			// Default `off` — picking a style policy is opinionated and
+			// should be an explicit team choice, not something the tool
+			// imposes silently. Presets that target specific style worlds
+			// (snake_case for dbt) can flip this on.
+			style: 'off',
+			acronyms: ['ID', 'URL', 'XML', 'SQL', 'JSON', 'API', 'UUID', 'CSV', 'HTTP', 'DB'],
+			words: [],
+		},
 	},
 	indentation: {
 		unit: 'space',

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { NinjaConfig, CommaPosition, OperatorPosition, NotEqualStyle, UnionStyle } from './config';
+import type { NinjaConfig, CommaPosition, OperatorPosition, NotEqualStyle, UnionStyle, IdentifierStylePolicy } from './config';
 import { DEFAULT_CONFIG } from './config';
 import { PRESETS, type FormatPreset } from './presets';
 import type { NinjaSeverity, RuleOptionValue } from './rule';
@@ -43,6 +43,23 @@ export function loadConfig(): NinjaConfig {
 			functions: get('capitalisation.functions', preset.capitalisation?.functions, DEFAULT_CONFIG.capitalisation.functions),
 			literals: get('capitalisation.literals', preset.capitalisation?.literals, DEFAULT_CONFIG.capitalisation.literals),
 			types: get('capitalisation.types', preset.capitalisation?.types, DEFAULT_CONFIG.capitalisation.types),
+			identifiers: {
+				style: get<IdentifierStylePolicy>(
+					'capitalisation.identifiers.style',
+					preset.capitalisation?.identifiers?.style,
+					DEFAULT_CONFIG.capitalisation.identifiers.style,
+				),
+				acronyms: get<string[]>(
+					'capitalisation.identifiers.acronyms',
+					preset.capitalisation?.identifiers?.acronyms,
+					DEFAULT_CONFIG.capitalisation.identifiers.acronyms,
+				),
+				words: get<string[]>(
+					'capitalisation.identifiers.words',
+					preset.capitalisation?.identifiers?.words,
+					DEFAULT_CONFIG.capitalisation.identifiers.words,
+				),
+			},
 		},
 		indentation: {
 			unit: get<'space' | 'tab'>('indentation.unit', preset.indentation?.unit, DEFAULT_CONFIG.indentation.unit),
