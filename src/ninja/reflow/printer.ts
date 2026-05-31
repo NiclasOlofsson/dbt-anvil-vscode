@@ -489,16 +489,18 @@ export function printDocument(input: PrinterInput): string {
 		const literal = source.slice(tok.start, tok.end + 1);
 
 		// ── Source blank-line preservation ────────────────────────────────
-		// If the source had a blank line between the previous SQL token and
-		// this token's first emission (leading comment OR the token itself),
-		// queue a blank line. Skipped inside indenting parens / function
-		// calls — blank lines in those contexts are almost always source
-		// formatting noise rather than meaningful section separators.
-		if (
-			prev && prev.category === 'sql'
-			&& config.maxBlankLines > 0
-			&& parenDepth === 0
-		) {
+		// If the source had a blank line between the previous token (SQL or
+		// Jinja) and this token's first emission (leading comment OR the
+		// token itself), queue a blank line. Skipped inside indenting
+		// parens / function calls — blank lines in those contexts are
+		// almost always source formatting noise rather than meaningful
+		// section separators.
+		//
+		// We derive the prev line from the source offset (not `prev.line`)
+		// so the check works for both SQL and Jinja tokens — Jinja tokens
+		// don't carry the same `line` field.
+		if (prev && config.maxBlankLines > 0 && parenDepth === 0) {
+			const prevLine = lineOfOffset(prev.end);
 			let firstEmitLine = tok.line;
 			if (tok.comments?.length) {
 				for (const c of tok.comments) {
@@ -508,7 +510,7 @@ export function printDocument(input: PrinterInput): string {
 					}
 				}
 			}
-			if (firstEmitLine - prev.line > 1) {
+			if (firstEmitLine - prevLine > 1) {
 				pendingBlankLine = true;
 			}
 		}
