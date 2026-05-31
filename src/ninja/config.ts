@@ -135,7 +135,7 @@ export interface NinjaConfig {
 export const DEFAULT_CONFIG: NinjaConfig = {
 	enabled: true,
 	diagnostics: { enabled: true },
-	format: { preset: 'sqlfmt' },
+	format: { preset: 'dbt-studio' },
 	rules: {},
 	disabledRules: [],
 	autoFix: {

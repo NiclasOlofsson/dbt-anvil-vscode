@@ -54,8 +54,10 @@ export class EditorModel {
 	private _disabledRules = new Set<string>();
 
 	// Draft value of `format.preset`. Mutations bump _isDirty; on save the
-	// panel writes this to settings.json.
-	private _preset: FormatPreset = 'sqlfmt';
+	// panel writes this to settings.json. The initial value is the
+	// pre-load placeholder; the panel immediately calls applyPreset with
+	// the actual setting value during construction.
+	private _preset: FormatPreset = 'dbt-studio';
 
 	constructor(rules: RuleViewModel[]) {
 		this._rules = rules;

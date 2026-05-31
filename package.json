@@ -1139,7 +1139,7 @@
 					},
 					"dbt-studio.ninja.format.preset": {
 						"type": "string",
-						"default": "sqlfmt",
+						"default": "dbt-studio",
 						"enum": [
 							"sqlfmt",
 							"dbt-labs",
