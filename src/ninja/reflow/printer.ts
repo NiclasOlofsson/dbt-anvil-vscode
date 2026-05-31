@@ -211,6 +211,11 @@ export function printDocument(input: PrinterInput): string {
 	// wraps). Set of operator-token start offsets. When the walker emits
 	// the operator, it breaks before (leading) or after (trailing) it.
 	const mustWrapWideExprOps = computeMustWrapWideExpressions(stream, config.maxLineLength, policy);
+	// THEN offsets whose preceding WHEN's body spans multiple lines (via
+	// predicate-boolean or arithmetic wraps) — those THENs need their own
+	// indented line. Computed after both wrap sets are known.
+	const multiLineWhenThens = computeMultiLineWhenThens(
+		stream, predicateBooleanOffsets, mustWrapWideExprOps);
 	// Pre-pass: GROUP BY / ORDER BY clause ranges that must wrap. Width-
 	// driven by default; `alwaysWrap.{groupBy,orderBy}` adds the second
 	// trigger. The matching comma-offset sets identify which commas inside
@@ -813,9 +818,12 @@ export function printDocument(input: PrinterInput): string {
 		}
 		// `indented_then` — a THEN keyword whose ancestor chain includes
 		// `Case`/`If` lives on a new indented line, mirroring sqlfluff's
-		// indented_then policy.
+		// indented_then policy. Token-stream fallback (multiLineWhenThens)
+		// covers cases where sqlglot's AST didn't propagate Case/If
+		// metadata to the THEN token's position.
 		const isIndentedThen = typeUpper === 'THEN'
-			&& (enclosing.includes('Case') || enclosing.includes('If'))
+			&& (enclosing.includes('Case') || enclosing.includes('If')
+				|| multiLineWhenThens.has(tok.start))
 			&& policy.indentedThen;
 		// `indented_joins` — a JOIN start token whose parent is `From`
 		// (top-level, not nested) indents one level deeper. This is an
@@ -893,8 +901,13 @@ export function printDocument(input: PrinterInput): string {
 			pendingNewline = true;
 			oneShotExtraIndent = 1;
 		} else if (isIndentedThen) {
+			// AST-driven indented_then lands THEN at +1 from the CASE
+			// body's indent (sqlfluff convention). The multiLineWhenThens
+			// fallback wants THEN at the SAME level as WHEN — every break
+			// inside WHEN already lives at +1 (the continuation indent),
+			// so THEN at +0 visually anchors back to WHEN's column.
 			pendingNewline = true;
-			oneShotExtraIndent = 1;
+			oneShotExtraIndent = multiLineWhenThens.has(tok.start) ? 0 : 1;
 		} else if (isPredicateBoolean && config.layout.operatorPosition === 'leading') {
 			// Break BEFORE the AND/OR so it leads the continuation line.
 			// +1 indent puts the operator at the same depth as whatever
@@ -2664,6 +2677,63 @@ function computeAlwaysWrapPredicateClauses(
 		}
 	}
 	return { keywordStarts, forcedBooleans };
+}
+
+/**
+ * Returns the set of THEN token offsets whose preceding WHEN condition
+ * spans multiple lines in the formatter output — either because the
+ * condition contains source-driven predicate-boolean wraps
+ * (`predicateBooleanOffsets`) or width-driven arithmetic wraps
+ * (`mustWrapWideExprOps`). Those THENs need their own indented line,
+ * matching sqlfluff's `indented_then`. Used as a token-stream fallback
+ * when the AST path (`enclosing.includes('Case')`) is unavailable.
+ */
+function computeMultiLineWhenThens(
+	stream: NinjaSqlToken[],
+	predicateBooleanOffsets: Set<number>,
+	mustWrapWideExprOps: Set<number>,
+): Set<number> {
+	const out = new Set<number>();
+	const whenStack: Array<{ openedAtDepth: number; hasBreak: boolean }> = [];
+	let parenDepth = 0;
+
+	for (const tok of stream) {
+		if (tok.category !== 'sql') continue;
+		const type = tok.type.toUpperCase();
+
+		if (type === 'L_PAREN') { parenDepth++; continue; }
+		if (type === 'R_PAREN') {
+			parenDepth = Math.max(0, parenDepth - 1);
+			while (whenStack.length > 0 && whenStack[whenStack.length - 1].openedAtDepth > parenDepth) {
+				whenStack.pop();
+			}
+			continue;
+		}
+
+		if (type === 'WHEN') {
+			whenStack.push({ openedAtDepth: parenDepth, hasBreak: false });
+			continue;
+		}
+
+		if (type === 'THEN' && whenStack.length > 0) {
+			const top = whenStack[whenStack.length - 1];
+			if (top.openedAtDepth === parenDepth) {
+				if (top.hasBreak) out.add(tok.start);
+				whenStack.pop();
+			}
+			continue;
+		}
+
+		// Any break inside the current WHEN's body marks the WHEN as
+		// multi-line. Counts both AND/OR predicate breaks (source-driven)
+		// and wide-arithmetic breaks (width-driven).
+		if (whenStack.length > 0
+			&& (predicateBooleanOffsets.has(tok.start) || mustWrapWideExprOps.has(tok.start))
+		) {
+			whenStack[whenStack.length - 1].hasBreak = true;
+		}
+	}
+	return out;
 }
 
 function peekNextSqlTokenTypeAt(stream: NinjaSqlToken[], start: number): string | undefined {
