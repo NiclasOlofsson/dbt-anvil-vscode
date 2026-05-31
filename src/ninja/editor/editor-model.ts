@@ -1,5 +1,6 @@
 import type { NinjaCategory } from '../categories';
 import type { NinjaSeverity, RuleOptionValue } from '../rule';
+import type { FormatPreset } from '../presets';
 import {
 	SEVERITY_OPTIONS,
 	type ConfigScope,
@@ -10,6 +11,8 @@ import {
 	type RuleViewModel,
 	type SortColumn,
 } from './editor-types';
+
+const AVAILABLE_PRESETS: FormatPreset[] = ['sqlfmt', 'dbt-labs', 'dbt-studio', 'custom'];
 
 // ── Inspected config input ──────────────────────────────────────────
 
@@ -50,6 +53,10 @@ export class EditorModel {
 	// Rule IDs that are completely disabled (merged from all scopes)
 	private _disabledRules = new Set<string>();
 
+	// Draft value of `format.preset`. Mutations bump _isDirty; on save the
+	// panel writes this to settings.json.
+	private _preset: FormatPreset = 'sqlfmt';
+
 	constructor(rules: RuleViewModel[]) {
 		this._rules = rules;
 	}
@@ -67,6 +74,18 @@ export class EditorModel {
 	applyDisabledRules(ids: string[]): void {
 		this._disabledRules = new Set(ids);
 	}
+
+	applyPreset(preset: FormatPreset): void {
+		this._preset = preset;
+	}
+
+	setPreset(preset: FormatPreset): void {
+		if (this._preset === preset) return;
+		this._preset = preset;
+		this._isDirty = true;
+	}
+
+	get preset(): FormatPreset { return this._preset; }
 
 	isDisabled(ruleId: string): boolean {
 		return this._disabledRules.has(ruleId);
@@ -126,6 +145,23 @@ export class EditorModel {
 
 	resetAll(): void {
 		this._overridesForActiveScope().clear();
+		this._isDirty = true;
+	}
+
+	/**
+	 * Clear every customization at the active scope: severity overrides,
+	 * autoFix overrides, per-rule option values, disabled rules, and
+	 * `format.preset`. The model goes back to the equivalent of an empty
+	 * settings.json — the panel marks every affected field dirty so save
+	 * emits the corresponding removes. Discard backs out as usual.
+	 */
+	resetToDefaults(defaultPreset: FormatPreset): void {
+		this._overridesForActiveScope().clear();
+		this._autoFixRules.clear();
+		this._optionValues.clear();
+		this._overriddenOptionPaths = new Set();
+		this._disabledRules.clear();
+		this._preset = defaultPreset;
 		this._isDirty = true;
 	}
 
@@ -232,6 +268,8 @@ export class EditorModel {
 			summary: this._summary(),
 			sortColumn: this._sortColumn,
 			sortDir: this._sortDir,
+			preset: this._preset,
+			availablePresets: AVAILABLE_PRESETS,
 		};
 	}
 

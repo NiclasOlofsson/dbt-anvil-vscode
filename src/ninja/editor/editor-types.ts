@@ -1,5 +1,6 @@
 import type { NinjaCategory } from '../categories';
 import type { FixScope, NinjaActionKind, NinjaSeverity, RuleConfigOptionSpec, RuleOptionValue } from '../rule';
+import type { FormatPreset } from '../presets';
 
 export type { RuleOptionValue };
 
@@ -60,6 +61,10 @@ export interface EditorSnapshot {
 	summary: EditorSummary;
 	sortColumn: SortColumn | null;
 	sortDir: 'asc' | 'desc';
+	/** Draft value of the `format.preset` setting. */
+	preset: FormatPreset;
+	/** Available presets the picker lists, including `custom`. */
+	availablePresets: FormatPreset[];
 }
 
 export interface EditorSummary {
@@ -84,6 +89,9 @@ export type InboundMessage =
 	| { type: 'resetRule'; ruleId: string }
 	| { type: 'resetAll' }
 	| { type: 'save' }
+	| { type: 'discard' }
+	| { type: 'setPreset'; preset: FormatPreset }
+	| { type: 'resetToDefaults' }
 	| { type: 'scan' }
 	| { type: 'setCategory'; category: NinjaCategory | 'all' }
 	| { type: 'setSearch'; query: string }

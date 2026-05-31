@@ -137,6 +137,24 @@ export function inspectRuleSeverities(): InspectedRuleConfig[] {
 	return result;
 }
 
+/**
+ * Inspect the effective `format.preset` value at the active scope, falling
+ * back to the workspace and then user scope (matching how `loadConfig`
+ * resolves it).
+ */
+export function inspectFormatPreset(): FormatPreset {
+	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
+	const inspection = cfg.inspect<FormatPreset>('format.preset');
+	return inspection?.workspaceValue ?? inspection?.globalValue ?? DEFAULT_CONFIG.format.preset;
+}
+
+/** Persist `format.preset` at the given scope. */
+export async function saveFormatPreset(preset: FormatPreset, scope: ConfigScope): Promise<void> {
+	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
+	const target = scope === 'user' ? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Workspace;
+	await cfg.update('format.preset', preset, target);
+}
+
 /** Persist a single rule severity override at the given scope. */
 export async function saveRuleSeverity(ruleId: string, severity: NinjaSeverity, scope: ConfigScope): Promise<void> {
 	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');

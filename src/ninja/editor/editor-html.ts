@@ -35,10 +35,23 @@ ${scopeTabs(snapshot)}
 function scopeTabs(s: EditorSnapshot): string {
 	const userCls = s.activeScope === 'user' ? 'active' : '';
 	const wsCls = s.activeScope === 'workspace' ? 'active' : '';
+	const dirty = s.isDirty;
+	const disabledAttr = dirty ? '' : 'disabled';
+	const dirtyCls = dirty ? ' is-dirty' : '';
+	const presetOptions = s.availablePresets.map(p =>
+		`<option value="${escAttr(p)}"${p === s.preset ? ' selected' : ''}>${esc(p)}</option>`,
+	).join('');
 	return `<div class="scope-tabs">
 	<button class="scope-tab ${userCls}" data-scope="user">User</button>
 	<button class="scope-tab ${wsCls}" data-scope="workspace">Workspace</button>
-	${s.isDirty ? '<span class="dirty-dot" title="Unsaved changes">●</span>' : ''}
+	<div class="action-bar${dirtyCls}">
+		<label class="preset-label">Preset</label>
+		<select class="preset-select" title="Format preset — selecting one stages its values; click Save to commit.">${presetOptions}</select>
+		<button class="reset-defaults-btn" title="Stage a draft that clears every customization at this scope. Click Save to commit, Discard to back out.">Reset to defaults</button>
+		${dirty ? '<span class="dirty-label">Unsaved changes</span>' : ''}
+		<button class="save-btn" ${disabledAttr} title="Persist draft changes to settings.json">Save</button>
+		<button class="discard-btn" ${disabledAttr} title="Discard draft changes and reload from settings.json">Discard</button>
+	</div>
 </div>`;
 }
 
@@ -242,10 +255,73 @@ body {
 	opacity: 1;
 	border-bottom-color: var(--vscode-focusBorder, #007fd4);
 }
-.dirty-dot {
+/* Action bar in the scope row — Save / Discard, plus a "Unsaved changes" label. */
+.action-bar {
+	margin-left: auto;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.action-bar .dirty-label {
 	color: var(--vscode-notificationsInfoIcon-foreground, #3794ff);
-	margin-left: 8px;
-	font-size: 16px;
+	font-size: 12px;
+	opacity: 0.9;
+}
+.action-bar .save-btn,
+.action-bar .discard-btn {
+	background: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+	border: 1px solid var(--vscode-button-border, transparent);
+	padding: 4px 12px;
+	border-radius: 2px;
+	font-size: 12px;
+	cursor: pointer;
+}
+.action-bar .save-btn:hover:not(:disabled),
+.action-bar .discard-btn:hover:not(:disabled) {
+	background: var(--vscode-button-hoverBackground);
+}
+.action-bar .discard-btn {
+	background: var(--vscode-button-secondaryBackground, transparent);
+	color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+	border: 1px solid var(--vscode-button-border, var(--vscode-panel-border, #444));
+}
+.action-bar .discard-btn:hover:not(:disabled) {
+	background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground));
+}
+.action-bar .save-btn:disabled,
+.action-bar .discard-btn:disabled {
+	opacity: 0.45;
+	cursor: default;
+}
+.action-bar .preset-label {
+	font-size: 12px;
+	opacity: 0.7;
+}
+.action-bar .preset-select {
+	background: var(--vscode-dropdown-background);
+	color: var(--vscode-dropdown-foreground);
+	border: 1px solid var(--vscode-dropdown-border, transparent);
+	padding: 3px 6px;
+	border-radius: 2px;
+	font-size: 12px;
+	cursor: pointer;
+}
+.action-bar .preset-select:focus {
+	border-color: var(--vscode-focusBorder);
+	outline: none;
+}
+.action-bar .reset-defaults-btn {
+	background: var(--vscode-button-secondaryBackground, transparent);
+	color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+	border: 1px solid var(--vscode-button-border, var(--vscode-panel-border, #444));
+	padding: 4px 10px;
+	border-radius: 2px;
+	font-size: 12px;
+	cursor: pointer;
+}
+.action-bar .reset-defaults-btn:hover {
+	background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground));
 }
 
 /* Layout */
@@ -665,6 +741,40 @@ const CLIENT_JS = /* js */`
 			vscode.postMessage({ type: 'switchScope', scope: btn.dataset.scope });
 		});
 	});
+
+	// Save / Discard
+	const saveBtn = document.querySelector('.save-btn');
+	if (saveBtn) {
+		saveBtn.addEventListener('click', () => {
+			if (saveBtn.disabled) return;
+			vscode.postMessage({ type: 'save' });
+		});
+	}
+	const discardBtn = document.querySelector('.discard-btn');
+	if (discardBtn) {
+		discardBtn.addEventListener('click', () => {
+			if (discardBtn.disabled) return;
+			vscode.postMessage({ type: 'discard' });
+		});
+	}
+
+	// Preset dropdown — stages the chosen preset into the draft. The user
+	// still needs to click Save to commit it to settings.json.
+	const presetSelect = document.querySelector('.preset-select');
+	if (presetSelect) {
+		presetSelect.addEventListener('change', () => {
+			vscode.postMessage({ type: 'setPreset', preset: presetSelect.value });
+		});
+	}
+
+	// Reset to defaults — wipes every override at the active scope into the
+	// draft. Save commits the wipe, Discard backs out.
+	const resetDefaultsBtn = document.querySelector('.reset-defaults-btn');
+	if (resetDefaultsBtn) {
+		resetDefaultsBtn.addEventListener('click', () => {
+			vscode.postMessage({ type: 'resetToDefaults' });
+		});
+	}
 
 	// Category nav
 	document.querySelectorAll('.cat-btn').forEach(btn => {
