@@ -325,6 +325,17 @@ export function printDocument(input: PrinterInput): string {
 	// reset to 0, so only the single line introduced by the trigger
 	// token receives the deeper indent.
 	let oneShotExtraIndent = 0;
+	// Queued counterpart of `currentLineIsBooleanContinuation`: set when an
+	// AND/OR predicate-boolean break is queued. emitNewline consumes it onto
+	// `currentLineIsBooleanContinuation` so the next line knows it's a wrap
+	// of a boolean chain (and therefore an inner arithmetic break should
+	// indent +1 deeper than the AND, not align with it).
+	let oneShotIsBooleanContinuation = false;
+	// True when the current line was started by a predicate-boolean (AND/OR)
+	// continuation break. Used by the arithmetic-break path to decide
+	// whether to indent the continuation flat (target wrap — same column)
+	// or one deeper (wrap-of-wrap inside an AND chain).
+	let currentLineIsBooleanContinuation = false;
 
 	// Stack tracking whether each currently-open SELECT was force-wrapped
 	// onto multiple lines. When FROM follows a non-wrapped SELECT it stays
@@ -374,7 +385,9 @@ export function printDocument(input: PrinterInput): string {
 				parts[parts.length - 1] = policy.at(indentLevel + oneShotExtraIndent);
 				currentLineExtraIndent = oneShotExtraIndent;
 			}
+			currentLineIsBooleanContinuation = oneShotIsBooleanContinuation;
 			oneShotExtraIndent = 0;
+			oneShotIsBooleanContinuation = false;
 			return;
 		}
 		if (pendingBlankLine) {
@@ -389,7 +402,9 @@ export function printDocument(input: PrinterInput): string {
 		}
 		parts.push(policy.at(indentLevel + oneShotExtraIndent));
 		currentLineExtraIndent = oneShotExtraIndent;
+		currentLineIsBooleanContinuation = oneShotIsBooleanContinuation;
 		oneShotExtraIndent = 0;
+		oneShotIsBooleanContinuation = false;
 		atLineStart = true;
 	};
 
@@ -923,14 +938,28 @@ export function printDocument(input: PrinterInput): string {
 				&& indentingParenIsOn[indentingParenIsOn.length - 1];
 			pendingNewline = true;
 			oneShotExtraIndent = insideOnParen ? 0 : 1;
+			// Mark the next line as a predicate-boolean continuation so a
+			// nested arithmetic break inside it knows to indent one step
+			// deeper than this AND/OR (wrap-of-wrap), not align with it.
+			oneShotIsBooleanContinuation = !insideOnParen;
 		} else if (mustWrapWideExprOps.has(tok.start) && config.layout.operatorPosition === 'leading') {
 			// Wide-expression arithmetic break (leading): break BEFORE the
-			// top-level operator so it leads the continuation line. +1
-			// indent puts the operand under the target's first line.
+			// top-level operator so it leads the continuation line.
 			// Triggered only when the target has no CASE/window/subquery
 			// — those have their own wraps.
+			//
+			// Indent: a SELECT-target arithmetic break is the FIRST wrap
+			// of that target, so the continuation aligns with the target
+			// at +1. An AND-predicate arithmetic break, on the other hand,
+			// already sits on a line that's itself a wrap of the boolean
+			// chain — so the arithmetic continuation is a wrap-of-wrap
+			// and goes one step deeper. We can't distinguish the two from
+			// `currentLineExtraIndent` alone (both are 1), so the boolean
+			// path opts in via `currentLineIsBooleanContinuation`.
 			pendingNewline = true;
-			oneShotExtraIndent = 1;
+			oneShotExtraIndent = currentLineIsBooleanContinuation
+				? currentLineExtraIndent + 1
+				: 1;
 		}
 		// A CTE separator comma always breaks, even when nested inside the
 		// WITH's top paren — that's the whole reason we need AST context
