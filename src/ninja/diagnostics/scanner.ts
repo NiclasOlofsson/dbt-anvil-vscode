@@ -113,6 +113,21 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 		const start = Date.now();
 
 		try {
+			// Respect the diagnostics gate. With either the master switch off
+			// or diagnostics specifically off, the scanner should not run —
+			// otherwise the user sees every file's violations pushed to the
+			// Problems panel despite explicitly silencing them. We also clear
+			// any previously-pushed diagnostics so flipping the switch off
+			// drains the collection immediately.
+			const gateConfig = loadConfig();
+			if (!gateConfig.enabled || !gateConfig.diagnostics.enabled) {
+				this._ninjaCollection.clear();
+				this._diagnosticsByUri.clear();
+				this._knownDiagnosticUris.clear();
+				this._emitCountsChange();
+				return;
+			}
+
 			const adapterType = this.indexer.adapterType;
 			if (!adapterType) {
 				this.logger.debug('[workspace-scanner] no adapterType resolved — skipping scan (manifest not loaded)');
@@ -217,7 +232,14 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 	}
 
 	restoreSnapshot(snapshot: PersistedWorkspaceScannerSnapshot): boolean {
-		const currentConfigHash = this._hashConfig(loadConfig());
+		const config = loadConfig();
+		// If diagnostics are off, don't restore persisted diagnostics — same
+		// rationale as the gate in `scanAll`. Returning false also skips the
+		// "applied" log line, matching the existing config-hash mismatch path.
+		if (!config.enabled || !config.diagnostics.enabled) {
+			return false;
+		}
+		const currentConfigHash = this._hashConfig(config);
 		if (snapshot.configHash !== currentConfigHash) {
 			return false;
 		}
