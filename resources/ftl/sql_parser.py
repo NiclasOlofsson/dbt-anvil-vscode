@@ -361,40 +361,21 @@ def _parse(sql, dialect, schema_json):
     except Exception:
         pass
     t1 = _time.time()
-    # Before qualify() expands SELECT *, record which CTEs have wildcard
-    # expressions — either a bare `SELECT *` body or qualified wildcards
-    # like `SELECT cp.*, co.companykey FROM ...`. qualify() rewrites both
-    # into individual Column nodes, so by the time the TypeScript extractor
-    # runs the wildcards are gone and the post-qualify columns have
-    # unreliable source positions. Capturing the CTE name here lets the
-    # extractor short-circuit on `wildcardEntry` and emit a single
-    # `[{name: '*'}]` columns array, which downstream rules
-    # (`structure.unused-columns`, `structure.select-star`) already key
-    # off — so the same skip path covers qualified wildcards too.
+    # Before qualify() expands SELECT *, record which CTEs are wildcard selects and their star line.
     wildcard_ctes = []
     for cte in ast.find_all(_exp.CTE):
         body = cte.this
-        if not isinstance(body, _exp.Select):
-            continue
-        star_meta = None
-        for expr in body.expressions:
-            if isinstance(expr, _exp.Star):
-                star_meta = getattr(expr, 'meta', None) or {}
-                break
-            # `cp.*` parses as Column(this=Star, table=Identifier('cp')).
-            if isinstance(expr, _exp.Column) and isinstance(expr.this, _exp.Star):
-                # Prefer the inner Star's meta; fall back to the Column's.
-                star_meta = (getattr(expr.this, 'meta', None)
-                             or getattr(expr, 'meta', None) or {})
-                break
-        if star_meta is None:
-            continue
-        line_1 = star_meta.get('line', 1)
-        col_1 = star_meta.get("col")
-        entry = {"name": cte.alias, "line": line_1 - 1}
-        if col_1 is not None:
-            entry["col"] = col_1 - 1
-        wildcard_ctes.append(entry)
+        if (isinstance(body, _exp.Select)
+                and len(body.expressions) == 1
+                and isinstance(body.expressions[0], _exp.Star)):
+            star = body.expressions[0]
+            m = getattr(star, 'meta', None) or {}
+            line_1 = m.get('line', 1)
+            col_1 = m.get("col")
+            entry = {"name": cte.alias, "line": line_1 - 1}
+            if col_1 is not None:
+                entry["col"] = col_1 - 1
+            wildcard_ctes.append(entry)
     # Build a schema supplement from CTE output columns so that qualify()'s
     # expand_stars() can expand SELECT * even when the external schema is absent
     # or when infer_schema can't determine a CTE's columns (e.g. GROUP BY ALL).
