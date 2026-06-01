@@ -35,13 +35,19 @@ export const tableAsRule: TokenRule = {
 			if (ref.aliasLine === undefined || ref.aliasCol === undefined) continue;
 			if (ref.line >= document.lineCount || ref.aliasLine >= document.lineCount) continue;
 
-			// Look at the source text between the table name and the alias.
-			// If it contains the AS keyword the alias is already explicit.
-			const nameEnd = document.offsetAt(new vscode.Position(ref.line, ref.endCol));
+			// Look at the source text immediately BEFORE the alias. If
+			// the previous non-whitespace tokens are `AS`, the alias is
+			// already explicit. We scan back ~16 chars (enough to clear
+			// `)` + whitespace + `AS`), trim trailing whitespace, then
+			// check the tail. Using "before the alias" rather than
+			// "between name and alias" handles subquery aliases too:
+			// `(select ...) as po` has the table_ref's `name`/`endCol`
+			// pointing at `po` itself, so the legacy between-slice was
+			// empty and the AS check was failing — false-positive.
 			const aliasStart = document.offsetAt(new vscode.Position(ref.aliasLine, ref.aliasCol));
-			const between = text.slice(nameEnd, aliasStart);
+			const beforeAlias = text.slice(Math.max(0, aliasStart - 16), aliasStart).trimEnd();
 
-			if (/\bAS\b/i.test(between)) continue;
+			if (/\bAS$/i.test(beforeAlias)) continue;
 
 			const aliasEndCol = ref.aliasEndCol ?? ref.aliasCol + ref.alias.length;
 			const range = new vscode.Range(ref.aliasLine, ref.aliasCol, ref.aliasLine, aliasEndCol);

@@ -104,4 +104,38 @@ describe(RULE, () => {
 		const m = model({});
 		expect(tableAsRule.check({ model: m, document: doc, config: cfg() })).toHaveLength(0);
 	});
+
+	it('no violation for subquery alias with AS keyword: ") as po"', () => {
+		// `from (select 1) as po`. For subquery aliases the table_ref's `name`
+		// equals the alias (`po`); `endCol` / `aliasCol` both point at the
+		// alias, so the legacy "between name and alias" slice was empty.
+		// The rule must look at the text right BEFORE the alias instead.
+		const sql = 'select * from (select 1) as po';
+		// 'po' starts at col 28 (0-based). isSubquery: true.
+		const tok = tableRefTok('po', 0, 28, 'po', 28, 30, { isSubquery: true });
+		const doc = mockDocument(sql);
+		const m = model({ tokens: [tok] });
+		expect(tableAsRule.check({ model: m, document: doc, config: cfg() })).toHaveLength(0);
+	});
+
+	it('flags subquery alias missing AS: ") po"', () => {
+		const sql = 'select * from (select 1) po';
+		const tok = tableRefTok('po', 0, 25, 'po', 25, 27, { isSubquery: true });
+		const doc = mockDocument(sql);
+		const m = model({ tokens: [tok] });
+		expect(tableAsRule.check({ model: m, document: doc, config: cfg() })).toHaveLength(1);
+	});
+
+	it('does not false-positive when the table name itself ends with "as": "from views_as o"', () => {
+		// `\bAS\b` could match the trailing `as` inside the table name; the
+		// regex anchors must reject that. Source: `views_as o`.
+		const sql = 'select * from views_as o';
+		// views_as at col 14, alias 'o' at col 23.
+		const tok = tableRefTok('views_as', 0, 14, 'o', 23, 24);
+		const doc = mockDocument(sql);
+		const m = model({ tokens: [tok] });
+		const v = tableAsRule.check({ model: m, document: doc, config: cfg() });
+		expect(v).toHaveLength(1);
+		expect(v[0].message).toContain('\'o\'');
+	});
 });
