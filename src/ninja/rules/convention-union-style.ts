@@ -9,7 +9,7 @@ export const unionStyleRule: TokenRule = {
 	id: 'ninja.convention.union-style',
 	type: 'token',
 	category: NinjaCategory.Convention,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'Enforce consistent UNION qualifier style (ALL vs DISTINCT).',
 	actionKinds: ['fix'],
 	autoFixable: true,

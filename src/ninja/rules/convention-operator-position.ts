@@ -14,7 +14,7 @@ export const operatorPositionRule: TokenRule = {
 	id: 'ninja.convention.operator-position',
 	type: 'token',
 	category: NinjaCategory.Convention,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'Enforce consistent boolean operator placement (trailing or leading).',
 	actionKinds: ['fix'],
 	autoFixable: true,
