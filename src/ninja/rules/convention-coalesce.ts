@@ -12,7 +12,7 @@ export const coalesceRule: TokenRule = {
 	id: 'ninja.convention.coalesce',
 	type: 'token',
 	category: NinjaCategory.Convention,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'Use COALESCE instead of legacy null-handling functions (IFNULL, NVL, ISNULL).',
 	actionKinds: ['fix'],
 	autoFixable: true,

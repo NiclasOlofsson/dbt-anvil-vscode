@@ -10,7 +10,7 @@ export const notEqualRule: TokenRule = {
 	id: 'ninja.convention.not-equal',
 	type: 'token',
 	category: NinjaCategory.Convention,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'Enforce consistent not-equal operator style (!= or <>).',
 	actionKinds: ['fix'],
 	autoFixable: true,

@@ -13,7 +13,7 @@ export const explicitInnerJoinRule: TokenRule = {
 	id: RULE_ID,
 	type: 'token',
 	category: NinjaCategory.Convention,
-	defaultSeverity: 'info',
+	defaultSeverity: 'hint',
 	description: 'Write INNER JOIN instead of bare JOIN to make intent explicit.',
 	actionKinds: ['fix'],
 	autoFixable: true,

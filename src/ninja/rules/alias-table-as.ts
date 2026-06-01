@@ -11,7 +11,7 @@ export const tableAsRule: TokenRule = {
 	id: RULE_ID,
 	type: 'token',
 	category: NinjaCategory.Aliasing,
-	defaultSeverity: 'info',
+	defaultSeverity: 'hint',
 	description: 'Table aliases should use the explicit AS keyword.',
 	actionKinds: ['fix'],
 	autoFixable: true,

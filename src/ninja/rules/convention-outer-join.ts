@@ -10,7 +10,7 @@ export const outerJoinRule: TokenRule = {
 	id: 'ninja.convention.outer-join',
 	type: 'token',
 	category: NinjaCategory.Convention,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'Remove redundant OUTER keyword — LEFT/RIGHT/FULL already imply outer semantics.',
 	actionKinds: ['fix'],
 	autoFixable: true,

@@ -16,7 +16,7 @@ export const columnAsRule: TokenRule = {
 	id: 'ninja.aliasing.column-as',
 	type: 'token',
 	category: NinjaCategory.Aliasing,
-	defaultSeverity: 'info',
+	defaultSeverity: 'hint',
 	description: 'Column aliases should use explicit AS keyword.',
 	actionKinds: ['fix'],
 	autoFixable: true,
