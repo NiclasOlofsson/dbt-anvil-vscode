@@ -3,13 +3,24 @@ import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import type { NinjaViolation } from '../violation';
 import type { CteInfo, ColumnRefToken } from '../../services/parse-service';
+import { sqlOnly } from '../../ftl/ninja-sql-tokens';
+import type { SqlToken } from '../../ftl/parse-result';
 
 /**
  * Flags columns defined in a CTE that are never referenced downstream.
  *
  * For each CTE, collects its defined columns and checks whether any
  * column_ref token with a matching resolvedTableRef references them.
- * Skips CTEs whose column list contains '*' (SELECT * bodies).
+ *
+ * Skips CTEs whose SELECT list contains a wildcard — either bare
+ * (`select *`) or qualified (`select cp.*`). The Python `qualify()` pass
+ * rewrites `cp.*` into individual Column nodes before the TypeScript
+ * extractor sees them, and the synthesised columns end up with broken
+ * source positions. Rather than try to recover positions or distinguish
+ * synthesised columns post-qualify, the rule probes the raw token
+ * stream for wildcard markers in each CTE's select list. This keeps
+ * `cte.columns` intact (lineage / completion / hover still see the full
+ * column set) while suppressing the per-column false positives.
  */
 export const unusedColumnsRule: TokenRule = {
 	id: 'ninja.structure.unused-columns',
@@ -28,11 +39,19 @@ export const unusedColumnsRule: TokenRule = {
 		// Build a map of CTE name (lower) → set of referenced column names (lower)
 		const referencedColumns = buildReferencedColumnsMap(model.ctes, model.tokens);
 
+		const sqlTokens = sqlOnly(model.ninjaSqlTokens);
+
 		const violations: NinjaViolation[] = [];
 
 		for (const cte of model.ctes) {
-			// Skip CTEs with wildcard columns — we can't know what's used
+			// Skip CTEs whose AST-derived column list still includes a literal
+			// '*' (bare `SELECT *` path, where the TS extractor short-circuited
+			// before qualify expanded it).
 			if (cte.columns.some(c => c.name === '*')) continue;
+			// Skip CTEs whose token stream shows any wildcard in their own
+			// SELECT list. Catches `cp.*` and other qualified wildcards that
+			// qualify() expands silently.
+			if (cteHasWildcardSelect(cte, sqlTokens)) continue;
 			if (cte.columns.length === 0) continue;
 
 			const refSet = referencedColumns.get(cte.name.toLowerCase());
@@ -53,6 +72,33 @@ export const unusedColumnsRule: TokenRule = {
 		return violations;
 	},
 };
+
+/**
+ * True when the CTE's own SELECT list contains a wildcard `*`. We look
+ * at tokens in the CTE's line range, track paren depth from the start
+ * (so the CTE's own body is depth 1 — any STAR at depth >= 2 belongs to
+ * a subquery or function call, not this CTE's SELECT list), and require
+ * the STAR to be preceded by SELECT / COMMA / DOT / DISTINCT so we
+ * don't false-trigger on multiplication (`a * b`, prev = VAR) or
+ * `COUNT(*)` (prev = L_PAREN).
+ */
+function cteHasWildcardSelect(cte: CteInfo, sqlTokens: SqlToken[]): boolean {
+	const WILDCARD_PREV = new Set(['SELECT', 'COMMA', 'DOT', 'DISTINCT']);
+	let depth = 0;
+	let prevType: string | undefined;
+	for (const tok of sqlTokens) {
+		if (tok.line < cte.line) continue;
+		if (tok.line > cte.endLine) break;
+		const type = tok.type.toUpperCase();
+		if (type === 'L_PAREN') { depth++; prevType = type; continue; }
+		if (type === 'R_PAREN') { depth = Math.max(0, depth - 1); prevType = type; continue; }
+		if (type === 'STAR' && depth === 1 && prevType && WILDCARD_PREV.has(prevType)) {
+			return true;
+		}
+		prevType = type;
+	}
+	return false;
+}
 
 /**
  * Build a map: CTE name (lowercase) → Set of column names (lowercase) referenced on it.

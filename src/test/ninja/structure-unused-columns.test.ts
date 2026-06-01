@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mockDocument, cfg, model, cte, tableRef, colRef } from './helpers';
+import { mockDocument, cfg, model, cte, tableRef, colRef, sqlTok } from './helpers';
 import { unusedColumnsRule } from '../../ninja/rules/structure-unused-columns';
 
 const RULE = 'ninja.structure.unused-columns';
@@ -57,6 +57,173 @@ describe(RULE, () => {
 			],
 		});
 		expect(check(sql, m)).toHaveLength(0);
+	});
+
+	it('skips CTEs whose SELECT list contains a qualified wildcard (cp.*)', () => {
+		// `WITH cte_a AS (SELECT cp.*, co.companykey FROM ...)` — qualify()
+		// expands `cp.*` into per-column entries with unreliable positions.
+		// The rule used to fire one violation per expanded column, all
+		// pointing at Ln 1 Col 1. With the token-stream wildcard probe it
+		// should now skip the whole CTE.
+		const sql = 'with cte_a as (\n  select cp.*, co.companykey\n  from cp\n  left join co on cp.id = co.id\n)\nselect id from cte_a';
+		// 0-based line for the SELECT line (1) and STAR offset.
+		// Tokens model the SELECT list shape we care about.
+		const sqlTokens = [
+			sqlTok('L_PAREN', 14, 14, 0, 15),    // CTE body open
+			sqlTok('SELECT',  18, 23, 1, 8),     // 'select'
+			sqlTok('VAR',     25, 26, 1, 11),    // 'cp'
+			sqlTok('DOT',     27, 27, 1, 12),    // '.'
+			sqlTok('STAR',    28, 28, 1, 13),    // '*'  ← the qualified wildcard
+			sqlTok('COMMA',   29, 29, 1, 14),
+			sqlTok('VAR',     31, 32, 1, 16),    // 'co'
+			sqlTok('DOT',     33, 33, 1, 17),
+			sqlTok('VAR',     34, 43, 1, 27),    // 'companykey'
+			sqlTok('R_PAREN', 80, 80, 4, 1),     // CTE body close
+		];
+		// Post-qualify the CTE's columns array contains the expanded names
+		// (with broken positions — line 0, no col, just what the bug
+		// produces today). The token-stream check should still skip.
+		const m = model({
+			ctes: [{
+				name: 'cte_a',
+				line: 0,
+				endLine: 4,
+				col: 5,
+				endCol: 1,
+				columns: [
+					{ name: 'recid',      line: 0 },
+					{ name: 'is_deleted', line: 0 },
+					{ name: 'companykey', line: 0 },
+				],
+			}],
+			sqlTokens,
+			tokens: [colRef('id', 5, 7, 'cte_a', tableRef('cte_a', 5, 15))],
+		});
+		expect(check(sql, m)).toHaveLength(0);
+	});
+
+	it('does NOT skip when the * is inside a subquery within the CTE body', () => {
+		// `WITH cte_a AS (SELECT a, b FROM (SELECT * FROM t))` — the wildcard
+		// belongs to the subquery, not the CTE's own SELECT list. CTE
+		// columns (a, b) should still be checked.
+		const sql = 'with cte_a as (\n  select a, b\n  from (select * from t)\n)\nselect a from cte_a';
+		const sqlTokens = [
+			sqlTok('L_PAREN',  14, 14, 0, 15),    // CTE body open → depth 1
+			sqlTok('SELECT',   18, 23, 1, 8),
+			sqlTok('VAR',      25, 25, 1, 10),     // 'a'
+			sqlTok('COMMA',    26, 26, 1, 11),
+			sqlTok('VAR',      28, 28, 1, 13),     // 'b'
+			sqlTok('FROM',     32, 35, 2, 6),
+			sqlTok('L_PAREN',  37, 37, 2, 8),      // subquery open → depth 2
+			sqlTok('SELECT',   38, 43, 2, 14),
+			sqlTok('STAR',     45, 45, 2, 16),     // STAR at depth 2 — ignored
+			sqlTok('FROM',     47, 50, 2, 21),
+			sqlTok('VAR',      52, 52, 2, 23),
+			sqlTok('R_PAREN',  53, 53, 2, 24),     // subquery close → depth 1
+			sqlTok('R_PAREN',  55, 55, 3, 1),      // CTE body close → depth 0
+		];
+		const ref = tableRef('cte_a', 4, 14);
+		const m = model({
+			ctes: [{
+				name: 'cte_a',
+				line: 0,
+				endLine: 3,
+				col: 5,
+				endCol: 1,
+				columns: [
+					{ name: 'a', line: 1, col: 9 },
+					{ name: 'b', line: 1, col: 12 },
+				],
+			}],
+			sqlTokens,
+			tokens: [ref, colRef('a', 4, 7, 'cte_a', ref)],
+		});
+		// Only 'b' is unused.
+		const v = check(sql, m);
+		expect(v).toHaveLength(1);
+		expect(v[0].message).toContain('b');
+	});
+
+	it('does NOT skip on multiplication (a * b) inside the CTE body', () => {
+		// Multiplication STAR is preceded by VAR, not SELECT/COMMA/DOT —
+		// the wildcard probe should ignore it.
+		const sql = 'with cte_a as (\n  select a, b\n  where x = a * b\n)\nselect a from cte_a';
+		const sqlTokens = [
+			sqlTok('L_PAREN', 14, 14, 0, 15),    // CTE body open
+			sqlTok('SELECT',  18, 23, 1, 8),
+			sqlTok('VAR',     25, 25, 1, 10),     // 'a'
+			sqlTok('COMMA',   26, 26, 1, 11),
+			sqlTok('VAR',     28, 28, 1, 13),     // 'b'
+			sqlTok('WHERE',   32, 36, 2, 7),
+			sqlTok('VAR',     38, 38, 2, 9),      // 'x'
+			sqlTok('EQ',      40, 40, 2, 11),
+			sqlTok('VAR',     42, 42, 2, 13),     // 'a'
+			sqlTok('STAR',    44, 44, 2, 15),     // multiplication — prev VAR, ignored
+			sqlTok('VAR',     46, 46, 2, 17),     // 'b'
+			sqlTok('R_PAREN', 48, 48, 3, 1),
+		];
+		const ref = tableRef('cte_a', 4, 14);
+		const m = model({
+			ctes: [{
+				name: 'cte_a',
+				line: 0,
+				endLine: 3,
+				col: 5,
+				endCol: 1,
+				columns: [
+					{ name: 'a', line: 1, col: 9 },
+					{ name: 'b', line: 1, col: 12 },
+				],
+			}],
+			sqlTokens,
+			tokens: [ref, colRef('a', 4, 7, 'cte_a', ref)],
+		});
+		// Only 'b' is unused — multiplication STAR doesn't trigger skip.
+		const v = check(sql, m);
+		expect(v).toHaveLength(1);
+		expect(v[0].message).toContain('b');
+	});
+
+	it('does NOT skip on COUNT(*)', () => {
+		// COUNT(*) has STAR preceded by L_PAREN — the probe should ignore.
+		const sql = 'with cte_a as (\n  select count(*), a, b\n)\nselect a from cte_a';
+		const sqlTokens = [
+			sqlTok('L_PAREN', 14, 14, 0, 15),    // CTE body open → depth 1
+			sqlTok('SELECT',  18, 23, 1, 8),
+			sqlTok('VAR',     25, 29, 1, 14),     // 'count'
+			sqlTok('L_PAREN', 30, 30, 1, 15),     // COUNT( → depth 2
+			sqlTok('STAR',    31, 31, 1, 16),     // STAR at depth 2 — ignored
+			sqlTok('R_PAREN', 32, 32, 1, 17),     // close COUNT → depth 1
+			sqlTok('COMMA',   33, 33, 1, 18),
+			sqlTok('VAR',     35, 35, 1, 20),     // 'a'
+			sqlTok('COMMA',   36, 36, 1, 21),
+			sqlTok('VAR',     38, 38, 1, 23),     // 'b'
+			sqlTok('R_PAREN', 40, 40, 2, 1),      // CTE body close
+		];
+		const ref = tableRef('cte_a', 3, 14);
+		const m = model({
+			ctes: [{
+				name: 'cte_a',
+				line: 0,
+				endLine: 2,
+				col: 5,
+				endCol: 1,
+				columns: [
+					{ name: 'count', line: 1, col: 9 },
+					{ name: 'a',     line: 1, col: 20 },
+					{ name: 'b',     line: 1, col: 23 },
+				],
+			}],
+			sqlTokens,
+			tokens: [ref, colRef('a', 3, 7, 'cte_a', ref)],
+		});
+		const v = check(sql, m);
+		// 'count' and 'b' unused; 'a' used.
+		expect(v).toHaveLength(2);
+		expect(v.map(x => x.message)).toEqual(expect.arrayContaining([
+			expect.stringContaining('count'),
+			expect.stringContaining('b'),
+		]));
 	});
 
 	it('no violations when no CTEs exist', () => {
