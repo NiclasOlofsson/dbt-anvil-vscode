@@ -666,7 +666,8 @@ export function printDocument(input: PrinterInput): string {
 				(willBePredicateBool && config.layout.operatorPosition === 'leading')
 				|| willBeJoinOnOrUsing
 				|| (typeUpper === 'THEN'
-					&& (enclosing.includes('Case') || enclosing.includes('If'))
+					&& (enclosing.includes('Case') || enclosing.includes('If')
+						|| multiLineWhenThens.has(tok.start))
 					&& policy.indentedThen);
 			const carriedExtraIndent = oneShotExtraIndent || (willTriggerContinuationIndent ? 1 : 0);
 			for (const c of tok.comments) {
@@ -2726,7 +2727,23 @@ function computeMultiLineWhenThens(
 	let parenDepth = 0;
 
 	for (const tok of stream) {
-		if (tok.category !== 'sql') continue;
+		// Jinja tokens inside a WHEN body force newlines around their tag,
+		// so the THEN ends up on its own line — count as a break.
+		if (tok.category !== 'sql') {
+			if (whenStack.length > 0) {
+				whenStack[whenStack.length - 1].hasBreak = true;
+			}
+			continue;
+		}
+		// Comments are attached to adjacent SQL tokens via tok.comments
+		// (sqlglot doesn't emit standalone COMMENT tokens). When any token
+		// inside a WHEN body — including the THEN itself — carries comments,
+		// the formatter has to emit those comments on their own lines, which
+		// forces THEN onto a new line. Mark the WHEN multi-line so the THEN
+		// gets `indented_then` treatment instead of sitting at WHEN's column.
+		if (whenStack.length > 0 && tok.comments && tok.comments.length > 0) {
+			whenStack[whenStack.length - 1].hasBreak = true;
+		}
 		const type = tok.type.toUpperCase();
 
 		if (type === 'L_PAREN') { parenDepth++; continue; }
