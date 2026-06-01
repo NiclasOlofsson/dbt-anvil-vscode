@@ -19,7 +19,7 @@ export const indentHavingRule: TokenRule = {
 	id: 'ninja.layout.indent-having',
 	type: 'token',
 	category: NinjaCategory.Layout,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'HAVING should be at the same indent level as its preceding peer clause.',
 	actionKinds: ['fix'],
 	autoFixable: true,

@@ -22,7 +22,7 @@ export const indentLimitRule: TokenRule = {
 	id: 'ninja.layout.indent-limit',
 	type: 'token',
 	category: NinjaCategory.Layout,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'LIMIT/OFFSET/QUALIFY/WINDOW should be at the same indent level as their preceding peer clause.',
 	actionKinds: ['fix'],
 	autoFixable: true,

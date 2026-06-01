@@ -32,7 +32,7 @@ export const literalCapRule: TokenRule = {
 	id: 'ninja.cap.literals',
 	type: 'token',
 	category: NinjaCategory.Capitalisation,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'SQL literals (NULL, TRUE, FALSE) should follow the configured capitalisation policy',
 	actionKinds: ['fix'],
 	autoFixable: true,

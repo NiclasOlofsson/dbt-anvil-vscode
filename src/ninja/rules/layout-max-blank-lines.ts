@@ -9,7 +9,7 @@ export const maxBlankLinesRule: LayoutRule = {
 	id: 'ninja.layout.max-blank-lines',
 	type: 'layout',
 	category: NinjaCategory.Layout,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'There should be at most N consecutive blank lines',
 	actionKinds: ['fix'],
 	autoFixable: true,

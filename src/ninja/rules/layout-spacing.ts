@@ -19,7 +19,7 @@ export const bracketSpacingRule: TokenRule = {
 	id: 'ninja.layout.spacing',
 	type: 'token',
 	category: NinjaCategory.Layout,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'No space immediately after `(` or before `)`.',
 	actionKinds: ['fix'],
 	autoFixable: true,

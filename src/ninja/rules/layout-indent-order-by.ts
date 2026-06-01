@@ -21,7 +21,7 @@ export const indentOrderByRule: TokenRule = {
 	id: 'ninja.layout.indent-order-by',
 	type: 'token',
 	category: NinjaCategory.Layout,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'ORDER BY should be at the same indent level as its preceding peer clause.',
 	actionKinds: ['fix'],
 	autoFixable: true,

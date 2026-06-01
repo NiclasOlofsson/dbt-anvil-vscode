@@ -14,7 +14,7 @@ export const indentRule: LayoutRule = {
 	id: 'ninja.layout.indent',
 	type: 'layout',
 	category: NinjaCategory.Layout,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'Indentation should use the configured style',
 	actionKinds: ['fix'],
 	autoFixable: true,

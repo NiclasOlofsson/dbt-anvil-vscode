@@ -14,7 +14,7 @@ export const selectModifiersRule: TokenRule = {
 	id: RULE_ID,
 	type: 'token',
 	category: NinjaCategory.Layout,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'DISTINCT and TOP should appear on the same line as SELECT (LT10)',
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {

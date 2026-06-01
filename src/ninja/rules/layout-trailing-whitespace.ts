@@ -9,7 +9,7 @@ export const trailingWhitespaceRule: LayoutRule = {
 	id: 'ninja.layout.trailing-whitespace',
 	type: 'layout',
 	category: NinjaCategory.Layout,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'Lines should not have trailing whitespace',
 	actionKinds: ['fix'],
 	autoFixable: true,

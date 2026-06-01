@@ -55,7 +55,7 @@ export const functionSpacingRule: LayoutRule = {
 	id: 'ninja.layout.function_spacing',
 	type: 'layout',
 	category: NinjaCategory.Layout,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'No space between function name and opening parenthesis',
 	actionKinds: ['fix'],
 	autoFixable: true,

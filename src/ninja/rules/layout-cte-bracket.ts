@@ -7,7 +7,7 @@ export const cteBracketRule: TokenRule = {
 	id: 'ninja.layout.cte-bracket',
 	type: 'token',
 	category: NinjaCategory.Layout,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'Closing ) of a CTE body must be on its own line (LT07)',
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {

@@ -23,7 +23,7 @@ export const indentThenRule: TokenRule = {
 	id: 'ninja.layout.indent-then',
 	type: 'token',
 	category: NinjaCategory.Layout,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'THEN should be indented relative to its WHEN clause.',
 	actionKinds: ['fix'],
 	autoFixable: true,

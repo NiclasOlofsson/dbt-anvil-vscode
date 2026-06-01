@@ -22,7 +22,7 @@ export const setOperatorRule: TokenRule = {
 	id: 'ninja.layout.set-operator',
 	type: 'token',
 	category: NinjaCategory.Layout,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'UNION / UNION ALL / INTERSECT / EXCEPT must be on their own line.',
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {

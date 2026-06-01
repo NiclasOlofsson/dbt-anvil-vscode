@@ -19,7 +19,7 @@ export const indentFromRule: TokenRule = {
 	id: 'ninja.layout.indent-from',
 	type: 'token',
 	category: NinjaCategory.Layout,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'FROM should be at the same indent level as its SELECT.',
 	actionKinds: ['fix'],
 	autoFixable: true,

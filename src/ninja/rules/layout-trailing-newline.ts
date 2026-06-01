@@ -9,7 +9,7 @@ export const trailingNewlineRule: LayoutRule = {
 	id: 'ninja.layout.trailing-newline',
 	type: 'layout',
 	category: NinjaCategory.Layout,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'Files should end with a single trailing newline',
 	actionKinds: ['fix'],
 	autoFixable: true,

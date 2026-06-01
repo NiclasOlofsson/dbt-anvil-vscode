@@ -15,7 +15,7 @@ export const indentBracketRule: TokenRule = {
 	id: 'ninja.layout.indent-bracket',
 	type: 'token',
 	category: NinjaCategory.Layout,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'Content inside `(...)` should be indented one level under the opening bracket.',
 	actionKinds: ['fix'],
 	autoFixable: true,

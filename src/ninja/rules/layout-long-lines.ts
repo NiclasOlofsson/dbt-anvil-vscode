@@ -12,7 +12,7 @@ export const longLinesRule: LayoutRule = {
 	id: 'ninja.layout.long-lines',
 	type: 'layout',
 	category: NinjaCategory.Layout,
-	defaultSeverity: 'info',
+	defaultSeverity: 'hint',
 	description: 'Lines should not exceed the configured maximum length',
 	configOptions: [{ settingPath: 'maxLineLength', label: 'Max length', type: 'number', min: 40, max: 500 }],
 

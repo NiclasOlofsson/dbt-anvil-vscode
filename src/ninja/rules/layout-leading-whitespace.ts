@@ -9,7 +9,7 @@ export const leadingWhitespaceRule: LayoutRule = {
 	id: 'ninja.layout.leading-whitespace',
 	type: 'layout',
 	category: NinjaCategory.Layout,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'Files should not start with blank lines',
 	actionKinds: ['fix'],
 	autoFixable: true,

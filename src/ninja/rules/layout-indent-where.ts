@@ -21,7 +21,7 @@ export const indentWhereRule: TokenRule = {
 	id: 'ninja.layout.indent-where',
 	type: 'token',
 	category: NinjaCategory.Layout,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'WHERE should be at the same indent level as its FROM/SELECT peer.',
 	actionKinds: ['fix'],
 	autoFixable: true,

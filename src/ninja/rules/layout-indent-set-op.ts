@@ -22,7 +22,7 @@ export const indentSetOpRule: TokenRule = {
 	id: 'ninja.layout.indent-set-op',
 	type: 'token',
 	category: NinjaCategory.Layout,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'UNION / INTERSECT / EXCEPT should be at the same indent level as the SELECT they follow.',
 	actionKinds: ['fix'],
 	autoFixable: true,

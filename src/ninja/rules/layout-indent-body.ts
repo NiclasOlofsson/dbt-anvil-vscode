@@ -19,7 +19,7 @@ export const indentBodyRule: TokenRule = {
 	id: 'ninja.layout.indent-body',
 	type: 'token',
 	category: NinjaCategory.Layout,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'Clause-body content (columns, tables, conditions) should be indented one level under its clause keyword.',
 	actionKinds: ['fix'],
 	autoFixable: true,

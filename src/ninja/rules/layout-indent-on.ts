@@ -23,7 +23,7 @@ export const indentOnRule: TokenRule = {
 	id: 'ninja.layout.indent-on',
 	type: 'token',
 	category: NinjaCategory.Layout,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'ON/USING should be indented relative to its JOIN clause.',
 	actionKinds: ['fix'],
 	autoFixable: true,

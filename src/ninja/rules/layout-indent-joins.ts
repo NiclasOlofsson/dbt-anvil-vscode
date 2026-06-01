@@ -28,7 +28,7 @@ export const indentJoinsRule: TokenRule = {
 	id: 'ninja.layout.indent-joins',
 	type: 'token',
 	category: NinjaCategory.Layout,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'JOIN clauses should be consistently indented relative to FROM.',
 	actionKinds: ['fix'],
 	autoFixable: true,

@@ -17,7 +17,7 @@ export const binaryOperatorSpacingRule: TokenRule = {
 	id: 'ninja.layout.binary-operator-spacing',
 	type: 'token',
 	category: NinjaCategory.Layout,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'Comparison operators (=, !=, <, <=, >, >=) should have a space on both sides.',
 	actionKinds: ['fix'],
 	autoFixable: true,

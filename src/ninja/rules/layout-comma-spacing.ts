@@ -15,7 +15,7 @@ export const commaSpacingRule: TokenRule = {
 	id: 'ninja.layout.comma-spacing',
 	type: 'token',
 	category: NinjaCategory.Layout,
-	defaultSeverity: 'warning',
+	defaultSeverity: 'hint',
 	description: 'No space before a comma, exactly one space after.',
 	actionKinds: ['fix'],
 	autoFixable: true,
