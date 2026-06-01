@@ -144,8 +144,13 @@ export function runSpacingEngine(
 			// in the WRONG boundary position. A token in the middle of a line
 			// (neither leading nor trailing) is on a single-line expression and is
 			// never a violation — the reflow engine handles those cases.
-			if (posPolicy === 'trailing' && isLeading) violated = true;   // at start of line, should be at end of prev
-			if (posPolicy === 'leading' && isTrailing) violated = true;    // at end of line, should be at start of next
+			//
+			// A token alone on its own line (isLeading && isTrailing) is fine
+			// for both 'leading' and 'trailing' policies — `where\n    x = 1`
+			// is a canonical layout. Excluding the alone case requires the
+			// inverse boundary to be false too.
+			if (posPolicy === 'trailing' && isLeading && !isTrailing) violated = true;   // at start of line, should be at end of prev
+			if (posPolicy === 'leading' && isTrailing && !isLeading) violated = true;    // at end of line, should be at start of next
 			if (posPolicy === 'alone' && (!isLeading || !isTrailing)) violated = true;
 
 			if (violated) {
