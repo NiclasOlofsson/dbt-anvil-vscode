@@ -65,6 +65,29 @@ describe(RULE, () => {
 		expect(v.length).toBe(1);
 	});
 
+	it('skips lines that are entirely a -- comment', () => {
+		// Long TODO-style comments can't be auto-wrapped without rewriting
+		// content. Flagging them just adds permanent noise.
+		const longComment = '-- TODO: ' + 'a'.repeat(150);
+		const v = violationsFor(run(longComment + '\n', { maxLineLength: 120 }), RULE);
+		expect(v.length).toBe(0);
+	});
+
+	it('skips indented -- comment lines', () => {
+		const longComment = '    -- ' + 'a'.repeat(150);
+		const v = violationsFor(run(longComment + '\n', { maxLineLength: 120 }), RULE);
+		expect(v.length).toBe(0);
+	});
+
+	it('still flags lines mixing code and a trailing comment', () => {
+		// The code portion alone might fit, but with the trailing comment
+		// the line exceeds the limit — still worth flagging since the user
+		// could move the comment onto its own line above.
+		const line = 'select x as foo  -- ' + 'a'.repeat(130);
+		const v = violationsFor(run(line + '\n', { maxLineLength: 120 }), RULE);
+		expect(v.length).toBe(1);
+	});
+
 	it('handles empty document', () => {
 		const v = violationsFor(run(''), RULE);
 		expect(v.length).toBe(0);

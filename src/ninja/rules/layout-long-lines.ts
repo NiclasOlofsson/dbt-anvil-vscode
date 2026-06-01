@@ -45,6 +45,13 @@ export const longLinesRule: LayoutRule = {
 			const jinjaChars = jinjaCharsPerLine.get(i) ?? 0;
 			if (jinjaChars > lineLen * 0.5) continue;
 
+			// Skip lines that are entirely a `--` comment. Long TODO/note
+			// comments can't be wrapped without rewriting user content, so
+			// flagging them just adds permanent noise. Lines mixing code
+			// with a trailing comment are still flagged — the user can
+			// move the comment onto its own line above the code.
+			if (line.trimStart().startsWith('--')) continue;
+
 			const range = new vscode.Range(i, maxLen, i, lineLen);
 			violations.push({
 				rule: 'ninja.layout.long-lines',
