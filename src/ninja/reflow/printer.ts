@@ -211,6 +211,15 @@ export function printDocument(input: PrinterInput): string {
 	// wraps). Set of operator-token start offsets. When the walker emits
 	// the operator, it breaks before (leading) or after (trailing) it.
 	const mustWrapWideExprOps = computeMustWrapWideExpressions(stream, config.maxLineLength, policy);
+	// L_PAREN offsets for function calls whose collapsed width exceeds
+	// `maxLineLength`. The walker treats these as indenting parens —
+	// `funcname(\n    arg,\n    arg\n)` at the caller's column. Calls
+	// whose body contains a wide CASE / window / subquery (those have
+	// their own wrap passes) are excluded so we don't double-nest.
+	const mustWrapWideCallParens = computeMustWrapWideCalls(
+		stream, source, config.maxLineLength,
+		mustWrapCaseStarts, mustWrapWindowParenStarts,
+	);
 	// THEN offsets whose preceding WHEN's body spans multiple lines (via
 	// predicate-boolean or arithmetic wraps) — those THENs need their own
 	// indented line. Computed after both wrap sets are known.
@@ -293,6 +302,11 @@ export function printDocument(input: PrinterInput): string {
 	// mirrors the wide-window restore. (2) AND/OR breaks inside skip the
 	// continuation +1 indent so predicates and operators share an indent.
 	const indentingParenIsOn: boolean[] = [];
+	// Parallel stack: true when the indenting paren is a wide function call
+	// (`coalesce(...)` etc. on a line that overflows `maxLineLength`). At
+	// COMMA emit inside such a paren the walker queues a newline so each
+	// argument lands on its own indented line.
+	const indentingParenIsCall: boolean[] = [];
 	// Extra-indent currently in effect on the line being built. Set by
 	// `emitNewline()` from whatever `oneShotExtraIndent` it just consumed,
 	// then read by the L_PAREN path to decide whether the next indenting
@@ -782,7 +796,12 @@ export function printDocument(input: PrinterInput): string {
 				// opens as an indenting body when the body is source-multi-
 				// line or width-overflowing. Subsumes the older JOIN-ON-
 				// specific wrap-paren handling.
-				|| logicalPredicateParens.has(tok.start));
+				|| logicalPredicateParens.has(tok.start)
+				// Function-call paren on a source line that exceeds
+				// `maxLineLength`. Opens as an indenting body so each
+				// argument lands on its own line and the matching `)`
+				// closes flush at the function-name column.
+				|| mustWrapWideCallParens.has(tok.start));
 		void innermost;
 		// An R_PAREN that closes the top indenting span needs a newline
 		// BEFORE it so the close sits alone on its own de-indented line.
@@ -1104,16 +1123,18 @@ export function printDocument(input: PrinterInput): string {
 				const extra = indentingParenExtras.pop() ?? 0;
 				const wasWindow = indentingParenIsWindow.pop() ?? false;
 				const wasOn = indentingParenIsOn.pop() ?? false;
+				const wasCall = indentingParenIsCall.pop() ?? false;
 				indentLevel = Math.max(0, indentLevel - 1 - extra);
-				// Wide-window `over (...)` close lands at the SAME column as
-				// the `over (` line (the select-list-continuation column),
-				// not the outer base. Restoring `+extra` for the R_PAREN's
-				// emit produces the canonical sqlfluff layout where `) as
-				// alias` aligns with the function call's `over`. Other
-				// indenting parens (CTE bodies, subqueries, IN-subqueries)
-				// close at the outer base regardless of the opener's
-				// continuation indent — that's the established convention.
-				if ((wasWindow || wasOn) && extra > 0) oneShotExtraIndent = extra;
+				// Wide-window `over (...)`, wide function-call `coalesce(...)`,
+				// and multi-predicate JOIN ON parens all close at the SAME
+				// column as their opener (the select-list-continuation
+				// column), not the outer base. Restoring `+extra` for the
+				// R_PAREN's emit produces `) as alias` aligned with the
+				// caller. Other indenting parens (CTE bodies, subqueries,
+				// IN-subqueries) close at the outer base regardless of the
+				// opener's continuation indent — that's the established
+				// convention.
+				if ((wasWindow || wasOn || wasCall) && extra > 0) oneShotExtraIndent = extra;
 			}
 			pendingNewline = true;
 		}
@@ -1203,6 +1224,7 @@ export function printDocument(input: PrinterInput): string {
 					prevTypeUpper === 'OVER' && mustWrapWindowParenStarts.has(tok.start),
 				);
 				indentingParenIsOn.push(logicalPredicateParens.has(tok.start));
+				indentingParenIsCall.push(mustWrapWideCallParens.has(tok.start));
 				pendingNewline = true;
 			} else {
 				// Function call, grouping, IN list — suppresses clause breaks
@@ -1280,6 +1302,19 @@ export function printDocument(input: PrinterInput): string {
 				pendingNewline = true;
 				// Indent continuation targets so they sit under the first one.
 				oneShotExtraIndent = 1;
+			}
+		} else if (
+			typeUpper === 'COMMA'
+			&& indentingParens.length > 0
+			&& indentingParens[indentingParens.length - 1] === parenDepth
+			&& indentingParenIsCall[indentingParenIsCall.length - 1]
+		) {
+			// Trailing-mode comma inside a wide function-call paren — each
+			// argument lands on its own indented line. Leading-mode is
+			// already handled before the comma emit (above), same as
+			// list-clause commas, so this branch only fires for trailing.
+			if (config.layout.commaPosition === 'trailing') {
+				pendingNewline = true;
 			}
 		} else if ((isPredicateBoolean || isPotentialPredicateBoolHoist) && config.layout.operatorPosition === 'trailing') {
 			// Trailing mode: the AND/OR already landed inline at the end of
@@ -2037,6 +2072,114 @@ function computeMustWrapWindows(
  * window, subquery) to wrap. Breaking at the outer `+` produces the
  * canonical two-line shape.
  */
+/**
+ * Identify function-call `L_PAREN` offsets that should wrap each argument
+ * onto its own indented line. Triggered by COLLAPSED CALL WIDTH (the
+ * source character sum from the function name through the matching `)`
+ * with single-space separators), not source-line width — that keeps
+ * the result idempotent across format passes. Any call whose
+ * collapsed width exceeds `maxLineLength - indentBuffer` is marked;
+ * the walker then opens its `(` as an indenting body and emits
+ * `funcname(\n    arg,\n    arg\n)` at the caller's column.
+ *
+ * `indentBuffer` is a small reserve (~one indent step) to account for
+ * whatever indent precedes the call in the formatted output. It under-
+ * estimates rather than over-estimates so a call that would just barely
+ * fit isn't wrapped — wrapping a short-but-not-quite-short call adds
+ * lines without helping readability.
+ *
+ * Calls whose collapsed width is small enough to stay inline are left
+ * alone — inner calls inside an already-wide outer wrap stay one-line
+ * unless they themselves are wide too.
+ */
+function computeMustWrapWideCalls(
+	stream: NinjaSqlToken[],
+	source: string,
+	maxLineLength: number,
+	mustWrapCaseStarts: Set<number>,
+	mustWrapWindowParenStarts: Set<number>,
+): Set<number> {
+	void source;
+	const out = new Set<number>();
+	// Reserve roughly one indent step for the column the call sits at
+	// (most calls live one indent below their clause keyword). Smaller
+	// buffer would over-wrap, larger would miss the user's typical
+	// 4-space-indent + ~120-char-line setup.
+	const indentBuffer = 4;
+
+	// Index of SQL-only tokens with their original stream index.
+	const sqlIdxs: number[] = [];
+	for (let i = 0; i < stream.length; i++) {
+		if (stream[i].category === 'sql') sqlIdxs.push(i);
+	}
+
+	for (let s = 0; s < sqlIdxs.length; s++) {
+		const tok = stream[sqlIdxs[s]];
+		if (tok.type.toUpperCase() !== 'L_PAREN') continue;
+		if (s === 0) continue;
+		const prev = stream[sqlIdxs[s - 1]];
+		const prevType = prev.type.toUpperCase();
+		// Function-call paren: prev is anything that ISN'T in the
+		// not-a-function deny-list. We can't consult the dialect's
+		// function set here (no DialectSymbols at pre-pass time), but
+		// the deny-list excludes operators / keywords / parens already,
+		// leaving only identifiers + keyword-builtin functions as
+		// candidates — same shape the main walker uses for spacing.
+		if (NOT_FUNCTION_PREV_TYPES.has(prevType)) continue;
+
+		// Find matching R_PAREN; also detect whether the body contains
+		// a wide CASE / window / subquery. Those have their own wrap
+		// passes — wrapping the outer call on top would double-nest.
+		let depth = 1;
+		let endSqlIdx = -1;
+		let hasInnerWrap = false;
+		for (let k = s + 1; k < sqlIdxs.length; k++) {
+			const t = stream[sqlIdxs[k]];
+			const tt = t.type.toUpperCase();
+			if (tt === 'L_PAREN') {
+				depth++;
+				// Wide window: `over(...)` inside this call's body.
+				if (depth === 2 && mustWrapWindowParenStarts.has(t.start)) hasInnerWrap = true;
+				// Subquery: any L_PAREN whose body opens with SELECT at
+				// the call's argument depth.
+				if (depth === 2) {
+					for (let j = k + 1; j < sqlIdxs.length; j++) {
+						const tj = stream[sqlIdxs[j]];
+						const ttj = tj.type.toUpperCase();
+						if (ttj === 'SELECT') { hasInnerWrap = true; break; }
+						if (ttj !== 'L_PAREN') break;
+					}
+				}
+			} else if (tt === 'R_PAREN') {
+				depth--;
+				if (depth === 0) { endSqlIdx = k; break; }
+			} else if (tt === 'CASE' && depth === 1 && mustWrapCaseStarts.has(t.start)) {
+				// Wide CASE at the call's own argument depth.
+				hasInnerWrap = true;
+			}
+		}
+		if (endSqlIdx < 0) continue;
+		if (hasInnerWrap) continue;
+
+		// Collapsed call width: token widths from func name through `)`,
+		// plus one space per gap between consecutive tokens. Approximates
+		// what the formatter would emit on a single line.
+		let charSum = 0;
+		let count = 0;
+		for (let k = s - 1; k <= endSqlIdx; k++) {
+			const t = stream[sqlIdxs[k]];
+			charSum += (t.end - t.start + 1);
+			count++;
+		}
+		const collapsedWidth = charSum + Math.max(0, count - 1);
+
+		if (collapsedWidth > maxLineLength - indentBuffer) {
+			out.add(tok.start);
+		}
+	}
+	return out;
+}
+
 function computeMustWrapWideExpressions(
 	stream: NinjaSqlToken[],
 	maxLineLength: number,
