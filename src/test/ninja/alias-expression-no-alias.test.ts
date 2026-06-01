@@ -19,7 +19,7 @@ function fs(columns: FinalSelectInfo['columns']): FinalSelectInfo {
 describe(RULE, () => {
 	it('flags expression without alias', () => {
 		const v = check(fs([
-			{ name: 'count(*)', line: 0, col: 7, endLine: 0, endCol: 15, expression: 'count(*)' },
+			{ name: 'count(*)', line: 0, col: 7, endLine: 0, endCol: 15, isComplexExpression: true },
 		]));
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('count(*)');
@@ -27,13 +27,33 @@ describe(RULE, () => {
 
 	it('no violation when expression has alias', () => {
 		expect(check(fs([
-			{ name: 'total', line: 0, col: 7, endLine: 0, endCol: 15, expression: 'count(*)', aliasLine: 0, aliasCol: 17, aliasEndCol: 22 },
+			{ name: 'total', line: 0, col: 7, endLine: 0, endCol: 15, isComplexExpression: true, aliasLine: 0, aliasCol: 17, aliasEndCol: 22 },
 		]))).toHaveLength(0);
 	});
 
 	it('no violation for plain columns', () => {
 		expect(check(fs([
 			{ name: 'id', line: 0, col: 7, endLine: 0, endCol: 9 },
+		]))).toHaveLength(0);
+	});
+
+	it('no violation for bare column references — even when expression is populated', () => {
+		// Real extractor sets `expression: 'id'` for `select id from t`. The
+		// rule must not flag bare column references just because they carry
+		// the expression source-name field.
+		expect(check(fs([
+			{ name: 'id', line: 0, col: 7, endLine: 0, endCol: 9, expression: 'id' },
+		]))).toHaveLength(0);
+	});
+
+	it('no violation for columns synthesized from SELECT * expansion', () => {
+		// qualify() expands `select *` into individual Column nodes pointing at
+		// the `*` source position. None are complex expressions — the rule
+		// must skip them all.
+		expect(check(fs([
+			{ name: 'receiver_address_country', line: 0, col: 7, endLine: 0, endCol: 8, expression: 'receiver_address_country' },
+			{ name: 'customer_purchase_order',  line: 0, col: 7, endLine: 0, endCol: 8, expression: 'customer_purchase_order' },
+			{ name: 'equipment_description',    line: 0, col: 7, endLine: 0, endCol: 8, expression: 'equipment_description' },
 		]))).toHaveLength(0);
 	});
 
@@ -45,7 +65,7 @@ describe(RULE, () => {
 
 	it('snippet fix pre-fills the column name when it is a valid identifier', () => {
 		const v = check(fs([
-			{ name: 'team', line: 0, col: 7, endLine: 0, endCol: 13, expression: 'team' },
+			{ name: 'team', line: 0, col: 7, endLine: 0, endCol: 13, isComplexExpression: true },
 		]));
 		expect(v).toHaveLength(1);
 		expect(v[0].action?.type).toBe(SnippetAction.TYPE);
@@ -56,7 +76,7 @@ describe(RULE, () => {
 
 	it('snippet fix uses generic placeholder when col name is not a safe identifier (e.g. count(*))', () => {
 		const v = check(fs([
-			{ name: 'count(*)', line: 0, col: 7, endLine: 0, endCol: 15, expression: 'count(*)' },
+			{ name: 'count(*)', line: 0, col: 7, endLine: 0, endCol: 15, isComplexExpression: true },
 		]));
 		expect(v).toHaveLength(1);
 		expect(v[0].action?.type).toBe(SnippetAction.TYPE);
@@ -68,7 +88,7 @@ describe(RULE, () => {
 	it('insert position uses last SQL token col when sqlTokens extend beyond endCol', () => {
 		// Simulates count(*) where endCol=15 but the R_PAREN token ends at col 16
 		const m = model({
-			finalSelect: fs([{ name: 'count(*)', line: 0, col: 7, endLine: 0, endCol: 15, expression: 'count(*)' }]),
+			finalSelect: fs([{ name: 'count(*)', line: 0, col: 7, endLine: 0, endCol: 15, isComplexExpression: true }]),
 			sqlTokens: [sqlTok('R_PAREN', 14, 14, 0, 16)], // col=16 > endCol=15
 		});
 		const result = run('select count(*)', {}, m);

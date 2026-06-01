@@ -242,6 +242,18 @@ export interface FinalSelectColumnInfo {
 	aliasCol?: number;
 	/** 0-based exclusive end column of the alias identifier. */
 	aliasEndCol?: number;
+	/**
+	 * True when this column is a non-trivial expression (function call, case,
+	 * arithmetic, etc.) and therefore a candidate for the
+	 * `aliasing.expression-no-alias` rule. False / absent for bare column
+	 * references (including those synthesized from `select *` expansion).
+	 *
+	 * The `expression` field above carries the source identifier for bare
+	 * columns too — it's used by alias-mismatch rules — so it can't double
+	 * as a flag for "is this an expression worth aliasing." Hence this
+	 * separate marker, set by the extractor on the exprNode shape.
+	 */
+	isComplexExpression?: boolean;
 }
 
 export interface FinalSelectInfo {

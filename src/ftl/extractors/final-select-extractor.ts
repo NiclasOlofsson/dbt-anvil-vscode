@@ -90,6 +90,12 @@ function buildSelectColumn(ast: AstPayload[], exprIdx: number): FinalSelectColum
 			if (tableId?.node.c === 'Identifier') entry.table = identifierName(ast, tableId.index);
 		} else if (inner?.node.c === 'Identifier') {
 			entry.expression = identifierName(ast, inner.index);
+		} else if (inner) {
+			// Alias wrapping a non-trivial expression (Function / Case / Cast /
+			// arithmetic / etc.). Mark it so rules can target the case
+			// "complex expression with an alias" (the alias is the wanted
+			// shape — this branch records the source kind for symmetry).
+			entry.isComplexExpression = true;
 		}
 	} else if (exprNode.c === 'Column') {
 		const colId = childOf(ast, exprIdx, 'this');
@@ -98,6 +104,11 @@ function buildSelectColumn(ast: AstPayload[], exprIdx: number): FinalSelectColum
 		if (tableId?.node.c === 'Identifier') entry.table = identifierName(ast, tableId.index);
 	} else if (exprNode.c === 'Identifier') {
 		entry.expression = identifierName(ast, exprIdx);
+	} else {
+		// Anything else (Function, Case, Cast, Sum, Add, Window, Paren, ...)
+		// is a non-trivial expression without an alias — the candidate for
+		// the `aliasing.expression-no-alias` rule.
+		entry.isComplexExpression = true;
 	}
 
 	return entry;

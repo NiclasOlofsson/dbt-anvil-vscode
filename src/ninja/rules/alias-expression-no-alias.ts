@@ -22,7 +22,12 @@ export const expressionNoAliasRule: TokenRule = {
 		const violations: NinjaViolation[] = [];
 
 		for (const col of model.finalSelect.columns) {
-			if (!col.expression) continue;
+			// Only flag actual complex expressions — bare column refs (incl.
+			// every column synthesized from `select *` expansion) carry the
+			// `expression` field too, so we can't use that to discriminate.
+			// The extractor sets `isComplexExpression` for Function / Case /
+			// Cast / arithmetic / etc.
+			if (!col.isComplexExpression) continue;
 			if (col.aliasLine !== undefined) continue;
 			// Synthesized columns (e.g. from SELECT * expansion) may have negative
 			// col values when the anchor position is smaller than the name length.
@@ -35,7 +40,7 @@ export const expressionNoAliasRule: TokenRule = {
 
 			violations.push({
 				rule: 'ninja.aliasing.expression-no-alias',
-				message: `Expression column '${col.expression}' should have an explicit alias.`,
+				message: `Expression column '${col.name}' should have an explicit alias.`,
 				range: new vscode.Range(col.line, col.col, col.endLine, col.endCol),
 				action: { type: SnippetAction.TYPE, position: insertPos, snippet: ` as \${1:${placeholder}}` },
 			});
