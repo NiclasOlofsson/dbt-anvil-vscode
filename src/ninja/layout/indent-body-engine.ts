@@ -71,6 +71,13 @@ const SKIP_ANCHOR_TYPES: ReadonlySet<string> = new Set([
 	'COMMA', 'SEMICOLON', 'DOT',
 	// Logical operators — handled by convention-operator-position.
 	'AND', 'OR', 'NOT',
+	// Arithmetic / bitwise / concat operators leading a continuation line
+	// belong to the expression they wrap, not to the enclosing clause body.
+	// The reflow engine places them at the expression's continuation column,
+	// which is deeper than the clause-body indent; flagging them here would
+	// fight the formatter. Mirrors how AND/OR are treated above.
+	'PLUS', 'MINUS', 'DASH', 'STAR', 'SLASH', 'MOD', 'PERCENT', 'POW',
+	'PIPE', 'DPIPE', 'AMPERSAND', 'CARET', 'TILDA', 'LSHIFT', 'RSHIFT',
 ]);
 
 function isLParen(type: string) { return type === 'L_PAREN' || type === 'LPAREN'; }

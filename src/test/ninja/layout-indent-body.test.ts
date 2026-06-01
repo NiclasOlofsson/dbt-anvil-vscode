@@ -58,6 +58,43 @@ describe('ninja.layout.indent-body', () => {
 		expect(check(sql, toks)).toHaveLength(0);
 	});
 
+	it('does not flag arithmetic operator at line start (expression continuation)', () => {
+		// select
+		//     a
+		//         + b
+		// from t
+		// `+ b` is a wrap of the previous expression, not a new clause-body
+		// token — the formatter places it at the continuation indent, and
+		// indent-body must not pull it back to the SELECT-body column.
+		const sql = 'select\n    a\n        + b\nfrom t';
+		const toks: SqlToken[] = [
+			sqlTok('SELECT',  0,  5, 0, 6),
+			sqlTok('VAR',    11, 11, 1, 5),
+			sqlTok('PLUS',   20, 20, 2, 9),
+			sqlTok('VAR',    22, 22, 2, 11),
+			sqlTok('FROM',   24, 27, 3, 4),
+			sqlTok('VAR',    29, 29, 3, 6),
+		];
+		expect(check(sql, toks)).toHaveLength(0);
+	});
+
+	it('does not flag SLASH / MINUS / DASH / STAR / MOD continuation lines', () => {
+		// Each test uses the smallest possible SELECT body with the operator
+		// leading the continuation. Engine should ignore the operator-led line.
+		for (const opType of ['SLASH', 'MINUS', 'DASH', 'STAR', 'MOD', 'PERCENT', 'POW', 'DPIPE']) {
+			const sql = `select\n    a\n        ${opType[0]} b\nfrom t`;
+			const toks: SqlToken[] = [
+				sqlTok('SELECT', 0,  5, 0, 6),
+				sqlTok('VAR',   11, 11, 1, 5),
+				sqlTok(opType,  20, 20, 2, 9),
+				sqlTok('VAR',   22, 22, 2, 11),
+				sqlTok('FROM',  24, 27, 3, 4),
+				sqlTok('VAR',   29, 29, 3, 6),
+			];
+			expect(check(sql, toks), `expected no violation for ${opType} continuation`).toHaveLength(0);
+		}
+	});
+
 	it('autofix indents column to match expected', () => {
 		const sql = 'select\na\nfrom t';
 		const toks: SqlToken[] = [
