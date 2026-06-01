@@ -1340,13 +1340,28 @@
 					},
 					"dbt-studio.ninja.capitalisation.identifiers.acronyms": {
 						"type": "array",
-						"items": { "type": "string" },
-						"default": ["ID", "URL", "XML", "SQL", "JSON", "API", "UUID", "CSV", "HTTP", "DB"],
+						"items": {
+							"type": "string"
+						},
+						"default": [
+							"ID",
+							"URL",
+							"XML",
+							"SQL",
+							"JSON",
+							"API",
+							"UUID",
+							"CSV",
+							"HTTP",
+							"DB"
+						],
 						"markdownDescription": "Acronyms allowed as a single uppercase run inside camelCase/PascalCase identifiers (e.g. `MyURL` instead of `MyUrl`). Matched case-insensitively. Used both to forgive acronym runs during detection and to preserve them when proposing renames."
 					},
 					"dbt-studio.ninja.capitalisation.identifiers.words": {
 						"type": "array",
-						"items": { "type": "string" },
+						"items": {
+							"type": "string"
+						},
 						"default": [],
 						"markdownDescription": "Optional whole-word tokens used to segment all-lowercase identifiers that lack visible markers (e.g. `customerid` → `customer_id` when `id` is in the list). Detection-only — without entries here, all-lowercase identifiers are accepted as valid single-word names (same as IntelliJ/VS behaviour)."
 					},
@@ -2224,12 +2239,9 @@
 		"demo:generate": "node scripts/demo/generate-demo.mjs",
 		"demo:render:gif": "node scripts/demo/generate-demo.mjs --config scripts/demo/rendering-config-gif.json",
 		"demo:render:mp4": "node scripts/demo/generate-demo.mjs --config scripts/demo/rendering-config-mp4.json",
-		"demo:render:webp": "node scripts/demo/generate-demo.mjs --config scripts/demo/rendering-config-webp.json && npm run demo:render:mp4",
-		"metricserver": "tsx src/metricserver/cli.ts",
-		"metricserver:start": "tsx src/metricserver/cli.ts 443"
+		"demo:render:webp": "node scripts/demo/generate-demo.mjs --config scripts/demo/rendering-config-webp.json && npm run demo:render:mp4"
 	},
 	"devDependencies": {
-		"@databricks/sql": "^1.13.0",
 		"@resvg/resvg-js": "^2.6.2",
 		"@stylistic/eslint-plugin": "^5.10.0",
 		"@types/js-yaml": "^4.0.9",
