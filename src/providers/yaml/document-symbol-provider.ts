@@ -14,7 +14,7 @@ export class YamlDocumentSymbolProvider implements vscode.DocumentSymbolProvider
 		document: vscode.TextDocument,
 		_token: vscode.CancellationToken,
 	): vscode.ProviderResult<vscode.DocumentSymbol[]> {
-		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.documentSymbols', true)) return [];
+		if (!vscode.workspace.getConfiguration('dbt-anvil').get('providers.documentSymbols', true)) return [];
 		return this._yamlSymbols(document);
 	}
 

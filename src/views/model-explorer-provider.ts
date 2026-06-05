@@ -72,7 +72,7 @@ export class ModelExplorerProvider implements vscode.TreeDataProvider<ExplorerIt
 		private readonly projectDir: string,
 		private readonly globalState: vscode.Memento,
 	) {
-		this._followActive = globalState.get<boolean>('dbt-studio.explorerFollowActive', false);
+		this._followActive = globalState.get<boolean>('dbt-anvil.explorerFollowActive', false);
 	}
 
 	get followActive(): boolean {
@@ -81,8 +81,8 @@ export class ModelExplorerProvider implements vscode.TreeDataProvider<ExplorerIt
 
 	toggleFollow(): void {
 		this._followActive = !this._followActive;
-		void this.globalState.update('dbt-studio.explorerFollowActive', this._followActive);
-		void vscode.commands.executeCommand('setContext', 'dbt-studio.explorerFollowActive', this._followActive);
+		void this.globalState.update('dbt-anvil.explorerFollowActive', this._followActive);
+		void vscode.commands.executeCommand('setContext', 'dbt-anvil.explorerFollowActive', this._followActive);
 	}
 
 	refresh(): void {

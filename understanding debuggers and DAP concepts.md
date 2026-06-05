@@ -24,57 +24,57 @@ Searched for files matching `**/*adapter*`, 2 matches
 
 Searched for regex `DebugAdapter|DebugConfiguration|breakpoint|stackTrace|symbol`, 200 results
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#1-1), lines 1 to 300
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#1-1), lines 1 to 300
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-symbols.ts#1-1), lines 1 to 100
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-symbols.ts#1-1), lines 1 to 100
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/resources/bridge/bridge.py#2520-2520), lines 2520 to 2570
+Read [](file:///c%3A/Development/github/dbt-anvil/resources/bridge/bridge.py#2520-2520), lines 2520 to 2570
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/package.json#330-330), lines 330 to 350
+Read [](file:///c%3A/Development/github/dbt-anvil/package.json#330-330), lines 330 to 350
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-config-provider.ts)
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-config-provider.ts)
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#301-301), lines 301 to 700
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#301-301), lines 301 to 700
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-symbols.ts#101-101), lines 101 to 250
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-symbols.ts#101-101), lines 101 to 250
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/resources/bridge/bridge.py#2571-2571), lines 2571 to 2700
+Read [](file:///c%3A/Development/github/dbt-anvil/resources/bridge/bridge.py#2571-2571), lines 2571 to 2700
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/package.json#330-330), lines 330 to 410
+Read [](file:///c%3A/Development/github/dbt-anvil/package.json#330-330), lines 330 to 410
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#1-1), lines 1 to 150
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#1-1), lines 1 to 150
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/resources/bridge/bridge.py#1-1), lines 1 to 100
+Read [](file:///c%3A/Development/github/dbt-anvil/resources/bridge/bridge.py#1-1), lines 1 to 100
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#150-150), lines 150 to 400
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#150-150), lines 150 to 400
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-symbols.ts#1-1), lines 1 to 200
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-symbols.ts#1-1), lines 1 to 200
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/resources/bridge/bridge.py#2500-2500), lines 2500 to 2650
+Read [](file:///c%3A/Development/github/dbt-anvil/resources/bridge/bridge.py#2500-2500), lines 2500 to 2650
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#400-400), lines 400 to 700
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#400-400), lines 400 to 700
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-symbols.ts#200-200), lines 200 to 293
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-symbols.ts#200-200), lines 200 to 293
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/resources/bridge/bridge.py#2650-2650), lines 2650 to 2750
+Read [](file:///c%3A/Development/github/dbt-anvil/resources/bridge/bridge.py#2650-2650), lines 2650 to 2750
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#700-700), lines 700 to 900
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#700-700), lines 700 to 900
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/resources/bridge/bridge.py#2750-2750), lines 2750 to 2950
+Read [](file:///c%3A/Development/github/dbt-anvil/resources/bridge/bridge.py#2750-2750), lines 2750 to 2950
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/test/debug-adapter.test.ts#1-1), lines 1 to 50
+Read [](file:///c%3A/Development/github/dbt-anvil/src/test/debug-adapter.test.ts#1-1), lines 1 to 50
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#900-900), lines 900 to 1100
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#900-900), lines 900 to 1100
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/resources/bridge/bridge.py#2600-2600), lines 2600 to 2950
+Read [](file:///c%3A/Development/github/dbt-anvil/resources/bridge/bridge.py#2600-2600), lines 2600 to 2950
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/test/debug-symbols-integration.test.ts#1-1), lines 1 to 100
+Read [](file:///c%3A/Development/github/dbt-anvil/src/test/debug-symbols-integration.test.ts#1-1), lines 1 to 100
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#1100-1100), lines 1100 to 1300
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#1100-1100), lines 1100 to 1300
 
 Searched for regex `_compileWithSymbols|_decompose|_remapPositions` (`**/src/dbt/debug-adapter.ts`), 6 results
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#1300-1300), lines 1300 to 1400
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#1300-1300), lines 1300 to 1400
 
 Searched for regex `_resolveClauseIndex|_resolveStepInTarget|_sendStopped|_terminate` (`**/src/dbt/debug-adapter.ts`), 20 results
 
@@ -82,11 +82,11 @@ Read [](file:///c%3A/Users/Niclas.Olofsson/AppData/Roaming/Code%20-%20Insiders/U
 
 Explore debug adapter DAP details
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts)
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts)
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-symbols.ts)
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-symbols.ts)
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/resources/bridge/bridge.py)
+Read [](file:///c%3A/Development/github/dbt-anvil/resources/bridge/bridge.py)
 
 Read [](file:///c%3A/Users/Niclas.Olofsson/AppData/Roaming/Code%20-%20Insiders/User/workspaceStorage/f159389fbe2f156b433d319f06a97a3b/GitHub.copilot-chat/chat-session-resources/699b4d5f-8125-4bc7-afbd-2686c0db6e32/toolu_bdrk_01F3UDTjutAmGNssg74TiJy9__vscode-1775253830142/content.txt#1-1), lines 1 to 450
 
@@ -229,11 +229,11 @@ GitHub Copilot: Let me ground this in the actual code before responding.
 
 Explore clause ordering and frame identity
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-symbols.ts#1-1), lines 1 to 100
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-symbols.ts#1-1), lines 1 to 100
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/resources/bridge/bridge.py#1-1), lines 1 to 100
+Read [](file:///c%3A/Development/github/dbt-anvil/resources/bridge/bridge.py#1-1), lines 1 to 100
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#1-1), lines 1 to 100
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#1-1), lines 1 to 100
 
 Searched for text `def extract_clauses` (`**/resources/bridge/bridge.py`), 1 result
 
@@ -243,35 +243,35 @@ Searched for regex `_handleStackTrace|_handleStepIn|_tryCrossModelStepIn` (`**/s
 
 Searched for text `decompose` (`**/resources/bridge/bridge.py`), 6 results
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/resources/bridge/bridge.py#2796-2796), lines 2796 to 2900
+Read [](file:///c%3A/Development/github/dbt-anvil/resources/bridge/bridge.py#2796-2796), lines 2796 to 2900
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#513-513), lines 513 to 620
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#513-513), lines 513 to 620
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/resources/bridge/bridge.py#2890-2890), lines 2890 to 3000
+Read [](file:///c%3A/Development/github/dbt-anvil/resources/bridge/bridge.py#2890-2890), lines 2890 to 3000
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/resources/bridge/bridge.py#2655-2655), lines 2655 to 2795
+Read [](file:///c%3A/Development/github/dbt-anvil/resources/bridge/bridge.py#2655-2655), lines 2655 to 2795
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#762-762), lines 762 to 900
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#762-762), lines 762 to 900
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#1278-1278), lines 1278 to 1350
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#1278-1278), lines 1278 to 1350
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-symbols.ts#1-1), lines 1 to 200
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-symbols.ts#1-1), lines 1 to 200
 
 Searched for text `private _frames` (`**/src/dbt/debug-adapter.ts`), 1 result
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#100-100), lines 100 to 300
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#100-100), lines 100 to 300
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#250-250), lines 250 to 400
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#250-250), lines 250 to 400
 
 Searched for text `decompose_query` (`**/src/dbt/debug-adapter.ts`), 2 results
 
 Searched for text `private async _decompose` (`**/src/dbt/debug-adapter.ts`), 1 result
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#1120-1120), lines 1120 to 1200
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#1120-1120), lines 1120 to 1200
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/resources/bridge/bridge.py#2920-2920), lines 2920 to 2950
+Read [](file:///c%3A/Development/github/dbt-anvil/resources/bridge/bridge.py#2920-2920), lines 2920 to 2950
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-symbols.ts#100-100), lines 100 to 200
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-symbols.ts#100-100), lines 100 to 200
 
 Read [](file:///c%3A/Users/Niclas.Olofsson/AppData/Roaming/Code%20-%20Insiders/User/workspaceStorage/f159389fbe2f156b433d319f06a97a3b/GitHub.copilot-chat/chat-session-resources/699b4d5f-8125-4bc7-afbd-2686c0db6e32/toolu_bdrk_011GFL2ca4W5rk6T4hf2gxTU__vscode-1775253830157/content.txt#1-1), lines 1 to 300
 
@@ -436,57 +436,57 @@ Searched for files matching `**/src/**/*lineage*`, 4 matches
 
 Searched for regex `lineage|column_lineage|trace|upstream|downstream` (`**/src/**`), 50 results
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/resources/bridge/bridge.py#1-1), lines 1 to 100
+Read [](file:///c%3A/Development/github/dbt-anvil/resources/bridge/bridge.py#1-1), lines 1 to 100
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/resources/bridge/bridge.py#100-100), lines 100 to 300
+Read [](file:///c%3A/Development/github/dbt-anvil/resources/bridge/bridge.py#100-100), lines 100 to 300
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/tools/get-lineage.ts)
+Read [](file:///c%3A/Development/github/dbt-anvil/src/tools/get-lineage.ts)
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/tools/get-column-lineage.ts#1-1), lines 1 to 100
+Read [](file:///c%3A/Development/github/dbt-anvil/src/tools/get-column-lineage.ts#1-1), lines 1 to 100
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/tools/get-column-lineage.ts#100-100), lines 100 to 250
+Read [](file:///c%3A/Development/github/dbt-anvil/src/tools/get-column-lineage.ts#100-100), lines 100 to 250
 
 Searched for regex `lineage|getLineage|upstream|downstream` (`**/src/indexing/**`), 20 results
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/views/lineage-graph-provider.ts#1-1), lines 1 to 150
+Read [](file:///c%3A/Development/github/dbt-anvil/src/views/lineage-graph-provider.ts#1-1), lines 1 to 150
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/tools/get-column-lineage.ts#150-150), lines 150 to 350
+Read [](file:///c%3A/Development/github/dbt-anvil/src/tools/get-column-lineage.ts#150-150), lines 150 to 350
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/indexing/manifest-indexer.ts#1-1), lines 1 to 330
+Read [](file:///c%3A/Development/github/dbt-anvil/src/indexing/manifest-indexer.ts#1-1), lines 1 to 330
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/indexing/manifest-indexer.ts#280-280), lines 280 to 400
+Read [](file:///c%3A/Development/github/dbt-anvil/src/indexing/manifest-indexer.ts#280-280), lines 280 to 400
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/tools/get-column-lineage.ts#150-150), lines 150 to 500
+Read [](file:///c%3A/Development/github/dbt-anvil/src/tools/get-column-lineage.ts#150-150), lines 150 to 500
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/tools/get-column-lineage.ts#250-250), lines 250 to 350
+Read [](file:///c%3A/Development/github/dbt-anvil/src/tools/get-column-lineage.ts#250-250), lines 250 to 350
 
 Searched for regex `lineage|getLineage|column_lineage` (`**/src/providers/**`), 12 results
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/tools/get-column-lineage.ts#50-50), lines 50 to 200
+Read [](file:///c%3A/Development/github/dbt-anvil/src/tools/get-column-lineage.ts#50-50), lines 50 to 200
 
 Searched for regex `traceCteLineage|ParseService` (`**/src/**`), 20 results
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/resources/bridge/bridge.py#400-400), lines 400 to 600
+Read [](file:///c%3A/Development/github/dbt-anvil/resources/bridge/bridge.py#400-400), lines 400 to 600
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/tools/get-column-lineage.ts#500-500), lines 500 to 700
+Read [](file:///c%3A/Development/github/dbt-anvil/src/tools/get-column-lineage.ts#500-500), lines 500 to 700
 
 Searched for regex `traceCteLineage` (`**/src/services/parse-service.ts`), 1 result
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/services/parse-service.ts#1-1), lines 1 to 130
+Read [](file:///c%3A/Development/github/dbt-anvil/src/services/parse-service.ts#1-1), lines 1 to 130
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/services/parse-service.ts#400-400), lines 400 to 450
+Read [](file:///c%3A/Development/github/dbt-anvil/src/services/parse-service.ts#400-400), lines 400 to 450
 
 Searched for regex `handle_column_lineage|handle_get_columns` (`**/resources/bridge/bridge.py`), 2 results
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/test/tools/column-lineage.test.ts#1-1), lines 1 to 100
+Read [](file:///c%3A/Development/github/dbt-anvil/src/test/tools/column-lineage.test.ts#1-1), lines 1 to 100
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/resources/bridge/bridge.py#2500-2500), lines 2500 to 2600
+Read [](file:///c%3A/Development/github/dbt-anvil/resources/bridge/bridge.py#2500-2500), lines 2500 to 2600
 
 Searched for regex `def handle_column_lineage|handle_get_column|get_column_lineage` (`**/resources/bridge/bridge.py`), 12 results
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/resources/bridge/bridge.py#2460-2460), lines 2460 to 2505
+Read [](file:///c%3A/Development/github/dbt-anvil/resources/bridge/bridge.py#2460-2460), lines 2460 to 2505
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/resources/bridge/bridge.py#1000-1000), lines 1000 to 1200
+Read [](file:///c%3A/Development/github/dbt-anvil/resources/bridge/bridge.py#1000-1000), lines 1000 to 1200
 
 Created memory file [](file:///c%3A/Users/Niclas.Olofsson/AppData/Roaming/Code%20-%20Insiders/User/workspaceStorage/f159389fbe2f156b433d319f06a97a3b/GitHub.copilot-chat/memory-tool/memories/Njk5YjRkNWYtODEyNS00YmM3LWFmYmQtMjY4NmMwZGI2ZTMy/lineage-exploration.md)
 
@@ -757,45 +757,45 @@ Searched for regex `TreeDataProvider|registerTreeDataProvider|createTreeView`, 7
 
 Searched for regex `onDidStartDebugSession|onDidTerminateDebugSession`, no results
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/package.json#1-1), lines 1 to 150
+Read [](file:///c%3A/Development/github/dbt-anvil/package.json#1-1), lines 1 to 150
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/extension.ts#1-1), lines 1 to 100
+Read [](file:///c%3A/Development/github/dbt-anvil/src/extension.ts#1-1), lines 1 to 100
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#1-1), lines 1 to 80
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#1-1), lines 1 to 80
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/package.json#150-150), lines 150 to 500
+Read [](file:///c%3A/Development/github/dbt-anvil/package.json#150-150), lines 150 to 500
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/extension.ts#100-100), lines 100 to 300
+Read [](file:///c%3A/Development/github/dbt-anvil/src/extension.ts#100-100), lines 100 to 300
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#80-80), lines 80 to 200
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#80-80), lines 80 to 200
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#300-300), lines 300 to 400
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#300-300), lines 300 to 400
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/views/model-explorer-provider.ts#1-1), lines 1 to 150
+Read [](file:///c%3A/Development/github/dbt-anvil/src/views/model-explorer-provider.ts#1-1), lines 1 to 150
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/views/profiler-results-provider.ts#1-1), lines 1 to 100
+Read [](file:///c%3A/Development/github/dbt-anvil/src/views/profiler-results-provider.ts#1-1), lines 1 to 100
 
 Searched for regex `_sendStopped|_send\(.*event.*stopped` (`**/src/dbt/debug-adapter.ts`), 15 results
 
 Searched for regex `extension.ts.*debug|debug.*extension.ts` (`**/src/extension.ts`), no results
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/views/test-explorer-provider.ts#1-1), lines 1 to 100
+Read [](file:///c%3A/Development/github/dbt-anvil/src/views/test-explorer-provider.ts#1-1), lines 1 to 100
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#1380-1380), lines 1380 to 1400
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#1380-1380), lines 1380 to 1400
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#156-156), lines 156 to 200
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#156-156), lines 156 to 200
 
 Searched for regex `SqlDebugAdapter|SqlDebugConfigProvider|debugAdapters|registerDebugAdapterDescriptorFactory` (`**/src/extension.ts`), 6 results
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/extension.ts#870-870), lines 870 to 900
+Read [](file:///c%3A/Development/github/dbt-anvil/src/extension.ts#870-870), lines 870 to 900
 
 Searched for regex `private _send\(|_seq` (`**/src/dbt/debug-adapter.ts`), 20 results
 
 Searched for regex `private _send\(.*{` (`**/src/dbt/debug-adapter.ts`), 1 result
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#1400-1400), lines 1400 to 1416
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#1400-1400), lines 1400 to 1416
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/views/profiler-results-provider.ts#100-100), lines 100 to 150
+Read [](file:///c%3A/Development/github/dbt-anvil/src/views/profiler-results-provider.ts#100-100), lines 100 to 150
 
 Read memory
 
@@ -805,9 +805,9 @@ Good context. The wiring challenge is: the adapter (where the DAG lives) and the
 
 Searched for regex `onDidReceiveDebugSessionCustomEvent|customRequest|custom event`, no results
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/extension.ts#870-870), lines 870 to 900
+Read [](file:///c%3A/Development/github/dbt-anvil/src/extension.ts#870-870), lines 870 to 900
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#1-1), lines 1 to 30
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#1-1), lines 1 to 30
 
 Now I have enough. Let me build the plan.
 
@@ -893,7 +893,7 @@ Clicking a node navigates the editor to that frame's source line.
 
 User: I did a parallell investigation of how to handle macros i want to get in here to. It relates to the naming of symbols etc. Giving them an anchor. I give you the last response from the other agent so you can process it on your own and see how it fits into our plan.
 
-## Summary: Macro handling in dbt-studio debug symbols
+## Summary: Macro handling in dbt-anvil debug symbols
 
 ### Problem
 `nearestSourceLine` and `compiledLineToSourceLine` both fall back to `nearestInterpolated()` — a linear-delta guess from the nearest debug anchor. This breaks for macro-expanded SQL because one source line (`{{ my_macro(...) }}`) expands to N compiled lines with no `@dbg` markers, creating holes in the source map that trigger the interpolation fallbacks with potentially wrong results.
@@ -1227,59 +1227,59 @@ Starting: *Phase 1: Custom event plumbing in adapter* (1/6)
 
 Let me read the key areas of the files I need to modify.
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#1-1), lines 1 to 80
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#1-1), lines 1 to 80
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#100-100), lines 100 to 200
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#100-100), lines 100 to 200
 
 Searched for text `_sendStopped` (`**/src/dbt/debug-adapter.ts`), 15 results
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#1370-1370), lines 1370 to 1400
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#1370-1370), lines 1370 to 1400
 
 Now let me read the `_handleTerminate` to know how cleanup works:
 
 Searched for text `_handleTerminate` (`**/src/dbt/debug-adapter.ts`), 2 results
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#1027-1027), lines 1027 to 1045
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#1027-1027), lines 1027 to 1045
 
 Now let me look at how the adapter wires executedFrames data — I need to understand the cache to know what row counts are available:
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#220-220), lines 220 to 260
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#220-220), lines 220 to 260
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#260-260), lines 260 to 270
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#260-260), lines 260 to 270
 
 Now let me check what the extension.ts debug registration area looks like more broadly:
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/extension.ts#876-876), lines 876 to 910
+Read [](file:///c%3A/Development/github/dbt-anvil/src/extension.ts#876-876), lines 876 to 910
 
 Now let me check the package.json areas I need to modify:
 
 Searched for text `"views"` (`**/package.json`), 1 result
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/package.json#295-295), lines 295 to 340
+Read [](file:///c%3A/Development/github/dbt-anvil/package.json#295-295), lines 295 to 340
 
 Now let me check the commands section:
 
 Searched for text `"commands"` (`**/package.json`), 1 result
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/package.json#68-68), lines 68 to 160
+Read [](file:///c%3A/Development/github/dbt-anvil/package.json#68-68), lines 68 to 160
 
 Let me also check the menus section for view/title patterns:
 
 Searched for text `view/title` (`**/package.json`), 1 result
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/package.json#515-515), lines 515 to 620
+Read [](file:///c%3A/Development/github/dbt-anvil/package.json#515-515), lines 515 to 620
 
 Now I have enough context. Let me look at one of the existing TreeDataProviders for the exact pattern:
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/views/profiler-results-provider.ts#1-1), lines 1 to 50
+Read [](file:///c%3A/Development/github/dbt-anvil/src/views/profiler-results-provider.ts#1-1), lines 1 to 50
 
 Good, I have all the patterns. Let me implement everything now.
 
 **Phase 1: Custom event plumbing in the adapter.**
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#42-42), lines 42 to 55
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#42-42), lines 42 to 55
 
-Replacing 11 lines with 21 lines in [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts)
+Replacing 11 lines with 21 lines in [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts)
 
 
 ```
@@ -1287,9 +1287,9 @@ Replacing 11 lines with 21 lines in [](file:///c%3A/Development/github/dbt-studi
 ```
 Now add `_sendPipelineEvent()` next to `_sendStopped()` and call it from `_sendStopped`:
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#1388-1388), lines 1388 to 1400
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#1388-1388), lines 1388 to 1400
 
-Replacing 7 lines with 31 lines in [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts)
+Replacing 7 lines with 31 lines in [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts)
 
 
 ```
@@ -1297,31 +1297,31 @@ Replacing 7 lines with 31 lines in [](file:///c%3A/Development/github/dbt-studio
 ```
 
 
-Checked [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts), no problems found
+Checked [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts), no problems found
 
 Starting: *Phase 2: TreeView provider (new file)* (2/6)
 
 Now the TreeView provider — the core new file:
 
-Created [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-pipeline-provider.ts)
+Created [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-pipeline-provider.ts)
 
-Checked [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-pipeline-provider.ts), no problems found
+Checked [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-pipeline-provider.ts), no problems found
 
 Starting: *Phase 3a: package.json contributions* (3/6)
 
 Phase 3a: package.json — add view, commands, and menu entries:
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/package.json#155-155), lines 155 to 175
+Read [](file:///c%3A/Development/github/dbt-anvil/package.json#155-155), lines 155 to 175
 
 I need to find the end of the commands array to add mine. Let me find it:
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/package.json#220-220), lines 220 to 265
+Read [](file:///c%3A/Development/github/dbt-anvil/package.json#220-220), lines 220 to 265
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/package.json#265-265), lines 265 to 295
+Read [](file:///c%3A/Development/github/dbt-anvil/package.json#265-265), lines 265 to 295
 
 Now I'll make all the package.json changes in one go. I need to add: (1) two commands, (2) one view in a `debug` container, (3) two menu entries in `view/title`:
 
-Replacing 20 lines with 51 lines in [](file:///c%3A/Development/github/dbt-studio-vscode/package.json)
+Replacing 20 lines with 51 lines in [](file:///c%3A/Development/github/dbt-anvil/package.json)
 
 
 ```
@@ -1329,19 +1329,19 @@ Replacing 20 lines with 51 lines in [](file:///c%3A/Development/github/dbt-studi
 ```
 
 
-Checked [](file:///c%3A/Development/github/dbt-studio-vscode/package.json), no problems found
+Checked [](file:///c%3A/Development/github/dbt-anvil/package.json), no problems found
 
 Starting: *Phase 3b: extension.ts registration* (4/6)
 
 Phase 3b: Wire it up in extension.ts. I need to add the provider, TreeView registration, event listeners, and commands near the debug adapter section:
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/extension.ts#1-1), lines 1 to 20
+Read [](file:///c%3A/Development/github/dbt-anvil/src/extension.ts#1-1), lines 1 to 20
 
 Searched for text `SqlDebugAdapter` (`**/src/extension.ts`), 2 results
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/extension.ts#60-60), lines 60 to 67
+Read [](file:///c%3A/Development/github/dbt-anvil/src/extension.ts#60-60), lines 60 to 67
 
-Replacing 12 lines with 37 lines in [](file:///c%3A/Development/github/dbt-studio-vscode/src/extension.ts)
+Replacing 12 lines with 37 lines in [](file:///c%3A/Development/github/dbt-anvil/src/extension.ts)
 
 
 ```
@@ -1349,11 +1349,11 @@ Replacing 12 lines with 37 lines in [](file:///c%3A/Development/github/dbt-studi
 ```
 
 
-Created [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-pipeline-provider.ts)
+Created [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-pipeline-provider.ts)
 
 Compacted conversation
 
-Checked [](file:///c%3A/Development/github/dbt-studio-vscode/src/extension.ts), no problems found
+Checked [](file:///c%3A/Development/github/dbt-anvil/src/extension.ts), no problems found
 
 Starting: *Phase 4: Unit tests* (5/6)
 
@@ -1363,19 +1363,19 @@ Searched for files matching `**/src/test/**/*.test.ts`, 20 matches
 
 Let me check an existing test file for patterns (vitest, how they import, etc.):
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/test/debug-adapter.test.ts#1-1), lines 1 to 50
+Read [](file:///c%3A/Development/github/dbt-anvil/src/test/debug-adapter.test.ts#1-1), lines 1 to 50
 
 Now I'll create the test file:
 
-Created [](file:///c%3A/Development/github/dbt-studio-vscode/src/test/debug-pipeline-provider.test.ts)
+Created [](file:///c%3A/Development/github/dbt-anvil/src/test/debug-pipeline-provider.test.ts)
 
 Need to add `endLine` to the frames. Let me check the shape:
 
 Searched for text `interface DecomposeFrame` (`**/src/dbt/debug-adapter.ts`), 1 result
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#24-24), lines 24 to 36
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#24-24), lines 24 to 36
 
-Replacing 7 lines with 7 lines in [](file:///c%3A/Development/github/dbt-studio-vscode/src/test/debug-pipeline-provider.test.ts)
+Replacing 7 lines with 7 lines in [](file:///c%3A/Development/github/dbt-anvil/src/test/debug-pipeline-provider.test.ts)
 
 
 ```
@@ -1383,21 +1383,21 @@ Replacing 7 lines with 7 lines in [](file:///c%3A/Development/github/dbt-studio-
 ```
 
 
-Checked [](file:///c%3A/Development/github/dbt-studio-vscode/src/test/debug-pipeline-provider.test.ts), 4 problems found
+Checked [](file:///c%3A/Development/github/dbt-anvil/src/test/debug-pipeline-provider.test.ts), 4 problems found
 
 The errors persist despite the edit applying. Let me check the PipelineEventBody types to understand:
 
 Searched for text `PipelineEventBody` (`**/src/dbt/debug-adapter.ts`), 2 results
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#57-57), lines 57 to 72
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#57-57), lines 57 to 72
 
 The `frames` field uses `DecomposeFrame` which is not exported. The test imports `PipelineEventBody` which references `DecomposeFrame` — but TypeScript resolves it structurally. The error message says `endLine` is missing but I already added it... Let me check the actual file:
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/test/debug-pipeline-provider.test.ts#7-7), lines 7 to 20
+Read [](file:///c%3A/Development/github/dbt-anvil/src/test/debug-pipeline-provider.test.ts#7-7), lines 7 to 20
 
 The file content is correct. The errors may be stale from the language server. Let me check once more:
 
-Checked [](file:///c%3A/Development/github/dbt-studio-vscode/src/test/debug-pipeline-provider.test.ts), 4 problems found
+Checked [](file:///c%3A/Development/github/dbt-anvil/src/test/debug-pipeline-provider.test.ts), 4 problems found
 
 The error text oddly omits `endLine` from the inferred type — likely a stale LS cache. Let me run tests to get the real picture:
 
@@ -1405,7 +1405,7 @@ Starting: *Verify: get_errors + npm test* (6/6)
 
 Execution complete: Running npm test
 
-Ran terminal command:  cd /c/Development/github/dbt-studio-vscode && npm test
+Ran terminal command:  cd /c/Development/github/dbt-anvil && npm test
 
 Ran terminal command:  npm test
 Completed with input:  npm test
@@ -1418,9 +1418,9 @@ Good — 3 test failures to fix. The issues are in the `_ancestorsOf` logic and 
 
 Let me fix both issues in the provider:
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-pipeline-provider.ts#140-140), lines 140 to 198
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-pipeline-provider.ts#140-140), lines 140 to 198
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-pipeline-provider.ts#198-198), lines 198 to 230
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-pipeline-provider.ts#198-198), lines 198 to 230
 
 Two bugs to fix:
 
@@ -1430,7 +1430,7 @@ Two bugs to fix:
 
 Actually, rethinking `_ancestorsOf` — the semantics should be: "all nodes on any path between any root and the target". Let me rewrite it properly:
 
-Replacing 50 lines with 65 lines in [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-pipeline-provider.ts)
+Replacing 50 lines with 65 lines in [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-pipeline-provider.ts)
 
 
 ```
@@ -1438,7 +1438,7 @@ Replacing 50 lines with 65 lines in [](file:///c%3A/Development/github/dbt-studi
 ```
 
 
-Checked [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-pipeline-provider.ts), no problems found
+Checked [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-pipeline-provider.ts), no problems found
 
 Ran terminal command:  npm test
 
@@ -1474,21 +1474,21 @@ Added 2 todos
 
 Check pipeline event call sites
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#1-1), lines 1 to 50
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#1-1), lines 1 to 50
 
 Searched for regex `_sendPipelineEvent|_executeDebugSetup|_handleTerminate` (`**/src/dbt/debug-adapter.ts`), 6 results
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#1393-1393), lines 1393 to 1420
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#1393-1393), lines 1393 to 1420
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#264-264), lines 264 to 275
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#264-264), lines 264 to 275
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#196-196), lines 196 to 206
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#196-196), lines 196 to 206
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#1037-1037), lines 1037 to 1070
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#1037-1037), lines 1037 to 1070
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#298-298), lines 298 to 350
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#298-298), lines 298 to 350
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#350-350), lines 350 to 450
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#350-350), lines 350 to 450
 
 The pipeline event firing is adequate — the first `_sendStopped()` after launch sends it, and `onDidTerminateDebugSession` → `provider.clear()` handles cleanup. The real missing piece is Phase 5: documentation.
 
@@ -1496,13 +1496,13 @@ Starting: *Phase 5: DEBUGGING.md documentation* (8/8)
 
 Let me check where CONTRIBUTING.md lives and what already exists, so I can decide placement:
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/CONTRIBUTING.md#1-1), lines 1 to 40
+Read [](file:///c%3A/Development/github/dbt-anvil/CONTRIBUTING.md#1-1), lines 1 to 40
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/CONTRIBUTING.md#40-40), lines 40 to 120
+Read [](file:///c%3A/Development/github/dbt-anvil/CONTRIBUTING.md#40-40), lines 40 to 120
 
 Good — CONTRIBUTING.md is short and operational. The plan calls for a separate `DEBUGGING.md`. Let me now create it with all 7 sections from the plan:
 
-Created [](file:///c%3A/Development/github/dbt-studio-vscode/DEBUGGING.md)
+Created [](file:///c%3A/Development/github/dbt-anvil/DEBUGGING.md)
 
 Now let me run tests one more time to make sure everything still passes:
 
@@ -1568,9 +1568,9 @@ Read conversation transcript thoroughly
 
 Read [](file:///c%3A/Users/Niclas.Olofsson/AppData/Roaming/Code%20-%20Insiders/User/workspaceStorage/f159389fbe2f156b433d319f06a97a3b/GitHub.copilot-chat/transcripts/699b4d5f-8125-4bc7-afbd-2686c0db6e32.jsonl#1-1), lines 1 to 200
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-adapter.ts#1278-1278), lines 1278 to 1350
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-adapter.ts#1278-1278), lines 1278 to 1350
 
-Read [](file:///c%3A/Development/github/dbt-studio-vscode/src/dbt/debug-symbols.ts#1-1), lines 1 to 200
+Read [](file:///c%3A/Development/github/dbt-anvil/src/dbt/debug-symbols.ts#1-1), lines 1 to 200
 
 Updated memory file [](file:///c%3A/Users/Niclas.Olofsson/AppData/Roaming/Code%20-%20Insiders/User/workspaceStorage/f159389fbe2f156b433d319f06a97a3b/GitHub.copilot-chat/memory-tool/memories/Njk5YjRkNWYtODEyNS00YmM3LWFmYmQtMjY4NmMwZGI2ZTMy/plan.md)
 

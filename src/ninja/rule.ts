@@ -14,7 +14,7 @@ import type { DialectSymbols } from '../ftl/sql-parser';
  * in the Problems panel. Use for cosmetic rules you want silently corrected.
  *
  * To disable a rule entirely (no diagnostic, no autofix), add its ID to
- * `dbt-studio.ninja.disabledRules` rather than using a severity override.
+ * `dbt-anvil.ninja.disabledRules` rather than using a severity override.
  */
 export type NinjaSeverity = 'error' | 'warning' | 'info' | 'hint' | 'mute';
 
@@ -39,7 +39,7 @@ export type RuleOptionValue = string | boolean | number;
 
 /** Describes a single configurable option for a rule (shown inline in the Rule Editor). */
 export interface RuleConfigOptionSpec {
-	/** The VS Code setting sub-path, e.g. `layout.operatorPosition`. Full key = `dbt-studio.ninja.<settingPath>`. */
+	/** The VS Code setting sub-path, e.g. `layout.operatorPosition`. Full key = `dbt-anvil.ninja.<settingPath>`. */
 	settingPath: string;
 	/** Short label shown in the UI, e.g. `Position`. */
 	label: string;

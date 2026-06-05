@@ -3,7 +3,7 @@
 <head>
 	<meta charset="utf-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1" />
-	<title>dbt Studio</title>
+	<title>dbt Anvil</title>
 	<style>
 		:root {
 			color-scheme: dark;
@@ -568,27 +568,27 @@
 	<main class="wrapper">
 		<section class="card">
 			<div class="brand">
-				<img alt="dbt Studio logo" src="../resources/icons/dbt-studio-128.png" />
-				<span>dbt Studio</span>
+				<img alt="dbt Anvil logo" src="../resources/icons/dbt-anvil-128.png" />
+				<span>dbt Anvil</span>
 			</div>
 
 			<section class="hero" aria-label="Hero">
 				<div>
-					<h1>dbt Studio for Visual Studio Code</h1>
+					<h1>dbt Anvil for Visual Studio Code</h1>
 					<p class="lead">
 						A VS Code extension that gives dbt the language support most developers assume already
 						exists.<br>It didn't. Now it does.
 					</p>
 
 					<div class="actions">
-						<a class="btn" href="https://marketplace.visualstudio.com/items?itemName=nickeolofsson.dbt-studio-vscode">Install from Marketplace</a>
-						<a class="btn secondary" href="https://github.com/NiclasOlofsson/dbt-studio">Follow project updates</a>
+						<a class="btn" href="https://marketplace.visualstudio.com/items?itemName=nickeolofsson.dbt-anvil">Install from Marketplace</a>
+						<a class="btn secondary" href="https://github.com/NiclasOlofsson/dbt-anvil">Follow project updates</a>
 					</div>
 				</div>
 
 				<div class="hero-media">
 					<p class="label">🎬 &nbsp;In a world where SQL tooling was broken... one extension dared to fix it. &nbsp;<em>Coming to a terminal near you.</em></p>
-					<img alt="dbt Studio demo movie" src="https://raw.githubusercontent.com/NiclasOlofsson/dbt-studio/main/demo.webp" />
+					<img alt="dbt Anvil demo movie" src="https://raw.githubusercontent.com/NiclasOlofsson/dbt-anvil/main/demo.webp" />
 				</div>
 			</section>
 
@@ -611,7 +611,7 @@
 						<div class="feature-media">
 							<img alt="Jinja parsing preview" src="images/cards/02-jinja.png" style="object-position: 44% 35%;" />
 						</div>
-						<p>Most SQL tooling treats Jinja like noise. dbt Studio treats it as a first-class layer, so completions, hover, diagnostics, and go-to-definition keep working inside <code>{% if %}</code> blocks, loops, and macros. Quietly, yes. Jinja ninja.</p>
+						<p>Most SQL tooling treats Jinja like noise. dbt Anvil treats it as a first-class layer, so completions, hover, diagnostics, and go-to-definition keep working inside <code>{% if %}</code> blocks, loops, and macros. Quietly, yes. Jinja ninja.</p>
 					<p>Macro calls get signature help as you type. Both Jinja-SQL and Jinja-in-YAML have dedicated grammars, so highlighting is accurate in model files and schema definitions.</p>
 					</article>
 					<article class="feature" data-accent="amber">
@@ -694,7 +694,7 @@
 				<div>
 					<h2>Testing</h2>
 					<p>Most dbt tests are data quality checks: <code>not_null</code>, <code>unique</code>, the occasional <code>accepted_values</code>. Useful, but not what a developer means when they say they want to test their logic. dbt does have unit tests now, and they are what developers actually want.</p>
-					<p>dbt Studio at least makes running them less painful: results show up in a sidebar with pass, fail, and warn grouped by status, and the real error output is right there without digging through terminal logs. Tests integrate with VS Code's native Test Controller, so the Testing panel works too.</p>
+					<p>dbt Anvil at least makes running them less painful: results show up in a sidebar with pass, fail, and warn grouped by status, and the real error output is right there without digging through terminal logs. Tests integrate with VS Code's native Test Controller, so the Testing panel works too.</p>
 					<p>You can also test individual CTEs in isolation using the <code>model::cte_name</code> convention, useful when a model has complex intermediate steps and you want to verify one of them without running the whole thing.</p>
 				</div>
 			</div>
@@ -716,7 +716,7 @@
 			<div class="prose-section getting-started">
 				<h2>Getting started</h2>
 				<ol class="steps">
-					<li><span class="step-num">1</span><span>Install <strong>dbt Studio</strong> from the VS Code Extensions panel, or <a href="https://marketplace.visualstudio.com/items?itemName=nickeolofsson.dbt-studio-vscode" style="color: var(--accent-hover);">directly from the Marketplace</a></span></li>
+					<li><span class="step-num">1</span><span>Install <strong>dbt Anvil</strong> from the VS Code Extensions panel, or <a href="https://marketplace.visualstudio.com/items?itemName=nickeolofsson.dbt-anvil" style="color: var(--accent-hover);">directly from the Marketplace</a></span></li>
 					<li><span class="step-num">2</span><span>Open a folder containing <code>dbt_project.yml</code></span></li>
 					<li><span class="step-num">3</span><span>The extension activates and starts indexing automatically. No setup required.*</span></li>
 				</ol>
@@ -809,13 +809,13 @@
 			<div class="prose-section" style="max-width: 100%; background-image: linear-gradient(rgba(18,18,20,0.3), rgba(18,18,20,0.3)), url('hero-bg.svg'); background-size: auto, 2560px 900px; background-position: top left, top left; background-repeat: repeat, repeat; border-radius: 8px; padding: 32px 38px; margin-top: 56px; border: 1px solid var(--border);">
 				<h2 style="text-align: center;">Under the hood</h2>
 				<p class="lead" style="margin-bottom: 32px; max-width: 72ch;">This extension is a fair bit more ambitious than a thin wrapper around a language server. Here's what's in it.</p>
-				<p><strong>No conflicts.</strong> dbt Studio uses your existing Python environment and your existing dbt installation. It auto-detects your setup (venv, uv, poetry, pipenv, conda, system Python) and bridges the VS Code Node.js world to dbt Core over a JSON process boundary, with nothing to configure. All core dbt operations: parse, compile, run, test, build, seed, snapshot, and query, go through this bridge. No bundled runtimes, no parallel installations, no version mismatches. The one thing it cannot help with is a broken dbt setup. That part is on you.</p>
-				<p><strong>Terminal monitoring.</strong> The extension also monitors your terminals. If a dbt command is detected that would conflict with something the extension is doing, or vice versa, it mediates. Running dbt from two places against the same target is a bad idea, and dbt Studio knows when that's about to happen.</p>
+				<p><strong>No conflicts.</strong> dbt Anvil uses your existing Python environment and your existing dbt installation. It auto-detects your setup (venv, uv, poetry, pipenv, conda, system Python) and bridges the VS Code Node.js world to dbt Core over a JSON process boundary, with nothing to configure. All core dbt operations: parse, compile, run, test, build, seed, snapshot, and query, go through this bridge. No bundled runtimes, no parallel installations, no version mismatches. The one thing it cannot help with is a broken dbt setup. That part is on you.</p>
+				<p><strong>Terminal monitoring.</strong> The extension also monitors your terminals. If a dbt command is detected that would conflict with something the extension is doing, or vice versa, it mediates. Running dbt from two places against the same target is a bad idea, and dbt Anvil knows when that's about to happen.</p>
 				<p><strong>Not blindly executing dbt.</strong> It minimises database communication to only what is strictly necessary. The extension runs against its own separate dbt target. When it does something internally, it doesn't touch your schema.</p>
 				<p><strong>Aggressive caching at every level.</strong> dbt is not invoked unless it needs to be. Parsing results, compiled SQL, column metadata, all cached to disk and reused across restarts. All dbt execution is coordinated through priority queues, because not all operations are equally urgent, and the extension takes advantage of that.</p>
 				<p><strong>Adapter-aware where it counts.</strong> Query execution is optimised for Databricks (using the SQL Statement API directly, bypassing <code>dbt show</code>) and DuckDB (local execution). More adapters are on the way.</p>
-				<p><strong>Built-in compiler, always running.</strong> For operations that do not require dbt at all, dbt Studio uses its own compiler: a hyper-fast, fully multithreaded SQL and Jinja parser that consumes every available thread and runs continuously in the background. It re-parses the active document on every keystroke (not on save, every keystroke), providing instant diagnostics as you type. On a project with 4,000 models, a full re-parse completes in under 10 seconds. Individual models parse in 2–5ms on average. That parser is written in Python but does not run Python. It is compiled to WebAssembly via <a href="https://pyodide.org" style="color: var(--accent-hover);">Pyodide</a> and executes natively in the extension host: multithreaded, no subprocess, no startup cost. It is built on <a href="https://github.com/tobymao/sqlglot" style="color: var(--accent-hover);">sqlglot</a>, which has no dependencies of its own.</p>
-				<p><strong>Everything is toggleable.</strong> Some of what dbt Studio does is opinionated, so every feature can be turned off individually from Settings. Changes take effect immediately, no reload required.</p>
+				<p><strong>Built-in compiler, always running.</strong> For operations that do not require dbt at all, dbt Anvil uses its own compiler: a hyper-fast, fully multithreaded SQL and Jinja parser that consumes every available thread and runs continuously in the background. It re-parses the active document on every keystroke (not on save, every keystroke), providing instant diagnostics as you type. On a project with 4,000 models, a full re-parse completes in under 10 seconds. Individual models parse in 2–5ms on average. That parser is written in Python but does not run Python. It is compiled to WebAssembly via <a href="https://pyodide.org" style="color: var(--accent-hover);">Pyodide</a> and executes natively in the extension host: multithreaded, no subprocess, no startup cost. It is built on <a href="https://github.com/tobymao/sqlglot" style="color: var(--accent-hover);">sqlglot</a>, which has no dependencies of its own.</p>
+				<p><strong>Everything is toggleable.</strong> Some of what dbt Anvil does is opinionated, so every feature can be turned off individually from Settings. Changes take effect immediately, no reload required.</p>
 				<p><strong>dbt Fusion support is planned.</strong> When it arrives, the debugger, profiler, and other execution-dependent features will be available there too. The extension doesn't depend on Python being part of your environment; in a Fusion world it may not be. At work we haven't gotten around to Fusion yet - it's a fairly large migration and we've been putting it off.</p>
 			</div>
 		</section>

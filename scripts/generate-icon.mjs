@@ -4,10 +4,10 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const outPath = path.join(__dirname, '..', 'resources', 'icons', 'dbt-studio-128.png');
+const outPath = path.join(__dirname, '..', 'resources', 'icons', 'dbt-anvil-128.png');
 
 // Marketplace icon: 128x128, transparent background
-// "dbt" bold on top, "studio" lighter below
+// "dbt" bold on top, "anvil" lighter below
 // #777777 works on both dark and light VS Code themes
 const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
   <text
@@ -31,7 +31,7 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width
     dominant-baseline="middle"
     textLength="108"
     lengthAdjust="spacingAndGlyphs"
-  >studio</text>
+  >Anvil</text>
 </svg>`;
 
 function renderSvg(svgStr, size, destPath) {
@@ -70,10 +70,10 @@ const svgActivity = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"
     dominant-baseline="middle"
     textLength="13.5"
     lengthAdjust="spacingAndGlyphs"
-  >studio</text>
+  >Anvil</text>
 </svg>`;
 
-const outActivity = path.join(__dirname, '..', 'resources', 'icons', 'dbt-studio-activity-preview.png');
+const outActivity = path.join(__dirname, '..', 'resources', 'icons', 'dbt-anvil-activity-preview.png');
 renderSvg(svgActivity, 48, outActivity);
 
 // White version for dark splash screens — 256px, white text on transparent background
@@ -99,12 +99,12 @@ const svgWhite = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" 
     dominant-baseline="middle"
     textLength="108"
     lengthAdjust="spacingAndGlyphs"
-  >studio</text>
+  >Anvil</text>
 </svg>`;
 
-const outWhite = path.join(__dirname, '..', 'resources', 'icons', 'dbt-studio-white-256.png');
+const outWhite = path.join(__dirname, '..', 'resources', 'icons', 'dbt-anvil-white-256.png');
 renderSvg(svgWhite, 256, outWhite);
 
 // Grey 512px — high-res source for splash screen (avoids upscale blur)
-const out512 = path.join(__dirname, '..', 'resources', 'icons', 'dbt-studio-512.png');
+const out512 = path.join(__dirname, '..', 'resources', 'icons', 'dbt-anvil-512.png');
 renderSvg(svg, 512, out512);

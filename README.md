@@ -1,26 +1,26 @@
-# dbt Studio
+# dbt Anvil
 
 A VS Code extension that gives dbt the same kind of language support that most programming languages have had for years. Now it's here, for dbt Core.
 
-If you work with TypeScript or Python in VS Code, you take column completions, go-to-definition, and inline diagnostics for granted. dbt projects haven't had any of that. dbt Studio changes that — column intelligence, interactive lineage, an integrated test runner, and Copilot tools that can query your warehouse and trace your DAG.
+If you work with TypeScript or Python in VS Code, you take column completions, go-to-definition, and inline diagnostics for granted. dbt projects haven't had any of that. dbt Anvil changes that — column intelligence, interactive lineage, an integrated test runner, and Copilot tools that can query your warehouse and trace your DAG.
 
 No configuration. Open a dbt project and everything works.
 
-![dbt Studio demo](https://raw.githubusercontent.com/NiclasOlofsson/dbt-studio/main/demo.webp)
+![dbt Anvil demo](https://raw.githubusercontent.com/NiclasOlofsson/dbt-anvil/main/demo.webp)
 
 ## Column Intelligence
 
-dbt Studio parses your models and knows their columns. Type in a SELECT and you get completions from the actual columns defined upstream. Hover over a column name to see where it comes from. Rename it and every reference updates.
+dbt Anvil parses your models and knows their columns. Type in a SELECT and you get completions from the actual columns defined upstream. Hover over a column name to see where it comes from. Rename it and every reference updates.
 
 This works through refs, sources, CTEs, and joins — across your entire project.
 
 ## Jinja
 
-Most SQL tooling treats Jinja as noise and breaks the moment it hits a `{% if %}` block. dbt Studio understands Jinja as a distinct layer on top of SQL and keeps working correctly underneath it — completions, hover, diagnostics, and go-to-definition all function normally inside conditional blocks and loop bodies.
+Most SQL tooling treats Jinja as noise and breaks the moment it hits a `{% if %}` block. dbt Anvil understands Jinja as a distinct layer on top of SQL and keeps working correctly underneath it — completions, hover, diagnostics, and go-to-definition all function normally inside conditional blocks and loop bodies.
 
 Macro calls get signature help as you type. Both Jinja-SQL and Jinja-in-YAML have dedicated grammars, so highlighting is accurate in model files and schema definitions alike.
 
-dbt Studio is, quietly, a Jinja ninja.
+dbt Anvil is, quietly, a Jinja ninja.
 
 ## Lineage
 
@@ -32,9 +32,9 @@ Also fast. Noticeably fast.
 
 ## SQL Editor
 
-dbt Studio includes a SQL editor for running ad-hoc queries directly against your warehouse. Open any `.sql` file outside your models folder, write a query, and press F5. Results appear in a panel immediately — with row numbers, a stats summary, and selection-aware copy and export.
+dbt Anvil includes a SQL editor for running ad-hoc queries directly against your warehouse. Open any `.sql` file outside your models folder, write a query, and press F5. Results appear in a panel immediately — with row numbers, a stats summary, and selection-aware copy and export.
 
-Vanilla SQL or Jinja macros — it doesn't matter. dbt Studio compiles Jinja before sending the query, so you can write `{{ ref('orders') }}` or `{{ my_macro() }}` in a scratch file and it just works.
+Vanilla SQL or Jinja macros — it doesn't matter. dbt Anvil compiles Jinja before sending the query, so you can write `{{ ref('orders') }}` or `{{ my_macro() }}` in a scratch file and it just works.
 
 Useful for exploration, debugging, and verifying what a compiled query actually returns before you build it into a model.
 
@@ -60,7 +60,7 @@ Think of it as a map drawn on a napkin — not GPS, but it'll get you to the rig
 
 Let's be honest — most dbt tests are data quality checks. `not_null`. `unique`. The occasional `accepted_values`. Useful, sure, but not exactly what a developer means when they say "I want to test my logic."
 
-dbt does have unit tests now, and they are what developers actually want. Someone has to write them though, and that someone is you. dbt Studio at least makes running them less painful: results show up in a sidebar with pass, fail, and warn grouped by status, and the real error output is right there without digging through terminal logs.
+dbt does have unit tests now, and they are what developers actually want. Someone has to write them though, and that someone is you. dbt Anvil at least makes running them less painful: results show up in a sidebar with pass, fail, and warn grouped by status, and the real error output is right there without digging through terminal logs.
 
 You can also test individual CTEs in isolation using the `model::cte_name` convention — useful when a model has complex intermediate steps and you want to verify one of them without running the whole thing.
 
@@ -68,7 +68,7 @@ Tests integrate with VS Code's native Test Controller, so the Testing panel work
 
 ## Copilot Tools
 
-With GitHub Copilot, dbt Studio registers 14 tools that give Copilot real access to your project:
+With GitHub Copilot, dbt Anvil registers 14 tools that give Copilot real access to your project:
 
 - **Project & Resources** — project info, resource listing, model/source details, dependency installation
 - **Lineage & Impact** — lineage tracing, impact analysis, column-level lineage
@@ -115,7 +115,7 @@ You've read the prose. You skipped to here anyway. Fine.
 
 ## Under the Hood
 
-dbt Studio runs a Python bridge process that talks to your project over JSON stdin/stdout. It auto-detects your Python environment — venv, uv, poetry, pipenv, conda, or system Python — and bundles sqlglot for column-level lineage parsing.
+dbt Anvil runs a Python bridge process that talks to your project over JSON stdin/stdout. It auto-detects your Python environment — venv, uv, poetry, pipenv, conda, or system Python — and bundles sqlglot for column-level lineage parsing.
 
 Parsing is two-layered: a fast structural pass on save, plus async database enrichment for column metadata. Everything is cached to disk and survives restarts. When the cache is valid, startup is near-instant.
 
@@ -125,7 +125,7 @@ Every feature area can be turned on or off individually from Settings — comple
 
 ## Getting Started
 
-1. Install **dbt Studio** from the VS Code Extensions panel
+1. Install **dbt Anvil** from the VS Code Extensions panel
 2. Open a folder containing `dbt_project.yml`
 3. The extension activates and starts indexing automatically
 

@@ -1,6 +1,6 @@
 # Debugging SQL: Architecture and Implementation
 
-This document explains how the dbt Studio SQL debugger works — conceptually, architecturally, and in implementation detail. It covers `debug-adapter.ts`, `debug-symbols.ts`, `debug-pipeline-provider.ts`, the Python bridge, and their collective integration with the VS Code Debug Adapter Protocol.
+This document explains how the dbt Anvil SQL debugger works — conceptually, architecturally, and in implementation detail. It covers `debug-adapter.ts`, `debug-symbols.ts`, `debug-pipeline-provider.ts`, the Python bridge, and their collective integration with the VS Code Debug Adapter Protocol.
 
 ---
 

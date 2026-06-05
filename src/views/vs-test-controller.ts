@@ -6,7 +6,7 @@ import type { TestExplorerProvider, TestGroupItem, TestNodeItem } from './test-e
 import type { ILogger } from '../types/logger';
 
 /**
- * Bridges dbt Studio's test execution to the native VS Code Testing panel.
+ * Bridges dbt Anvil's test execution to the native VS Code Testing panel.
  *
  * All test execution — whether triggered from the sidebar tree, a CodeLens
  * action, or the native Testing panel beaker icon — routes through
@@ -29,7 +29,7 @@ export class VsTestController implements vscode.Disposable {
 		private readonly logger: ILogger,
 		private readonly cteTestRunner: CteTestRunner,
 	) {
-		this._controller = vscode.tests.createTestController('dbt-studio', 'dbt Tests');
+		this._controller = vscode.tests.createTestController('dbt-anvil', 'dbt Tests');
 		this._runProfile = this._controller.createRunProfile(
 			'Run',
 			vscode.TestRunProfileKind.Run,

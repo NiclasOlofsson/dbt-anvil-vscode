@@ -1,7 +1,7 @@
 /**
  * capture-demo.mjs
  *
- * Launches VS Code with the dbt Studio extension loaded against the nba-monte-carlo
+ * Launches VS Code with the dbt Anvil extension loaded against the nba-monte-carlo
  * sample project, drives through 14 feature segments via Playwright Electron mode,
  * and saves screenshots to temp_auto/demo-frames/.
  *
@@ -309,7 +309,7 @@ async function pressEscape(win) {
 }
 
 /**
- * Wait until the dbt Studio status bar shows "dbt: Ready" (no active job).
+ * Wait until the dbt Anvil status bar shows "dbt: Ready" (no active job).
  * The status bar text is either "$(sync~spin) dbt: <label>" while busy
  * or "$(check) dbt: Ready" when idle.
  */
@@ -349,7 +349,7 @@ async function waitForDbQuery(win, timeout = 30000) {
 // ─── Panel / tree helpers ─────────────────────────────────────────────────────
 
 /**
- * Expand or collapse a dbt Studio sidebar panel by its visible title text.
+ * Expand or collapse a dbt Anvil sidebar panel by its visible title text.
  * Uses Playwright locator .click() so real mouse events reach VS Code's handlers
  * (synthetic DOM clicks via evaluate() are ignored by the sidebar).
  */
@@ -442,16 +442,16 @@ async function collapseAllTreeItems(win, containerSelector = '.part.sidebar', ma
 }
 
 /**
- * Open the dbt Studio activity-bar container and wait until its sidebar panes appear.
- * This is more reliable than assuming the currently visible sidebar belongs to dbt Studio.
+ * Open the dbt Anvil activity-bar container and wait until its sidebar panes appear.
+ * This is more reliable than assuming the currently visible sidebar belongs to dbt Anvil.
  */
-async function openDbtStudioSidebar(win, timeout = 15000) {
+async function openDbtAnvilSidebar(win, timeout = 15000) {
 	const iconSelectors = [
-		'.activitybar .action-label[aria-label="dbt Studio"]',
-		'.activitybar li[aria-label="dbt Studio"]',
-		'.activitybar [title="dbt Studio"]',
-		'.composite-bar .action-label[aria-label="dbt Studio"]',
-		'.composite-bar [title="dbt Studio"]',
+		'.activitybar .action-label[aria-label="dbt Anvil"]',
+		'.activitybar li[aria-label="dbt Anvil"]',
+		'.activitybar [title="dbt Anvil"]',
+		'.composite-bar .action-label[aria-label="dbt Anvil"]',
+		'.composite-bar [title="dbt Anvil"]',
 	];
 
 	const paneTitleLocator = win.locator('.part.sidebar .pane-header .title');
@@ -476,13 +476,13 @@ async function openDbtStudioSidebar(win, timeout = 15000) {
 		await win.waitForTimeout(500);
 	}
 
-	throw new Error('Could not open dbt Studio sidebar');
+	throw new Error('Could not open dbt Anvil sidebar');
 }
 
 // ─── Wait for extension to be fully ready ────────────────────────────────────
 //
 // Strategy:
-//   1. Poll for the dbt Studio activity bar icon (proves the extension registered)
+//   1. Poll for the dbt Anvil activity bar icon (proves the extension registered)
 //   2. Click it to open the sidebar
 //   3. Wait for the Model Explorer to show tree items (proves the manifest was
 //      loaded and the index was built — everything else is guaranteed ready)
@@ -524,7 +524,7 @@ async function removeCursor(win) {
 
 /**
  * Reset VS Code to the base demo layout:
- *   - Primary sidebar = dbt Studio, only MODEL EXPLORER panel expanded
+ *   - Primary sidebar = dbt Anvil, only MODEL EXPLORER panel expanded
  *   - All editor tabs closed (middle column empty)
  *   - Bottom panel closed
  *   - Secondary sidebar (right column) closed
@@ -547,8 +547,8 @@ async function resetLayout(win) {
 	if (auxOpen) {
 		await runCommand(win, 'View: Close Secondary Side Bar');
 	}
-	// Open dbt Studio sidebar then collapse everything except MODEL EXPLORER
-	await openDbtStudioSidebar(win);
+	// Open dbt Anvil sidebar then collapse everything except MODEL EXPLORER
+	await openDbtAnvilSidebar(win);
 	await collapsePanelsExcept(win, 'MODEL EXPLORER');
 }
 
@@ -609,14 +609,14 @@ async function moveMouse(win, x, y, steps = 20) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function waitForExtensionReady(win) {
-	console.log('Waiting for dbt Studio activity bar icon...');
+	console.log('Waiting for dbt Anvil activity bar icon...');
 
 	const iconSelectors = [
-		'.activitybar .action-label[aria-label="dbt Studio"]',
-		'.activitybar li[aria-label="dbt Studio"]',
-		'.activitybar [title="dbt Studio"]',
-		'.composite-bar .action-label[aria-label="dbt Studio"]',
-		'.composite-bar [title="dbt Studio"]',
+		'.activitybar .action-label[aria-label="dbt Anvil"]',
+		'.activitybar li[aria-label="dbt Anvil"]',
+		'.activitybar [title="dbt Anvil"]',
+		'.composite-bar .action-label[aria-label="dbt Anvil"]',
+		'.composite-bar [title="dbt Anvil"]',
 	];
 
 	let foundSelector = null;
@@ -643,7 +643,7 @@ async function waitForExtensionReady(win) {
 		console.warn('  Proceeding without clicking sidebar...');
 	} else {
 		console.log(`  Found icon via: ${foundSelector}`);
-		await openDbtStudioSidebar(win, 15000);
+		await openDbtAnvilSidebar(win, 15000);
 	}
 
 	// Wait for the Model Explorer tree to populate with model items.
@@ -667,7 +667,7 @@ async function waitForExtensionReady(win) {
 async function main() {
 	sessionStartMs = Date.now();
 	logEvent('session.start');
-	console.log('\n=== dbt Studio Demo Capture ===\n');
+	console.log('\n=== dbt Anvil Demo Capture ===\n');
 	console.log('Launching VS Code Insiders...');
 
 	// VS Code Insiders checks for "updating_version" + "new_Code - Insiders.exe" on launch
@@ -819,7 +819,7 @@ async function main() {
 			const wsStorage = path.join(userDataDir, 'User', 'workspaceStorage');
 			if (!fs.existsSync(wsStorage)) return null;
 			for (const hash of fs.readdirSync(wsStorage)) {
-				const candidate = path.join(wsStorage, hash, 'nickeolofsson.dbt-studio-vscode', 'column-store.json');
+				const candidate = path.join(wsStorage, hash, 'nickeolofsson.dbt-anvil', 'column-store.json');
 				if (fs.existsSync(candidate)) return candidate;
 			}
 			return null;
@@ -1214,7 +1214,7 @@ async function main() {
 			// PRE-DEMO: open file, show lineage, maximize, fit, wait for enrichment
 			await resetLayout(win);
 			await openFile(win, 'season_summary.sql');
-			await runCommand(win, 'dbt Studio: Show Lineage');
+			await runCommand(win, 'dbt Anvil: Show Lineage');
 			await waitForReady(win, 30000).catch(() => { });
 			await win.waitForTimeout(5000);
 			const maximizeBtn = win.locator('.part.panel .codicon-panel-maximize').first();

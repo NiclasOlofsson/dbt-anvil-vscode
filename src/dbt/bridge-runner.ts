@@ -454,6 +454,6 @@ function waitForExit(proc: ChildProcessWithoutNullStreams, timeoutMs: number): P
 function buildDbtLogDir(projectDir: string): Record<string, string> {
 	const crypto = require('node:crypto') as typeof import('node:crypto');
 	const hash = crypto.createHash('md5').update(projectDir).digest('hex').slice(0, 8);
-	const logDir = path.join(os.tmpdir(), `dbt_studio_logs_${hash}`);
+	const logDir = path.join(os.tmpdir(), `dbt_anvil_logs_${hash}`);
 	return { DBT_LOG_PATH: logDir };
 }

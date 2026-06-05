@@ -17,7 +17,7 @@ export class DbtWorkspaceSymbolProvider implements vscode.WorkspaceSymbolProvide
 		query: string,
 		_token: vscode.CancellationToken,
 	): vscode.SymbolInformation[] {
-		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.workspaceSymbols', true)) return [];
+		if (!vscode.workspace.getConfiguration('dbt-anvil').get('providers.workspaceSymbols', true)) return [];
 		const index = this.indexer.index;
 		if (!index) return [];
 

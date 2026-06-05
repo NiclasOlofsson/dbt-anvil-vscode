@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-dbt Studio VS Code Extension — Python Bridge
+dbt Anvil VS Code Extension — Python Bridge
 
 This script is bundled with the extension and executed in the user's Python
 environment (which must have dbt installed). It exposes dbt execution via a

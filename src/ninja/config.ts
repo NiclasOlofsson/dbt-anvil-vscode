@@ -135,7 +135,7 @@ export interface NinjaConfig {
 export const DEFAULT_CONFIG: NinjaConfig = {
 	enabled: true,
 	diagnostics: { enabled: true },
-	format: { preset: 'dbt-studio' },
+	format: { preset: 'dbt-anvil' },
 	rules: {},
 	disabledRules: [],
 	autoFix: {

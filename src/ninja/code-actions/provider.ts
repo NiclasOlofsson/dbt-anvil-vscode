@@ -62,7 +62,7 @@ export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 		_context: vscode.CodeActionContext,
 		_token: vscode.CancellationToken,
 	): vscode.CodeAction[] {
-		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.codeActions', true)) return [];
+		if (!vscode.workspace.getConfiguration('dbt-anvil').get('providers.sql.codeActions', true)) return [];
 
 		const actions: vscode.CodeAction[] = [];
 		const line = document.lineAt(range.start.line).text;
@@ -80,7 +80,7 @@ export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 				);
 				action.command = {
 					title: `Create ${modelName}.sql`,
-					command: 'dbt-studio.createModelFile',
+					command: 'dbt-anvil.createModelFile',
 					arguments: [modelName],
 				};
 				action.isPreferred = true;
@@ -159,7 +159,7 @@ export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 				);
 				inlineAction.command = {
 					title: 'Inline refs and sources',
-					command: 'dbt-studio.inlineRefs',
+					command: 'dbt-anvil.inlineRefs',
 					arguments: [document.uri],
 				};
 				actions.push(inlineAction);
@@ -172,7 +172,7 @@ export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 				);
 				restoreAction.command = {
 					title: 'Restore refs and sources',
-					command: 'dbt-studio.restoreRefs',
+					command: 'dbt-anvil.restoreRefs',
 					arguments: [document.uri],
 				};
 				actions.push(restoreAction);

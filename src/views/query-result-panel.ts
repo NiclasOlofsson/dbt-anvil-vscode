@@ -25,11 +25,11 @@ export class QueryResultPanel implements vscode.WebviewViewProvider, vscode.Webv
 	/** viewType for WebviewPanel persistence (must match package.json serializer). */
 	static readonly viewType = 'dbtQueryResults';
 	/** viewId registered in package.json contributes.views. */
-	static readonly viewId = 'dbt-studio.queryResults';
+	static readonly viewId = 'dbt-anvil.queryResults';
 
-	private static readonly _ctxVisible = 'dbt-studio.queryResultVisible';
-	private static readonly _ctxInPanel = 'dbt-studio.queryResultInPanel';
-	private static readonly _stateKey = 'dbt-studio.queryResultInPanel';
+	private static readonly _ctxVisible = 'dbt-anvil.queryResultVisible';
+	private static readonly _ctxInPanel = 'dbt-anvil.queryResultInPanel';
+	private static readonly _stateKey = 'dbt-anvil.queryResultInPanel';
 
 	private constructor(
 		private readonly _extensionUri: vscode.Uri,
@@ -80,7 +80,7 @@ export class QueryResultPanel implements vscode.WebviewViewProvider, vscode.Webv
 		this._isDebugStep = isDebugStep;
 
 		const loc = resultLocationOverride
-			?? vscode.workspace.getConfiguration('dbt-studio').get<string>('queryEditor.resultLocation', 'preserve');
+			?? vscode.workspace.getConfiguration('dbt-anvil').get<string>('queryEditor.resultLocation', 'preserve');
 		if (loc === 'panel' && !this._inPanel) this.moveToPanel();
 		else if (loc === 'editor' && this._inPanel) this.moveToEditor();
 

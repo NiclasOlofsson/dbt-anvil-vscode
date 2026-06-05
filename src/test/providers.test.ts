@@ -576,7 +576,7 @@ describe('SqlCodeLensProvider', () => {
 		});
 
 		const result = await provider.provideCodeLenses(doc, mockToken);
-		const cteLenses = result.filter(l => l.command?.command === 'dbt-studio.queryCte');
+		const cteLenses = result.filter(l => l.command?.command === 'dbt-anvil.queryCte');
 		expect(cteLenses).toHaveLength(2);
 		expect(cteLenses[0].command?.arguments).toEqual(['model.project.customers', 'base']);
 		expect(cteLenses[1].command?.arguments).toEqual(['model.project.customers', 'final']);
@@ -782,7 +782,7 @@ describe('SqlCodeActionProvider', () => {
 		const quickFix = actions.find(a => a.kind?.value === vscode.CodeActionKind.QuickFix.value);
 		expect(quickFix).toBeDefined();
 		expect(quickFix!.title).toContain('nonexistent_model');
-		expect(quickFix!.command?.command).toBe('dbt-studio.createModelFile');
+		expect(quickFix!.command?.command).toBe('dbt-anvil.createModelFile');
 		expect(quickFix!.isPreferred).toBe(true);
 	});
 

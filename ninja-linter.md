@@ -1,14 +1,14 @@
-# Ninja Linter — SQL Quality for dbt Studio
+# Ninja Linter — SQL Quality for dbt Anvil
 
 ## Background
 
 SQL linting has a rich history in the dbt ecosystem. Tools like **sqlfluff** pioneered the space, bringing configurable rule-based analysis to SQL files and establishing many of the conventions that teams rely on today — consistent capitalisation, trailing whitespace, indentation standards, and more. These tools work well as standalone CLI utilities and CI checks.
 
-dbt Studio takes a different approach: it embeds linting directly into the editor as a native VS Code experience. Rather than running an external process and parsing its output, Ninja operates on the same parsed representation that powers every other dbt Studio feature — completions, navigation, diagnostics, and debugging. This means lint feedback appears instantly as you type, with no round-trip to a subprocess, no Python dependency, and no configuration file to maintain outside of VS Code settings.
+dbt Anvil takes a different approach: it embeds linting directly into the editor as a native VS Code experience. Rather than running an external process and parsing its output, Ninja operates on the same parsed representation that powers every other dbt Anvil feature — completions, navigation, diagnostics, and debugging. This means lint feedback appears instantly as you type, with no round-trip to a subprocess, no Python dependency, and no configuration file to maintain outside of VS Code settings.
 
 ## What Made This Possible
 
-Ninja is built on top of the **DocumentModel** — a rich AST-like representation that dbt Studio already maintains for every open SQL file. The DocumentModel is parsed incrementally by a Python bridge backed by **sqlglot**, and it provides:
+Ninja is built on top of the **DocumentModel** — a rich AST-like representation that dbt Anvil already maintains for every open SQL file. The DocumentModel is parsed incrementally by a Python bridge backed by **sqlglot**, and it provides:
 
 - **Token-level information** — every column reference, table reference, and column definition, with resolved source tracking (`resolvedTableRef`) that links column usages back to their defining CTE or table.
 - **CTE awareness** — each CTE's name, line span, and column list, enabling cross-CTE dependency analysis.
@@ -38,25 +38,25 @@ from orders  -- noqa: ninja.structure.select-star
 
 ## Configuration
 
-Ninja is configured through VS Code settings under the `dbt-studio.ninja` namespace. Every rule can be individually set to `error`, `warning`, `info`, or `off`.
+Ninja is configured through VS Code settings under the `dbt-anvil.ninja` namespace. Every rule can be individually set to `error`, `warning`, `info`, or `off`.
 
 ```jsonc
 // .vscode/settings.json
 {
-  "dbt-studio.ninja.enabled": true,
-  "dbt-studio.ninja.capitalisation.keywords": "lower",
-  "dbt-studio.ninja.capitalisation.functions": "lower",
-  "dbt-studio.ninja.capitalisation.literals": "lower",
-  "dbt-studio.ninja.capitalisation.types": "lower",
-  "dbt-studio.ninja.indentation.unit": "space",
-  "dbt-studio.ninja.indentation.size": 4,
-  "dbt-studio.ninja.maxLineLength": 120,
-  "dbt-studio.ninja.layout.commaPosition": "trailing",
-  "dbt-studio.ninja.layout.operatorPosition": "trailing",
-  "dbt-studio.ninja.structure.allowStarInCte": false,
-  "dbt-studio.ninja.convention.notEqual": "!=",
-  "dbt-studio.ninja.convention.unionStyle": "all",
-  "dbt-studio.ninja.rules": {
+  "dbt-anvil.ninja.enabled": true,
+  "dbt-anvil.ninja.capitalisation.keywords": "lower",
+  "dbt-anvil.ninja.capitalisation.functions": "lower",
+  "dbt-anvil.ninja.capitalisation.literals": "lower",
+  "dbt-anvil.ninja.capitalisation.types": "lower",
+  "dbt-anvil.ninja.indentation.unit": "space",
+  "dbt-anvil.ninja.indentation.size": 4,
+  "dbt-anvil.ninja.maxLineLength": 120,
+  "dbt-anvil.ninja.layout.commaPosition": "trailing",
+  "dbt-anvil.ninja.layout.operatorPosition": "trailing",
+  "dbt-anvil.ninja.structure.allowStarInCte": false,
+  "dbt-anvil.ninja.convention.notEqual": "!=",
+  "dbt-anvil.ninja.convention.unionStyle": "all",
+  "dbt-anvil.ninja.rules": {
     "ninja.cap.keywords": "warning",
     "ninja.structure.unused-cte": "error",
     "ninja.layout.long-lines": "off"
@@ -268,7 +268,7 @@ from orders
 
 Same convention logic as commas but applied to `AND` and `OR` operators. In **trailing** mode, operators end the line. In **leading** mode, operators start the next line.
 
-Configured via `dbt-studio.ninja.layout.operatorPosition`. Default is `trailing`.
+Configured via `dbt-anvil.ninja.layout.operatorPosition`. Default is `trailing`.
 
 - **Default severity:** warning
 - **Auto-fix:** Moves the operator to the correct position (appends to previous line in trailing mode, prepends to next line in leading mode).
@@ -297,7 +297,7 @@ where
 
 > Inequality comparisons should use the configured style (`!=` or `<>`).
 
-Configured via `dbt-studio.ninja.convention.notEqual`. Default is `!=`. Both `!=` and `<>` are valid SQL but mixing them is inconsistent.
+Configured via `dbt-anvil.ninja.convention.notEqual`. Default is `!=`. Both `!=` and `<>` are valid SQL but mixing them is inconsistent.
 
 - **Default severity:** warning
 - **Auto-fix:** Replaces the operator with the configured style.
@@ -393,7 +393,7 @@ select coalesce(amount, 0), coalesce(status, 'unknown')
 
 > Enforce a consistent UNION qualifier — either always `ALL` or always `DISTINCT`.
 
-Configured via `dbt-studio.ninja.convention.unionStyle` (`"all"` or `"distinct"`, default `"all"`). When a `UNION ALL` or `UNION DISTINCT` is found with the wrong qualifier, it is flagged. Bare `UNION` (no qualifier) is handled separately by `ninja.ambiguity.bare-union`.
+Configured via `dbt-anvil.ninja.convention.unionStyle` (`"all"` or `"distinct"`, default `"all"`). When a `UNION ALL` or `UNION DISTINCT` is found with the wrong qualifier, it is flagged. Bare `UNION` (no qualifier) is handled separately by `ninja.ambiguity.bare-union`.
 
 - **Default severity:** warning
 - **Auto-fix:** Replaces the qualifier with the configured style (e.g. `DISTINCT` → `ALL`).
@@ -454,7 +454,7 @@ select * from orders o INNER join items i on o.id = i.order_id
 Bare `UNION` implies `DISTINCT` by SQL standard, but this is easy to miss. Being explicit clarifies whether duplicates are removed.
 
 - **Default severity:** warning
-- **Auto-fix:** Appends the qualifier configured by `dbt-studio.ninja.convention.unionStyle` (default `ALL`).
+- **Auto-fix:** Appends the qualifier configured by `dbt-anvil.ninja.convention.unionStyle` (default `ALL`).
 
 ```sql
 -- Flags: bare UNION (unionStyle = "all")

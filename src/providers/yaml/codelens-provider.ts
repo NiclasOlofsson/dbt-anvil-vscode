@@ -16,7 +16,7 @@ export class YamlCodeLensProvider implements vscode.CodeLensProvider {
 		document: vscode.TextDocument,
 		_token: vscode.CancellationToken,
 	): vscode.CodeLens[] {
-		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.codeLens', true)) return [];
+		if (!vscode.workspace.getConfiguration('dbt-anvil').get('providers.codeLens', true)) return [];
 		return this._yamlCodeLenses(document);
 	}
 
@@ -41,7 +41,7 @@ export class YamlCodeLensProvider implements vscode.CodeLensProvider {
 					lenses.push(
 						new vscode.CodeLens(range, {
 							title: '$(combine) Run CTE Test',
-							command: 'dbt-studio.runCteTest',
+							command: 'dbt-anvil.runCteTest',
 							arguments: [document.fileName, unitTestName],
 							tooltip: `Generate and run CTE test: ${unitTestName}`,
 						}),
@@ -54,7 +54,7 @@ export class YamlCodeLensProvider implements vscode.CodeLensProvider {
 					lenses.push(
 						new vscode.CodeLens(range, {
 							title: '$(beaker) Run Unit Test',
-							command: 'dbt-studio.runUnitTest',
+							command: 'dbt-anvil.runUnitTest',
 							arguments: [modelRef ?? '', unitTestName],
 							tooltip: `dbt test --select ${selector}`,
 						}),
@@ -111,13 +111,13 @@ export class YamlCodeLensProvider implements vscode.CodeLensProvider {
 						lenses.push(
 							new vscode.CodeLens(range, {
 								title: '$(run) Run',
-								command: 'dbt-studio.runNamedModel',
+								command: 'dbt-anvil.runNamedModel',
 								arguments: [currentModelName],
 								tooltip: `dbt run -s ${currentModelName}`,
 							}),
 							new vscode.CodeLens(range, {
 								title: '$(beaker) Test',
-								command: 'dbt-studio.testNamedModel',
+								command: 'dbt-anvil.testNamedModel',
 								arguments: [currentModelName],
 								tooltip: `dbt test -s ${currentModelName}`,
 							}),
@@ -150,7 +150,7 @@ export class YamlCodeLensProvider implements vscode.CodeLensProvider {
 						lenses.push(
 							new vscode.CodeLens(range, {
 								title: '$(beaker) Run Test',
-								command: 'dbt-studio.testNamedModel',
+								command: 'dbt-anvil.testNamedModel',
 								arguments: [currentModelName],
 								tooltip: `dbt test -s ${currentModelName}`,
 							}),

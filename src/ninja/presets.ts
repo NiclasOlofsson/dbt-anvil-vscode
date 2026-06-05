@@ -1,6 +1,6 @@
 import type { NinjaConfig } from './config';
 
-export type FormatPreset = 'sqlfmt' | 'dbt-labs' | 'dbt-studio' | 'custom';
+export type FormatPreset = 'sqlfmt' | 'dbt-labs' | 'dbt-anvil' | 'custom';
 
 /** Partial overrides that a preset applies on top of DEFAULT_CONFIG. */
 export type PresetOverrides = Partial<Omit<NinjaConfig, 'enabled' | 'diagnostics' | 'rules' | 'autoFix' | 'format' | 'capitalisation' | 'indentation' | 'layout' | 'convention' | 'structure'>> & {
@@ -91,13 +91,13 @@ const DBT_LABS_PRESET: PresetOverrides = {
 };
 
 /**
- * dbt Studio house style: dbt-labs leading-comma/operator layout, plus
+ * dbt Anvil house style: dbt-labs leading-comma/operator layout, plus
  * forced multi-line wrapping for GROUP BY, ORDER BY, the OVER window, CASE,
  * and WHERE/HAVING boolean chains. Matches the layout most dbt teams write
  * by hand — vertical clauses make diffs and review easier when columns or
  * predicates change.
  */
-const DBT_STUDIO_PRESET: PresetOverrides = {
+const DBT_ANVIL_PRESET: PresetOverrides = {
 	maxLineLength: 120,
 	capitalisation: {
 		keywords: 'lower',
@@ -106,7 +106,7 @@ const DBT_STUDIO_PRESET: PresetOverrides = {
 		types: 'lower',
 	},
 	indentation: {
-		// dbt Studio house style: THEN on its own indented line under
+		// dbt Anvil house style: THEN on its own indented line under
 		// each WHEN — emphasizes the (condition, result) split visually
 		// and matches the broader "every wrap adds an indent" philosophy
 		// the preset uses elsewhere (alwaysWrap.* across most clauses).
@@ -131,6 +131,6 @@ const DBT_STUDIO_PRESET: PresetOverrides = {
 export const PRESETS: Record<FormatPreset, PresetOverrides> = {
 	sqlfmt: SQLFMT_PRESET,
 	'dbt-labs': DBT_LABS_PRESET,
-	'dbt-studio': DBT_STUDIO_PRESET,
+	'dbt-anvil': DBT_ANVIL_PRESET,
 	custom: {},
 };

@@ -1,5 +1,5 @@
 {
-  "name": "dbt-studio-demo-scripts",
+  "name": "dbt-anvil-demo-scripts",
   "version": "1.0.0",
   "private": true,
   "dependencies": {

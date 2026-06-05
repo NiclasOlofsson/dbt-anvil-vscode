@@ -15,7 +15,7 @@ export class StatusBarManager implements vscode.Disposable {
 		private readonly logger: ILogger,
 	) {
 		this._item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-		this._item.name = 'dbt Studio';
+		this._item.name = 'dbt Anvil';
 
 		this._disposables.push(
 			service.onJobStarted(job => {
@@ -63,20 +63,20 @@ export class StatusBarManager implements vscode.Disposable {
 		if (this._errorMessage) {
 			this._item.text = '$(error) dbt: Setup Required';
 			this._item.tooltip = this._errorMessage;
-			this._item.command = 'dbt-studio.statusBarMenu';
+			this._item.command = 'dbt-anvil.statusBarMenu';
 			return;
 		}
 
 		if (!this._ready) {
 			this._item.text = '$(sync~spin) dbt: Initializing';
-			this._item.tooltip = 'dbt Studio — loading manifest';
+			this._item.tooltip = 'dbt Anvil — loading manifest';
 			this._item.command = undefined;
 			return;
 		}
 
 		this._item.text = '$(check) dbt: Ready';
-		this._item.tooltip = 'dbt Studio — click for options';
-		this._item.command = 'dbt-studio.statusBarMenu';
+		this._item.tooltip = 'dbt Anvil — click for options';
+		this._item.command = 'dbt-anvil.statusBarMenu';
 	}
 
 	private _buildTooltip(): string {

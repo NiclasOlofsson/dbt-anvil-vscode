@@ -26,7 +26,7 @@ export class SqlDebugConfigProvider implements vscode.DebugConfigurationProvider
 
 		// Fill in defaults from settings
 		if (config.limit === undefined) {
-			config.limit = vscode.workspace.getConfiguration('dbt-studio').get<number>('queryEditor.defaultLimit', 500);
+			config.limit = vscode.workspace.getConfiguration('dbt-anvil').get<number>('queryEditor.defaultLimit', 500);
 		}
 		if (!config.scope) {
 			config.scope = 'cursor';

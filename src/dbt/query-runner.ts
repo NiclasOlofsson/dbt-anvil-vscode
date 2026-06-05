@@ -51,7 +51,7 @@ export class QueryRunner {
 	async executeFromEditor(editor: vscode.TextEditor): Promise<void> {
 		const doc = editor.document;
 		const selection = editor.selection;
-		const limit = vscode.workspace.getConfiguration('dbt-studio').get<number>('queryEditor.defaultLimit', 500);
+		const limit = vscode.workspace.getConfiguration('dbt-anvil').get<number>('queryEditor.defaultLimit', 500);
 
 		let sqlToExecute: string;
 
@@ -74,13 +74,13 @@ export class QueryRunner {
 
 	/** Execute all statements in the active editor. */
 	async executeAll(editor: vscode.TextEditor): Promise<void> {
-		const limit = vscode.workspace.getConfiguration('dbt-studio').get<number>('queryEditor.defaultLimit', 500);
+		const limit = vscode.workspace.getConfiguration('dbt-anvil').get<number>('queryEditor.defaultLimit', 500);
 		await this._executeStatements(editor.document.getText(), limit, undefined, editor.document.uri.toString());
 	}
 
 	/** Execute a single SQL string (from CodeLens or debug adapter). */
 	async executeSql(sql: string, limit?: number): Promise<void> {
-		const effectiveLimit = limit ?? vscode.workspace.getConfiguration('dbt-studio').get<number>('queryEditor.defaultLimit', 500);
+		const effectiveLimit = limit ?? vscode.workspace.getConfiguration('dbt-anvil').get<number>('queryEditor.defaultLimit', 500);
 		await this._executeStatements(sql, effectiveLimit);
 	}
 
@@ -117,7 +117,7 @@ export class QueryRunner {
 		const statements = splitStatements(sql);
 		if (statements.length === 0) return;
 
-		const stopOnError = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('queryEditor.stopOnError', false);
+		const stopOnError = vscode.workspace.getConfiguration('dbt-anvil').get<boolean>('queryEditor.stopOnError', false);
 
 		if (runningUri) {
 			this._runningUri = runningUri;

@@ -90,7 +90,7 @@ export const JsonRpcErrorCode = {
 
 /**
  * Shape of the discovery file written by the extension and read by the proxy.
- * Lives at `~/.dbt-studio/mcp/<workspace-hash>.json`.
+ * Lives at `~/.dbt-anvil/mcp/<workspace-hash>.json`.
  */
 export interface DiscoveryFile {
 	port: number;

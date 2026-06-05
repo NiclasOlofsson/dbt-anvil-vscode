@@ -38,7 +38,7 @@ export class DbtCodeLensProvider implements vscode.CodeLensProvider {
 		document: vscode.TextDocument,
 		_token: vscode.CancellationToken,
 	): vscode.CodeLens[] {
-		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.codeLens', true)) return [];
+		if (!vscode.workspace.getConfiguration('dbt-anvil').get('providers.codeLens', true)) return [];
 		if (document.languageId === 'jinja-sql') {
 			return this._sqlCodeLenses(document);
 		}
@@ -65,22 +65,22 @@ export class DbtCodeLensProvider implements vscode.CodeLensProvider {
 		return [
 			new vscode.CodeLens(topRange, {
 				title: '$(run) Run',
-				command: 'dbt-studio.runModel',
+				command: 'dbt-anvil.runModel',
 				tooltip: `dbt run -s ${modelName}`,
 			}),
 			new vscode.CodeLens(topRange, {
 				title: '$(package) Build',
-				command: 'dbt-studio.buildModel',
+				command: 'dbt-anvil.buildModel',
 				tooltip: `dbt build -s ${modelName}`,
 			}),
 			new vscode.CodeLens(topRange, {
 				title: '$(beaker) Test',
-				command: 'dbt-studio.testModel',
+				command: 'dbt-anvil.testModel',
 				tooltip: `dbt test -s ${modelName}`,
 			}),
 			new vscode.CodeLens(topRange, {
 				title: '$(gear) Compile',
-				command: 'dbt-studio.compileModel',
+				command: 'dbt-anvil.compileModel',
 				tooltip: `dbt compile -s ${modelName}`,
 			}),
 			...this._profileLens(document, modelName!, topRange),
@@ -99,12 +99,12 @@ export class DbtCodeLensProvider implements vscode.CodeLensProvider {
 			return [
 				new vscode.CodeLens(range, {
 					title: `$(loading~spin) Profiling (${n}/${total})`,
-					command: 'dbt-studio.profiler.profileModel',
+					command: 'dbt-anvil.profiler.profileModel',
 					tooltip: `Profiling ${modelName} — ${n} of ${total} CTEs done`,
 				}),
 				new vscode.CodeLens(range, {
 					title: '$(stop-circle) Stop',
-					command: 'dbt-studio.profiler.cancelProfiling',
+					command: 'dbt-anvil.profiler.cancelProfiling',
 					tooltip: 'Cancel profiling',
 				}),
 			];
@@ -117,7 +117,7 @@ export class DbtCodeLensProvider implements vscode.CodeLensProvider {
 		}
 		return [new vscode.CodeLens(range, {
 			title,
-			command: 'dbt-studio.profiler.profileModel',
+			command: 'dbt-anvil.profiler.profileModel',
 			tooltip: `Profile all CTEs in ${modelName}`,
 		})];
 	}
@@ -133,7 +133,7 @@ export class DbtCodeLensProvider implements vscode.CodeLensProvider {
 		if (statements.length > 1) {
 			lenses.push(new vscode.CodeLens(new vscode.Range(0, 0, 0, 0), {
 				title: `$(run-all) Run All (${statements.length})`,
-				command: 'dbt-studio.executeAll',
+				command: 'dbt-anvil.executeAll',
 				tooltip: `Execute all ${statements.length} statements (Ctrl+Shift+Enter)`,
 			}));
 		}
@@ -143,7 +143,7 @@ export class DbtCodeLensProvider implements vscode.CodeLensProvider {
 			const range = new vscode.Range(stmt.startLine, 0, stmt.startLine, 0);
 			lenses.push(new vscode.CodeLens(range, {
 				title: '$(play) Run',
-				command: 'dbt-studio.executeStatement',
+				command: 'dbt-anvil.executeStatement',
 				arguments: [stmt.sql],
 				tooltip: `F5 — ${stmt.sql.length > 80 ? stmt.sql.substring(0, 80) + '…' : stmt.sql}`,
 			}));
@@ -173,7 +173,7 @@ export class DbtCodeLensProvider implements vscode.CodeLensProvider {
 					lenses.push(
 						new vscode.CodeLens(range, {
 							title: '$(combine) Run CTE Test',
-							command: 'dbt-studio.runCteTest',
+							command: 'dbt-anvil.runCteTest',
 							arguments: [document.fileName, unitTestName],
 							tooltip: `Generate and run CTE test: ${unitTestName}`,
 						}),
@@ -186,7 +186,7 @@ export class DbtCodeLensProvider implements vscode.CodeLensProvider {
 					lenses.push(
 						new vscode.CodeLens(range, {
 							title: '$(beaker) Run Unit Test',
-							command: 'dbt-studio.runUnitTest',
+							command: 'dbt-anvil.runUnitTest',
 							arguments: [modelRef ?? '', unitTestName],
 							tooltip: `dbt test --select ${selector}`,
 						}),
@@ -243,13 +243,13 @@ export class DbtCodeLensProvider implements vscode.CodeLensProvider {
 						lenses.push(
 							new vscode.CodeLens(range, {
 								title: '$(run) Run',
-								command: 'dbt-studio.runNamedModel',
+								command: 'dbt-anvil.runNamedModel',
 								arguments: [currentModelName],
 								tooltip: `dbt run -s ${currentModelName}`,
 							}),
 							new vscode.CodeLens(range, {
 								title: '$(beaker) Test',
-								command: 'dbt-studio.testNamedModel',
+								command: 'dbt-anvil.testNamedModel',
 								arguments: [currentModelName],
 								tooltip: `dbt test -s ${currentModelName}`,
 							}),
@@ -282,7 +282,7 @@ export class DbtCodeLensProvider implements vscode.CodeLensProvider {
 						lenses.push(
 							new vscode.CodeLens(range, {
 								title: '$(beaker) Run Test',
-								command: 'dbt-studio.testNamedModel',
+								command: 'dbt-anvil.testNamedModel',
 								arguments: [currentModelName],
 								tooltip: `dbt test -s ${currentModelName}`,
 							}),

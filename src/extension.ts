@@ -63,10 +63,11 @@ import { WorkspaceDiagnosticsScanner } from './ninja/diagnostics/scanner';
 import { WorkspaceDiagnosticsPersistence } from './ninja/diagnostics/persistence';
 import { NinjaEditorPanel } from './ninja/editor';
 import * as path from 'node:path';
+import { migrateLegacySettings } from './migration';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
 	// -------- Bootstrap logging & service container --------
-	const outputChannel = vscode.window.createOutputChannel('dbt Studio', { log: true });
+	const outputChannel = vscode.window.createOutputChannel('dbt Anvil', { log: true });
 
 	if (context.extensionMode === vscode.ExtensionMode.Development) {
 		outputChannel.show(true);
@@ -78,7 +79,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	ServiceContainer.initialize({ extensionContext: context, logger, extensionVersion: version });
 	context.subscriptions.push(outputChannel);
 
-	logger.info(`dbt Studio v${version} activating...`);
+	// One-time migration from the previous "dbt Studio" identity (settings,
+	// formatter id, and stale MCP wiring). Runs before any config is read.
+	await migrateLegacySettings(context, logger);
+
+	logger.info(`dbt Anvil v${version} activating...`);
 
 	// -------- Claim .sql files as jinja-sql --------
 	// Other extensions (sqlfluff, sql-formatter, etc.) may steal .sql bindings depending
@@ -95,7 +100,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// -------- Resolve workspace/project directory --------
 	const workspaceFolders = vscode.workspace.workspaceFolders;
 	if (!workspaceFolders || workspaceFolders.length === 0) {
-		logger.warn('No workspace folder open — dbt Studio may be limited.');
+		logger.warn('No workspace folder open — dbt Anvil may be limited.');
 		return;
 	}
 
@@ -141,7 +146,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 						logger.warn(`Environment manager not found on PATH: ${mgr}`);
 						initError = `${mgr} is not installed or not on PATH. Install it (e.g. pip install ${mgr}), then reload the window.`;
 						void vscode.window.showErrorMessage(
-							`dbt Studio: ${mgr} is not installed or not on PATH. Install it, then reload the window.`,
+							`dbt Anvil: ${mgr} is not installed or not on PATH. Install it, then reload the window.`,
 							'Reload Window',
 						).then((selection) => {
 							if (selection === 'Reload Window') {
@@ -154,7 +159,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 						if (bootstrapCmd) {
 							logger.info(`Bootstrapping Python environment: ${bootstrapCmd.join(' ')}`);
 							envReady = await vscode.window.withProgress(
-								{ location: vscode.ProgressLocation.Notification, title: 'dbt Studio: Setting up Python environment…', cancellable: false },
+								{ location: vscode.ProgressLocation.Notification, title: 'dbt Anvil: Setting up Python environment…', cancellable: false },
 								() => _runBootstrap(bootstrapCmd, projectDir, pythonEnv.envVars),
 							);
 							if (envReady) {
@@ -162,13 +167,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 							}
 							if (!envReady) {
 								logger.warn(`Bootstrap completed but Python environment still not working: ${pythonEnv.description}`);
-								initError = `Python environment setup failed (${pythonEnv.description}). Check the dbt Studio output channel for details.`;
+								initError = `Python environment setup failed (${pythonEnv.description}). Check the dbt Anvil output channel for details.`;
 								void vscode.window.showErrorMessage(
-									'dbt Studio: Python environment setup failed. See the dbt Studio output channel for details.',
+									'dbt Anvil: Python environment setup failed. See the dbt Anvil output channel for details.',
 									'Show Output',
 								).then((selection) => {
 									if (selection === 'Show Output') {
-										void vscode.commands.executeCommand('dbt-studio.showOutputChannel');
+										void vscode.commands.executeCommand('dbt-anvil.showOutputChannel');
 									}
 								});
 							} else {
@@ -178,7 +183,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 							logger.warn(`Python environment validation failed: ${pythonEnv.description}`);
 							initError = `Python environment not working (${pythonEnv.description}). dbt features are disabled.`;
 							void vscode.window.showWarningMessage(
-								`dbt Studio: Python environment not found or not working (${pythonEnv.description}). dbt features are disabled.`,
+								`dbt Anvil: Python environment not found or not working (${pythonEnv.description}). dbt features are disabled.`,
 								'Reload Window',
 							).then((selection) => {
 								if (selection === 'Reload Window') {
@@ -196,7 +201,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 					if (bootstrapCmd) {
 						logger.info(`dbt missing — bootstrapping environment: ${bootstrapCmd.join(' ')}`);
 						const bootstrapOk = await vscode.window.withProgress(
-							{ location: vscode.ProgressLocation.Notification, title: 'dbt Studio: Installing project dependencies…', cancellable: false },
+							{ location: vscode.ProgressLocation.Notification, title: 'dbt Anvil: Installing project dependencies…', cancellable: false },
 							() => _runBootstrap(bootstrapCmd, projectDir, pythonEnv.envVars),
 						);
 						if (bootstrapOk && await validateDbtInstalled(pythonEnv, projectDir)) {
@@ -205,7 +210,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 							logger.warn(`dbt still not found after bootstrap: ${pythonEnv.description}`);
 							initError = `dbt is not installed in the Python environment (${pythonEnv.description}). Add dbt to your project dependencies and reload.`;
 							void vscode.window.showErrorMessage(
-								'dbt Studio: dbt is not installed in the Python environment. Add it to your project dependencies and reload the window.',
+								'dbt Anvil: dbt is not installed in the Python environment. Add it to your project dependencies and reload the window.',
 								'Reload Window',
 							).then((selection) => {
 								if (selection === 'Reload Window') {
@@ -216,7 +221,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 					} else {
 						initError = `dbt is not installed in the Python environment (${pythonEnv.description}). Add dbt to your project dependencies and reload.`;
 						void vscode.window.showErrorMessage(
-							'dbt Studio: dbt is not installed in the Python environment. Add it to your project dependencies and reload the window.',
+							'dbt Anvil: dbt is not installed in the Python environment. Add it to your project dependencies and reload the window.',
 							'Reload Window',
 						).then((selection) => {
 							if (selection === 'Reload Window') {
@@ -231,7 +236,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// -------- Terminal environment setup --------
 	// Shims are written after background env validation completes (see _envInitDone.then below).
 	// Clear immediately so a stale shim from a previous session never leaks into new terminals.
-	const contributeCliShim = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('terminal.contributeCliShim', true);
+	const contributeCliShim = vscode.workspace.getConfiguration('dbt-anvil').get<boolean>('terminal.contributeCliShim', true);
 	context.environmentVariableCollection.clear();
 
 	// -------- Set up manifest loading and indexing --------
@@ -393,7 +398,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				const shimPath = writeShims(shimsDir, pythonEnv);
 				if (shimPath) {
 					context.environmentVariableCollection.prepend('PATH', shimPath + path.delimiter);
-					context.environmentVariableCollection.description = `dbt Studio: activated ${pythonEnv.description}`;
+					context.environmentVariableCollection.description = `dbt Anvil: activated ${pythonEnv.description}`;
 					logger.info(`Terminal shim contributed: ${shimPath}`);
 				} else {
 					logger.info('No terminal shim needed (system Python)');
@@ -440,12 +445,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	});
 
 	// -------- External dbt monitor (detect conflicting terminal dbt commands) --------
-	if (vscode.workspace.getConfiguration('dbt-studio').get<boolean>('terminal.externalCommandMonitor.enabled', true)) {
+	if (vscode.workspace.getConfiguration('dbt-anvil').get<boolean>('terminal.externalCommandMonitor.enabled', true)) {
 		const externalDbtMonitor = new ExternalDbtMonitor(projectDir, executionService, manifestWatcher, logger, context);
 		externalDbtMonitor.start();
 		context.subscriptions.push(externalDbtMonitor);
 	} else {
-		logger.warn('ExternalDbtMonitor is disabled via dbt-studio.terminal.externalCommandMonitor.enabled — concurrent terminal dbt commands may corrupt the manifest.');
+		logger.warn('ExternalDbtMonitor is disabled via dbt-anvil.terminal.externalCommandMonitor.enabled — concurrent terminal dbt commands may corrupt the manifest.');
 	}
 
 	// Kick off a full compile to warm the cache. Skipped if enough valid entries
@@ -507,7 +512,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	void mcpStart.then(result => {
 		if (result?.configChanged) {
 			void vscode.window.showInformationMessage(
-				'dbt Studio MCP tools registered — restart Claude Code to activate.',
+				'dbt Anvil MCP tools registered — restart Claude Code to activate.',
 			);
 		}
 	});
@@ -519,13 +524,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	lineageGraphProvider.setColumnLineageTool(columnLineageTool);
 	lineageGraphProvider.setExecutionService(executionService);
 	// Initialise context keys so the correct toolbar icons show from the start
-	void vscode.commands.executeCommand('setContext', 'dbt-studio.lineageFollowActive', lineageGraphProvider.followActive);
-	void vscode.commands.executeCommand('setContext', 'dbt-studio.lineage.showTests', lineageGraphProvider.showTests);
-	void vscode.commands.executeCommand('setContext', 'dbt-studio.explorerFollowActive', modelExplorerProvider.followActive);
+	void vscode.commands.executeCommand('setContext', 'dbt-anvil.lineageFollowActive', lineageGraphProvider.followActive);
+	void vscode.commands.executeCommand('setContext', 'dbt-anvil.lineage.showTests', lineageGraphProvider.showTests);
+	void vscode.commands.executeCommand('setContext', 'dbt-anvil.explorerFollowActive', modelExplorerProvider.followActive);
 	void vscode.commands.executeCommand('setContext', ProfilerDecorationProvider.contextKey, true);
 	const testExplorerProvider = new TestExplorerProvider(manifestIndexer, manifestLoader, logger);
 
-	const modelExplorerView = vscode.window.createTreeView('dbt-studio.modelExplorer', {
+	const modelExplorerView = vscode.window.createTreeView('dbt-anvil.modelExplorer', {
 		treeDataProvider: modelExplorerProvider,
 		showCollapseAll: true,
 	});
@@ -533,7 +538,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	context.subscriptions.push(
 		modelExplorerView,
 		vscode.window.registerWebviewViewProvider(LineageGraphProvider.viewId, lineageGraphProvider),
-		vscode.window.registerTreeDataProvider('dbt-studio.testExplorer', testExplorerProvider),
+		vscode.window.registerTreeDataProvider('dbt-anvil.testExplorer', testExplorerProvider),
 	);
 
 	// -------- Profiler views --------
@@ -650,7 +655,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		const category = editor?.document.languageId === 'jinja-sql'
 			? pathResolver.classifyFile(editor.document.fileName)
 			: undefined;
-		void vscode.commands.executeCommand('setContext', 'dbt-studio.fileCategory', category);
+		void vscode.commands.executeCommand('setContext', 'dbt-anvil.fileCategory', category);
 	};
 	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(updateFileCategory));
 	updateFileCategory(vscode.window.activeTextEditor);
@@ -743,7 +748,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		if (!envReady) {
 			const msg = initError
 				? `dbt environment error (${pythonEnv.description}): ${initError}`
-				: 'dbt Studio is still initializing — please try again in a moment.';
+				: 'dbt Anvil is still initializing — please try again in a moment.';
 			void vscode.window.showWarningMessage(msg, ...(initError ? ['Reload Window'] as const : [])).then((selection) => {
 				if (selection === 'Reload Window') {
 					void vscode.commands.executeCommand('workbench.action.reloadWindow');
@@ -756,33 +761,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	// -------- Register commands --------
 	context.subscriptions.push(
-		vscode.commands.registerCommand('dbt-studio.showOutputChannel', () => {
+		vscode.commands.registerCommand('dbt-anvil.showOutputChannel', () => {
 			outputChannel.show(true);
 		}),
-		vscode.commands.registerCommand('dbt-studio.suppressSqlFluffWarning', async () => {
-			await vscode.workspace.getConfiguration('dbt-studio').update('notifications.suppressSqlFluffWarning', true, vscode.ConfigurationTarget.Global);
+		vscode.commands.registerCommand('dbt-anvil.suppressSqlFluffWarning', async () => {
+			await vscode.workspace.getConfiguration('dbt-anvil').update('notifications.suppressSqlFluffWarning', true, vscode.ConfigurationTarget.Global);
 		}),
-		vscode.commands.registerCommand('dbt-studio.suppressAutoSaveWarning', async () => {
-			await vscode.workspace.getConfiguration('dbt-studio').update('notifications.suppressAutoSaveWarning', true, vscode.ConfigurationTarget.Global);
+		vscode.commands.registerCommand('dbt-anvil.suppressAutoSaveWarning', async () => {
+			await vscode.workspace.getConfiguration('dbt-anvil').update('notifications.suppressAutoSaveWarning', true, vscode.ConfigurationTarget.Global);
 		}),
-		vscode.commands.registerCommand('dbt-studio.setAsDefaultFormatter', async () => {
-			await vscode.workspace.getConfiguration('editor', { languageId: 'jinja-sql' }).update('defaultFormatter', 'nickeolofsson.dbt-studio-vscode', vscode.ConfigurationTarget.Global, true);
+		vscode.commands.registerCommand('dbt-anvil.setAsDefaultFormatter', async () => {
+			await vscode.workspace.getConfiguration('editor', { languageId: 'jinja-sql' }).update('defaultFormatter', 'nickeolofsson.dbt-anvil', vscode.ConfigurationTarget.Global, true);
 		}),
-		vscode.commands.registerCommand('dbt-studio.suppressFormatterWarning', async () => {
-			await vscode.workspace.getConfiguration('dbt-studio').update('notifications.suppressFormatterWarning', true, vscode.ConfigurationTarget.Global);
+		vscode.commands.registerCommand('dbt-anvil.suppressFormatterWarning', async () => {
+			await vscode.workspace.getConfiguration('dbt-anvil').update('notifications.suppressFormatterWarning', true, vscode.ConfigurationTarget.Global);
 		}),
-		vscode.commands.registerCommand('dbt-studio.ninja.scanWorkspace', () => { void workspaceScanner?.scanAll(); }),
-		vscode.commands.registerCommand('dbt-studio.ninja.openRuleEditor', () => {
+		vscode.commands.registerCommand('dbt-anvil.ninja.scanWorkspace', () => { void workspaceScanner?.scanAll(); }),
+		vscode.commands.registerCommand('dbt-anvil.ninja.openRuleEditor', () => {
 			const panel = NinjaEditorPanel.getInstance();
 			panel.setScanner(workspaceScanner);
 			void panel.open();
 		}),
-		vscode.commands.registerCommand('dbt-studio.ninja.statusBarMenu', async () => {
+		vscode.commands.registerCommand('dbt-anvil.ninja.statusBarMenu', async () => {
 			const items: vscode.QuickPickItem[] = [
 				{ label: '$(search) Rescan all files', description: 'Run Ninja on every SQL file in the workspace' },
 				{ label: '$(edit) Rule Editor', description: 'Open the Ninja Rule Editor' },
 				{ label: '$(warning) Open Problems panel', description: 'Show all Ninja diagnostics' },
-				{ label: '$(gear) Open Ninja settings', description: 'Configure dbt-studio.ninja options' },
+				{ label: '$(gear) Open Ninja settings', description: 'Configure dbt-anvil.ninja options' },
 				{ label: '$(trash) Clear Ninja diagnostics', description: 'Remove all Ninja issues from the Problems panel' },
 			];
 			const pick = await vscode.window.showQuickPick(items, { placeHolder: 'Ninja workspace diagnostics' });
@@ -790,22 +795,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			if (pick.label.includes('Rescan')) {
 				void workspaceScanner?.scanAll();
 			} else if (pick.label.includes('Rule Editor')) {
-				void vscode.commands.executeCommand('dbt-studio.ninja.openRuleEditor');
+				void vscode.commands.executeCommand('dbt-anvil.ninja.openRuleEditor');
 			} else if (pick.label.includes('Open Problems')) {
 				void vscode.commands.executeCommand('workbench.action.problems.focus');
 			} else if (pick.label.includes('settings')) {
-				void vscode.commands.executeCommand('workbench.action.openSettings', 'dbt-studio.ninja');
+				void vscode.commands.executeCommand('workbench.action.openSettings', 'dbt-anvil.ninja');
 			} else if (pick.label.includes('Clear')) {
 				workspaceScanner?.clear();
 			}
 		}),
-		vscode.commands.registerCommand('dbt-studio.statusBarMenu', async () => {
+		vscode.commands.registerCommand('dbt-anvil.statusBarMenu', async () => {
 			const items: vscode.QuickPickItem[] = [
 				{ label: '$(trash) Clear All Caches', description: 'Hard reset — wipes all cached data from memory and disk' },
-				{ label: '$(gear) Open Settings', description: 'Configure dbt Studio options' },
-				{ label: '$(output) Show Output Channel', description: 'Open the dbt Studio output log' },
+				{ label: '$(gear) Open Settings', description: 'Configure dbt Anvil options' },
+				{ label: '$(output) Show Output Channel', description: 'Open the dbt Anvil output log' },
 			];
-			const pick = await vscode.window.showQuickPick(items, { placeHolder: 'dbt Studio' });
+			const pick = await vscode.window.showQuickPick(items, { placeHolder: 'dbt Anvil' });
 			if (!pick) return;
 			if (pick.label.includes('Clear All')) {
 				// Clear in-memory caches
@@ -822,22 +827,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				}
 				void vscode.window.showInformationMessage('All caches cleared.');
 			} else if (pick.label.includes('Settings')) {
-				void vscode.commands.executeCommand('workbench.action.openSettings', 'dbt-studio');
+				void vscode.commands.executeCommand('workbench.action.openSettings', 'dbt-anvil');
 			} else if (pick.label.includes('Output')) {
-				void vscode.commands.executeCommand('dbt-studio.showOutputChannel');
+				void vscode.commands.executeCommand('dbt-anvil.showOutputChannel');
 			}
 		}),
-		vscode.commands.registerCommand('dbt-studio.goToLine', async (args: { uri: string; line: number }) => {
+		vscode.commands.registerCommand('dbt-anvil.goToLine', async (args: { uri: string; line: number }) => {
 			const uri = vscode.Uri.parse(args.uri);
 			const pos = new vscode.Position(args.line, 0);
 			await vscode.window.showTextDocument(uri, { selection: new vscode.Range(pos, pos), preserveFocus: false });
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.refreshExplorer', () => {
+		vscode.commands.registerCommand('dbt-anvil.refreshExplorer', () => {
 			modelExplorerProvider.refresh();
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.runModel', async () => {
+		vscode.commands.registerCommand('dbt-anvil.runModel', async () => {
 			if (!requireEnv()) return;
 			const model = getActiveModelName();
 			if (!model) return;
@@ -853,14 +858,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			modelExplorerProvider.refresh();
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.testModel', async () => {
+		vscode.commands.registerCommand('dbt-anvil.testModel', async () => {
 			if (!requireEnv()) return;
 			const model = getActiveModelName();
 			if (!model) return;
 			await vsTestController.runTestsForModel(model);
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.buildModel', async () => {
+		vscode.commands.registerCommand('dbt-anvil.buildModel', async () => {
 			if (!requireEnv()) return;
 			const model = getActiveModelName();
 			if (!model) return;
@@ -876,7 +881,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			modelExplorerProvider.refresh();
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.compileModel', async () => {
+		vscode.commands.registerCommand('dbt-anvil.compileModel', async () => {
 			if (!requireEnv()) return;
 			const model = getActiveModelName();
 			if (!model) return;
@@ -922,7 +927,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			}
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.showLineage', () => {
+		vscode.commands.registerCommand('dbt-anvil.showLineage', () => {
 			void (async () => {
 				const model = getActiveModelName();
 				if (!model) return;
@@ -932,43 +937,43 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 					return;
 				}
 				lineageGraphProvider.setFocusModel(models[0].uniqueId);
-				void vscode.commands.executeCommand('dbt-studio.lineageGraph.focus');
+				void vscode.commands.executeCommand('dbt-anvil.lineageGraph.focus');
 			})();
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.toggleLineageFollow', () => {
+		vscode.commands.registerCommand('dbt-anvil.toggleLineageFollow', () => {
 			lineageGraphProvider.toggleFollow();
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.toggleLineageFollowOff', () => {
+		vscode.commands.registerCommand('dbt-anvil.toggleLineageFollowOff', () => {
 			lineageGraphProvider.toggleFollow();
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.toggleExplorerFollow', () => {
+		vscode.commands.registerCommand('dbt-anvil.toggleExplorerFollow', () => {
 			modelExplorerProvider.toggleFollow();
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.toggleExplorerFollowOff', () => {
+		vscode.commands.registerCommand('dbt-anvil.toggleExplorerFollowOff', () => {
 			modelExplorerProvider.toggleFollow();
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.showLineageTests', () => {
+		vscode.commands.registerCommand('dbt-anvil.showLineageTests', () => {
 			lineageGraphProvider.setShowTests(true);
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.hideLineageTests', () => {
+		vscode.commands.registerCommand('dbt-anvil.hideLineageTests', () => {
 			lineageGraphProvider.setShowTests(false);
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.toggleLineageTests', () => {
+		vscode.commands.registerCommand('dbt-anvil.toggleLineageTests', () => {
 			lineageGraphProvider.setShowTests(!lineageGraphProvider.showTests);
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.refreshTestExplorer', () => {
+		vscode.commands.registerCommand('dbt-anvil.refreshTestExplorer', () => {
 			testExplorerProvider.refresh();
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.runDeps', async () => {
+		vscode.commands.registerCommand('dbt-anvil.runDeps', async () => {
 			if (!requireEnv()) return;
 			const result = await executionService.submit({
 				type: 'deps', args: ['deps'],
@@ -984,7 +989,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			}
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.parseProject', async () => {
+		vscode.commands.registerCommand('dbt-anvil.parseProject', async () => {
 			if (!requireEnv()) return;
 			const result = await executionService.submit({
 				type: 'parse', args: ['parse'],
@@ -1004,7 +1009,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			}
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.createModelFile', async (modelName: string) => {
+		vscode.commands.registerCommand('dbt-anvil.createModelFile', async (modelName: string) => {
 			const folders = vscode.workspace.workspaceFolders;
 			if (!folders) return;
 			const modelsDir = vscode.Uri.joinPath(folders[0].uri, 'models');
@@ -1015,7 +1020,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			await vscode.window.showTextDocument(doc);
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.inlineRefs', async (uri: vscode.Uri) => {
+		vscode.commands.registerCommand('dbt-anvil.inlineRefs', async (uri: vscode.Uri) => {
 			const doc = await vscode.workspace.openTextDocument(uri);
 			const inlined = sqlCodeActionProvider.inlineRefs(doc.getText());
 			const edit = new vscode.WorkspaceEdit();
@@ -1023,7 +1028,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			await vscode.workspace.applyEdit(edit);
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.restoreRefs', async (uri: vscode.Uri) => {
+		vscode.commands.registerCommand('dbt-anvil.restoreRefs', async (uri: vscode.Uri) => {
 			const doc = await vscode.workspace.openTextDocument(uri);
 			const restored = sqlCodeActionProvider.restoreRefs(doc.getText());
 			const edit = new vscode.WorkspaceEdit();
@@ -1033,7 +1038,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 		// ---- Test running commands (for explorer + CodeLens) ----
 
-		vscode.commands.registerCommand('dbt-studio.runNamedModel', async (modelName: string) => {
+		vscode.commands.registerCommand('dbt-anvil.runNamedModel', async (modelName: string) => {
 			if (!requireEnv()) return;
 			const result = await executionService.submit({
 				type: 'run', args: ['run', '-s', modelName],
@@ -1046,19 +1051,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			}
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.testNamedModel', async (modelName: string) => {
+		vscode.commands.registerCommand('dbt-anvil.testNamedModel', async (modelName: string) => {
 			if (!requireEnv()) return;
 			await vsTestController.runTestsForModel(modelName);
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.runUnitTest', async (_modelName: string, testName: string) => {
+		vscode.commands.registerCommand('dbt-anvil.runUnitTest', async (_modelName: string, testName: string) => {
 			const uid = testExplorerProvider.resolveUidByName(testName);
 			if (uid) {
 				await vsTestController.runTests([uid]);
 			}
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.runCteTest', async (_yamlFilePath: string, testName: string) => {
+		vscode.commands.registerCommand('dbt-anvil.runCteTest', async (_yamlFilePath: string, testName: string) => {
 			const uid = testExplorerProvider.resolveUidByName(testName);
 			if (uid) {
 				await vsTestController.runTests([uid]);
@@ -1067,56 +1072,56 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			}
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.runTestFromExplorer', async (item: unknown) => {
+		vscode.commands.registerCommand('dbt-anvil.runTestFromExplorer', async (item: unknown) => {
 			const testItem = item as { uniqueId: string } | undefined;
 			if (!testItem?.uniqueId) return;
 			await vsTestController.runTests([testItem.uniqueId]);
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.runTestGroupFromExplorer', async (item: unknown) => {
+		vscode.commands.registerCommand('dbt-anvil.runTestGroupFromExplorer', async (item: unknown) => {
 			const group = item as { children: Array<{ uniqueId: string }> } | undefined;
 			if (!group?.children) return;
 			await vsTestController.runTests(group.children.map(c => c.uniqueId));
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.runTestCategoryFromExplorer', async (item: unknown) => {
+		vscode.commands.registerCommand('dbt-anvil.runTestCategoryFromExplorer', async (item: unknown) => {
 			const category = item as { children: Array<{ children: Array<{ uniqueId: string }> }> } | undefined;
 			if (!category?.children) return;
 			const uids = category.children.flatMap(g => g.children).map(n => n.uniqueId);
 			await vsTestController.runTests(uids);
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.runAllTestsFromExplorer', async () => {
+		vscode.commands.registerCommand('dbt-anvil.runAllTestsFromExplorer', async () => {
 			await vsTestController.runTests();
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.openSettings', () => {
-			void vscode.commands.executeCommand('workbench.action.openSettings', '@ext:nickeolofsson.dbt-studio-vscode');
+		vscode.commands.registerCommand('dbt-anvil.openSettings', () => {
+			void vscode.commands.executeCommand('workbench.action.openSettings', '@ext:nickeolofsson.dbt-anvil');
 		}),
 
 		// ---- Profiler commands ----
 
-		vscode.commands.registerCommand('dbt-studio.profiler.profileModel', async () => {
+		vscode.commands.registerCommand('dbt-anvil.profiler.profileModel', async () => {
 			const editor = vscode.window.activeTextEditor;
 			if (!editor || editor.document.languageId !== 'jinja-sql') {
 				void vscode.window.showWarningMessage('Open a dbt SQL model file to profile it.');
 				return;
 			}
-			void vscode.commands.executeCommand('setContext', 'dbt-studio.profilingActive', true);
+			void vscode.commands.executeCommand('setContext', 'dbt-anvil.profilingActive', true);
 			try {
 				await modelProfiler.profileDocument(editor.document);
 			} catch (err) {
 				void vscode.window.showErrorMessage(`Profile failed: ${err}`);
 			} finally {
-				void vscode.commands.executeCommand('setContext', 'dbt-studio.profilingActive', false);
+				void vscode.commands.executeCommand('setContext', 'dbt-anvil.profilingActive', false);
 			}
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.profiler.clearResults', () => {
+		vscode.commands.registerCommand('dbt-anvil.profiler.clearResults', () => {
 			modelProfiler.clearAll();
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.profiler.cancelProfiling', () => {
+		vscode.commands.registerCommand('dbt-anvil.profiler.cancelProfiling', () => {
 			const editor = vscode.window.activeTextEditor;
 			if (!editor) return;
 			const result = modelProfiler.getResultForFile(editor.document.fileName);
@@ -1125,7 +1130,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			}
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.profiler.goToCte', async (filePath: string, cteName: string) => {
+		vscode.commands.registerCommand('dbt-anvil.profiler.goToCte', async (filePath: string, cteName: string) => {
 			const doc = await vscode.workspace.openTextDocument(filePath);
 			const model = await parseService.getDocumentModel(doc, { skipEnrichment: true });
 			let line: number;
@@ -1142,14 +1147,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			});
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.profiler.showDecorations', () => {
+		vscode.commands.registerCommand('dbt-anvil.profiler.showDecorations', () => {
 			if (!profilerDecorationProvider.visible) {
 				profilerDecorationProvider.toggle();
 			}
 			void vscode.commands.executeCommand('setContext', ProfilerDecorationProvider.contextKey, true);
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.profiler.hideDecorations', () => {
+		vscode.commands.registerCommand('dbt-anvil.profiler.hideDecorations', () => {
 			if (profilerDecorationProvider.visible) {
 				profilerDecorationProvider.toggle();
 			}
@@ -1170,7 +1175,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	sqlCodeLensProvider.setQueryRunner(queryRunner);
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand('dbt-studio.executeQuery', async () => {
+		vscode.commands.registerCommand('dbt-anvil.executeQuery', async () => {
 			if (!requireEnv()) return;
 			const editor = vscode.window.activeTextEditor;
 			if (!editor || editor.document.languageId !== 'jinja-sql') {
@@ -1185,7 +1190,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			await vscode.debug.startDebugging(undefined, { type: 'dbt-sql', request: 'launch', name: 'Run SQL', scope: 'cursor', noDebug: true });
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.executeAll', async () => {
+		vscode.commands.registerCommand('dbt-anvil.executeAll', async () => {
 			const editor = vscode.window.activeTextEditor;
 			if (!editor || editor.document.languageId !== 'jinja-sql') {
 				void vscode.window.showWarningMessage('Open a dbt SQL file to execute queries.');
@@ -1199,12 +1204,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			await vscode.debug.startDebugging(undefined, { type: 'dbt-sql', request: 'launch', name: 'Run All SQL', scope: 'all', noDebug: true });
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.executeStatement', async (sql: string) => {
+		vscode.commands.registerCommand('dbt-anvil.executeStatement', async (sql: string) => {
 			if (!sql) return;
 			await queryRunner.executeSql(sql);
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.queryCte', async (modelId: string, cteName: string) => {
+		vscode.commands.registerCommand('dbt-anvil.queryCte', async (modelId: string, cteName: string) => {
 			if (!modelId || !cteName) return;
 			const rawNode = manifestIndexer.getRawNode(modelId);
 			if (!rawNode || rawNode.resource_type !== 'model') return;
@@ -1216,7 +1221,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			await queryRunner.executeSql(cteSql);
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.queryModel', async () => {
+		vscode.commands.registerCommand('dbt-anvil.queryModel', async () => {
 			const editor = vscode.window.activeTextEditor;
 			if (!editor) return;
 			const modelId = manifestIndexer.findModelByFilePath(editor.document.fileName);
@@ -1236,19 +1241,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			await queryRunner.executeSql(compiledSql);
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.queryResult.moveToPanel', () => {
+		vscode.commands.registerCommand('dbt-anvil.queryResult.moveToPanel', () => {
 			queryResultPanel.moveToPanel();
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.queryResult.moveToEditor', () => {
+		vscode.commands.registerCommand('dbt-anvil.queryResult.moveToEditor', () => {
 			queryResultPanel.moveToEditor();
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.queryResult.toggleStats', () => {
+		vscode.commands.registerCommand('dbt-anvil.queryResult.toggleStats', () => {
 			queryResultPanel.toggleStats();
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.queryResult.exportMenu', async () => {
+		vscode.commands.registerCommand('dbt-anvil.queryResult.exportMenu', async () => {
 			const items: vscode.QuickPickItem[] = [
 				{ label: '$(copy) Copy as CSV', detail: 'csv' },
 				{ label: '$(copy) Copy as TSV', detail: 'tsv' },
@@ -1262,16 +1267,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			}
 		}),
 
-		vscode.commands.registerCommand('dbt-studio.queryResult.export.csv', () => {
+		vscode.commands.registerCommand('dbt-anvil.queryResult.export.csv', () => {
 			queryResultPanel.requestExport('csv', 'file');
 		}),
-		vscode.commands.registerCommand('dbt-studio.queryResult.export.tsv', () => {
+		vscode.commands.registerCommand('dbt-anvil.queryResult.export.tsv', () => {
 			queryResultPanel.requestExport('tsv', 'file');
 		}),
-		vscode.commands.registerCommand('dbt-studio.queryResult.export.json', () => {
+		vscode.commands.registerCommand('dbt-anvil.queryResult.export.json', () => {
 			queryResultPanel.requestExport('json', 'file');
 		}),
-		vscode.commands.registerCommand('dbt-studio.queryResult.export.markdown', () => {
+		vscode.commands.registerCommand('dbt-anvil.queryResult.export.markdown', () => {
 			queryResultPanel.requestExport('markdown', 'file');
 		}),
 	);
@@ -1331,7 +1336,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			editor.selection = new vscode.Selection(pos, pos);
 			editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
 		}),
-		vscode.commands.registerCommand('dbt-studio.debug.showFrameSql', async (...args: unknown[]) => {
+		vscode.commands.registerCommand('dbt-anvil.debug.showFrameSql', async (...args: unknown[]) => {
 			logger.info('showFrameSql command invoked', { args: args.map(a => JSON.stringify(a)), argsLength: args.length });
 
 			const session = vscode.debug.activeDebugSession;
@@ -1379,7 +1384,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			workspaceDiagnosticsPersistence.save(workspaceScanner.getSnapshot());
 			workspaceScanner.dispose();
 		}
-		const enabled = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('ninja.workspaceDiagnostics', false);
+		const enabled = vscode.workspace.getConfiguration('dbt-anvil').get<boolean>('ninja.workspaceDiagnostics', false);
 		if (!enabled) {
 			workspaceScanner = undefined;
 			return;
@@ -1416,12 +1421,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 		vscode.window.onDidChangeVisibleTextEditors(_editors => { /* scanner no longer owns a collection */ }),
 		vscode.workspace.onDidChangeConfiguration(e => {
-			if (e.affectsConfiguration('dbt-studio.ninja.workspaceDiagnostics')) initWorkspaceScanner();
-			if (e.affectsConfiguration('dbt-studio.ninja') && workspaceScanner) {
+			if (e.affectsConfiguration('dbt-anvil.ninja.workspaceDiagnostics')) initWorkspaceScanner();
+			if (e.affectsConfiguration('dbt-anvil.ninja') && workspaceScanner) {
 				workspaceScanner.invalidateAllCaches();
 				void workspaceScanner.scanAll();
 			}
-			if (e.affectsConfiguration('dbt-studio.layers')) {
+			if (e.affectsConfiguration('dbt-anvil.layers')) {
 				manifestIndexer.setLayerConfigs(loadLayerConfigs(logger));
 			}
 		}),
@@ -1432,7 +1437,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		),
 	);
 
-	logger.info(`dbt Studio v${version} activated.`);
+	logger.info(`dbt Anvil v${version} activated.`);
 }
 
 /**
@@ -1454,16 +1459,16 @@ async function _runBootstrap(cmd: string[], projectDir: string, envVars?: Record
 }
 
 /**
- * Read `dbt-studio.layers` from workspace configuration, validate it, and return
+ * Read `dbt-anvil.layers` from workspace configuration, validate it, and return
  * the resolved array. Invalid entries are dropped and logged; a totally invalid
  * config yields an empty array so indexing continues unaffected.
  */
 function loadLayerConfigs(logger: ILogger): LayerConfig[] {
-	const raw = vscode.workspace.getConfiguration('dbt-studio').get<unknown>('layers');
+	const raw = vscode.workspace.getConfiguration('dbt-anvil').get<unknown>('layers');
 	if (raw === undefined || raw === null) return [];
 	const errors = validateLayerConfig(raw);
 	if (errors.length > 0) {
-		logger.warn(`dbt-studio.layers has ${errors.length} validation error(s): ${errors.join('; ')}`);
+		logger.warn(`dbt-anvil.layers has ${errors.length} validation error(s): ${errors.join('; ')}`);
 		return [];
 	}
 	return raw as LayerConfig[];

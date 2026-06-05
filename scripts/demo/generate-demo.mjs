@@ -238,7 +238,7 @@ function renderSplashMp4(profile, splashDurationMs, sizing, outputPath) {
 		const logoLeft = Math.floor((outputWidth - logoW) / 2);
 		const logoTop = Math.floor((outputHeight - logoH) / 2);
 		// Glint: small white sparkle on the dot of the "i" in "studio"
-		// Position calibrated against resources/icons/dbt-studio-512.png
+		// Position calibrated against resources/icons/dbt-anvil-512.png
 		const glintX = logoLeft + Math.round((358 / 512) * logoW);
 		const glintY = logoTop + Math.round((236 / 512) * logoH);
 		const glintR2 = Math.pow(Math.max(1, Math.round(logoW * 9 / 153)), 2);

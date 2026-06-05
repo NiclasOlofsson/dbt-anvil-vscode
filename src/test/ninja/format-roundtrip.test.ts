@@ -79,7 +79,7 @@ const FIXTURES = fs.readdirSync(FIXTURES_DIR)
 
 /**
  * A fixture can opt into a non-default preset by adding a sibling
- * `<name>.preset` file containing the preset name (e.g. `dbt-studio`).
+ * `<name>.preset` file containing the preset name (e.g. `dbt-anvil`).
  * Absent → `sqlfmt`.
  */
 function fixturePreset(name: string): FormatPreset {

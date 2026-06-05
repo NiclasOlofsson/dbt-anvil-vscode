@@ -1,10 +1,10 @@
 /**
- * Smart IntelliSense for `dbt-studio.layers` inside user / workspace `settings.json`.
+ * Smart IntelliSense for `dbt-anvil.layers` inside user / workspace `settings.json`.
  *
  * Triggers in two locations:
- *   1. The `"dbt-studio.layers": ▮` value slot  → offer whole-array scaffolds
+ *   1. The `"dbt-anvil.layers": ▮` value slot  → offer whole-array scaffolds
  *      driven by live heuristics over the indexed manifest.
- *   2. A new `{ ▮ }` element inside an existing `dbt-studio.layers` array →
+ *   2. A new `{ ▮ }` element inside an existing `dbt-anvil.layers` array →
  *      offer single-layer scaffolds for the most frequent folders / tags /
  *      name prefixes we observed.
  */
@@ -15,7 +15,7 @@ import type { ManifestIndexer } from '../../indexing/manifest-indexer';
 import { suggestAll, suggestEntries, type LayerSuggestion, type EntrySuggestion } from '../../indexing/layer-suggestions';
 import type { LayerConfig } from '../../indexing/layer-classifier';
 
-const TARGET_PATH = ['dbt-studio.layers'];
+const TARGET_PATH = ['dbt-anvil.layers'];
 
 export class LayersCompletionProvider implements vscode.CompletionItemProvider {
 	constructor(private readonly indexer: ManifestIndexer) { }
@@ -31,8 +31,8 @@ export class LayersCompletionProvider implements vscode.CompletionItemProvider {
 
 		const afterTarget = loc.path.slice(TARGET_PATH.length);
 
-		// Case 1: cursor is on the value slot of "dbt-studio.layers" itself
-		// (e.g. user typed `"dbt-studio.layers": ▮`). The path is exactly the target.
+		// Case 1: cursor is on the value slot of "dbt-anvil.layers" itself
+		// (e.g. user typed `"dbt-anvil.layers": ▮`). The path is exactly the target.
 		if (afterTarget.length === 0) {
 			return this.buildArrayCompletions(document, position);
 		}
@@ -82,7 +82,7 @@ export class LayersCompletionProvider implements vscode.CompletionItemProvider {
 
 	private makeArrayScaffoldItem(sug: LayerSuggestion, document: vscode.TextDocument, position: vscode.Position): vscode.CompletionItem {
 		const item = new vscode.CompletionItem(
-			`dbt Studio: use detected ${sug.kind} layout`,
+			`dbt Anvil: use detected ${sug.kind} layout`,
 			vscode.CompletionItemKind.Snippet,
 		);
 		const pct = sug.total > 0 ? Math.round((sug.matched / sug.total) * 100) : 0;
@@ -99,7 +99,7 @@ export class LayersCompletionProvider implements vscode.CompletionItemProvider {
 
 	private makeEmptyScaffoldItem(document: vscode.TextDocument, position: vscode.Position): vscode.CompletionItem {
 		const item = new vscode.CompletionItem(
-			'dbt Studio: empty layers scaffold',
+			'dbt Anvil: empty layers scaffold',
 			vscode.CompletionItemKind.Snippet,
 		);
 		item.detail = 'Start with a blank layer entry';
@@ -112,7 +112,7 @@ export class LayersCompletionProvider implements vscode.CompletionItemProvider {
 	}
 
 	private makeEntryItem(entry: EntrySuggestion, document: vscode.TextDocument, position: vscode.Position): vscode.CompletionItem {
-		const label = `dbt Studio: layer "${entry.layer.name}" (${entry.kind})`;
+		const label = `dbt Anvil: layer "${entry.layer.name}" (${entry.kind})`;
 		const item = new vscode.CompletionItem(label, vscode.CompletionItemKind.Snippet);
 		item.detail = `${entry.matched} model(s) match`;
 		item.documentation = new vscode.MarkdownString(
@@ -127,7 +127,7 @@ export class LayersCompletionProvider implements vscode.CompletionItemProvider {
 
 	private makeBlankEntryItem(document: vscode.TextDocument, position: vscode.Position): vscode.CompletionItem {
 		const item = new vscode.CompletionItem(
-			'dbt Studio: blank layer entry',
+			'dbt Anvil: blank layer entry',
 			vscode.CompletionItemKind.Snippet,
 		);
 		item.insertText = new vscode.SnippetString(

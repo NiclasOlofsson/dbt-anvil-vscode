@@ -1,4 +1,4 @@
-# Contributing to dbt Studio for VS Code
+# Contributing to dbt Anvil for VS Code
 
 ## Development Setup
 
@@ -6,8 +6,8 @@
 
 2. **Clone the repository:**
    ```bash
-   git clone https://github.com/NiclasOlofsson/dbt-studio-vscode.git
-   cd dbt-studio-vscode
+   git clone https://github.com/NiclasOlofsson/dbt-anvil.git
+   cd dbt-anvil
    ```
 
 3. **Install dependencies:**

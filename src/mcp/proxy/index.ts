@@ -9,7 +9,7 @@
  * Lazy connection: `initialize` is answered immediately so Claude Code shows
  * "Connected" right away. All other requests wait (up to 60 s) for the
  * extension host to activate and write the discovery file. This means the
- * proxy can be spawned before VS Code has finished activating the dbt Studio
+ * proxy can be spawned before VS Code has finished activating the dbt Anvil
  * extension and the handshake still succeeds.
  */
 import * as http from 'node:http';
@@ -29,7 +29,7 @@ function parseArgs(argv: string[]): ProxyArgs {
 		}
 	}
 	if (!workspace) {
-		process.stderr.write('dbt-studio mcp-proxy: --workspace <path> is required\n');
+		process.stderr.write('dbt-anvil mcp-proxy: --workspace <path> is required\n');
 		process.exit(2);
 	}
 	return { workspace };
@@ -42,7 +42,7 @@ async function waitForDiscovery(workspacePath: string): Promise<DiscoveryFile> {
 		await sleep(CONNECT_RETRY_MS);
 	}
 	throw new Error(
-		'dbt Studio extension not responding — is the workspace open and the extension activated?',
+		'dbt Anvil extension not responding — is the workspace open and the extension activated?',
 	);
 }
 
@@ -104,7 +104,7 @@ function makeInitializeResponse(id: string | number | null): string {
 		result: {
 			protocolVersion: MCP_PROTOCOL_VERSION,
 			capabilities: { tools: {} },
-			serverInfo: { name: 'dbt-studio', version: '0.0.0' },
+			serverInfo: { name: 'dbt-anvil', version: '0.0.0' },
 		},
 	});
 }

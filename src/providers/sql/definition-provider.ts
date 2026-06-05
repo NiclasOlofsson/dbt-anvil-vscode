@@ -25,7 +25,7 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 		position: vscode.Position,
 		token: vscode.CancellationToken,
 	): Promise<vscode.Definition | undefined> {
-		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.definition', true)) return undefined;
+		if (!vscode.workspace.getConfiguration('dbt-anvil').get('providers.sql.definition', true)) return undefined;
 		const line = document.lineAt(position.line).text;
 
 		// Skip comments

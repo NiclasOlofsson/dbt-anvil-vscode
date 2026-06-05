@@ -1,6 +1,6 @@
 ---
 applyTo: '**'
-description: Workspace rules for dbt-studio-vscode
+description: Workspace rules for dbt-anvil
 ---
 # Workspace Rules
 

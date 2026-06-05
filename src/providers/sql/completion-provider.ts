@@ -23,7 +23,7 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 		token: vscode.CancellationToken,
 		_context: vscode.CompletionContext,
 	): Promise<vscode.CompletionItem[] | undefined> {
-		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.completion', true)) return undefined;
+		if (!vscode.workspace.getConfiguration('dbt-anvil').get('providers.sql.completion', true)) return undefined;
 		const linePrefix = document.lineAt(position.line).text.substring(0, position.character);
 
 		// Skip comments

@@ -40,7 +40,7 @@ export interface IndexedModel {
 	tags: string[];
 	materialisation: string;
 	description?: string;
-	/** Resolved layer (dbt Studio-local classification). Undefined if no configured layer matches. */
+	/** Resolved layer (dbt Anvil-local classification). Undefined if no configured layer matches. */
 	layer?: LayerInfo;
 }
 

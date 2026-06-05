@@ -34,7 +34,7 @@ Press **F5** in VS Code to launch the Extension Development Host after starting 
 
 ## Architecture
 
-dbt Studio is a VS Code extension (TypeScript + persistent Python subprocess) providing language intelligence for [dbt Core](https://docs.getdbt.com/) projects. It activates when a workspace contains `dbt_project.yml`.
+dbt Anvil is a VS Code extension (TypeScript + persistent Python subprocess) providing language intelligence for [dbt Core](https://docs.getdbt.com/) projects. It activates when a workspace contains `dbt_project.yml`.
 
 ### Entry Points
 
@@ -52,7 +52,7 @@ All three are bundled by esbuild (`.esbuild.ts`) into `dist/`.
 4. Load `manifest.json` and build in-memory DAG + symbol tables (`ManifestIndexer`)
 5. Spawn `bridge.py` as a persistent Python subprocess (JSON RPC over stdin/stdout)
 6. Initialize Pyodide WASM worker pool for SQL parsing
-7. Start MCP subsystem: HTTP server on an ephemeral 127.0.0.1 port, write discovery file at `~/.dbt-studio/mcp/<workspace-hash>.json`, upsert `~/.claude.json` per-project entry pointing at `dist/mcp-proxy.js`
+7. Start MCP subsystem: HTTP server on an ephemeral 127.0.0.1 port, write discovery file at `~/.dbt-anvil/mcp/<workspace-hash>.json`, upsert `~/.claude.json` per-project entry pointing at `dist/mcp-proxy.js`
 8. Register all language providers, tree views, debug adapter, and language-model tools (Copilot + MCP)
 
 ### Core layers

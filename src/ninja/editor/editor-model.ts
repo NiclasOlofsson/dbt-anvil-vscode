@@ -12,7 +12,7 @@ import {
 	type SortColumn,
 } from './editor-types';
 
-const AVAILABLE_PRESETS: FormatPreset[] = ['sqlfmt', 'dbt-labs', 'dbt-studio', 'custom'];
+const AVAILABLE_PRESETS: FormatPreset[] = ['sqlfmt', 'dbt-labs', 'dbt-anvil', 'custom'];
 
 // ── Inspected config input ──────────────────────────────────────────
 
@@ -57,7 +57,7 @@ export class EditorModel {
 	// panel writes this to settings.json. The initial value is the
 	// pre-load placeholder; the panel immediately calls applyPreset with
 	// the actual setting value during construction.
-	private _preset: FormatPreset = 'dbt-studio';
+	private _preset: FormatPreset = 'dbt-anvil';
 
 	constructor(rules: RuleViewModel[]) {
 		this._rules = rules;

@@ -16,7 +16,7 @@ export class YamlHoverProvider implements vscode.HoverProvider {
 		document: vscode.TextDocument,
 		position: vscode.Position,
 	): vscode.Hover | undefined {
-		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.yaml.hover', true)) return undefined;
+		if (!vscode.workspace.getConfiguration('dbt-anvil').get('providers.yaml.hover', true)) return undefined;
 		const lineText = document.lineAt(position.line).text;
 
 		// Match "- name: <model_name>" lines

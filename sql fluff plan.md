@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Replace SQLFluff entirely with **Ninja** — a built-in linter and formatter that leverages the existing sqlglot parser and jinja tokenizer. Everything is parser-based (no regex scanning). The extension already parses every document for providers, so Ninja piggybacks on `ParseService.getDocumentModel()` — rules consume the existing `DocumentModel` (tokens, CTEs, aliases, scope). Pure layout checks (whitespace, indentation) use simple string ops, not regex. Namespace is `ninja` everywhere: code (`src/ninja/`), diagnostic source, settings (`dbt-studio.ninja.*`), rule IDs (`ninja.cap.keywords`). Supports `.sqlfluff` config for migration.
+Replace SQLFluff entirely with **Ninja** — a built-in linter and formatter that leverages the existing sqlglot parser and jinja tokenizer. Everything is parser-based (no regex scanning). The extension already parses every document for providers, so Ninja piggybacks on `ParseService.getDocumentModel()` — rules consume the existing `DocumentModel` (tokens, CTEs, aliases, scope). Pure layout checks (whitespace, indentation) use simple string ops, not regex. Namespace is `ninja` everywhere: code (`src/ninja/`), diagnostic source, settings (`dbt-anvil.ninja.*`), rule IDs (`ninja.cap.keywords`). Supports `.sqlfluff` config for migration.
 
 ## Architecture
 
@@ -28,7 +28,7 @@ AST-level structural rules (unused CTE, case patterns, join analysis) are **brid
 
 ### Step 1.2: Configuration (`src/ninja/config.ts`, `src/ninja/config-loader.ts`)
 - `NinjaConfig` type with all options.
-- Resolution: VS Code settings (`dbt-studio.ninja.*`) → `.sqlfluff` file (INI parse, map SQLFluff codes) → inline `-- noqa` / `-- noqa: ninja.cap.keywords` suppression (SQLFluff `-- noqa: CP01` also supported).
+- Resolution: VS Code settings (`dbt-anvil.ninja.*`) → `.sqlfluff` file (INI parse, map SQLFluff codes) → inline `-- noqa` / `-- noqa: ninja.cap.keywords` suppression (SQLFluff `-- noqa: CP01` also supported).
 - Config loader walks up from file to workspace root for `.sqlfluff`.
 
 ### Step 1.3: Bridge Extension
@@ -46,7 +46,7 @@ This is an additive change to the existing response. Flag `lint: true` in the re
 - Each violation: `code` = rule ID (e.g. `ninja.cap.keywords`), `source` = `'ninja'`
 
 ### Step 1.5: VS Code Settings
-`dbt-studio.ninja.*` in `package.json`:
+`dbt-anvil.ninja.*` in `package.json`:
 - `enabled` (boolean, default true)
 - `rules` (object — per-rule severity/enable)
 - `indentation.unit` (`space` | `tab`)
@@ -186,7 +186,7 @@ Replace stub with `DocumentFormattingEditProvider` + `DocumentRangeFormattingEdi
 - Standard `editor.formatOnSave` integration
 
 ### Step 6.2: Commands
-- `dbt-studio.formatDocument` command
+- `dbt-anvil.formatDocument` command
 - `source.fixAll.ninja` code action kind for VS Code "Fix All"
 
 ### Step 6.3: Advanced Formatting (stretch)
@@ -199,7 +199,7 @@ Replace stub with `DocumentFormattingEditProvider` + `DocumentRangeFormattingEdi
 ## Phase 7: SQLFluff Migration
 
 - Detect `.sqlfluff` → notification: "Ninja can replace SQLFluff. [Migrate] [Dismiss]"
-- Migrate: read `.sqlfluff`, map to `dbt-studio.ninja.*` settings
+- Migrate: read `.sqlfluff`, map to `dbt-anvil.ninja.*` settings
 - Update `_updateSqlFluffDiagnostic()` to suggest disabling/uninstalling SQLFluff
 
 ---
@@ -227,7 +227,7 @@ Replace stub with `DocumentFormattingEditProvider` + `DocumentRangeFormattingEdi
 - `src/providers/diagnostics-provider.ts` — Add ninja diagnostic collection, wire engine
 - `src/providers/sql/code-action-provider.ts` — Quick-fix code actions
 - `src/extension.ts` — Register formatter, ninja engine
-- `package.json` — `dbt-studio.ninja.*` settings
+- `package.json` — `dbt-anvil.ninja.*` settings
 - `resources/bridge/bridge.py` — Extend `parse_document`: emit `keywords`/`functions`/`literals` tokens + `lintViolations`
 
 ### Reference (patterns to reuse)

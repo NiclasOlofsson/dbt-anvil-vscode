@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 
 /**
- * Central icon/symbol registry for dbt Studio.
+ * Central icon/symbol registry for dbt Anvil.
  *
  * Two layers:
  *   DbtIcons   — dbt-level objects: models, sources, macros, seeds, snapshots

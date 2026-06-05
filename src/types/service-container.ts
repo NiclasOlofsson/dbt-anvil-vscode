@@ -15,7 +15,7 @@ export interface ServiceContainerOptions {
 }
 
 /**
- * Singleton service locator for the dbt Studio extension.
+ * Singleton service locator for the dbt Anvil extension.
  *
  * Holds the extension context and all lazily-initialized services.
  * Call ServiceContainer.initialize(options) from activate(), then

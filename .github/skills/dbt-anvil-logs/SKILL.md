@@ -1,26 +1,26 @@
 ---
-name: dbt-studio-logs
-description: "Read dbt Studio VS Code extension output logs to self-diagnose errors without waiting for the user to paste them. USE FOR: workspace scanner errors, Ninja rule failures, extension crashes, parse errors, any error in the dbt Studio extension. DO NOT USE FOR: other extensions, system logs, Git logs."
+name: dbt-anvil-logs
+description: "Read dbt Anvil VS Code extension output logs to self-diagnose errors without waiting for the user to paste them. USE FOR: workspace scanner errors, Ninja rule failures, extension crashes, parse errors, any error in the dbt Anvil extension. DO NOT USE FOR: other extensions, system logs, Git logs."
 ---
 
-# dbt Studio Extension Log Reader
+# dbt Anvil Extension Log Reader
 
-This skill enables you to fetch the `dbt Studio` output channel log directly from disk, so you can diagnose errors autonomously.
+This skill enables you to fetch the `dbt Anvil` output channel log directly from disk, so you can diagnose errors autonomously.
 
 ## Log File Location
 
 VS Code writes each extension's output channel to a timestamped session folder:
 
 ```
-%APPDATA%\Code - Insiders\logs\<session>\<window>\exthost\nickeolofsson.dbt-studio-vscode\dbt Studio.log
+%APPDATA%\Code - Insiders\logs\<session>\<window>\exthost\nickeolofsson.dbt-anvil\dbt Anvil.log
 ```
 
 | Segment | Details |
 |---------|---------|
 | `%APPDATA%` | `c:\Users\nicke\AppData\Roaming` |
 | `<session>` | Newest folder named `YYYYMMDDTHHmmss`, e.g. `20260416T005059` |
-| `<window>` | Folder named `window<N>` — use the one whose `exthost/` subtree contains `nickeolofsson.dbt-studio-vscode/` |
-| Log file | `dbt Studio.log` (with the space) |
+| `<window>` | Folder named `window<N>` — use the one whose `exthost/` subtree contains `nickeolofsson.dbt-anvil/` |
+| Log file | `dbt Anvil.log` (with the space) |
 
 ### Step-by-step: find the log
 
@@ -44,12 +44,12 @@ Try the highest-numbered window first (most recently opened). Check if it has th
 ls "c:/Users/nicke/AppData/Roaming/Code - Insiders/logs/<session>/<window>/exthost/"
 ```
 
-Look for `nickeolofsson.dbt-studio-vscode/` in the listing. If not present, try the next-highest window number.
+Look for `nickeolofsson.dbt-anvil/` in the listing. If not present, try the next-highest window number.
 
 **Step 3 — Read the log**
 
 ```bash
-tail -100 "c:/Users/nicke/AppData/Roaming/Code - Insiders/logs/<session>/<window>/exthost/nickeolofsson.dbt-studio-vscode/dbt Studio.log"
+tail -100 "c:/Users/nicke/AppData/Roaming/Code - Insiders/logs/<session>/<window>/exthost/nickeolofsson.dbt-anvil/dbt Anvil.log"
 ```
 
 Use `read_file` with `startLine` near the end for targeted reading without truncation. The file grows continuously during a session.
@@ -57,7 +57,7 @@ Use `read_file` with `startLine` near the end for targeted reading without trunc
 **Full concrete example** (substitute the actual session/window):
 
 ```
-c:/Users/nicke/AppData/Roaming/Code - Insiders/logs/20260416T005059/window28/exthost/nickeolofsson.dbt-studio-vscode/dbt Studio.log
+c:/Users/nicke/AppData/Roaming/Code - Insiders/logs/20260416T005059/window28/exthost/nickeolofsson.dbt-anvil/dbt Anvil.log
 ```
 
 ## Key Log Patterns
@@ -89,7 +89,7 @@ c:/Users/nicke/AppData/Roaming/Code - Insiders/logs/20260416T005059/window28/ext
 ### Extension startup
 
 ```
-[info] dbt Studio v<version> activated.
+[info] dbt Anvil v<version> activated.
 [debug] [workspace-scanner] found N SQL files in model/analysis dirs
 ```
 

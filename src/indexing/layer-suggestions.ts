@@ -1,5 +1,5 @@
 /**
- * Heuristics that suggest a plausible `dbt-studio.layers` config from an indexed project.
+ * Heuristics that suggest a plausible `dbt-anvil.layers` config from an indexed project.
  * Pure functions — no VS Code dependency. Consumed by the settings completion provider
  * (and, if we ever want it, by a "Detect layers" command).
  */

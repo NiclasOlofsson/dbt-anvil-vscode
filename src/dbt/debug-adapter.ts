@@ -494,14 +494,14 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 				const cte = model?.ctes.find(c => cursorLine >= c.line && cursorLine <= c.endLine);
 				if (cte) {
 					this._terminate();
-					void vscode.commands.executeCommand('dbt-studio.queryCte', modelId, cte.name);
+					void vscode.commands.executeCommand('dbt-anvil.queryCte', modelId, cte.name);
 					return;
 				}
 			}
 		}
 
 		this._sourceUri = editor.document.uri.toString();
-		const defaultLimit = vscode.workspace.getConfiguration('dbt-studio').get<number>('queryEditor.defaultLimit', 500);
+		const defaultLimit = vscode.workspace.getConfiguration('dbt-anvil').get<number>('queryEditor.defaultLimit', 500);
 		this._limit = typeof args.limit === 'number' ? args.limit : defaultLimit;
 		this._scope = args.scope === 'all' ? 'all' : 'cursor';
 		this._resultLocation = typeof args.resultLocation === 'string' ? args.resultLocation : undefined;
@@ -522,7 +522,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		}
 
 		this._sourceUri = editor.document.uri.toString();
-		const defaultLimit = vscode.workspace.getConfiguration('dbt-studio').get<number>('queryEditor.defaultLimit', 500);
+		const defaultLimit = vscode.workspace.getConfiguration('dbt-anvil').get<number>('queryEditor.defaultLimit', 500);
 		this._limit = typeof args.limit === 'number' ? args.limit : defaultLimit;
 		this._scope = args.scope === 'all' ? 'all' : 'cursor';
 		this._resultLocation = typeof args.resultLocation === 'string' ? args.resultLocation : undefined;

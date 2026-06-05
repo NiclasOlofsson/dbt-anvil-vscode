@@ -7,11 +7,11 @@ import type { InspectedRuleConfig } from './editor/editor-model';
 import type { ConfigScope } from './editor/editor-types';
 
 /**
- * Build a NinjaConfig by reading VS Code settings (`dbt-studio.ninja.*`).
+ * Build a NinjaConfig by reading VS Code settings (`dbt-anvil.ninja.*`).
  * Falls back to DEFAULT_CONFIG for any missing values.
  */
 export function loadConfig(): NinjaConfig {
-	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
+	const cfg = vscode.workspace.getConfiguration('dbt-anvil.ninja');
 
 	const formatPreset = cfg.get<FormatPreset>('format.preset', DEFAULT_CONFIG.format.preset);
 	const preset = PRESETS[formatPreset] ?? {};
@@ -116,11 +116,11 @@ export function parseInlineSuppressions(lines: string[]): Map<number, Set<string
 }
 
 /**
- * Inspect `dbt-studio.ninja.rules` at each scope and return per-rule
+ * Inspect `dbt-anvil.ninja.rules` at each scope and return per-rule
  * user / workspace severity values.
  */
 export function inspectRuleSeverities(): InspectedRuleConfig[] {
-	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
+	const cfg = vscode.workspace.getConfiguration('dbt-anvil.ninja');
 	const inspection = cfg.inspect<Record<string, NinjaSeverity>>('rules');
 	const global = inspection?.globalValue ?? {};
 	const workspace = inspection?.workspaceValue ?? {};
@@ -143,21 +143,21 @@ export function inspectRuleSeverities(): InspectedRuleConfig[] {
  * resolves it).
  */
 export function inspectFormatPreset(): FormatPreset {
-	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
+	const cfg = vscode.workspace.getConfiguration('dbt-anvil.ninja');
 	const inspection = cfg.inspect<FormatPreset>('format.preset');
 	return inspection?.workspaceValue ?? inspection?.globalValue ?? DEFAULT_CONFIG.format.preset;
 }
 
 /** Persist `format.preset` at the given scope. */
 export async function saveFormatPreset(preset: FormatPreset, scope: ConfigScope): Promise<void> {
-	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
+	const cfg = vscode.workspace.getConfiguration('dbt-anvil.ninja');
 	const target = scope === 'user' ? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Workspace;
 	await cfg.update('format.preset', preset, target);
 }
 
 /** Persist a single rule severity override at the given scope. */
 export async function saveRuleSeverity(ruleId: string, severity: NinjaSeverity, scope: ConfigScope): Promise<void> {
-	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
+	const cfg = vscode.workspace.getConfiguration('dbt-anvil.ninja');
 	const target = scope === 'user' ? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Workspace;
 	const inspection = cfg.inspect<Record<string, NinjaSeverity>>('rules');
 	const current = (scope === 'user' ? inspection?.globalValue : inspection?.workspaceValue) ?? {};
@@ -166,7 +166,7 @@ export async function saveRuleSeverity(ruleId: string, severity: NinjaSeverity, 
 
 /** Remove a single rule override at the given scope (for Reset). */
 export async function removeRuleSeverity(ruleId: string, scope: ConfigScope): Promise<void> {
-	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
+	const cfg = vscode.workspace.getConfiguration('dbt-anvil.ninja');
 	const target = scope === 'user' ? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Workspace;
 	const inspection = cfg.inspect<Record<string, NinjaSeverity>>('rules');
 	const current = { ...((scope === 'user' ? inspection?.globalValue : inspection?.workspaceValue) ?? {}) };
@@ -180,14 +180,14 @@ export async function removeRuleSeverity(ruleId: string, scope: ConfigScope): Pr
  * Absence means "use the rule's built-in default" (true for autoFixable rules).
  */
 export function inspectAutoFixRules(): Record<string, boolean> {
-	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
+	const cfg = vscode.workspace.getConfiguration('dbt-anvil.ninja');
 	const inspection = cfg.inspect<Record<string, boolean>>('autoFix.rules');
 	return { ...(inspection?.globalValue ?? {}), ...(inspection?.workspaceValue ?? {}) };
 }
 
 /** Persist a per-rule auto-fix override at the given scope. */
 export async function saveAutoFixRule(ruleId: string, enabled: boolean, scope: ConfigScope): Promise<void> {
-	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
+	const cfg = vscode.workspace.getConfiguration('dbt-anvil.ninja');
 	const target = scope === 'user' ? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Workspace;
 	const inspection = cfg.inspect<Record<string, boolean>>('autoFix.rules');
 	const current = (scope === 'user' ? inspection?.globalValue : inspection?.workspaceValue) ?? {};
@@ -196,7 +196,7 @@ export async function saveAutoFixRule(ruleId: string, enabled: boolean, scope: C
 
 /** Remove a per-rule auto-fix override, reverting to the default (enabled). */
 export async function removeAutoFixRule(ruleId: string, scope: ConfigScope): Promise<void> {
-	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
+	const cfg = vscode.workspace.getConfiguration('dbt-anvil.ninja');
 	const target = scope === 'user' ? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Workspace;
 	const inspection = cfg.inspect<Record<string, boolean>>('autoFix.rules');
 	const current = { ...(scope === 'user' ? inspection?.globalValue : inspection?.workspaceValue) ?? {} };
@@ -206,27 +206,27 @@ export async function removeAutoFixRule(ruleId: string, scope: ConfigScope): Pro
 
 /**
  * Persist a single global config option (e.g. layout.operatorPosition) at the given scope.
- * `settingPath` is the sub-path under `dbt-studio.ninja`, e.g. `layout.operatorPosition`.
+ * `settingPath` is the sub-path under `dbt-anvil.ninja`, e.g. `layout.operatorPosition`.
  */
 export async function saveConfigOption(settingPath: string, value: RuleOptionValue, scope: ConfigScope): Promise<void> {
-	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
+	const cfg = vscode.workspace.getConfiguration('dbt-anvil.ninja');
 	const target = scope === 'user' ? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Workspace;
 	await cfg.update(settingPath, value, target);
 }
 
 /** Remove a config option override at the given scope, restoring it to the default. */
 export async function removeConfigOption(settingPath: string, scope: ConfigScope): Promise<void> {
-	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
+	const cfg = vscode.workspace.getConfiguration('dbt-anvil.ninja');
 	const target = scope === 'user' ? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Workspace;
 	await cfg.update(settingPath, undefined, target);
 }
 
 /**
- * Read current values for an arbitrary list of sub-paths under `dbt-studio.ninja`.
+ * Read current values for an arbitrary list of sub-paths under `dbt-anvil.ninja`.
  * Returns a flat Record<settingPath, currentValue>.
  */
 export function inspectConfigOptions(paths: string[]): Record<string, RuleOptionValue> {
-	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
+	const cfg = vscode.workspace.getConfiguration('dbt-anvil.ninja');
 	const result: Record<string, RuleOptionValue> = {};
 	for (const p of paths) {
 		const val = cfg.get<RuleOptionValue>(p);
@@ -237,7 +237,7 @@ export function inspectConfigOptions(paths: string[]): Record<string, RuleOption
 
 /** Return the merged disabled rule IDs across user + workspace scopes. */
 export function inspectDisabledRules(): { user: string[]; workspace: string[] } {
-	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
+	const cfg = vscode.workspace.getConfiguration('dbt-anvil.ninja');
 	const info = cfg.inspect<string[]>('disabledRules');
 	return {
 		user: info?.globalValue ?? [],
@@ -247,7 +247,7 @@ export function inspectDisabledRules(): { user: string[]; workspace: string[] } 
 
 /** Add a rule ID to the disabled list at the given scope. */
 export async function disableRule(ruleId: string, scope: ConfigScope): Promise<void> {
-	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
+	const cfg = vscode.workspace.getConfiguration('dbt-anvil.ninja');
 	const target = scope === 'user' ? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Workspace;
 	const info = cfg.inspect<string[]>('disabledRules');
 	const current = (scope === 'user' ? info?.globalValue : info?.workspaceValue) ?? [];
@@ -258,7 +258,7 @@ export async function disableRule(ruleId: string, scope: ConfigScope): Promise<v
 
 /** Remove a rule ID from the disabled list at the given scope (re-enables it). */
 export async function enableRule(ruleId: string, scope: ConfigScope): Promise<void> {
-	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
+	const cfg = vscode.workspace.getConfiguration('dbt-anvil.ninja');
 	const target = scope === 'user' ? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Workspace;
 	const info = cfg.inspect<string[]>('disabledRules');
 	const current = (scope === 'user' ? info?.globalValue : info?.workspaceValue) ?? [];
@@ -268,7 +268,7 @@ export async function enableRule(ruleId: string, scope: ConfigScope): Promise<vo
 
 /** Returns the subset of paths that have an explicit override at the given scope. */
 export function getOverriddenOptionPaths(paths: string[], scope: ConfigScope): Set<string> {
-	const cfg = vscode.workspace.getConfiguration('dbt-studio.ninja');
+	const cfg = vscode.workspace.getConfiguration('dbt-anvil.ninja');
 	const result = new Set<string>();
 	for (const p of paths) {
 		const info = cfg.inspect<RuleOptionValue>(p);

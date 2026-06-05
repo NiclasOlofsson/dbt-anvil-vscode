@@ -144,7 +144,7 @@ describe('validateLayerConfig', () => {
 	});
 
 	it('rejects non-array root', () => {
-		expect(validateLayerConfig({} as unknown)).toContain('dbt-studio.layers must be an array');
+		expect(validateLayerConfig({} as unknown)).toContain('dbt-anvil.layers must be an array');
 	});
 
 	it('flags duplicate names', () => {

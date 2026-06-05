@@ -40,7 +40,7 @@ export class SqlCodeLensProvider implements vscode.CodeLensProvider {
 		document: vscode.TextDocument,
 		_token: vscode.CancellationToken,
 	): vscode.CodeLens[] | Thenable<vscode.CodeLens[]> {
-		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.codeLens', true)) return [];
+		if (!vscode.workspace.getConfiguration('dbt-anvil').get('providers.codeLens', true)) return [];
 		return this._sqlCodeLenses(document);
 	}
 
@@ -63,7 +63,7 @@ export class SqlCodeLensProvider implements vscode.CodeLensProvider {
 		return (model?.ctes ?? []).map(cte =>
 			new vscode.CodeLens(new vscode.Range(cte.line, 0, cte.line, 0), {
 				title: 'Query CTE...',
-				command: 'dbt-studio.queryCte',
+				command: 'dbt-anvil.queryCte',
 				arguments: [modelId, cte.name],
 				tooltip: `Query CTE: ${cte.name}\n\nTip: place cursor inside this CTE and press Ctrl+F5 to run it without clicking.`,
 			}),

@@ -1,15 +1,15 @@
 {
   "format": "mp4",
-  "outputFile": "../dbt-studio-assets/demo.mp4",
+  "outputFile": "../dbt-anvil-assets/demo.mp4",
   "manuscriptFile": "scripts/demo/manuscript.json",
   "outputWidth": 1920,
   "captionHeightPx": 48,
   "splash": {
-    "logoPath": "resources/icons/dbt-studio-512.png",
+    "logoPath": "resources/icons/dbt-anvil-512.png",
     "backgroundColor": "#000000"
   },
   "watermark": {
-    "logoPath": "resources/icons/dbt-studio-128.png",
+    "logoPath": "resources/icons/dbt-anvil-128.png",
     "sizePx": 32,
     "position": "bottom-right",
     "opacity": 0.6

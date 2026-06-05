@@ -16,7 +16,7 @@ export class YamlCompletionProvider implements vscode.CompletionItemProvider {
 		document: vscode.TextDocument,
 		position: vscode.Position,
 	): vscode.CompletionItem[] | undefined {
-		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.yaml.completion', true)) return undefined;
+		if (!vscode.workspace.getConfiguration('dbt-anvil').get('providers.yaml.completion', true)) return undefined;
 		const lineText = document.lineAt(position.line).text;
 		const linePrefix = lineText.substring(0, position.character);
 

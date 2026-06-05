@@ -311,7 +311,7 @@ export class DatabricksProvider implements DatabaseProvider {
 				'Authorization': `Bearer ${this._token}`,
 				'Content-Type': 'application/json',
 				'Accept': 'application/json',
-				'User-Agent': 'dbt-studio-vscode/1.0',
+				'User-Agent': 'dbt-anvil/1.0',
 			},
 		};
 

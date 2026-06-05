@@ -1,18 +1,18 @@
 {
-	"name": "dbt-studio-vscode",
-	"displayName": "dbt Studio",
+	"name": "dbt-anvil",
+	"displayName": "dbt Anvil",
 	"description": "A VS Code extension that gives dbt the same kind of language support that most programming languages have had for years. Now it's here, for dbt Core.",
 	"version": "0.1.14",
 	"publisher": "nickeolofsson",
 	"license": "MIT",
-	"icon": "resources/icons/dbt-studio-128.png",
+	"icon": "resources/icons/dbt-anvil-128.png",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/NiclasOlofsson/dbt-studio"
+		"url": "https://github.com/NiclasOlofsson/dbt-anvil"
 	},
-	"homepage": "https://niclasolofsson.github.io/dbt-studio-vscode/",
+	"homepage": "https://niclasolofsson.github.io/dbt-anvil/",
 	"bugs": {
-		"url": "https://github.com/NiclasOlofsson/dbt-studio/issues"
+		"url": "https://github.com/NiclasOlofsson/dbt-anvil/issues"
 	},
 	"enabledApiProposals": [
 		"contribLanguageModelToolSets"
@@ -82,212 +82,212 @@
 		],
 		"commands": [
 			{
-				"command": "dbt-studio.runModel",
+				"command": "dbt-anvil.runModel",
 				"title": "Run Model",
 				"icon": "$(run)"
 			},
 			{
-				"command": "dbt-studio.testModel",
+				"command": "dbt-anvil.testModel",
 				"title": "Test Model",
 				"icon": "$(beaker)"
 			},
 			{
-				"command": "dbt-studio.buildModel",
+				"command": "dbt-anvil.buildModel",
 				"title": "Build Model",
 				"icon": "$(package)"
 			},
 			{
-				"command": "dbt-studio.compileModel",
+				"command": "dbt-anvil.compileModel",
 				"title": "Compile Model",
 				"icon": "$(gear)"
 			},
 			{
-				"command": "dbt-studio.queryModel",
+				"command": "dbt-anvil.queryModel",
 				"title": "Query Model",
 				"icon": "$(zap)"
 			},
 			{
-				"command": "dbt-studio.queryCte",
+				"command": "dbt-anvil.queryCte",
 				"title": "Query CTE"
 			},
 			{
-				"command": "dbt-studio.showLineage",
+				"command": "dbt-anvil.showLineage",
 				"title": "Show Lineage Graph",
 				"icon": "$(type-hierarchy)"
 			},
 			{
-				"command": "dbt-studio.runDeps",
+				"command": "dbt-anvil.runDeps",
 				"title": "Install Dependencies (dbt deps)",
 				"icon": "$(cloud-download)"
 			},
 			{
-				"command": "dbt-studio.parseProject",
+				"command": "dbt-anvil.parseProject",
 				"title": "Parse Project",
 				"icon": "$(refresh)"
 			},
 			{
-				"command": "dbt-studio.refreshExplorer",
+				"command": "dbt-anvil.refreshExplorer",
 				"title": "Refresh Model Explorer",
 				"icon": "$(refresh)"
 			},
 			{
-				"command": "dbt-studio.toggleLineageFollow",
+				"command": "dbt-anvil.toggleLineageFollow",
 				"title": "Toggle Lineage Follow Active Editor",
 				"icon": "$(eye)"
 			},
 			{
-				"command": "dbt-studio.toggleLineageFollowOff",
+				"command": "dbt-anvil.toggleLineageFollowOff",
 				"title": "Toggle Lineage Follow Active Editor",
 				"icon": "$(eye-closed)"
 			},
 			{
-				"command": "dbt-studio.toggleExplorerFollow",
+				"command": "dbt-anvil.toggleExplorerFollow",
 				"title": "Toggle Explorer Follow Active Editor",
 				"icon": "$(eye)"
 			},
 			{
-				"command": "dbt-studio.toggleExplorerFollowOff",
+				"command": "dbt-anvil.toggleExplorerFollowOff",
 				"title": "Toggle Explorer Follow Active Editor",
 				"icon": "$(eye-closed)"
 			},
 			{
-				"command": "dbt-studio.showLineageTests",
+				"command": "dbt-anvil.showLineageTests",
 				"title": "Show Tests in Lineage Graph",
 				"icon": "$(beaker)"
 			},
 			{
-				"command": "dbt-studio.hideLineageTests",
+				"command": "dbt-anvil.hideLineageTests",
 				"title": "Hide Tests in Lineage Graph",
 				"icon": "$(beaker)"
 			},
 			{
-				"command": "dbt-studio.toggleLineageTests",
+				"command": "dbt-anvil.toggleLineageTests",
 				"title": "Toggle Tests in Lineage Graph",
 				"icon": "$(beaker)"
 			},
 			{
-				"command": "dbt-studio.refreshTestExplorer",
+				"command": "dbt-anvil.refreshTestExplorer",
 				"title": "Refresh Test Explorer",
 				"icon": "$(refresh)"
 			},
 			{
-				"command": "dbt-studio.runTestFromExplorer",
+				"command": "dbt-anvil.runTestFromExplorer",
 				"title": "Run Test",
 				"icon": "$(play)"
 			},
 			{
-				"command": "dbt-studio.runTestGroupFromExplorer",
+				"command": "dbt-anvil.runTestGroupFromExplorer",
 				"title": "Run All Tests in Group",
 				"icon": "$(run-all)"
 			},
 			{
-				"command": "dbt-studio.runTestCategoryFromExplorer",
+				"command": "dbt-anvil.runTestCategoryFromExplorer",
 				"title": "Run All Tests in Category",
 				"icon": "$(run-all)"
 			},
 			{
-				"command": "dbt-studio.runAllTestsFromExplorer",
+				"command": "dbt-anvil.runAllTestsFromExplorer",
 				"title": "Run All Tests",
 				"icon": "$(run-all)"
 			},
 			{
-				"command": "dbt-studio.runNamedModel",
+				"command": "dbt-anvil.runNamedModel",
 				"title": "Run Named Model",
 				"icon": "$(run)"
 			},
 			{
-				"command": "dbt-studio.testNamedModel",
+				"command": "dbt-anvil.testNamedModel",
 				"title": "Test Named Model",
 				"icon": "$(beaker)"
 			},
 			{
-				"command": "dbt-studio.runUnitTest",
+				"command": "dbt-anvil.runUnitTest",
 				"title": "Run Unit Test",
 				"icon": "$(beaker)"
 			},
 			{
-				"command": "dbt-studio.runCteTest",
+				"command": "dbt-anvil.runCteTest",
 				"title": "Run CTE Test",
 				"icon": "$(combine)"
 			},
 			{
-				"command": "dbt-studio.openSettings",
+				"command": "dbt-anvil.openSettings",
 				"title": "Open Settings",
 				"icon": "$(gear)"
 			},
 			{
-				"command": "dbt-studio.profiler.profileModel",
+				"command": "dbt-anvil.profiler.profileModel",
 				"title": "Profile Model",
 				"icon": "$(clock)"
 			},
 			{
-				"command": "dbt-studio.profiler.clearResults",
+				"command": "dbt-anvil.profiler.clearResults",
 				"title": "Clear Profile Results",
 				"icon": "$(clear-all)"
 			},
 			{
-				"command": "dbt-studio.profiler.cancelProfiling",
+				"command": "dbt-anvil.profiler.cancelProfiling",
 				"title": "Stop Profiling",
 				"icon": "$(stop-circle)"
 			},
 			{
-				"command": "dbt-studio.profiler.goToCte",
+				"command": "dbt-anvil.profiler.goToCte",
 				"title": "Go to CTE Definition"
 			},
 			{
-				"command": "dbt-studio.profiler.showDecorations",
+				"command": "dbt-anvil.profiler.showDecorations",
 				"title": "Show Profile Decorations",
 				"icon": "$(eye)"
 			},
 			{
-				"command": "dbt-studio.profiler.hideDecorations",
+				"command": "dbt-anvil.profiler.hideDecorations",
 				"title": "Hide Profile Decorations",
 				"icon": "$(eye-closed)"
 			},
 			{
-				"command": "dbt-studio.executeQuery",
+				"command": "dbt-anvil.executeQuery",
 				"title": "Execute Query",
 				"icon": "$(play)"
 			},
 			{
-				"command": "dbt-studio.executeAll",
+				"command": "dbt-anvil.executeAll",
 				"title": "Execute All Statements",
 				"icon": "$(run-all)"
 			},
 			{
-				"command": "dbt-studio.executeStatement",
+				"command": "dbt-anvil.executeStatement",
 				"title": "Execute Statement",
 				"icon": "$(play)"
 			},
 			{
-				"command": "dbt-studio.queryResult.moveToPanel",
+				"command": "dbt-anvil.queryResult.moveToPanel",
 				"title": "Move Query Results to Panel",
 				"icon": "$(layout-panel)"
 			},
 			{
-				"command": "dbt-studio.queryResult.moveToEditor",
+				"command": "dbt-anvil.queryResult.moveToEditor",
 				"title": "Move Query Results to Editor",
 				"icon": "$(layout-panel-off)"
 			},
 			{
-				"command": "dbt-studio.queryResult.toggleStats",
+				"command": "dbt-anvil.queryResult.toggleStats",
 				"title": "Toggle Column Stats",
 				"icon": "$(graph)"
 			},
 			{
-				"command": "dbt-studio.queryResult.export.csv",
+				"command": "dbt-anvil.queryResult.export.csv",
 				"title": "Export as CSV"
 			},
 			{
-				"command": "dbt-studio.queryResult.export.tsv",
+				"command": "dbt-anvil.queryResult.export.tsv",
 				"title": "Export as TSV"
 			},
 			{
-				"command": "dbt-studio.queryResult.export.json",
+				"command": "dbt-anvil.queryResult.export.json",
 				"title": "Export as JSON"
 			},
 			{
-				"command": "dbt-studio.queryResult.export.markdown",
+				"command": "dbt-anvil.queryResult.export.markdown",
 				"title": "Export as Markdown"
 			},
 			{
@@ -305,88 +305,88 @@
 				"title": "Go to Frame"
 			},
 			{
-				"command": "dbt-studio.debug.showFrameSql",
+				"command": "dbt-anvil.debug.showFrameSql",
 				"title": "Show SQL"
 			},
 			{
-				"command": "dbt-studio.ninja.scanWorkspace",
+				"command": "dbt-anvil.ninja.scanWorkspace",
 				"title": "Ninja: Scan All SQL Files"
 			},
 			{
-				"command": "dbt-studio.ninja.statusBarMenu",
+				"command": "dbt-anvil.ninja.statusBarMenu",
 				"title": "Ninja: Options"
 			},
 			{
-				"command": "dbt-studio.ninja.openRuleEditor",
+				"command": "dbt-anvil.ninja.openRuleEditor",
 				"title": "Ninja: Rule Editor"
 			},
 			{
-				"command": "dbt-studio.statusBarMenu",
-				"title": "dbt Studio: Options"
+				"command": "dbt-anvil.statusBarMenu",
+				"title": "dbt Anvil: Options"
 			},
 			{
-				"command": "dbt-studio.setAsDefaultFormatter",
-				"title": "Set dbt Studio as Default SQL Formatter"
+				"command": "dbt-anvil.setAsDefaultFormatter",
+				"title": "Set dbt Anvil as Default SQL Formatter"
 			},
 			{
-				"command": "dbt-studio.suppressFormatterWarning",
+				"command": "dbt-anvil.suppressFormatterWarning",
 				"title": "Suppress Formatter Warning"
 			}
 		],
 		"viewsContainers": {
 			"activitybar": [
 				{
-					"id": "dbt-studio",
-					"title": "dbt Studio",
-					"icon": "resources/icons/dbt-studio-activitybar.svg"
+					"id": "dbt-anvil",
+					"title": "dbt Anvil",
+					"icon": "resources/icons/dbt-anvil-activitybar.svg"
 				}
 			],
 			"panel": [
 				{
-					"id": "dbt-studio-panel",
+					"id": "dbt-anvil-panel",
 					"title": "dbt Lineage",
 					"icon": "$(type-hierarchy)"
 				},
 				{
-					"id": "dbt-studio-results",
+					"id": "dbt-anvil-results",
 					"title": "Query Results",
 					"icon": "$(table)"
 				}
 			]
 		},
 		"views": {
-			"dbt-studio": [
+			"dbt-anvil": [
 				{
-					"id": "dbt-studio.modelExplorer",
+					"id": "dbt-anvil.modelExplorer",
 					"name": "Model Explorer",
 					"when": "workspaceHasDBT"
 				},
 				{
-					"id": "dbt-studio.testExplorer",
+					"id": "dbt-anvil.testExplorer",
 					"name": "Test Explorer",
 					"when": "workspaceHasDBT"
 				},
 				{
-					"id": "dbt-studio.profilerResults",
+					"id": "dbt-anvil.profilerResults",
 					"name": "Profile Results",
 					"when": "workspaceHasDBT",
 					"visibility": "collapsed"
 				}
 			],
-			"dbt-studio-panel": [
+			"dbt-anvil-panel": [
 				{
 					"type": "webview",
-					"id": "dbt-studio.lineageGraph",
+					"id": "dbt-anvil.lineageGraph",
 					"name": "Lineage",
 					"when": "workspaceHasDBT"
 				}
 			],
-			"dbt-studio-results": [
+			"dbt-anvil-results": [
 				{
 					"type": "webview",
-					"id": "dbt-studio.queryResults",
+					"id": "dbt-anvil.queryResults",
 					"name": "Query Results",
-					"when": "dbt-studio.queryResultInPanel"
+					"when": "dbt-anvil.queryResultInPanel"
 				}
 			],
 			"debug": [
@@ -496,171 +496,171 @@
 			"editor/title/run": [],
 			"editor/title": [
 				{
-					"command": "dbt-studio.executeQuery",
-					"when": "resourceLangId == jinja-sql && dbt-studio.fileCategory && !(dbt-studio.fileCategory =~ /model|seed|snapshot/)",
+					"command": "dbt-anvil.executeQuery",
+					"when": "resourceLangId == jinja-sql && dbt-anvil.fileCategory && !(dbt-anvil.fileCategory =~ /model|seed|snapshot/)",
 					"group": "navigation@1"
 				},
 				{
-					"command": "dbt-studio.executeAll",
-					"when": "resourceLangId == jinja-sql && dbt-studio.fileCategory && !(dbt-studio.fileCategory =~ /model|seed|snapshot/)",
+					"command": "dbt-anvil.executeAll",
+					"when": "resourceLangId == jinja-sql && dbt-anvil.fileCategory && !(dbt-anvil.fileCategory =~ /model|seed|snapshot/)",
 					"group": "navigation@2"
 				},
 				{
-					"command": "dbt-studio.queryResult.moveToPanel",
-					"when": "dbt-studio.queryResultVisible && !dbt-studio.queryResultInPanel && resourceLangId != jinja-sql",
+					"command": "dbt-anvil.queryResult.moveToPanel",
+					"when": "dbt-anvil.queryResultVisible && !dbt-anvil.queryResultInPanel && resourceLangId != jinja-sql",
 					"group": "navigation@99"
 				},
 				{
-					"command": "dbt-studio.queryResult.moveToEditor",
-					"when": "dbt-studio.queryResultVisible && dbt-studio.queryResultInPanel && resourceLangId != jinja-sql",
+					"command": "dbt-anvil.queryResult.moveToEditor",
+					"when": "dbt-anvil.queryResultVisible && dbt-anvil.queryResultInPanel && resourceLangId != jinja-sql",
 					"group": "navigation@99"
 				},
 				{
-					"command": "dbt-studio.queryResult.toggleStats",
-					"when": "dbt-studio.queryResultVisible && resourceLangId != jinja-sql",
+					"command": "dbt-anvil.queryResult.toggleStats",
+					"when": "dbt-anvil.queryResultVisible && resourceLangId != jinja-sql",
 					"group": "navigation@98"
 				},
 				{
-					"command": "dbt-studio.queryResult.export.csv",
-					"when": "dbt-studio.queryResultVisible",
+					"command": "dbt-anvil.queryResult.export.csv",
+					"when": "dbt-anvil.queryResultVisible",
 					"group": "1_export@1"
 				},
 				{
-					"command": "dbt-studio.queryResult.export.tsv",
-					"when": "dbt-studio.queryResultVisible",
+					"command": "dbt-anvil.queryResult.export.tsv",
+					"when": "dbt-anvil.queryResultVisible",
 					"group": "1_export@2"
 				},
 				{
-					"command": "dbt-studio.queryResult.export.json",
-					"when": "dbt-studio.queryResultVisible",
+					"command": "dbt-anvil.queryResult.export.json",
+					"when": "dbt-anvil.queryResultVisible",
 					"group": "1_export@3"
 				},
 				{
-					"command": "dbt-studio.queryResult.export.markdown",
-					"when": "dbt-studio.queryResultVisible",
+					"command": "dbt-anvil.queryResult.export.markdown",
+					"when": "dbt-anvil.queryResultVisible",
 					"group": "1_export@4"
 				},
 				{
-					"command": "dbt-studio.showLineage",
-					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-studio.fileCategory =~ /model|seed|snapshot/",
+					"command": "dbt-anvil.showLineage",
+					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-anvil.fileCategory =~ /model|seed|snapshot/",
 					"group": "navigation@1"
 				},
 				{
-					"command": "dbt-studio.runModel",
-					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-studio.fileCategory =~ /model|seed|snapshot/",
+					"command": "dbt-anvil.runModel",
+					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-anvil.fileCategory =~ /model|seed|snapshot/",
 					"group": "navigation@2"
 				},
 				{
-					"command": "dbt-studio.testModel",
-					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-studio.fileCategory =~ /model|seed|snapshot/",
+					"command": "dbt-anvil.testModel",
+					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-anvil.fileCategory =~ /model|seed|snapshot/",
 					"group": "navigation@3"
 				},
 				{
-					"command": "dbt-studio.compileModel",
-					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-studio.fileCategory =~ /model|seed|snapshot/",
+					"command": "dbt-anvil.compileModel",
+					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-anvil.fileCategory =~ /model|seed|snapshot/",
 					"group": "navigation@4"
 				},
 				{
-					"command": "dbt-studio.queryModel",
-					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-studio.fileCategory =~ /model|seed|snapshot/",
+					"command": "dbt-anvil.queryModel",
+					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-anvil.fileCategory =~ /model|seed|snapshot/",
 					"group": "navigation@5"
 				},
 				{
-					"command": "dbt-studio.profiler.profileModel",
-					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-studio.fileCategory =~ /model|seed|snapshot/ && !dbt-studio.profilingActive",
+					"command": "dbt-anvil.profiler.profileModel",
+					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-anvil.fileCategory =~ /model|seed|snapshot/ && !dbt-anvil.profilingActive",
 					"group": "navigation@5"
 				},
 				{
-					"command": "dbt-studio.profiler.cancelProfiling",
-					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-studio.fileCategory =~ /model|seed|snapshot/ && dbt-studio.profilingActive",
+					"command": "dbt-anvil.profiler.cancelProfiling",
+					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-anvil.fileCategory =~ /model|seed|snapshot/ && dbt-anvil.profilingActive",
 					"group": "navigation@5"
 				}
 			],
 			"view/title": [
 				{
-					"command": "dbt-studio.queryResult.moveToEditor",
-					"when": "view == dbt-studio.queryResults",
+					"command": "dbt-anvil.queryResult.moveToEditor",
+					"when": "view == dbt-anvil.queryResults",
 					"group": "navigation"
 				},
 				{
-					"command": "dbt-studio.queryResult.toggleStats",
-					"when": "view == dbt-studio.queryResults",
+					"command": "dbt-anvil.queryResult.toggleStats",
+					"when": "view == dbt-anvil.queryResults",
 					"group": "navigation"
 				},
 				{
-					"command": "dbt-studio.queryResult.export.csv",
-					"when": "view == dbt-studio.queryResults",
+					"command": "dbt-anvil.queryResult.export.csv",
+					"when": "view == dbt-anvil.queryResults",
 					"group": "1_export@1"
 				},
 				{
-					"command": "dbt-studio.queryResult.export.tsv",
-					"when": "view == dbt-studio.queryResults",
+					"command": "dbt-anvil.queryResult.export.tsv",
+					"when": "view == dbt-anvil.queryResults",
 					"group": "1_export@2"
 				},
 				{
-					"command": "dbt-studio.queryResult.export.json",
-					"when": "view == dbt-studio.queryResults",
+					"command": "dbt-anvil.queryResult.export.json",
+					"when": "view == dbt-anvil.queryResults",
 					"group": "1_export@3"
 				},
 				{
-					"command": "dbt-studio.queryResult.export.markdown",
-					"when": "view == dbt-studio.queryResults",
+					"command": "dbt-anvil.queryResult.export.markdown",
+					"when": "view == dbt-anvil.queryResults",
 					"group": "1_export@4"
 				},
 				{
-					"command": "dbt-studio.refreshExplorer",
-					"when": "view == dbt-studio.modelExplorer",
+					"command": "dbt-anvil.refreshExplorer",
+					"when": "view == dbt-anvil.modelExplorer",
 					"group": "navigation"
 				},
 				{
-					"command": "dbt-studio.toggleExplorerFollow",
-					"when": "view == dbt-studio.modelExplorer && dbt-studio.explorerFollowActive",
+					"command": "dbt-anvil.toggleExplorerFollow",
+					"when": "view == dbt-anvil.modelExplorer && dbt-anvil.explorerFollowActive",
 					"group": "navigation"
 				},
 				{
-					"command": "dbt-studio.toggleExplorerFollowOff",
-					"when": "view == dbt-studio.modelExplorer && !dbt-studio.explorerFollowActive",
+					"command": "dbt-anvil.toggleExplorerFollowOff",
+					"when": "view == dbt-anvil.modelExplorer && !dbt-anvil.explorerFollowActive",
 					"group": "navigation"
 				},
 				{
-					"command": "dbt-studio.toggleLineageFollow",
-					"when": "view == dbt-studio.lineageGraph && dbt-studio.lineageFollowActive",
+					"command": "dbt-anvil.toggleLineageFollow",
+					"when": "view == dbt-anvil.lineageGraph && dbt-anvil.lineageFollowActive",
 					"group": "navigation"
 				},
 				{
-					"command": "dbt-studio.toggleLineageFollowOff",
-					"when": "view == dbt-studio.lineageGraph && !dbt-studio.lineageFollowActive",
+					"command": "dbt-anvil.toggleLineageFollowOff",
+					"when": "view == dbt-anvil.lineageGraph && !dbt-anvil.lineageFollowActive",
 					"group": "navigation"
 				},
 				{
-					"command": "dbt-studio.toggleLineageTests",
-					"when": "view == dbt-studio.lineageGraph",
+					"command": "dbt-anvil.toggleLineageTests",
+					"when": "view == dbt-anvil.lineageGraph",
 					"group": "navigation@2",
-					"checked": "dbt-studio.lineage.showTests"
+					"checked": "dbt-anvil.lineage.showTests"
 				},
 				{
-					"command": "dbt-studio.refreshTestExplorer",
-					"when": "view == dbt-studio.testExplorer",
+					"command": "dbt-anvil.refreshTestExplorer",
+					"when": "view == dbt-anvil.testExplorer",
 					"group": "navigation@2"
 				},
 				{
-					"command": "dbt-studio.runAllTestsFromExplorer",
-					"when": "view == dbt-studio.testExplorer",
+					"command": "dbt-anvil.runAllTestsFromExplorer",
+					"when": "view == dbt-anvil.testExplorer",
 					"group": "navigation@1"
 				},
 				{
-					"command": "dbt-studio.openSettings",
-					"when": "view == dbt-studio.modelExplorer",
+					"command": "dbt-anvil.openSettings",
+					"when": "view == dbt-anvil.modelExplorer",
 					"group": "navigation@100"
 				},
 				{
-					"command": "dbt-studio.profiler.showDecorations",
-					"when": "view == dbt-studio.profilerResults && !dbt-studio.profilerDecorationsVisible",
+					"command": "dbt-anvil.profiler.showDecorations",
+					"when": "view == dbt-anvil.profilerResults && !dbt-anvil.profilerDecorationsVisible",
 					"group": "navigation"
 				},
 				{
-					"command": "dbt-studio.profiler.hideDecorations",
-					"when": "view == dbt-studio.profilerResults && dbt-studio.profilerDecorationsVisible",
+					"command": "dbt-anvil.profiler.hideDecorations",
+					"when": "view == dbt-anvil.profilerResults && dbt-anvil.profilerDecorationsVisible",
 					"group": "navigation"
 				},
 				{
@@ -676,24 +676,24 @@
 			],
 			"view/item/context": [
 				{
-					"command": "dbt-studio.runTestFromExplorer",
-					"when": "view == dbt-studio.testExplorer && viewItem =~ /unitTestNode|dataTestNode|cteTestNode/",
+					"command": "dbt-anvil.runTestFromExplorer",
+					"when": "view == dbt-anvil.testExplorer && viewItem =~ /unitTestNode|dataTestNode|cteTestNode/",
 					"group": "inline@1"
 				},
 				{
-					"command": "dbt-studio.runTestGroupFromExplorer",
-					"when": "view == dbt-studio.testExplorer && viewItem == testGroup",
+					"command": "dbt-anvil.runTestGroupFromExplorer",
+					"when": "view == dbt-anvil.testExplorer && viewItem == testGroup",
 					"group": "inline@1"
 				},
 				{
-					"command": "dbt-studio.runTestCategoryFromExplorer",
-					"when": "view == dbt-studio.testExplorer && viewItem == testCategory",
+					"command": "dbt-anvil.runTestCategoryFromExplorer",
+					"when": "view == dbt-anvil.testExplorer && viewItem == testCategory",
 					"group": "inline@1"
 				}
 			],
 			"debug/callstack/context": [
 				{
-					"command": "dbt-studio.debug.showFrameSql",
+					"command": "dbt-anvil.debug.showFrameSql",
 					"when": "debugType == 'dbt-sql'",
 					"group": "navigation"
 				}
@@ -701,10 +701,10 @@
 		},
 		"configuration": [
 			{
-				"id": "dbt-studio",
-				"title": "dbt Studio",
+				"id": "dbt-anvil",
+				"title": "dbt Anvil",
 				"properties": {
-					"dbt-studio.mcp.registration": {
+					"dbt-anvil.mcp.registration": {
 						"type": "string",
 						"default": "auto",
 						"enum": [
@@ -717,14 +717,14 @@
 							"Always start the MCP server and register tools, even if Claude Code is not detected.",
 							"Never start the MCP server or write .mcp.json / ~/.claude.json entries."
 						],
-						"markdownDescription": "Controls whether dbt Studio runs its MCP subsystem for Claude Code. In `auto` mode the extension only starts the local MCP server and writes config files when Claude Code is installed; otherwise the subsystem stays dormant."
+						"markdownDescription": "Controls whether dbt Anvil runs its MCP subsystem for Claude Code. In `auto` mode the extension only starts the local MCP server and writes config files when Claude Code is installed; otherwise the subsystem stays dormant."
 					},
-					"dbt-studio.profilesDir": {
+					"dbt-anvil.profilesDir": {
 						"type": "string",
 						"default": "",
 						"description": "Path to dbt profiles directory. Leave empty to use project directory or ~/.dbt."
 					},
-					"dbt-studio.logLevel": {
+					"dbt-anvil.logLevel": {
 						"type": "string",
 						"default": "info",
 						"enum": [
@@ -734,18 +734,18 @@
 							"warn",
 							"error"
 						],
-						"description": "Log level for dbt Studio output channel."
+						"description": "Log level for dbt Anvil output channel."
 					}
 				}
 			},
 			{
-				"id": "dbt-studio.layers",
+				"id": "dbt-anvil.layers",
 				"title": "Layers",
 				"properties": {
-					"dbt-studio.layers": {
+					"dbt-anvil.layers": {
 						"type": "array",
 						"default": [],
-						"markdownDescription": "Ordered list of **data layers** for your project (e.g. `raw → bronze → silver → gold → marts`). Order defines ordinality — index 0 is the upstream-most layer. Layers are a dbt Studio-local concept used for classification, grouping, and architectural rules; they are never written to `manifest.json` or passed to the dbt CLI.\n\nEach entry has a `name` and a `match` rule. First match wins, top-down. Models matching no layer remain unclassified.\n\n**Scope**: only dbt **models** (plus seeds, snapshots, analyses) are classified. `source:` definitions from `schema.yml` are _not_ matched — they sit conceptually upstream of every layer. If you want sources to show up as `raw`, classify the staging models that wrap them (e.g. by tag or folder) instead of adding a `sources` layer.\n\nExample:\n```json\n[\n  { \"name\": \"raw\",     \"match\": { \"folder\": \"models/raw\" } },\n  { \"name\": \"bronze\",  \"match\": { \"tag\": \"bronze\" } },\n  { \"name\": \"silver\",  \"match\": { \"namePrefix\": \"slv_\" } },\n  { \"name\": \"gold\",    \"match\": { \"any\": [ { \"folder\": \"models/gold\" }, { \"tag\": \"gold\" } ] } },\n  { \"name\": \"marts\",   \"match\": { \"folder\": \"models/marts\" } }\n]\n```",
+						"markdownDescription": "Ordered list of **data layers** for your project (e.g. `raw → bronze → silver → gold → marts`). Order defines ordinality — index 0 is the upstream-most layer. Layers are a dbt Anvil-local concept used for classification, grouping, and architectural rules; they are never written to `manifest.json` or passed to the dbt CLI.\n\nEach entry has a `name` and a `match` rule. First match wins, top-down. Models matching no layer remain unclassified.\n\n**Scope**: only dbt **models** (plus seeds, snapshots, analyses) are classified. `source:` definitions from `schema.yml` are _not_ matched — they sit conceptually upstream of every layer. If you want sources to show up as `raw`, classify the staging models that wrap them (e.g. by tag or folder) instead of adding a `sources` layer.\n\nExample:\n```json\n[\n  { \"name\": \"raw\",     \"match\": { \"folder\": \"models/raw\" } },\n  { \"name\": \"bronze\",  \"match\": { \"tag\": \"bronze\" } },\n  { \"name\": \"silver\",  \"match\": { \"namePrefix\": \"slv_\" } },\n  { \"name\": \"gold\",    \"match\": { \"any\": [ { \"folder\": \"models/gold\" }, { \"tag\": \"gold\" } ] } },\n  { \"name\": \"marts\",   \"match\": { \"folder\": \"models/marts\" } }\n]\n```",
 						"items": {
 							"type": "object",
 							"required": [
@@ -902,10 +902,10 @@
 				}
 			},
 			{
-				"id": "dbt-studio.lineage",
+				"id": "dbt-anvil.lineage",
 				"title": "Lineage",
 				"properties": {
-					"dbt-studio.lineage.showTests": {
+					"dbt-anvil.lineage.showTests": {
 						"type": "boolean",
 						"default": true,
 						"description": "Show test nodes in the lineage graph."
@@ -913,70 +913,70 @@
 				}
 			},
 			{
-				"id": "dbt-studio.providers",
+				"id": "dbt-anvil.providers",
 				"title": "Providers",
 				"properties": {
-					"dbt-studio.providers.codeLens": {
+					"dbt-anvil.providers.codeLens": {
 						"type": "boolean",
 						"default": true,
 						"markdownDescription": "**Enabled**: Show Run / Build / Test / Compile code lens actions above dbt SQL models and test entries in schema.yml."
 					},
-					"dbt-studio.providers.documentSymbols": {
+					"dbt-anvil.providers.documentSymbols": {
 						"type": "boolean",
 						"default": true,
 						"markdownDescription": "**Enabled**: Populate the Outline panel and breadcrumbs with CTEs (SQL files) and model/column hierarchy (YAML files)."
 					},
-					"dbt-studio.providers.workspaceSymbols": {
+					"dbt-anvil.providers.workspaceSymbols": {
 						"type": "boolean",
 						"default": true,
 						"markdownDescription": "**Enabled**: Include dbt models, sources, and macros in workspace symbol search (Ctrl+T / Cmd+T)."
 					},
-					"dbt-studio.providers.sql.hover": {
+					"dbt-anvil.providers.sql.hover": {
 						"type": "boolean",
 						"default": true,
 						"markdownDescription": "**Enabled**: Show hover tooltips for `ref()`, `source()`, macros, CTE names, and column names in Jinja SQL files."
 					},
-					"dbt-studio.providers.sql.completion": {
+					"dbt-anvil.providers.sql.completion": {
 						"type": "boolean",
 						"default": true,
 						"markdownDescription": "**Enabled**: Provide autocomplete for `ref()`, `source()`, macros, columns, and table names after FROM/JOIN in Jinja SQL files."
 					},
-					"dbt-studio.providers.sql.definition": {
+					"dbt-anvil.providers.sql.definition": {
 						"type": "boolean",
 						"default": true,
 						"markdownDescription": "**Enabled**: Enable Go to Definition for `ref()`, `source()`, macros, CTEs, and column names in Jinja SQL files."
 					},
-					"dbt-studio.providers.sql.references": {
+					"dbt-anvil.providers.sql.references": {
 						"type": "boolean",
 						"default": true,
 						"markdownDescription": "**Enabled**: Enable Find All References for `ref()`, `source()`, and column names in Jinja SQL files."
 					},
-					"dbt-studio.providers.sql.rename": {
+					"dbt-anvil.providers.sql.rename": {
 						"type": "boolean",
 						"default": true,
 						"markdownDescription": "**Enabled**: Enable Rename Symbol for dbt models — updates `ref()` calls, schema.yml entries, and renames the `.sql` file. Works best when `sql.definition` is also enabled."
 					},
-					"dbt-studio.providers.sql.signatureHelp": {
+					"dbt-anvil.providers.sql.signatureHelp": {
 						"type": "boolean",
 						"default": true,
 						"markdownDescription": "**Enabled**: Show parameter hints when typing dbt macro calls in Jinja SQL files."
 					},
-					"dbt-studio.providers.sql.codeActions": {
+					"dbt-anvil.providers.sql.codeActions": {
 						"type": "boolean",
 						"default": true,
 						"markdownDescription": "**Enabled**: Show quick-fix actions for unknown `ref()` and `source()` calls in Jinja SQL files (e.g. create missing model file)."
 					},
-					"dbt-studio.providers.sql.diagnostics": {
+					"dbt-anvil.providers.sql.diagnostics": {
 						"type": "boolean",
 						"default": true,
-						"markdownDescription": "**Enabled**: Show dbt parse errors, unknown `ref()`/`source()` calls, and invalid column names in the Problems panel. Disabling this clears all dbt Studio diagnostics immediately."
+						"markdownDescription": "**Enabled**: Show dbt parse errors, unknown `ref()`/`source()` calls, and invalid column names in the Problems panel. Disabling this clears all dbt Anvil diagnostics immediately."
 					},
-					"dbt-studio.providers.yaml.hover": {
+					"dbt-anvil.providers.yaml.hover": {
 						"type": "boolean",
 						"default": true,
 						"markdownDescription": "**Enabled**: Show hover tooltips for model and source names in dbt schema YAML files."
 					},
-					"dbt-studio.providers.yaml.completion": {
+					"dbt-anvil.providers.yaml.completion": {
 						"type": "boolean",
 						"default": true,
 						"markdownDescription": "**Enabled**: Provide autocomplete for model names, column names, tags, test names, and source references in dbt schema YAML files."
@@ -984,36 +984,36 @@
 				}
 			},
 			{
-				"id": "dbt-studio.notifications",
+				"id": "dbt-anvil.notifications",
 				"title": "Notifications",
 				"properties": {
-					"dbt-studio.notifications.suppressSqlFluffWarning": {
+					"dbt-anvil.notifications.suppressSqlFluffWarning": {
 						"type": "boolean",
 						"default": false,
-						"markdownDescription": "Suppress the notice about SQLFluff being active alongside dbt Studio."
+						"markdownDescription": "Suppress the notice about SQLFluff being active alongside dbt Anvil."
 					},
-					"dbt-studio.notifications.suppressAutoSaveWarning": {
+					"dbt-anvil.notifications.suppressAutoSaveWarning": {
 						"type": "boolean",
 						"default": false,
 						"markdownDescription": "Suppress the warning about auto-save triggering frequent dbt parse runs."
 					},
-					"dbt-studio.notifications.suppressFormatterWarning": {
+					"dbt-anvil.notifications.suppressFormatterWarning": {
 						"type": "boolean",
 						"default": false,
-						"markdownDescription": "Suppress the warning about dbt Studio not being set as the default formatter for SQL files."
+						"markdownDescription": "Suppress the warning about dbt Anvil not being set as the default formatter for SQL files."
 					}
 				}
 			},
 			{
-				"id": "dbt-studio.terminal",
+				"id": "dbt-anvil.terminal",
 				"title": "Terminal",
 				"properties": {
-					"dbt-studio.terminal.externalCommandMonitor.enabled": {
+					"dbt-anvil.terminal.externalCommandMonitor.enabled": {
 						"type": "boolean",
 						"default": true,
-						"markdownDescription": "**⚠️ Disabling this is strongly discouraged.** dbt Studio monitors terminal shell executions and automatically suspends its own background operations when you run `dbt run`, `build`, `seed`, `snapshot`, `clone`, or `run-operation` directly in a terminal. Without this, concurrent dbt writes can corrupt the manifest and produce stale intellisense, phantom errors, and incorrect lineage. Only disable if VS Code shell integration is causing unrelated problems in your environment."
+						"markdownDescription": "**⚠️ Disabling this is strongly discouraged.** dbt Anvil monitors terminal shell executions and automatically suspends its own background operations when you run `dbt run`, `build`, `seed`, `snapshot`, `clone`, or `run-operation` directly in a terminal. Without this, concurrent dbt writes can corrupt the manifest and produce stale intellisense, phantom errors, and incorrect lineage. Only disable if VS Code shell integration is causing unrelated problems in your environment."
 					},
-					"dbt-studio.terminal.contributeCliShim": {
+					"dbt-anvil.terminal.contributeCliShim": {
 						"type": "boolean",
 						"default": true,
 						"markdownDescription": "Contribute a `dbt` command to integrated terminals that delegates to the detected package manager (uv, poetry, etc.). When enabled, you can type `dbt build` in the terminal instead of `uv run dbt build`."
@@ -1021,28 +1021,28 @@
 				}
 			},
 			{
-				"id": "dbt-studio.ninja",
+				"id": "dbt-anvil.ninja",
 				"title": "Ninja Linter",
 				"properties": {
-					"dbt-studio.ninja.enabled": {
+					"dbt-anvil.ninja.enabled": {
 						"type": "boolean",
 						"default": true,
-						"markdownDescription": "Master switch for the Ninja subsystem. When off, **all** of these are disabled: diagnostics (Problems panel), Format Document, auto-fix on save, and code actions. To silence diagnostics only while keeping formatting and code actions, use `#dbt-studio.ninja.diagnostics.enabled#` instead."
+						"markdownDescription": "Master switch for the Ninja subsystem. When off, **all** of these are disabled: diagnostics (Problems panel), Format Document, auto-fix on save, and code actions. To silence diagnostics only while keeping formatting and code actions, use `#dbt-anvil.ninja.diagnostics.enabled#` instead."
 					},
-					"dbt-studio.ninja.diagnostics.enabled": {
+					"dbt-anvil.ninja.diagnostics.enabled": {
 						"type": "boolean",
 						"default": true,
-						"markdownDescription": "Show Ninja violations in the Problems panel. Turn off to hide diagnostics while keeping **Format Document** and code actions working. Requires `#dbt-studio.ninja.enabled#`."
+						"markdownDescription": "Show Ninja violations in the Problems panel. Turn off to hide diagnostics while keeping **Format Document** and code actions working. Requires `#dbt-anvil.ninja.enabled#`."
 					},
-					"dbt-studio.ninja.disabledRules": {
+					"dbt-anvil.ninja.disabledRules": {
 						"type": "array",
 						"items": {
 							"type": "string"
 						},
 						"default": [],
-						"markdownDescription": "Rule IDs that are completely disabled — no diagnostic, no autofix. Use the rule editor UI to manage this list. To silence a rule while keeping its autofix, use `mute` in `#dbt-studio.ninja.rules#` instead."
+						"markdownDescription": "Rule IDs that are completely disabled — no diagnostic, no autofix. Use the rule editor UI to manage this list. To silence a rule while keeping its autofix, use `mute` in `#dbt-anvil.ninja.rules#` instead."
 					},
-					"dbt-studio.ninja.rules": {
+					"dbt-anvil.ninja.rules": {
 						"type": "object",
 						"default": {},
 						"markdownDescription": "Per-rule severity overrides. Keys are Ninja rule IDs, values are `error`, `warning`, `info`, `hint`, or `mute`.",
@@ -1137,77 +1137,77 @@
 							]
 						}
 					},
-					"dbt-studio.ninja.format.preset": {
+					"dbt-anvil.ninja.format.preset": {
 						"type": "string",
-						"default": "dbt-studio",
+						"default": "dbt-anvil",
 						"enum": [
 							"sqlfmt",
 							"dbt-labs",
-							"dbt-studio",
+							"dbt-anvil",
 							"custom"
 						],
 						"enumDescriptions": [
 							"sqlfmt style: 88-char lines, lowercase, trailing commas.",
 							"dbt Labs style guide: 120-char lines, lowercase, leading commas.",
-							"dbt Studio house style: leading commas + operators, plus forced multi-line wrapping for GROUP BY, ORDER BY, OVER window, CASE, and WHERE/HAVING boolean chains.",
+							"dbt Anvil house style: leading commas + operators, plus forced multi-line wrapping for GROUP BY, ORDER BY, OVER window, CASE, and WHERE/HAVING boolean chains.",
 							"No preset — all settings use their explicit values or defaults."
 						],
 						"markdownDescription": "Named style preset. Provides defaults for unset config keys; explicit overrides always win. **New installs** default to `sqlfmt`; existing users whose settings are already configured see no change."
 					},
-					"dbt-studio.ninja.layout.alwaysWrap.select": {
+					"dbt-anvil.ninja.layout.alwaysWrap.select": {
 						"type": "boolean",
 						"default": true,
-						"markdownDescription": "Always wrap multi-target SELECT lists onto multiple lines (one target per line), regardless of whether the collapsed form would fit within `#dbt-studio.ninja.maxLineLength#`. Single-target SELECTs stay inline. Default `true` matches sqlfmt and dbt Labs conventions — set `false` to keep short multi-target SELECTs on one line."
+						"markdownDescription": "Always wrap multi-target SELECT lists onto multiple lines (one target per line), regardless of whether the collapsed form would fit within `#dbt-anvil.ninja.maxLineLength#`. Single-target SELECTs stay inline. Default `true` matches sqlfmt and dbt Labs conventions — set `false` to keep short multi-target SELECTs on one line."
 					},
-					"dbt-studio.ninja.layout.alwaysWrap.groupBy": {
+					"dbt-anvil.ninja.layout.alwaysWrap.groupBy": {
 						"type": "boolean",
 						"default": false,
 						"markdownDescription": "Always wrap top-level GROUP BY clauses with 2+ targets onto multiple lines (one target per line), regardless of width. Single-target `group by x` stays inline."
 					},
-					"dbt-studio.ninja.layout.alwaysWrap.orderBy": {
+					"dbt-anvil.ninja.layout.alwaysWrap.orderBy": {
 						"type": "boolean",
 						"default": false,
 						"markdownDescription": "Always wrap top-level ORDER BY clauses with 2+ targets onto multiple lines (one target per line), regardless of width. Single-target `order by x` stays inline."
 					},
-					"dbt-studio.ninja.layout.alwaysWrap.windowPartitionBy": {
+					"dbt-anvil.ninja.layout.alwaysWrap.windowPartitionBy": {
 						"type": "boolean",
 						"default": false,
 						"markdownDescription": "Always put `PARTITION BY` inside an `OVER(...)` window on its own line with 2+ targets each on their own line, regardless of width. The OVER paren opens an indented block."
 					},
-					"dbt-studio.ninja.layout.alwaysWrap.windowOrderBy": {
+					"dbt-anvil.ninja.layout.alwaysWrap.windowOrderBy": {
 						"type": "boolean",
 						"default": false,
 						"markdownDescription": "Always put `ORDER BY` inside an `OVER(...)` window on its own line with 2+ targets each on their own line, regardless of width."
 					},
-					"dbt-studio.ninja.layout.alwaysWrap.case": {
+					"dbt-anvil.ninja.layout.alwaysWrap.case": {
 						"type": "boolean",
 						"default": false,
 						"markdownDescription": "Always wrap `CASE` expressions with 2+ WHEN branches across multiple lines (one branch per line), regardless of width. Single-branch CASE stays inline."
 					},
-					"dbt-studio.ninja.layout.alwaysWrap.where": {
+					"dbt-anvil.ninja.layout.alwaysWrap.where": {
 						"type": "boolean",
 						"default": false,
 						"markdownDescription": "Always put `WHERE` on its own line and indent every predicate (including the first) onto its own line, when the WHERE has 2+ predicates joined by `AND`/`OR`. Single-predicate WHEREs stay inline (`where x = 1`)."
 					},
-					"dbt-studio.ninja.layout.alwaysWrap.having": {
+					"dbt-anvil.ninja.layout.alwaysWrap.having": {
 						"type": "boolean",
 						"default": false,
 						"markdownDescription": "Always put `HAVING` on its own line and indent every predicate (including the first) onto its own line, when the HAVING has 2+ predicates joined by `AND`/`OR`. Single-predicate HAVINGs stay inline."
 					},
-					"dbt-studio.ninja.autoFix.applyOnFormat": {
+					"dbt-anvil.ninja.autoFix.applyOnFormat": {
 						"type": "boolean",
 						"default": true,
-						"markdownDescription": "Apply safe auto-fixes when **Format Document** (`Shift+Alt+F`) is invoked on a SQL file. Which rules auto-fix is controlled by `#dbt-studio.ninja.autoFix.rules#`."
+						"markdownDescription": "Apply safe auto-fixes when **Format Document** (`Shift+Alt+F`) is invoked on a SQL file. Which rules auto-fix is controlled by `#dbt-anvil.ninja.autoFix.rules#`."
 					},
-					"dbt-studio.ninja.autoFix.applyOnFixAll": {
+					"dbt-anvil.ninja.autoFix.applyOnFixAll": {
 						"type": "boolean",
 						"default": false,
-						"markdownDescription": "Enable auto-fix on save. Which rules auto-fix is controlled by `#dbt-studio.ninja.autoFix.rules#`."
+						"markdownDescription": "Enable auto-fix on save. Which rules auto-fix is controlled by `#dbt-anvil.ninja.autoFix.rules#`."
 					},
-					"dbt-studio.ninja.autoFix.rules": {
+					"dbt-anvil.ninja.autoFix.rules": {
 						"type": "object",
 						"default": {},
-						"markdownDescription": "Per-rule auto-fix overrides. Only applies when `#dbt-studio.ninja.autoFix.applyOnFormat#` or `#dbt-studio.ninja.autoFix.applyOnFixAll#` is enabled.",
+						"markdownDescription": "Per-rule auto-fix overrides. Only applies when `#dbt-anvil.ninja.autoFix.applyOnFormat#` or `#dbt-anvil.ninja.autoFix.applyOnFixAll#` is enabled.",
 						"propertyNames": {
 							"enum": [
 								"ninja.alias.length",
@@ -1285,7 +1285,7 @@
 							"type": "boolean"
 						}
 					},
-					"dbt-studio.ninja.capitalisation.keywords": {
+					"dbt-anvil.ninja.capitalisation.keywords": {
 						"type": "string",
 						"default": "lower",
 						"enum": [
@@ -1295,7 +1295,7 @@
 						],
 						"markdownDescription": "Capitalisation policy for SQL keywords (SELECT, FROM, WHERE, etc.)."
 					},
-					"dbt-studio.ninja.capitalisation.functions": {
+					"dbt-anvil.ninja.capitalisation.functions": {
 						"type": "string",
 						"default": "lower",
 						"enum": [
@@ -1305,7 +1305,7 @@
 						],
 						"markdownDescription": "Capitalisation policy for SQL function names (count, coalesce, etc.)."
 					},
-					"dbt-studio.ninja.capitalisation.literals": {
+					"dbt-anvil.ninja.capitalisation.literals": {
 						"type": "string",
 						"default": "lower",
 						"enum": [
@@ -1315,7 +1315,7 @@
 						],
 						"markdownDescription": "Capitalisation policy for SQL literals (NULL, TRUE, FALSE)."
 					},
-					"dbt-studio.ninja.capitalisation.types": {
+					"dbt-anvil.ninja.capitalisation.types": {
 						"type": "string",
 						"default": "lower",
 						"enum": [
@@ -1325,7 +1325,7 @@
 						],
 						"markdownDescription": "Capitalisation policy for SQL datatype keywords (INT, VARCHAR, BOOLEAN, etc.)."
 					},
-					"dbt-studio.ninja.capitalisation.identifiers.style": {
+					"dbt-anvil.ninja.capitalisation.identifiers.style": {
 						"type": "string",
 						"default": "off",
 						"enum": [
@@ -1338,7 +1338,7 @@
 						],
 						"markdownDescription": "Identifier style policy for introduced identifiers (column aliases, CTE names, table aliases). `off` disables the check. Violations are surfaced as diagnostics with a per-site rename code action — never auto-fixed."
 					},
-					"dbt-studio.ninja.capitalisation.identifiers.acronyms": {
+					"dbt-anvil.ninja.capitalisation.identifiers.acronyms": {
 						"type": "array",
 						"items": {
 							"type": "string"
@@ -1357,7 +1357,7 @@
 						],
 						"markdownDescription": "Acronyms allowed as a single uppercase run inside camelCase/PascalCase identifiers (e.g. `MyURL` instead of `MyUrl`). Matched case-insensitively. Used both to forgive acronym runs during detection and to preserve them when proposing renames."
 					},
-					"dbt-studio.ninja.capitalisation.identifiers.words": {
+					"dbt-anvil.ninja.capitalisation.identifiers.words": {
 						"type": "array",
 						"items": {
 							"type": "string"
@@ -1365,7 +1365,7 @@
 						"default": [],
 						"markdownDescription": "Optional whole-word tokens used to segment all-lowercase identifiers that lack visible markers (e.g. `customerid` → `customer_id` when `id` is in the list). Detection-only — without entries here, all-lowercase identifiers are accepted as valid single-word names (same as IntelliJ/VS behaviour)."
 					},
-					"dbt-studio.ninja.indentation.unit": {
+					"dbt-anvil.ninja.indentation.unit": {
 						"type": "string",
 						"default": "space",
 						"enum": [
@@ -1374,48 +1374,48 @@
 						],
 						"markdownDescription": "Indentation character."
 					},
-					"dbt-studio.ninja.indentation.size": {
+					"dbt-anvil.ninja.indentation.size": {
 						"type": "number",
 						"default": 4,
 						"minimum": 1,
 						"maximum": 8,
 						"markdownDescription": "Number of spaces (or tabs) per indent level."
 					},
-					"dbt-studio.ninja.indentation.indentedJoins": {
+					"dbt-anvil.ninja.indentation.indentedJoins": {
 						"type": "boolean",
 						"default": false,
 						"markdownDescription": "Indent JOIN clauses one extra level relative to FROM (sqlfluff: `indented_joins`)."
 					},
-					"dbt-studio.ninja.indentation.indentedOn": {
+					"dbt-anvil.ninja.indentation.indentedOn": {
 						"type": "boolean",
 						"default": true,
 						"markdownDescription": "Indent ON/USING one level under their JOIN clause (sqlfluff: `indented_using_on`)."
 					},
-					"dbt-studio.ninja.indentation.indentedThen": {
+					"dbt-anvil.ninja.indentation.indentedThen": {
 						"type": "boolean",
 						"default": true,
 						"markdownDescription": "Indent THEN one level under its WHEN clause (sqlfluff: `indented_then`)."
 					},
-					"dbt-studio.ninja.indentation.indentedCtes": {
+					"dbt-anvil.ninja.indentation.indentedCtes": {
 						"type": "boolean",
 						"default": false,
 						"markdownDescription": "Indent CTE body one extra level (sqlfluff: `indented_ctes`)."
 					},
-					"dbt-studio.ninja.maxLineLength": {
+					"dbt-anvil.ninja.maxLineLength": {
 						"type": "number",
 						"default": 120,
 						"minimum": 40,
 						"maximum": 500,
 						"markdownDescription": "Maximum line length before the long-lines rule triggers."
 					},
-					"dbt-studio.ninja.maxBlankLines": {
+					"dbt-anvil.ninja.maxBlankLines": {
 						"type": "number",
 						"default": 2,
 						"minimum": 1,
 						"maximum": 10,
 						"markdownDescription": "Maximum number of consecutive blank lines allowed."
 					},
-					"dbt-studio.ninja.layout.commaPosition": {
+					"dbt-anvil.ninja.layout.commaPosition": {
 						"type": "string",
 						"default": "trailing",
 						"enum": [
@@ -1424,7 +1424,7 @@
 						],
 						"markdownDescription": "Whether commas should appear at end (trailing) or start (leading) of lines."
 					},
-					"dbt-studio.ninja.layout.operatorPosition": {
+					"dbt-anvil.ninja.layout.operatorPosition": {
 						"type": "string",
 						"default": "trailing",
 						"enum": [
@@ -1433,12 +1433,12 @@
 						],
 						"markdownDescription": "Whether operators (AND, OR, +, etc.) should appear at end (trailing) or start (leading) of lines."
 					},
-					"dbt-studio.ninja.structure.allowStarInCte": {
+					"dbt-anvil.ninja.structure.allowStarInCte": {
 						"type": "boolean",
 						"default": false,
 						"markdownDescription": "Allow `SELECT *` inside CTEs (only flag it in the final SELECT)."
 					},
-					"dbt-studio.ninja.convention.notEqual": {
+					"dbt-anvil.ninja.convention.notEqual": {
 						"type": "string",
 						"default": "!=",
 						"enum": [
@@ -1447,7 +1447,7 @@
 						],
 						"markdownDescription": "Preferred not-equal operator style."
 					},
-					"dbt-studio.ninja.convention.unionStyle": {
+					"dbt-anvil.ninja.convention.unionStyle": {
 						"type": "string",
 						"default": "all",
 						"enum": [
@@ -1456,17 +1456,17 @@
 						],
 						"markdownDescription": "Whether bare `UNION` should be auto-fixed to `UNION ALL` or `UNION DISTINCT`."
 					},
-					"dbt-studio.ninja.convention.explicitAs": {
+					"dbt-anvil.ninja.convention.explicitAs": {
 						"type": "boolean",
 						"default": true,
 						"markdownDescription": "Require the `AS` keyword for table aliases, e.g. `FROM orders AS o` rather than `FROM orders o`. Controls the `ninja.aliasing.table-as` rule."
 					},
-					"dbt-studio.ninja.convention.explicitInnerJoin": {
+					"dbt-anvil.ninja.convention.explicitInnerJoin": {
 						"type": "boolean",
 						"default": true,
 						"markdownDescription": "Require `INNER JOIN` instead of bare `JOIN`. Controls the `ninja.convention.explicit-inner-join` rule."
 					},
-					"dbt-studio.ninja.workspaceDiagnostics": {
+					"dbt-anvil.ninja.workspaceDiagnostics": {
 						"type": "boolean",
 						"default": false,
 						"markdownDescription": "Run Ninja linting on all SQL files in the workspace (not just open files). Results appear in the Problems panel and a status bar item shows the total issue count."
@@ -1474,10 +1474,10 @@
 				}
 			},
 			{
-				"id": "dbt-studio.database",
+				"id": "dbt-anvil.database",
 				"title": "Database",
 				"properties": {
-					"dbt-studio.database.preferNativeAdapter": {
+					"dbt-anvil.database.preferNativeAdapter": {
 						"type": "boolean",
 						"default": true,
 						"markdownDescription": "**Enabled**: Use a native database adapter (e.g. Databricks REST API) for faster parallel queries when available. Disable to force all queries through `dbt show` instead — useful as a fallback if the native adapter has issues."
@@ -1485,22 +1485,22 @@
 				}
 			},
 			{
-				"id": "dbt-studio.queryEditor",
+				"id": "dbt-anvil.queryEditor",
 				"title": "Query Editor",
 				"properties": {
-					"dbt-studio.queryEditor.defaultLimit": {
+					"dbt-anvil.queryEditor.defaultLimit": {
 						"type": "number",
 						"default": 500,
 						"minimum": 1,
 						"maximum": 100000,
 						"markdownDescription": "Default row limit for ad-hoc query execution. Override per-statement with an explicit `LIMIT` clause in SQL."
 					},
-					"dbt-studio.queryEditor.stopOnError": {
+					"dbt-anvil.queryEditor.stopOnError": {
 						"type": "boolean",
 						"default": false,
 						"markdownDescription": "Stop executing remaining statements when one fails. When disabled, errors are shown per-statement and execution continues."
 					},
-					"dbt-studio.queryEditor.resultLocation": {
+					"dbt-anvil.queryEditor.resultLocation": {
 						"type": "string",
 						"enum": [
 							"preserve",
@@ -2032,7 +2032,7 @@
 				"name": "get_diagnostics",
 				"displayName": "Get Diagnostics",
 				"userDescription": "Read errors and warnings from the VS Code Problems panel",
-				"modelDescription": "Return diagnostics from the VS Code Problems panel. Sources include TypeScript, ESLint, the dbt-studio Ninja linter, and any other active linter. Use to verify edits before declaring work done. Pass 'path' to scope to one file. Positions are 1-indexed.",
+				"modelDescription": "Return diagnostics from the VS Code Problems panel. Sources include TypeScript, ESLint, the dbt-anvil Ninja linter, and any other active linter. Use to verify edits before declaring work done. Pass 'path' to scope to one file. Positions are 1-indexed.",
 				"canBeReferencedInPrompt": false,
 				"toolReferenceName": "get_diagnostics",
 				"icon": "$(warning)",
@@ -2059,7 +2059,7 @@
 						},
 						"source": {
 							"type": "string",
-							"description": "Filter by diagnostic source (e.g., 'ts', 'eslint', 'dbt-studio')"
+							"description": "Filter by diagnostic source (e.g., 'ts', 'eslint', 'dbt-anvil')"
 						},
 						"max_results": {
 							"type": "number",
@@ -2211,7 +2211,7 @@
 	},
 	"keybindings": [
 		{
-			"command": "dbt-studio.executeAll",
+			"command": "dbt-anvil.executeAll",
 			"key": "ctrl+shift+enter",
 			"mac": "cmd+shift+enter",
 			"when": "editorTextFocus && resourceLangId == jinja-sql"

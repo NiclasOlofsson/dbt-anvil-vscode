@@ -30,11 +30,11 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 	private readonly _columnCollection: vscode.DiagnosticCollection;
 	/** Structural SQL warnings from sqlglot (e.g. Aliases node type from a dangling identifier). */
 	private readonly _sqlglotCollection: vscode.DiagnosticCollection;
-	/** Warning shown on dbt_project.yml when SQLFluff is active alongside dbt Studio. */
+	/** Warning shown on dbt_project.yml when SQLFluff is active alongside dbt Anvil. */
 	private readonly _sqlfluffCollection: vscode.DiagnosticCollection;
 	/** Warning shown on dbt_project.yml when auto-save is enabled (triggers frequent dbt parse). */
 	private readonly _autoSaveCollection: vscode.DiagnosticCollection;
-	/** Warning shown on dbt_project.yml when dbt Studio is not the default formatter for jinja-sql. */
+	/** Warning shown on dbt_project.yml when dbt Anvil is not the default formatter for jinja-sql. */
 	private readonly _formatterCollection: vscode.DiagnosticCollection;
 	/** Ninja style-linting diagnostics (capitalisation, whitespace, jinja padding). */
 	private readonly _ninjaCollection: vscode.DiagnosticCollection;
@@ -65,35 +65,35 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		startupReady = true,
 	) {
 		this._startupReady = startupReady;
-		this._parseCollection = vscode.languages.createDiagnosticCollection('dbt-studio');
-		this._refCollection = vscode.languages.createDiagnosticCollection('dbt-studio-refs');
-		this._columnCollection = vscode.languages.createDiagnosticCollection('dbt-studio-columns');
-		this._sqlglotCollection = vscode.languages.createDiagnosticCollection('dbt-studio-sqlglot');
-		this._sqlfluffCollection = vscode.languages.createDiagnosticCollection('dbt-studio-sqlfluff');
-		this._autoSaveCollection = vscode.languages.createDiagnosticCollection('dbt-studio-autosave');
-		this._formatterCollection = vscode.languages.createDiagnosticCollection('dbt-studio-formatter');
-		this._ninjaCollection = vscode.languages.createDiagnosticCollection('dbt-studio-ninja');
+		this._parseCollection = vscode.languages.createDiagnosticCollection('dbt-anvil');
+		this._refCollection = vscode.languages.createDiagnosticCollection('dbt-anvil-refs');
+		this._columnCollection = vscode.languages.createDiagnosticCollection('dbt-anvil-columns');
+		this._sqlglotCollection = vscode.languages.createDiagnosticCollection('dbt-anvil-sqlglot');
+		this._sqlfluffCollection = vscode.languages.createDiagnosticCollection('dbt-anvil-sqlfluff');
+		this._autoSaveCollection = vscode.languages.createDiagnosticCollection('dbt-anvil-autosave');
+		this._formatterCollection = vscode.languages.createDiagnosticCollection('dbt-anvil-formatter');
+		this._ninjaCollection = vscode.languages.createDiagnosticCollection('dbt-anvil-ninja');
 		this._syntaxErrorDim = vscode.window.createTextEditorDecorationType({ opacity: '0.5' });
 		this._disposables.push(this._syntaxErrorDim);
 
 		// SQLFluff warning: shown on dbt_project.yml when SQLFluff extension is active.
-		// Cleared when the user sets dbt-studio.notifications.suppressSqlFluffWarning in settings.
+		// Cleared when the user sets dbt-anvil.notifications.suppressSqlFluffWarning in settings.
 		this._updateSqlFluffDiagnostic();
 		// Auto-save warning: shown on dbt_project.yml when auto-save is enabled.
-		// Cleared when the user sets dbt-studio.notifications.suppressAutoSaveWarning in settings.
+		// Cleared when the user sets dbt-anvil.notifications.suppressAutoSaveWarning in settings.
 		this._updateAutoSaveDiagnostic();
-		// Formatter warning: shown on dbt_project.yml when dbt Studio is not the default formatter.
-		// Cleared when the user sets the formatter or sets dbt-studio.notifications.suppressFormatterWarning.
+		// Formatter warning: shown on dbt_project.yml when dbt Anvil is not the default formatter.
+		// Cleared when the user sets the formatter or sets dbt-anvil.notifications.suppressFormatterWarning.
 		this._updateFormatterDiagnostic();
 		this._disposables.push(
 			vscode.workspace.onDidChangeConfiguration((e) => {
-				if (e.affectsConfiguration('dbt-studio.notifications.suppressSqlFluffWarning')) {
+				if (e.affectsConfiguration('dbt-anvil.notifications.suppressSqlFluffWarning')) {
 					this._updateSqlFluffDiagnostic();
 				}
-				if (e.affectsConfiguration('dbt-studio.notifications.suppressAutoSaveWarning') || e.affectsConfiguration('files.autoSave')) {
+				if (e.affectsConfiguration('dbt-anvil.notifications.suppressAutoSaveWarning') || e.affectsConfiguration('files.autoSave')) {
 					this._updateAutoSaveDiagnostic();
 				}
-				if (e.affectsConfiguration('dbt-studio.notifications.suppressFormatterWarning') || e.affectsConfiguration('editor.defaultFormatter')) {
+				if (e.affectsConfiguration('dbt-anvil.notifications.suppressFormatterWarning') || e.affectsConfiguration('editor.defaultFormatter')) {
 					this._updateFormatterDiagnostic();
 				}
 			}),
@@ -104,7 +104,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		this._disposables.push(
 			service.onJobCompleted(({ job, result }) => {
 				if (job.type === 'parse') {
-					if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) return;
+					if (!vscode.workspace.getConfiguration('dbt-anvil').get('providers.sql.diagnostics', true)) return;
 					// Always scan stderr — dbt parse can return success=true
 					// even when there are compilation/syntax errors in models.
 					// Also scan stdout — dbt often writes error details there too.
@@ -114,7 +114,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 			}),
 			service.onJobFailed(({ job, error }) => {
 				if (job.type === 'parse') {
-					if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) return;
+					if (!vscode.workspace.getConfiguration('dbt-anvil').get('providers.sql.diagnostics', true)) return;
 					this._handleParseOutput(error.message, false);
 				}
 			}),
@@ -123,12 +123,12 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		// Real-time ref/source validation
 		this._disposables.push(
 			vscode.workspace.onDidOpenTextDocument((doc) => {
-				if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) return;
+				if (!vscode.workspace.getConfiguration('dbt-anvil').get('providers.sql.diagnostics', true)) return;
 				void this._validateDocument(doc);
 				this._runNinjaDirect(doc);
 			}),
 			vscode.workspace.onDidChangeTextDocument((e) => {
-				if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) return;
+				if (!vscode.workspace.getConfiguration('dbt-anvil').get('providers.sql.diagnostics', true)) return;
 				this._validateDocumentDebounced(e.document);
 				this._runNinjaDebounced(e.document);
 			}),
@@ -143,8 +143,8 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 			// 	this._updateStatusBar();
 			// }),
 			vscode.workspace.onDidChangeConfiguration((e) => {
-				if (e.affectsConfiguration('dbt-studio.providers.sql.diagnostics')) {
-					const enabled = vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true);
+				if (e.affectsConfiguration('dbt-anvil.providers.sql.diagnostics')) {
+					const enabled = vscode.workspace.getConfiguration('dbt-anvil').get('providers.sql.diagnostics', true);
 					if (!enabled) {
 						this.clearAll();
 					} else {
@@ -155,7 +155,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 						}
 					}
 				}
-				if (e.affectsConfiguration('dbt-studio.ninja')) {
+				if (e.affectsConfiguration('dbt-anvil.ninja')) {
 					this._cachedNinjaConfig = undefined;
 					// Re-run ninja on all open SQL documents when ninja settings change
 					for (const doc of vscode.workspace.textDocuments) {
@@ -172,7 +172,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		if (onAliasesReady && this.parseService) {
 			this._disposables.push(
 				onAliasesReady((uri) => {
-					if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) return;
+					if (!vscode.workspace.getConfiguration('dbt-anvil').get('providers.sql.diagnostics', true)) return;
 					const doc = vscode.workspace.textDocuments.find(d => d.uri.toString() === uri.toString());
 					if (doc) this._validateColumnsDebounced(doc);
 				}),
@@ -189,7 +189,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 			this._disposables.push(
 				onIndexRebuild(() => {
 					this.setStartupReady();
-					if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) return;
+					if (!vscode.workspace.getConfiguration('dbt-anvil').get('providers.sql.diagnostics', true)) return;
 					const openSqlDocs = vscode.workspace.textDocuments.filter(d => d.languageId === 'jinja-sql');
 					this.logger.debug(`[diagnostics] onIndexRebuild: re-validating refs/sources for ${openSqlDocs.length} open jinja-sql docs`);
 					// Snapshot URIs currently tracked so we can clean up closed-doc entries
@@ -231,7 +231,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 							`${prefix}: ${w.message}`,
 							severity,
 						);
-						diag.source = 'dbt-studio (sqlglot)';
+						diag.source = 'dbt-anvil (sqlglot)';
 						diag.code = isSyntaxError ? 'sqlglot-syntax-error' : 'sqlglot-scope-warning';
 						return diag;
 					});
@@ -268,7 +268,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 
 		// Validate all currently open editors
 		for (const editor of vscode.window.visibleTextEditors) {
-			if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) break;
+			if (!vscode.workspace.getConfiguration('dbt-anvil').get('providers.sql.diagnostics', true)) break;
 			void this._validateDocument(editor.document);
 			this._runNinjaDirect(editor.document);
 		}
@@ -279,7 +279,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		this._startupReady = true;
 		this.logger.debug('[diagnostics] startup initialization complete — enabling document diagnostics');
 
-		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.diagnostics', true)) return;
+		if (!vscode.workspace.getConfiguration('dbt-anvil').get('providers.sql.diagnostics', true)) return;
 		for (const editor of vscode.window.visibleTextEditors) {
 			void this._validateDocument(editor.document);
 			this._runNinjaDirect(editor.document);
@@ -673,7 +673,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 	}
 
 	private _updateAutoSaveDiagnostic(): void {
-		const suppressed = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('notifications.suppressAutoSaveWarning');
+		const suppressed = vscode.workspace.getConfiguration('dbt-anvil').get<boolean>('notifications.suppressAutoSaveWarning');
 		const projectYml = vscode.Uri.file(`${this.projectDir}/dbt_project.yml`);
 		const autoSave = vscode.workspace.getConfiguration('files').get<string>('autoSave', 'off');
 		if (suppressed || autoSave === 'off') {
@@ -682,34 +682,34 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		}
 		const diag = new vscode.Diagnostic(
 			new vscode.Range(0, 0, 0, 0),
-			'Auto-save is enabled. dbt Studio triggers a dbt parse on every save of a SQL or YAML file — with auto-save on, this can run very frequently and slow things down on larger projects.',
+			'Auto-save is enabled. dbt Anvil triggers a dbt parse on every save of a SQL or YAML file — with auto-save on, this can run very frequently and slow things down on larger projects.',
 			vscode.DiagnosticSeverity.Warning,
 		);
-		diag.source = 'dbt-studio';
+		diag.source = 'dbt-anvil';
 		diag.code = 'autosave-active';
 		this._autoSaveCollection.set(projectYml, [diag]);
 	}
 
 	private _updateFormatterDiagnostic(): void {
-		const suppressed = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('notifications.suppressFormatterWarning');
+		const suppressed = vscode.workspace.getConfiguration('dbt-anvil').get<boolean>('notifications.suppressFormatterWarning');
 		const projectYml = vscode.Uri.file(`${this.projectDir}/dbt_project.yml`);
 		const defaultFormatter = vscode.workspace.getConfiguration('editor', { languageId: 'jinja-sql' }).get<string>('defaultFormatter');
-		if (suppressed || defaultFormatter === 'nickeolofsson.dbt-studio-vscode') {
+		if (suppressed || defaultFormatter === 'nickeolofsson.dbt-anvil') {
 			this._formatterCollection.delete(projectYml);
 			return;
 		}
 		const diag = new vscode.Diagnostic(
 			new vscode.Range(0, 0, 0, 0),
-			'dbt Studio is not set as the default formatter for SQL files. Auto-fix (format on save) will use a different formatter and ninja fixes won\'t be applied automatically.',
+			'dbt Anvil is not set as the default formatter for SQL files. Auto-fix (format on save) will use a different formatter and ninja fixes won\'t be applied automatically.',
 			vscode.DiagnosticSeverity.Warning,
 		);
-		diag.source = 'dbt-studio';
+		diag.source = 'dbt-anvil';
 		diag.code = 'formatter-not-set';
 		this._formatterCollection.set(projectYml, [diag]);
 	}
 
 	private _updateSqlFluffDiagnostic(): void {
-		const suppressed = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('notifications.suppressSqlFluffWarning');
+		const suppressed = vscode.workspace.getConfiguration('dbt-anvil').get<boolean>('notifications.suppressSqlFluffWarning');
 		const projectYml = vscode.Uri.file(`${this.projectDir}/dbt_project.yml`);
 		if (suppressed || !vscode.extensions.getExtension('dorzey.vscode-sqlfluff')) {
 			this._sqlfluffCollection.delete(projectYml);
@@ -717,10 +717,10 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		}
 		const diag = new vscode.Diagnostic(
 			new vscode.Range(0, 0, 0, 0),
-			'SQLFluff is active alongside dbt Studio. dbt Studio already provides SQL diagnostics for dbt models — SQLFluff may produce duplicate or conflicting warnings.',
+			'SQLFluff is active alongside dbt Anvil. dbt Anvil already provides SQL diagnostics for dbt models — SQLFluff may produce duplicate or conflicting warnings.',
 			vscode.DiagnosticSeverity.Warning,
 		);
-		diag.source = 'dbt-studio';
+		diag.source = 'dbt-anvil';
 		diag.code = 'sqlfluff-active';
 		this._sqlfluffCollection.set(projectYml, [diag]);
 	}

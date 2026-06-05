@@ -20,7 +20,7 @@
 			"request": "launch",
 			"internalConsoleOptions": "neverOpen",
 			"args": [
-				"c:/Development/oatly/worktrees/dbt-studio-testing",
+				"c:/Development/oatly/worktrees/dbt-anvil-testing",
 				"--extensionDevelopmentPath=${workspaceFolder}"
 			],
 			"outFiles": [

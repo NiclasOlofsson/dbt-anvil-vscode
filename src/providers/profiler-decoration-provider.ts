@@ -8,10 +8,10 @@ import type { ManifestIndexer } from '../indexing/manifest-indexer';
  * Renders inline timing annotations, gutter icons, and overview ruler colours
  * on CTE definition lines in the active SQL editor.
  *
- * Can be toggled on/off via the `dbt-studio.profiler.toggleDecorations` command.
+ * Can be toggled on/off via the `dbt-anvil.profiler.toggleDecorations` command.
  */
 export class ProfilerDecorationProvider implements vscode.Disposable {
-	static readonly contextKey = 'dbt-studio.profilerDecorationsVisible';
+	static readonly contextKey = 'dbt-anvil.profilerDecorationsVisible';
 
 	private _visible = true;
 

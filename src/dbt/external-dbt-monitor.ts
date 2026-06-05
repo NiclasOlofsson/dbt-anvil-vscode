@@ -88,7 +88,7 @@ export class ExternalDbtMonitor implements vscode.Disposable {
 		this.logger.warn(`ExternalDbtMonitor: interrupting terminal "${event.terminal.name}" — "${commandLine}" conflicts with active user job`);
 		event.terminal.sendText('\x03', false);
 		setTimeout(() => event.terminal.sendText('\x03', false), 200);
-		this._trackEvent(event.terminal.name, commandLine, 'interrupt', 'dbt Studio user job is active');
+		this._trackEvent(event.terminal.name, commandLine, 'interrupt', 'dbt Anvil user job is active');
 		this._showInterruptNotification(event.terminal.name);
 		this.logger.info(`[ExternalDbtMonitor] INTERRUPT: terminal="${event.terminal.name}" command="${commandLine}"`);
 	}
@@ -119,24 +119,24 @@ export class ExternalDbtMonitor implements vscode.Disposable {
 	}
 
 	private _showInterruptNotification(terminalName: string): void {
-		const modalShownCount = this.context.workspaceState.get<number>('dbtStudio.interrupt.modalShownCount', 0);
-		const message = `dbt Studio stopped a "${terminalName}" terminal command because a user-initiated dbt operation is already running.`;
+		const modalShownCount = this.context.workspaceState.get<number>('dbtAnvil.interrupt.modalShownCount', 0);
+		const message = `dbt Anvil stopped a "${terminalName}" terminal command because a user-initiated dbt operation is already running.`;
 		if (modalShownCount < MODAL_THRESHOLD) {
 			void vscode.window.showWarningMessage(message, { modal: true }, 'OK');
-			void this.context.workspaceState.update('dbtStudio.interrupt.modalShownCount', modalShownCount + 1);
+			void this.context.workspaceState.update('dbtAnvil.interrupt.modalShownCount', modalShownCount + 1);
 		} else {
 			void vscode.window.showWarningMessage(message);
 		}
 	}
 
 	private _trackEvent(terminalName: string, command: string, action: 'interrupt' | 'yield', reason: string): void {
-		const count = this.context.workspaceState.get<number>('dbtStudio.interrupt.count', 0);
-		void this.context.workspaceState.update('dbtStudio.interrupt.count', count + 1);
-		void this.context.workspaceState.update('dbtStudio.interrupt.lastAt', new Date().toISOString());
-		const history = this.context.workspaceState.get<InterruptEvent[]>('dbtStudio.interrupt.history', []);
+		const count = this.context.workspaceState.get<number>('dbtAnvil.interrupt.count', 0);
+		void this.context.workspaceState.update('dbtAnvil.interrupt.count', count + 1);
+		void this.context.workspaceState.update('dbtAnvil.interrupt.lastAt', new Date().toISOString());
+		const history = this.context.workspaceState.get<InterruptEvent[]>('dbtAnvil.interrupt.history', []);
 		history.push({ timestamp: new Date().toISOString(), terminalName, command, action, reason });
 		if (history.length > 20) history.splice(0, history.length - 20);
-		void this.context.workspaceState.update('dbtStudio.interrupt.history', history);
+		void this.context.workspaceState.update('dbtAnvil.interrupt.history', history);
 	}
 
 	private _showStatusBar(): void {
@@ -144,7 +144,7 @@ export class ExternalDbtMonitor implements vscode.Disposable {
 			this._statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
 		}
 		this._statusBarItem.text = '$(loading~spin) dbt running in terminal';
-		this._statusBarItem.tooltip = 'dbt Studio is waiting for the terminal dbt command to finish before resuming queued operations.';
+		this._statusBarItem.tooltip = 'dbt Anvil is waiting for the terminal dbt command to finish before resuming queued operations.';
 		this._statusBarItem.show();
 	}
 

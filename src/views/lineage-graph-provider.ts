@@ -93,7 +93,7 @@ function normalizeLayoutConfig(config: unknown): typeof DEFAULT_LAYOUT_CONFIG {
 }
 
 export class LineageGraphProvider implements vscode.WebviewViewProvider {
-	public static readonly viewId = 'dbt-studio.lineageGraph';
+	public static readonly viewId = 'dbt-anvil.lineageGraph';
 
 	private _view?: vscode.WebviewView;
 	private _focusModel?: string;
@@ -115,12 +115,12 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 		private readonly globalState: vscode.Memento,
 		private readonly workspaceState: vscode.Memento,
 	) {
-		this._followActive = globalState.get<boolean>('dbt-studio.lineageFollowActive', true);
-		this._showTests = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('lineage.showTests', true);
+		this._followActive = globalState.get<boolean>('dbt-anvil.lineageFollowActive', true);
+		this._showTests = vscode.workspace.getConfiguration('dbt-anvil').get<boolean>('lineage.showTests', true);
 		vscode.workspace.onDidChangeConfiguration(e => {
-			if (e.affectsConfiguration('dbt-studio.lineage.showTests')) {
-				this._showTests = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('lineage.showTests', true);
-				void vscode.commands.executeCommand('setContext', 'dbt-studio.lineage.showTests', this._showTests);
+			if (e.affectsConfiguration('dbt-anvil.lineage.showTests')) {
+				this._showTests = vscode.workspace.getConfiguration('dbt-anvil').get<boolean>('lineage.showTests', true);
+				void vscode.commands.executeCommand('setContext', 'dbt-anvil.lineage.showTests', this._showTests);
 				this._updateGraph();
 			}
 		});
@@ -140,10 +140,10 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 
 	toggleFollow(): void {
 		this._followActive = !this._followActive;
-		void this.globalState.update('dbt-studio.lineageFollowActive', this._followActive);
+		void this.globalState.update('dbt-anvil.lineageFollowActive', this._followActive);
 		void vscode.commands.executeCommand(
 			'setContext',
-			'dbt-studio.lineageFollowActive',
+			'dbt-anvil.lineageFollowActive',
 			this._followActive,
 		);
 	}
@@ -153,7 +153,7 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 	}
 
 	setShowTests(value: boolean): void {
-		void vscode.workspace.getConfiguration('dbt-studio').update('lineage.showTests', value, vscode.ConfigurationTarget.Global);
+		void vscode.workspace.getConfiguration('dbt-anvil').update('lineage.showTests', value, vscode.ConfigurationTarget.Global);
 		// Config change listener handles re-render and context key update
 	}
 

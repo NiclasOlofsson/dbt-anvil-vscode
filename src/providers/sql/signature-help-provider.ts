@@ -26,7 +26,7 @@ export class DbtSignatureHelpProvider implements vscode.SignatureHelpProvider {
 		_token: vscode.CancellationToken,
 		_context: vscode.SignatureHelpContext,
 	): vscode.SignatureHelp | undefined {
-		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.signatureHelp', true)) return undefined;
+		if (!vscode.workspace.getConfiguration('dbt-anvil').get('providers.sql.signatureHelp', true)) return undefined;
 
 		const call = findEnclosingMacroCall(document.getText(), document.offsetAt(position));
 		if (!call) return undefined;

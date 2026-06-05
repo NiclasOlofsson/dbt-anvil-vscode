@@ -5,7 +5,7 @@ import type { ILogger } from '../../types/logger';
 
 const CLAUDE_CONFIG = path.join(os.homedir(), '.claude.json');
 const MCP_JSON_FILE = '.mcp.json';
-const SERVER_NAME = 'dbt-studio';
+const SERVER_NAME = 'dbt-anvil';
 
 interface McpServerEntry {
 	type?: 'stdio';

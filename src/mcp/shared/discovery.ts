@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { DiscoveryFile } from './protocol';
 
-const DISCOVERY_ROOT = path.join(os.homedir(), '.dbt-studio', 'mcp');
+const DISCOVERY_ROOT = path.join(os.homedir(), '.dbt-anvil', 'mcp');
 
 /**
  * Stable 10-char hex hash of a workspace path. Used as the discovery file

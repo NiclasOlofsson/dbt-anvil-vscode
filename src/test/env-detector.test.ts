@@ -9,7 +9,7 @@ const mockSpawn = vi.hoisted(() => vi.fn());
 vi.mock('node:child_process', () => ({ spawn: mockSpawn }));
 
 describe('detectPythonEnvironment', () => {
-	const tmpDir = path.join(os.tmpdir(), 'dbt-studio-env-test');
+	const tmpDir = path.join(os.tmpdir(), 'dbt-anvil-env-test');
 
 	function setup() {
 		fs.rmSync(tmpDir, { recursive: true, force: true });

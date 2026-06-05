@@ -16,7 +16,7 @@ const CLAUDE_CODE_EXTENSION_IDS = ['anthropics.claude-code', 'anthropic.claude-c
  * Checks (in order): explicit setting, VS Code extension registry, ~/.claude.json existence.
  */
 function shouldRegisterMcp(): boolean {
-	const setting = vscode.workspace.getConfiguration('dbt-studio').get<string>('mcp.registration', 'auto');
+	const setting = vscode.workspace.getConfiguration('dbt-anvil').get<string>('mcp.registration', 'auto');
 	if (setting === 'enabled') { return true; }
 	if (setting === 'disabled') { return false; }
 	// auto: check for Claude Code extension or prior usage
@@ -54,7 +54,7 @@ export class McpSubsystem implements vscode.Disposable {
 		}
 
 		if (!shouldRegisterMcp()) {
-			this.logger.info('MCP subsystem skipped (dbt-studio.mcp.registration = disabled or Claude Code not detected) — no server, no discovery file, no config writes');
+			this.logger.info('MCP subsystem skipped (dbt-anvil.mcp.registration = disabled or Claude Code not detected) — no server, no discovery file, no config writes');
 			return { configChanged: false };
 		}
 

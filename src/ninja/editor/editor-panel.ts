@@ -30,7 +30,7 @@ import type { NinjaCategory } from '../categories';
  * in-flight work. When the buffer is clean we reload as before.
  */
 export class NinjaEditorPanel implements vscode.Disposable {
-	static readonly viewType = 'dbt-studio.ninjaRuleEditor';
+	static readonly viewType = 'dbt-anvil.ninjaRuleEditor';
 	private static _instance: NinjaEditorPanel | undefined;
 
 	private _panel: vscode.WebviewPanel | undefined;
@@ -60,7 +60,7 @@ export class NinjaEditorPanel implements vscode.Disposable {
 		this._disposables.push(
 			vscode.workspace.onDidChangeConfiguration(e => {
 				if (this._writingConfig) return;
-				if (!e.affectsConfiguration('dbt-studio.ninja')) return;
+				if (!e.affectsConfiguration('dbt-anvil.ninja')) return;
 				if (this._model.isDirty) return;
 				this._reloadFromSettings();
 				this._pushSnapshot();

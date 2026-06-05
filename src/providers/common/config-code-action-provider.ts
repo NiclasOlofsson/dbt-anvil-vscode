@@ -22,7 +22,7 @@ export class ConfigCodeActionProvider implements vscode.CodeActionProvider {
 			action.diagnostics = [sqlfluffDiag];
 			action.command = {
 				title: 'Suppress SQLFluff warning',
-				command: 'dbt-studio.suppressSqlFluffWarning',
+				command: 'dbt-anvil.suppressSqlFluffWarning',
 			};
 			action.isPreferred = true;
 			actions.push(action);
@@ -34,7 +34,7 @@ export class ConfigCodeActionProvider implements vscode.CodeActionProvider {
 			action.diagnostics = [autoSaveDiag];
 			action.command = {
 				title: 'Suppress auto-save warning',
-				command: 'dbt-studio.suppressAutoSaveWarning',
+				command: 'dbt-anvil.suppressAutoSaveWarning',
 			};
 			action.isPreferred = true;
 			actions.push(action);
@@ -42,11 +42,11 @@ export class ConfigCodeActionProvider implements vscode.CodeActionProvider {
 
 		const formatterDiag = context.diagnostics.find(d => d.code === 'formatter-not-set');
 		if (formatterDiag) {
-			const fix = new vscode.CodeAction('Set dbt Studio as default SQL formatter', vscode.CodeActionKind.QuickFix);
+			const fix = new vscode.CodeAction('Set dbt Anvil as default SQL formatter', vscode.CodeActionKind.QuickFix);
 			fix.diagnostics = [formatterDiag];
 			fix.command = {
-				title: 'Set dbt Studio as default formatter',
-				command: 'dbt-studio.setAsDefaultFormatter',
+				title: 'Set dbt Anvil as default formatter',
+				command: 'dbt-anvil.setAsDefaultFormatter',
 			};
 			fix.isPreferred = true;
 
@@ -54,7 +54,7 @@ export class ConfigCodeActionProvider implements vscode.CodeActionProvider {
 			suppress.diagnostics = [formatterDiag];
 			suppress.command = {
 				title: 'Suppress formatter warning',
-				command: 'dbt-studio.suppressFormatterWarning',
+				command: 'dbt-anvil.suppressFormatterWarning',
 			};
 
 			actions.push(fix, suppress);

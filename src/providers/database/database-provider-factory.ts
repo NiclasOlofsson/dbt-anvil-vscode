@@ -31,7 +31,7 @@ export async function createDatabaseProvider(
 		return new DbtDatabaseProvider('unknown', executionService, logger);
 	}
 
-	const preferNative = vscode.workspace.getConfiguration('dbt-studio').get<boolean>('database.preferNativeAdapter', true);
+	const preferNative = vscode.workspace.getConfiguration('dbt-anvil').get<boolean>('database.preferNativeAdapter', true);
 
 	if (preferNative && adapterType === 'databricks') {
 		logger.info('DatabaseProviderFactory: using DatabricksProvider');

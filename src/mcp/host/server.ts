@@ -148,7 +148,7 @@ export class McpHostServer {
 				return ok(req.id, {
 					protocolVersion: MCP_PROTOCOL_VERSION,
 					capabilities: { tools: {} },
-					serverInfo: { name: 'dbt-studio', version: '0.0.0' },
+					serverInfo: { name: 'dbt-anvil', version: '0.0.0' },
 				});
 			case 'tools/list':
 				return ok(req.id, { tools: this.registry.describe() });

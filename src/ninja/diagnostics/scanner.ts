@@ -76,12 +76,12 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 		private readonly pathResolver: DbtPathResolver,
 		private readonly logger: ILogger,
 	) {
-		this._ninjaCollection = vscode.languages.createDiagnosticCollection('dbt-studio-workspace-ninja');
-		this._contractsCollection = vscode.languages.createDiagnosticCollection('dbt-studio-workspace-contracts');
+		this._ninjaCollection = vscode.languages.createDiagnosticCollection('dbt-anvil-workspace-ninja');
+		this._contractsCollection = vscode.languages.createDiagnosticCollection('dbt-anvil-workspace-contracts');
 
 		this._statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
 		this._statusBarItem.name = 'Ninja Workspace';
-		this._statusBarItem.command = 'dbt-studio.ninja.statusBarMenu';
+		this._statusBarItem.command = 'dbt-anvil.ninja.statusBarMenu';
 		this._statusBarItem.tooltip = 'Ninja workspace diagnostics — click for options';
 		this._updateStatusBar();
 		this._statusBarItem.show();
@@ -449,7 +449,7 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 				`Model '${indexedModel.name}' is not referenced by any downstream model or exposure`,
 				vscode.DiagnosticSeverity.Hint,
 			);
-			diag.source = 'dbt-studio';
+			diag.source = 'dbt-anvil';
 			diag.code = 'unused-model';
 			addDiag(vscode.Uri.file(indexedModel.path), diag);
 		}
@@ -491,7 +491,7 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 						`Column '${token.name}' not found in '${ref.model}' (known: ${colListSample}${suffix})`,
 						vscode.DiagnosticSeverity.Error,
 					);
-					diag.source = 'dbt-studio';
+					diag.source = 'dbt-anvil';
 					diag.code = 'column-contract-break';
 					addDiag(uri, diag);
 				}

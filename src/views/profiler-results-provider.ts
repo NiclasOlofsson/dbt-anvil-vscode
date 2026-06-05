@@ -34,7 +34,7 @@ class StepItem extends vscode.TreeItem {
 		this.iconPath = _tierIcon(ms / maxStepMs);
 		if (navigateArgs) {
 			this.command = {
-				command: 'dbt-studio.profiler.goToCte',
+				command: 'dbt-anvil.profiler.goToCte',
 				title: 'Go to CTE',
 				arguments: navigateArgs,
 			};
@@ -62,7 +62,7 @@ class ModelProfileItem extends vscode.TreeItem {
 type TreeEntry = ModelProfileItem | StepItem | PendingCteItem;
 
 export class ProfilerResultsProvider implements vscode.TreeDataProvider<TreeEntry>, vscode.Disposable {
-	static readonly viewId = 'dbt-studio.profilerResults';
+	static readonly viewId = 'dbt-anvil.profilerResults';
 
 	private readonly _onDidChangeTreeData = new vscode.EventEmitter<TreeEntry | undefined>();
 	readonly onDidChangeTreeData = this._onDidChangeTreeData.event;

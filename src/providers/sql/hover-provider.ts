@@ -24,7 +24,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		position: vscode.Position,
 		token: vscode.CancellationToken,
 	): Promise<vscode.Hover | undefined> {
-		if (!vscode.workspace.getConfiguration('dbt-studio').get('providers.sql.hover', true)) return undefined;
+		if (!vscode.workspace.getConfiguration('dbt-anvil').get('providers.sql.hover', true)) return undefined;
 		const line = document.lineAt(position.line).text;
 
 		// Skip comments
@@ -62,13 +62,13 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 	private _md(): vscode.MarkdownString {
 		const md = new vscode.MarkdownString();
 		md.supportThemeIcons = true;
-		md.isTrusted = { enabledCommands: ['dbt-studio.goToLine'] };
+		md.isTrusted = { enabledCommands: ['dbt-anvil.goToLine'] };
 		return md;
 	}
 
 	private _lineLink(uri: vscode.Uri, line: number, label: string): string {
 		const args = encodeURIComponent(JSON.stringify({ uri: uri.toString(), line }));
-		return `[\`${label}\`](command:dbt-studio.goToLine?${args})`;
+		return `[\`${label}\`](command:dbt-anvil.goToLine?${args})`;
 	}
 
 	private _externalRefLabel(modelName: string, docUri?: vscode.Uri): string {

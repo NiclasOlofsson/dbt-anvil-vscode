@@ -1,8 +1,8 @@
 /**
- * Layer classification — dbt Studio-local concept.
+ * Layer classification — dbt Anvil-local concept.
  *
  * Users configure an ordered list of "layers" (e.g. raw → bronze → silver → gold → marts)
- * via `dbt-studio.layers`. Each layer has a name and a matcher that decides whether a given
+ * via `dbt-anvil.layers`. Each layer has a name and a matcher that decides whether a given
  * model belongs to it. Order defines ordinality — index 0 is the upstream-most layer.
  *
  * This is purely an indexer-side enrichment. We never write it to manifest.json and never
@@ -126,7 +126,7 @@ function matchesFolder(model: IndexedModel, folder: string, projectDir: string):
 export function validateLayerConfig(layers: unknown): string[] {
 	const errors: string[] = [];
 	if (!Array.isArray(layers)) {
-		return ['dbt-studio.layers must be an array'];
+		return ['dbt-anvil.layers must be an array'];
 	}
 	const names = new Set<string>();
 	for (let i = 0; i < layers.length; i++) {
