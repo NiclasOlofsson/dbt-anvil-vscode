@@ -6,11 +6,12 @@ import type { DialectSymbols } from '../../ftl/sql-parser';
 import { mergeSqlAndJinjaTokens } from '../../ftl/ninja-sql-tokens';
 import * as vscode from 'vscode';
 
-type ConfigOverride = Omit<Partial<NinjaConfig>, 'indentation' | 'layout'> & {
+type ConfigOverride = Omit<Partial<NinjaConfig>, 'indentation' | 'layout' | 'capitalisation'> & {
 	indentation?: Partial<NinjaConfig['indentation']>;
 	layout?: Partial<Omit<NinjaConfig['layout'], 'alwaysWrap'>> & {
 		alwaysWrap?: Partial<NinjaConfig['layout']['alwaysWrap']>;
 	};
+	capitalisation?: Partial<NinjaConfig['capitalisation']>;
 };
 
 /** Build a minimal NinjaConfig with optional overrides. */
@@ -19,6 +20,7 @@ export function cfg(overrides: ConfigOverride = {}): NinjaConfig {
 		...DEFAULT_CONFIG,
 		...overrides,
 		indentation: { ...DEFAULT_CONFIG.indentation, ...overrides.indentation },
+		capitalisation: { ...DEFAULT_CONFIG.capitalisation, ...overrides.capitalisation },
 		layout: {
 			...DEFAULT_CONFIG.layout,
 			...overrides.layout,
