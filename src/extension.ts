@@ -63,7 +63,7 @@ import { WorkspaceDiagnosticsScanner } from './ninja/diagnostics/scanner';
 import { WorkspaceDiagnosticsPersistence } from './ninja/diagnostics/persistence';
 import { NinjaEditorPanel } from './ninja/editor';
 import * as path from 'node:path';
-import { migrateLegacySettings } from './migration';
+import { migrateLegacySettings, warnIfLegacyExtensionInstalled } from './migration';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
 	// -------- Bootstrap logging & service container --------
@@ -82,6 +82,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// One-time migration from the previous "dbt Studio" identity (settings,
 	// formatter id, and stale MCP wiring). Runs before any config is read.
 	await migrateLegacySettings(context, logger);
+
+	// Warn (every activation) if the old "dbt Studio" extension is still
+	// enabled alongside this one — they collide on shared/global identifiers.
+	warnIfLegacyExtensionInstalled(logger);
 
 	logger.info(`dbt Anvil v${version} activating...`);
 

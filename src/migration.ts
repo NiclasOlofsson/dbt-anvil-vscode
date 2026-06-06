@@ -107,6 +107,42 @@ export async function migrateLegacySettings(
 	}
 }
 
+/**
+ * Warn if the previous "dbt Studio" extension is still installed AND enabled.
+ * The two extensions collide on globally-named resources (language-model tool
+ * names, the kept `dbt-sql` debugger type + data-pipeline view), so running
+ * both produces "already registered" / "duplicate view id" errors and leaves
+ * dbt Anvil's tools half-broken. Offer a one-click uninstall. Runs every
+ * activation while the conflict exists; goes away once the old one is removed.
+ * `getExtension` returns undefined for a disabled extension, so a user who
+ * merely disabled (not uninstalled) the old one is not nagged.
+ */
+export function warnIfLegacyExtensionInstalled(logger: ILogger): void {
+	if (!vscode.extensions.getExtension(OLD_ID)) { return; }
+	logger.warn(`Legacy extension ${OLD_ID} is still enabled — it conflicts with dbt Anvil.`);
+	void vscode.window.showWarningMessage(
+		'"dbt Studio" has been renamed to dbt Anvil, and the old extension is still installed. ' +
+		'Running both conflicts (duplicate tools and views) — please uninstall dbt Studio.',
+		'Uninstall dbt Studio',
+		'Dismiss',
+	).then(async (choice) => {
+		if (choice !== 'Uninstall dbt Studio') { return; }
+		try {
+			await vscode.commands.executeCommand('workbench.extensions.uninstallExtension', OLD_ID);
+			const reload = await vscode.window.showInformationMessage(
+				'dbt Studio uninstalled. Reload the window to clear the conflict.',
+				'Reload Window',
+			);
+			if (reload === 'Reload Window') {
+				await vscode.commands.executeCommand('workbench.action.reloadWindow');
+			}
+		} catch (err) {
+			logger.warn(`Could not uninstall ${OLD_ID}: ${err instanceof Error ? err.message : String(err)}`);
+			void vscode.commands.executeCommand('extension.open', OLD_ID);
+		}
+	});
+}
+
 async function migrateConfigKeys(logger: ILogger): Promise<void> {
 	const cfg = vscode.workspace.getConfiguration();
 	let migrated = 0;
