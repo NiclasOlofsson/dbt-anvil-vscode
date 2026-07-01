@@ -220,6 +220,16 @@ export function printDocument(input: PrinterInput): string {
 		stream, source, config.maxLineLength,
 		mustWrapCaseStarts, mustWrapWindowParenStarts,
 	);
+	// A wide function-call argument that is itself a boolean AND/OR chain
+	// (`coalesce(a and b and c, false)`) needs per-operand breaks, same as a
+	// WHERE/CASE predicate. `computeLogicalPredicateParens` deliberately skips
+	// function-call parens (the parens belong to the call, not a logical
+	// group), so without this the operators inside a wrapping call only break
+	// where a trailing comment forces a newline — collapsing the uncommented
+	// operands onto one over-long line. Seed them off the wide-call set.
+	for (const off of computeWideCallBooleanOffsets(stream, mustWrapWideCallParens)) {
+		predicateBooleanOffsets.add(off);
+	}
 	// THEN offsets whose preceding WHEN's body spans multiple lines (via
 	// predicate-boolean or arithmetic wraps) — those THENs need their own
 	// indented line. Computed after both wrap sets are known.
@@ -954,14 +964,20 @@ export function printDocument(input: PrinterInput): string {
 			// indent already), so the AND/OR should NOT add another +1 —
 			// otherwise the operator floats one column deeper than its
 			// fellow predicates. Skip the continuation bump in that case.
+			// A wide function-call paren is the same shape: the call opened
+			// an indenting body, so the boolean operands of an argument align
+			// with the first argument rather than nesting one column deeper.
 			const insideOnParen = indentingParenIsOn.length > 0
 				&& indentingParenIsOn[indentingParenIsOn.length - 1];
+			const insideCallParen = indentingParenIsCall.length > 0
+				&& indentingParenIsCall[indentingParenIsCall.length - 1];
+			const bodyIndentIsPredicate = insideOnParen || insideCallParen;
 			pendingNewline = true;
-			oneShotExtraIndent = insideOnParen ? 0 : 1;
+			oneShotExtraIndent = bodyIndentIsPredicate ? 0 : 1;
 			// Mark the next line as a predicate-boolean continuation so a
 			// nested arithmetic break inside it knows to indent one step
 			// deeper than this AND/OR (wrap-of-wrap), not align with it.
-			oneShotIsBooleanContinuation = !insideOnParen;
+			oneShotIsBooleanContinuation = !bodyIndentIsPredicate;
 		} else if (mustWrapWideExprOps.has(tok.start) && config.layout.operatorPosition === 'leading') {
 			// Wide-expression arithmetic break (leading): break BEFORE the
 			// top-level operator so it leads the continuation line.
@@ -3043,6 +3059,41 @@ function computeLogicalPredicateParens(
 	}
 
 	return { parenStarts, breakOffsets };
+}
+
+/**
+ * For each wide function-call paren (one whose collapsed width overflows, so
+ * its arguments each land on their own line), return the `start` offsets of
+ * every top-level AND/OR in its body — the boolean operators that separate the
+ * operands of a boolean-expression argument. Feeding these into
+ * `predicateBooleanOffsets` makes the printer break each operand onto its own
+ * line instead of collapsing the ones without a trailing comment.
+ *
+ * Only the operators at the call's own argument depth (paren-relative depth 1)
+ * are returned; AND/OR nested inside a sub-expression (`nullif(a and b, 0)`)
+ * belong to that inner group and are left alone.
+ */
+function computeWideCallBooleanOffsets(
+	stream: NinjaSqlToken[],
+	wideCallParens: Set<number>,
+): Set<number> {
+	const out = new Set<number>();
+	for (let i = 0; i < stream.length; i++) {
+		const tok = stream[i];
+		if (tok.category !== 'sql') continue;
+		if (tok.type.toUpperCase() !== 'L_PAREN') continue;
+		if (!wideCallParens.has(tok.start)) continue;
+		let d = 1;
+		for (let k = i + 1; k < stream.length; k++) {
+			const t = stream[k];
+			if (t.category !== 'sql') continue;
+			const tt = t.type.toUpperCase();
+			if (tt === 'L_PAREN') { d++; continue; }
+			if (tt === 'R_PAREN') { d--; if (d === 0) break; continue; }
+			if (d === 1 && (tt === 'AND' || tt === 'OR')) out.add(t.start);
+		}
+	}
+	return out;
 }
 
 /**
