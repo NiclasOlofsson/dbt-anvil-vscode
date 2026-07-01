@@ -165,6 +165,7 @@
     {
       "id": "call-hierarchy",
       "frame": "call-hierarchy",
+      "useVideo": true,
       "caption": "Call Hierarchy — full blast radius. Everything upstream and downstream at once.",
       "duration": {
         "from": {

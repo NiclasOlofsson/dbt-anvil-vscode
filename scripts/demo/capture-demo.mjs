@@ -17,10 +17,12 @@ import { _electron as electron } from 'playwright';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import os from 'os';
+import { execSync } from 'node:child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../..');
-const sampleProject = path.join(repoRoot, 'samples', 'nba-monte-carlo');
+const sampleProject = process.env.DEMO_PROJECT || path.join(repoRoot, 'samples', 'nba-monte-carlo');
 const framesDir = path.join(repoRoot, 'temp_auto', 'demo-frames');
 const videoDir = path.join(repoRoot, 'temp_auto', 'demo-video');
 const userDataDir = path.join(repoRoot, 'temp_auto', 'demo-userdata');
@@ -32,8 +34,28 @@ const stepArgIdx = process.argv.indexOf('--step');
 const stepFilter = stepArgIdx !== -1 ? process.argv[stepArgIdx + 1] : null;
 const shouldRun = (id) => !stepFilter || stepFilter === id;
 
-// VS Code Insiders executable — primary path on this machine
-const VSCODE_EXE = 'C:\\Users\\Niclas.Olofsson\\AppData\\Local\\Programs\\Microsoft VS Code Insiders\\Code - Insiders.exe';
+// VS Code Insiders executable. Resolves from the current user's home; override
+// with the VSCODE_EXE env var (e.g. for a system-wide or non-standard install).
+const VSCODE_EXE = process.env.VSCODE_EXE
+	|| path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Microsoft VS Code Insiders', 'Code - Insiders.exe');
+
+// Logical screen size. The window is maximized to fill it and the video is recorded
+// at this size, then the render scales the result down to the configured output
+// (1080p/720p). Querying it keeps the capture correct on any machine/DPI instead of
+// assuming 1920x1080, which a HiDPI laptop's logical resolution can't actually fit.
+let SCREEN = { width: 1920, height: 1080 };
+try {
+	const out = execSync(
+		`powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Width; [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea.Height"`,
+		{ encoding: 'utf8', windowsHide: true },
+	);
+	const nums = out.match(/\d+/g);
+	if (nums && nums.length >= 2) {
+		SCREEN = { width: parseInt(nums[0], 10), height: parseInt(nums[1], 10) };
+	}
+} catch {
+	// keep the 1920x1080 fallback
+}
 
 // Delay between keystrokes when typing via keyboard.type(). 1ms = effectively instant
 // but still fires individual key events (needed for VS Code quick-open fuzzy matching).
@@ -70,6 +92,10 @@ const existingSettings = fs.existsSync(vscSettingsPath)
 existingSettings['update.mode'] = 'none';
 existingSettings['extensions.autoCheckUpdates'] = false;
 existingSettings['extensions.autoUpdate'] = false;
+// Keep the demo frames clean: no Chat panel in the secondary side bar, no chat
+// button in the title-bar command center. VS Code Insiders otherwise auto-opens it.
+existingSettings['chat.commandCenter.enabled'] = false;
+existingSettings['workbench.secondarySideBar.defaultVisibility'] = 'hidden';
 fs.writeFileSync(vscSettingsPath, JSON.stringify(existingSettings, null, 2));
 
 let screenshotN = 0;
@@ -267,9 +293,19 @@ async function openFile(win, filename) {
 	await win.keyboard.press('Control+P');
 	const input = win.locator('.quick-input-widget input');
 	await input.waitFor({ state: 'visible', timeout: 3000 });
-	await win.keyboard.press('Control+A'); // clear any leftover text
+	await input.click();   // focus the quick-open input (not the editor) before typing
+	await input.fill('');  // clear leftover text reliably — Ctrl+A can race the focus
 	await win.keyboard.type(filename, TYPE_DELAY);
-	await win.waitForSelector('.quick-input-list .monaco-list-row', { timeout: 3000 }).catch(() => { });
+	// Only open once the intended file is actually the top hit, so a stray fuzzy match
+	// (e.g. .gitignore) can never get opened by a premature Enter.
+	const topRow = win.locator('.quick-input-list .monaco-list-row').first();
+	await topRow.waitFor({ state: 'visible', timeout: 5000 }).catch(() => { });
+	const stem = filename.replace(/\.[^.]+$/, '');
+	for (let i = 0; i < 20; i++) {
+		const label = (await topRow.textContent().catch(() => '')) || '';
+		if (label.toLowerCase().includes(stem.toLowerCase())) { break; }
+		await win.waitForTimeout(150);
+	}
 	await win.keyboard.press('Enter');
 	// Wait for editor to be visible and stabilise
 	await win.waitForSelector('.monaco-editor .view-lines', { timeout: 10000 });
@@ -330,22 +366,6 @@ async function waitForReady(win, timeout = 60000) {
 	);
 }
 
-async function waitForDbQuery(win, timeout = 30000) {
-	await win.waitForFunction(
-		() => {
-			for (const item of document.querySelectorAll('.statusbar-item')) {
-				const text = (item.textContent || '')
-					+ (item.getAttribute('aria-label') || '')
-					+ (item.title || '');
-				if (text.includes('dbt: db query')) return true;
-			}
-			return false;
-		},
-		undefined,
-		{ timeout },
-	);
-}
-
 // ─── Panel / tree helpers ─────────────────────────────────────────────────────
 
 /**
@@ -393,8 +413,11 @@ async function setAllTreeItemsExpanded(win, expanded, containerSelector = '.part
 		const orderedRows = expanded ? rowHandles : [...rowHandles].reverse();
 		for (const row of orderedRows) {
 			const twistie = await row.$('.monaco-tl-twistie, .expand-collapse-button, .codicon.codicon-chevron-right, .codicon.codicon-chevron-down');
-			if (twistie) await twistie.click().catch(() => row.click().catch(() => { }));
-			else await row.click().catch(() => { });
+			// Short timeout: a non-actionable row must fail fast. Playwright's 30s default
+			// per click would let a handful of stale rows hang the whole capture past its
+			// own timeout (this is what killed the document-symbols segment).
+			if (twistie) await twistie.click({ timeout: 1500 }).catch(() => row.click({ timeout: 1500 }).catch(() => { }));
+			else await row.click({ timeout: 1500 }).catch(() => { });
 		}
 
 		await win.waitForTimeout(400);
@@ -434,11 +457,6 @@ async function collapsePanelsExcept(win, keepTitle) {
  */
 async function expandAllTreeItems(win, containerSelector = '.part.sidebar', maxPasses = 6) {
 	return setAllTreeItemsExpanded(win, true, containerSelector, maxPasses);
-}
-
-/** Collapse all expanded tree rows inside containerSelector. */
-async function collapseAllTreeItems(win, containerSelector = '.part.sidebar', maxPasses = 6) {
-	return setAllTreeItemsExpanded(win, false, containerSelector, maxPasses);
 }
 
 /**
@@ -542,11 +560,10 @@ async function resetLayout(win) {
 		// Wait for the panel animation to finish — Ctrl+J is a raw keypress with no palette confirmation
 		await win.waitForSelector('.part.panel', { state: 'hidden', timeout: 2000 }).catch(() => { });
 	}
-	// Close the secondary sidebar (right column) if it is open
-	const auxOpen = await win.locator('.auxiliarybar, .part.auxiliarybar').isVisible({ timeout: 300 }).catch(() => false);
-	if (auxOpen) {
-		await runCommand(win, 'View: Close Secondary Side Bar');
-	}
+	// The secondary side bar (built-in Chat) is kept hidden via the profile setting
+	// workbench.secondarySideBar.defaultVisibility=hidden. Do NOT run a close command
+	// here: when the bar is already hidden there is no "Close Secondary Side Bar" entry,
+	// so the palette fuzzy-match falls through to "Toggle …", which reopens it.
 	// Open dbt Anvil sidebar then collapse everything except MODEL EXPLORER
 	await openDbtAnvilSidebar(win);
 	await collapsePanelsExcept(win, 'MODEL EXPLORER');
@@ -697,9 +714,19 @@ async function main() {
 	let app;
 	let recordedVideoPath = null;
 	let windowSize = null;
+	// VS Code's integrated terminal injects env vars that break a spawned VS Code:
+	// ELECTRON_RUN_AS_NODE makes it run as plain Node (rejects every flag as a
+	// "bad option"), and the VSCODE_* hooks can tie the child to the parent instance.
+	// Strip them so the capture works even when launched from inside VS Code.
+	const sanitizedEnv = { ...process.env };
+	delete sanitizedEnv.ELECTRON_RUN_AS_NODE;
+	for (const k of Object.keys(sanitizedEnv)) {
+		if (k.startsWith('VSCODE_') || k.startsWith('ELECTRON_') || k === 'CHROME_CRASHPAD_PIPE_NAME' || k === 'DISPLAY' || k === 'NODE_OPTIONS') { delete sanitizedEnv[k]; }
+	}
 	try {
 		app = await electron.launch({
 			executablePath: VSCODE_EXE,
+			env: sanitizedEnv,
 			args: [
 				'--extensionDevelopmentPath=' + repoRoot,
 				'--user-data-dir=' + userDataDir,
@@ -707,18 +734,29 @@ async function main() {
 				'--disable-workspace-trust',
 				'--skip-release-notes',
 				'--skip-welcome',
-				'--window-size=1920,1080',
+				`--window-size=${SCREEN.width},${SCREEN.height}`,
 				sampleProject,
 			],
 			timeout: 60000,
 			recordVideo: {
 				dir: videoDir,
-				size: { width: 1920, height: 1080 },
+				size: { width: SCREEN.width, height: SCREEN.height },
 			},
 		});
 
 		// Get the main workbench window
-		const win = await app.firstWindow({ timeout: 45000 });
+		// VS Code can surface a transient/blank window before the workbench, and
+		// firstWindow() may latch onto the wrong one. Poll every open window for the
+		// one that actually hosts the workbench.
+		let win = null;
+		const wbDeadline = Date.now() + 60000;
+		while (Date.now() < wbDeadline && !win) {
+			for (const w of app.windows()) {
+				if (await w.locator('.monaco-workbench').count().catch(() => 0)) { win = w; break; }
+			}
+			if (!win) { await app.waitForEvent('window', { timeout: 2000 }).catch(() => { }); }
+		}
+		if (!win) { throw new Error('No VS Code window exposed .monaco-workbench within 60s'); }
 		// Record how many ms elapsed before the first window appeared — the Playwright
 		// video recording starts approximately here, so all seek times must be offset
 		// by this amount to align event timestamps with the video file's timeline.
@@ -843,10 +881,12 @@ async function main() {
 		if (!cacheWarm && !stepFilter) {
 			console.log('[warm-up] Filling describe cache (bottom-up)...');
 			for (const f of warmupFiles) {
-				await openFile(win, f);
-				await waitForReady(win, 60000);
+				// Non-fatal: a slow cold-cache enrichment must not abort the whole capture.
+				// Segments enrich on demand and the cache persists for the next run.
+				await openFile(win, f).catch(() => { });
+				await waitForReady(win, 90000).catch(() => { });
 			}
-			await waitForReady(win, 120000);
+			await waitForReady(win, 120000).catch(() => { });
 		}
 
 		if (!stepFilter) {
@@ -948,10 +988,10 @@ async function main() {
 			await resetLayout(win);
 			await openFile(win, 'reg_season_actuals_enriched.sql');
 			await waitForReady(win, 30000);
-			await goToLine(win, 77, 8);
+			await goToLine(win, 89, 16);
 			await initCustomCursor(win);
-			const posHoverCol = await getTokenScreenPos(win, 77, 8);
-			if (!posHoverCol) throw new Error('getTokenScreenPos returned null for line 77 col 8');
+			const posHoverCol = await getTokenScreenPos(win, 89, 16);
+			if (!posHoverCol) throw new Error('getTokenScreenPos returned null for line 89 col 16');
 			console.log(`  hover-column token pos: ${posHoverCol.x},${posHoverCol.y}`);
 			// DEMO: cursor sweep is part of the demo
 			await syncAndLogDemo(win, 'hover-column.demo');
@@ -1052,6 +1092,8 @@ async function main() {
 			await win.keyboard.press('Control+Shift+M');
 			await win.waitForSelector('.part.panel', { state: 'visible', timeout: 3000 }).catch(() => { });
 			await openFile(win, 'season_summary.sql');
+			// Manifest must be loaded before the unknown-ref check can fire.
+			await waitForReady(win, 90000);
 			await goToLine(win, 20, 22);
 			await initCustomCursor(win);
 			const posDiag = await getTokenScreenPos(win, 20, 22);
@@ -1066,7 +1108,23 @@ async function main() {
 			}
 			await win.waitForTimeout(300);
 			await win.keyboard.type('zzz_missing_model', TYPE_DELAY);
-			await win.waitForTimeout(3500);
+			// Hover the broken ref until its "Model not found" tooltip appears — that's the
+			// focus, not the workspace-noisy Problems panel. The diagnostic is a fast
+			// manifest lookup, so poll (re-hovering to refresh the tooltip) and screenshot
+			// exactly when the error shows, instead of waiting on a fixed timeout.
+			const hoverPos = await getTokenScreenPos(win, 20, 22);
+			if (hoverPos) await moveMouse(win, hoverPos.x, hoverPos.y, 20);
+			let hoverErr = false;
+			for (let i = 0; i < 8 && !hoverErr; i++) {
+				if (hoverPos) {
+					await win.mouse.move(hoverPos.x + (i % 2), hoverPos.y);
+					await win.mouse.move(hoverPos.x, hoverPos.y);
+				}
+				await win.waitForTimeout(1200);
+				hoverErr = await win.evaluate(() =>
+					/not found|unknown.ref|does not exist/i.test(document.querySelector('.monaco-hover')?.textContent || ''));
+			}
+			await win.waitForTimeout(800);
 			await screenshot(win, 'diagnostics', 'Diagnostics — unknown ref() flagged in real time', 3500);
 			logEvent('diagnostics.post-demo');
 			// POST-DEMO
@@ -1082,12 +1140,14 @@ async function main() {
 		console.log('[08] Document Symbols');
 		markSegmentStart('document-symbols');
 		if (shouldRun('document-symbols')) try {
-			// PRE-DEMO
+			// PRE-DEMO: focus the Outline FIRST so the collapse/expand act on the Explorer
+			// sidebar (where the Outline lives), not the dbt Anvil sidebar. Collapsing the
+			// file-tree + Timeline panes afterwards makes the CTE outline fill the sidebar.
 			await resetLayout(win);
 			await openFile(win, 'reg_season_actuals_enriched.sql');
-			await collapsePanelsExcept(win, 'OUTLINE');
 			await runCommand(win, 'View: Focus Outline');
 			await win.waitForSelector('.outline-element', { timeout: 8000 });
+			await collapsePanelsExcept(win, 'OUTLINE');
 			await setAllTreeItemsExpanded(win, true, '.part.sidebar', 4);
 			// DEMO
 			await syncAndLogDemo(win, 'document-symbols.demo');
@@ -1110,22 +1170,26 @@ async function main() {
 			await openFile(win, 'reg_season_actuals_enriched.sql');
 			await goToLine(win, 92, 18);
 			await initCustomCursor(win);
-			const posGotoDef = await getTokenScreenPos(win, 92, 18);
-			// DEMO: cursor sweep is part of the demo
+			// DEMO: two jumps — first a column → its CTE definition (same file), then a
+			// ref() → the referenced model's own .sql file.
 			await syncAndLogDemo(win, 'go-to-definition.demo');
-			if (posGotoDef) await moveMouse(win, posGotoDef.x, posGotoDef.y, 30);
-			if (posGotoDef) {
+			const ctrlClick = async (pos) => {
+				await moveMouse(win, pos.x, pos.y, 30);
 				await win.waitForTimeout(300);
-				// Hold Ctrl — VS Code shows clickable underline
-				await win.keyboard.down('Control');
-				await win.waitForTimeout(700);
-				await win.mouse.click(posGotoDef.x, posGotoDef.y);
+				await win.keyboard.down('Control'); // VS Code shows the clickable underline
+				await win.waitForTimeout(600);
+				await win.mouse.click(pos.x, pos.y);
 				await win.keyboard.up('Control');
-			} else {
-				await win.keyboard.press('F12');
-			}
-			await win.waitForTimeout(2500);
-			await screenshot(win, 'go-to-definition', 'Go to Definition — Ctrl+Click to jump to source', 3000);
+			};
+			const posCol = await getTokenScreenPos(win, 92, 18);
+			if (posCol) { await ctrlClick(posCol); } else { await win.keyboard.press('F12'); }
+			await win.waitForTimeout(1800);
+			// jump 2 — a ref() opens that model's file
+			await goToLine(win, 6, 30);
+			const posRef = await getTokenScreenPos(win, 6, 30);
+			if (posRef) { await ctrlClick(posRef); }
+			await win.waitForTimeout(2200);
+			await screenshot(win, 'go-to-definition', 'Go to Definition — column → its CTE, ref() → its model', 3000);
 			logEvent('go-to-definition.post-demo');
 			// POST-DEMO
 			await removeCursor(win);
@@ -1169,15 +1233,26 @@ async function main() {
 			await openFile(win, 'season_summary.sql');
 			await win.click('.monaco-editor .view-lines');
 			await goToLine(win, 20, 22);
-			// DEMO
+			// DEMO: show incoming calls (who refs this model) first, then toggle to
+			// outgoing calls (what this model refs) so both directions are demonstrated.
 			await syncAndLogDemo(win, 'call-hierarchy.demo');
 			await win.keyboard.press('Shift+Alt+H');
 			await waitForReady(win, 15000).catch(() => { });
-			await win.waitForTimeout(2000);
+			await win.waitForTimeout(1500);
 			await setAllTreeItemsExpanded(win, true, '.part.panel', 3);
 			await setAllTreeItemsExpanded(win, true, '.part.sidebar', 3);
-			await win.waitForTimeout(1000);
-			await screenshot(win, 'call-hierarchy', 'Call Hierarchy — upstream & downstream model tree', 4000);
+			await win.waitForTimeout(1500);
+			const outgoingBtn = win.locator('[aria-label="Show Outgoing Calls"]').first();
+			if (await outgoingBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+				await outgoingBtn.click();
+			} else {
+				await runCommand(win, 'Calls: Show Outgoing Calls').catch(() => { });
+			}
+			await win.waitForTimeout(1500);
+			await setAllTreeItemsExpanded(win, true, '.part.panel', 3);
+			await setAllTreeItemsExpanded(win, true, '.part.sidebar', 3);
+			await win.waitForTimeout(1500);
+			await screenshot(win, 'call-hierarchy', 'Call Hierarchy — incoming & outgoing model calls', 4000);
 			logEvent('call-hierarchy.post-demo');
 			// POST-DEMO
 			await pressEscape(win);
@@ -1278,11 +1353,11 @@ async function main() {
 		console.log('[15] Profiler');
 		markSegmentStart('profiler');
 		if (shouldRun('profiler')) try {
-			// PRE-DEMO: reset layout, open file, collapse panels, wait for editor title button
+			// PRE-DEMO: reset layout, open file, keep only the PROFILE RESULTS pane.
+			// Do NOT collapse the tree here — profiling populates it and we want it shown.
 			await resetLayout(win);
 			await openFile(win, 'reg_season_actuals_enriched.sql');
 			await collapsePanelsExcept(win, 'PROFILE RESULTS');
-			await collapseAllTreeItems(win, '.part.sidebar');
 			await goToLine(win, 1);
 			await waitForReady(win, 30000);
 			const profileBtn = win.locator('.editor-actions [aria-label="Profile Model"]');
@@ -1294,26 +1369,27 @@ async function main() {
 			// DEMO: cursor sweeps to the Profile Model editor title button and clicks
 			await syncAndLogDemo(win, 'profiler.demo');
 			await moveMouse(win, profilePos.x, profilePos.y, 30);
-			await win.mouse.click(profilePos.x, profilePos.y);
+			await profileBtn.click();
 
 			await flashPaneHighlight(win, 'PROFILE RESULTS');
-			await waitForDbQuery(win, 30000);
-			logEvent('profiler.started');
-			await win.waitForTimeout(500);
-
-			// Expand the full tree so every CTE row is visible
-			await expandAllTreeItems(win, '.part.sidebar');
-			logEvent('profiler.tree-expanded');
-			await win.waitForTimeout(500);
-			await removeHighlight(win);
-
-			await waitForReady(win, 180000);
+			// Profiling runs against DuckDB on a direct connection (no "dbt: db query"
+			// status) and re-renders the tree as rows land — which invalidates element
+			// handles. So poll the row count via page.evaluate (handle-safe) until it
+			// stabilises, wrapping each expand in try/catch. Never collapse the tree —
+			// collapsing it is what hid the results.
+			let prevRows = -1, stable = 0;
+			for (let i = 0; i < 90 && stable < 4; i++) {
+				await win.waitForTimeout(1000);
+				try { await expandAllTreeItems(win, '.part.sidebar'); } catch { /* tree mid-render */ }
+				let rows = 0;
+				try { rows = await win.evaluate(() => document.querySelectorAll('.part.sidebar .monaco-list-row').length); } catch { /* */ }
+				stable = (rows === prevRows && rows > 5) ? stable + 1 : 0;
+				prevRows = rows;
+			}
 			logEvent('profiler.ready');
-			await win.waitForTimeout(800);
-
-			// Re-expand after all results have landed (items added during profiling start collapsed)
-			await expandAllTreeItems(win, '.part.sidebar');
+			try { await expandAllTreeItems(win, '.part.sidebar'); } catch { /* */ }
 			await win.waitForTimeout(400);
+			await removeHighlight(win);
 
 			await flashPaneHighlight(win, 'PROFILE RESULTS');
 			await screenshot(win, 'profiler', 'Profiler — per-CTE row counts & timing', 4000);
@@ -1337,14 +1413,14 @@ async function main() {
 			// DEMO: F5 runs the statement at cursor
 			await syncAndLogDemo(win, 'query-results.demo');
 			await win.keyboard.press('F5');
-			// Wait for status bar to show "db query" (query started)
-			await waitForDbQuery(win, 15000);
-			// Wait for status bar to return to Ready (query finished)
-			await waitForReady(win, 60000);
-			await win.waitForTimeout(1000);
-			await win.waitForTimeout(1000);
-			// Find result cells and sweep cursor through a few with Shift-click
-			const resultsFrame = await findWebviewFrame(win, 'td[data-col]');
+			// F5 launches the dbt-sql "Run SQL" config — it runs via the debug adapter and
+			// does NOT set a "dbt: db query" status, so poll for the result-grid webview to
+			// appear instead of waiting on the status bar.
+			let resultsFrame = null;
+			for (let i = 0; i < 60 && !resultsFrame; i++) {
+				await win.waitForTimeout(1000);
+				resultsFrame = await findWebviewFrame(win, 'td[data-col]').catch(() => null);
+			}
 			if (resultsFrame) {
 				const firstCell = resultsFrame.locator('td[data-col]').first();
 				await firstCell.waitFor({ state: 'visible', timeout: 8000 });
@@ -1433,9 +1509,13 @@ async function main() {
 			// DEMO: cursor sweeps to editor title button and clicks
 			await syncAndLogDemo(win, 'query-model.demo');
 			await moveMouse(win, queryModelPos.x, queryModelPos.y, 30);
-			await win.mouse.click(queryModelPos.x, queryModelPos.y);
-			await waitForDbQuery(win, 15000);
-			await waitForReady(win, 60000);
+			await queryModelBtn.click();
+			// Wait for the result-grid webview (the db-query status is unreliable / too fast).
+			let qmFrame = null;
+			for (let i = 0; i < 60 && !qmFrame; i++) {
+				await win.waitForTimeout(1000);
+				qmFrame = await findWebviewFrame(win, 'td[data-col]').catch(() => null);
+			}
 			await win.waitForTimeout(1000);
 			await screenshot(win, 'query-model', 'Query Model — compile & run the full model', 4000);
 			logEvent('query-model.post-demo');
@@ -1464,9 +1544,12 @@ async function main() {
 			// DEMO: cursor sweeps to the Query CTE codelens and clicks
 			await syncAndLogDemo(win, 'query-cte.demo');
 			await moveMouse(win, queryCtePos.x, queryCtePos.y, 30);
-			await win.mouse.click(queryCtePos.x, queryCtePos.y);
-			await waitForDbQuery(win, 15000);
-			await waitForReady(win, 60000);
+			await queryCteLens.click();
+			let qcFrame = null;
+			for (let i = 0; i < 60 && !qcFrame; i++) {
+				await win.waitForTimeout(1000);
+				qcFrame = await findWebviewFrame(win, 'td[data-col]').catch(() => null);
+			}
 			await win.waitForTimeout(1000);
 			await screenshot(win, 'query-cte', 'Query CTE — run a single CTE in isolation', 4000);
 			logEvent('query-cte.post-demo');
