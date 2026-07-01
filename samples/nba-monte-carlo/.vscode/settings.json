@@ -1,0 +1,6 @@
+{
+	"files.associations": {
+		"*.sql": "jinja-sql"
+	},
+	"dbt-anvil.ninja.workspaceDiagnostics": true
+}

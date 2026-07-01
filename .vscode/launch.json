@@ -15,6 +15,19 @@
 			]
 		},
 		{
+			"name": "Run Extension (oatanalytics-MAIN)",
+			"type": "extensionHost",
+			"request": "launch",
+			"internalConsoleOptions": "neverOpen",
+			"args": [
+				"c:/Development/oatly/dbt_oatanalytics",
+				"--extensionDevelopmentPath=${workspaceFolder}"
+			],
+			"outFiles": [
+				"${workspaceFolder}/dist/**/*.js"
+			]
+		},
+		{
 			"name": "Run Extension (oatanalytics-TEST)",
 			"type": "extensionHost",
 			"request": "launch",
