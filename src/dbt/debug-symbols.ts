@@ -1,5 +1,7 @@
-import { iterJinjaTags } from './jinja-blanker';
+import { iterJinjaTags, blankJinja } from './jinja-blanker';
 import { buildLineStarts, lineAtOffset } from '../ftl/jinja-spans';
+import { analyze, tokenize, MAIN_FRAME } from '../ftl/sqllens/api';
+import type { Sym, Dialect } from '../ftl/sqllens/api';
 import type { SqlToken } from '../ftl/parse-result';
 import type { JinjaToken } from '../ftl/jinja-tokenizer';
 
@@ -563,6 +565,22 @@ export function emitDebugSymbolsFromTokens(
 
 	if (symbols.length === 0) return undefined;
 
+	const { refMarkers, sourceMarkers, macroSpans } = buildJinjaClassifications(source, jinjaTokens, lineStarts);
+
+	const annotatedSource = injectMarkers(source, symbols, jinjaSpans, { macroSpans, refMarkers, sourceMarkers });
+	return { annotatedSource, symbols, macroSpans, refMarkers, sourceMarkers };
+}
+
+/**
+ * Extract @ref / @source / @macro Jinja classifications from a raw dbt source.
+ * Shared by both emit paths (token-based and sqllens-based) — the Jinja marker
+ * wire format is identical regardless of which SQL parser produced the symbols.
+ */
+function buildJinjaClassifications(
+	source: string,
+	jinjaTokens: JinjaToken[],
+	lineStarts: number[],
+): { refMarkers: BridgeRefMarker[]; sourceMarkers: BridgeSourceMarker[]; macroSpans: BridgeMacroSpan[] } {
 	const refMarkers: BridgeRefMarker[] = [];
 	const sourceMarkers: BridgeSourceMarker[] = [];
 	const macroSpans: BridgeMacroSpan[] = [];
@@ -631,8 +649,7 @@ export function emitDebugSymbolsFromTokens(
 		});
 	}
 
-	const annotatedSource = injectMarkers(source, symbols, jinjaSpans, { macroSpans, refMarkers, sourceMarkers });
-	return { annotatedSource, symbols, macroSpans, refMarkers, sourceMarkers };
+	return { refMarkers, sourceMarkers, macroSpans };
 }
 
 export interface BridgeMacroSpan {
@@ -663,5 +680,256 @@ export interface EmitResult {
 	macroSpans: BridgeMacroSpan[];
 	refMarkers: BridgeRefMarker[];
 	sourceMarkers: BridgeSourceMarker[];
+}
+
+// ---------------------------------------------------------------------------
+// emitDebugSymbols — sqllens-powered emit path (parallel to
+// emitDebugSymbolsFromTokens). Symbols come from sqllens's semantic Sym model
+// (idents/functions) plus its lexical token stream (clause keywords / star /
+// literals); frames come from Sym.frame, replacing the hand-rolled
+// buildCteRanges walk. The marker WIRE FORMAT is identical — injectMarkers /
+// parseSourceMap are reused unchanged.
+// ---------------------------------------------------------------------------
+
+/** Clause-keyword text (uppercased) → debugger role. The sqllens analogue of
+ *  TOKEN_ROLE_MAP: sqllens emits GROUP/ORDER/… as separate keyword tokens (not
+ *  the collapsed GROUP_BY/ORDER_BY of sqlglot), so we key the *leading* keyword —
+ *  its line is the one the debugger anchors the clause to. */
+const CLAUSE_KEYWORD_ROLE: Record<string, string> = {
+	SELECT: 'select',
+	FROM: 'from',
+	JOIN: 'join',
+	INNER: 'join',
+	LEFT: 'join',
+	RIGHT: 'join',
+	CROSS: 'join',
+	FULL: 'join',
+	WHERE: 'where',
+	GROUP: 'group',
+	HAVING: 'having',
+	ORDER: 'order',
+	LIMIT: 'limit',
+	SORT: 'sort',
+	CLUSTER: 'cluster',
+	DISTRIBUTE: 'distribute',
+	OFFSET: 'offset',
+	WITH: 'cte',
+};
+
+/** Map a dbt/sqlglot dialect name to the closest sqllens grammar. sqllens ships
+ *  eight grammars; adapters outside that set fold onto the nearest relative and
+ *  ultimately onto databricks (the widest Spark-family grammar). */
+const SQLGLOT_TO_SQLLENS: Record<string, Dialect> = {
+	databricks: 'databricks',
+	spark: 'databricks',
+	hive: 'databricks',
+	tsql: 'tsql',
+	synapse: 'tsql',
+	sqlserver: 'tsql',
+	fabric: 'tsql',
+	snowflake: 'snowflake',
+	bigquery: 'bigquery',
+	redshift: 'redshift',
+	postgres: 'postgres',
+	postgresql: 'postgres',
+	duckdb: 'duckdb',
+	trino: 'trino',
+	athena: 'trino',
+	presto: 'trino',
+};
+
+function toSqllensDialect(dialect: string): Dialect {
+	return SQLGLOT_TO_SQLLENS[dialect.toLowerCase()] ?? 'databricks';
+}
+
+interface FrameRange {
+	name: string;
+	/** 0-based inclusive line bounds. */
+	startLine: number;
+	endLine: number;
+}
+
+/** Per-frame line ranges derived from Sym.frame. A symbol's own frame bounds that
+ *  frame; a CTE *declaration* additionally bounds the frame it names (so the
+ *  opening `name AS (` line and any body-less boundary lines resolve correctly).
+ *  Used only to attribute token-derived roles (keywords/star/literals) to a
+ *  frame — ident/fn symbols carry Sym.frame directly. */
+function buildFrameRanges(symbols: Sym[]): FrameRange[] {
+	const map = new Map<string, { start: number; end: number }>();
+	const fold = (name: string, l0: number, l1: number): void => {
+		if (name === MAIN_FRAME) return; // _main_ is the fallback; never a bounded range
+		const cur = map.get(name);
+		if (cur) {
+			cur.start = Math.min(cur.start, l0);
+			cur.end = Math.max(cur.end, l1);
+		} else {
+			map.set(name, { start: l0, end: l1 });
+		}
+	};
+	for (const s of symbols) {
+		const l0 = s.span.line - 1;
+		const l1 = s.span.endLine - 1;
+		fold(s.frame, l0, l1);
+		if (s.kind === 'cte' && s.modifiers.includes('declaration')) fold(s.name, l0, l1);
+	}
+	return [...map].map(([name, r]) => ({ name, startLine: r.start, endLine: r.end }));
+}
+
+/** The narrowest (innermost) frame whose range covers `line`, else _main_. */
+function resolveFrame(line: number, ranges: FrameRange[]): string {
+	let best: FrameRange | undefined;
+	for (const r of ranges) {
+		if (line >= r.startLine && line <= r.endLine) {
+			if (!best || r.endLine - r.startLine < best.endLine - best.startLine) best = r;
+		}
+	}
+	return best ? best.name : MAIN_FRAME;
+}
+
+/** Blank Jinja and run sqllens. Tries identifier mode first, then comment mode as a
+ *  fallback for statement-level macros; returns whichever parses cleanest. The
+ *  returned `blanked` is the exact string sqllens saw, so tokenize() re-lexes it
+ *  1:1 (positions in blanked == positions in the source — length-preserving). */
+function analyzeBlanked(source: string, dialect: Dialect): { symbols: Sym[]; blanked: string } | undefined {
+	let best: { symbols: Sym[]; blanked: string; errors: number } | undefined;
+	for (const mode of ['identifier', 'comment'] as const) {
+		let blanked: string;
+		try {
+			blanked = blankJinja(source, mode).blanked;
+		} catch {
+			continue;
+		}
+		let errors: number;
+		let symbols: Sym[];
+		try {
+			const analysis = analyze(blanked, dialect);
+			errors = analysis.errors;
+			symbols = analysis.symbols;
+		} catch {
+			continue;
+		}
+		if (errors === 0) return { symbols, blanked };
+		if (!best || errors < best.errors) best = { symbols, blanked, errors };
+	}
+	return best ? { symbols: best.symbols, blanked: best.blanked } : undefined;
+}
+
+/**
+ * sqllens-powered replacement for emitDebugSymbolsFromTokens. Blanks Jinja
+ * (length-preserving), parses the blanked SQL with sqllens, then emits the same
+ * SymbolEntry[] / EmitResult the token path produces — reusing injectMarkers and
+ * the shared Jinja-classification extraction unchanged.
+ *
+ * Roles: idents (column reference / table / alias / cte) and functions come from
+ * the semantic Sym model; clause keywords, `*`, and literals come from the
+ * lexical token stream. Frames come from Sym.frame (idents/fns) or a frame-range
+ * lookup keyed on Sym.frame (token-derived roles).
+ */
+export function emitDebugSymbols(
+	source: string,
+	dialect: string,
+	jinjaTokens: JinjaToken[],
+): EmitResult | undefined {
+	const sqllensDialect = toSqllensDialect(dialect);
+	const analyzed = analyzeBlanked(source, sqllensDialect);
+	if (!analyzed) return undefined;
+	const { symbols: syms, blanked } = analyzed;
+
+	const lineStarts = buildLineStarts(source);
+	const jinjaSpans = findJinjaSpans(source);
+	const inJinja = (offset: number): boolean => jinjaSpans.some(s => offset >= s.start && offset < s.end);
+	const frameRanges = buildFrameRanges(syms);
+
+	// Candidate markers carry char offsets so we can drop any that overlap a kept
+	// one — injectMarkers assumes disjoint, single-line spans (it splices markers
+	// right-to-left and nested/overlapping insertions would corrupt the offsets).
+	interface Candidate {
+		line: number;
+		col: number;
+		endCol: number;
+		role: string;
+		frameName: string;
+		startOffset: number;
+		endOffset: number;
+	}
+	const candidates: Candidate[] = [];
+	const push = (line: number, col: number, endCol: number, role: string, frameName: string): void => {
+		if (endCol <= col) return;
+		const base = lineStarts[line] ?? 0;
+		const startOffset = base + col;
+		if (inJinja(startOffset)) return; // Jinja-region symbols (e.g. a blanked ref table name) are skipped
+		candidates.push({ line, col, endCol, role, frameName, startOffset, endOffset: base + endCol });
+	};
+
+	// Idents + functions from the semantic Sym model. Each carries its own frame.
+	for (const s of syms) {
+		const line = s.span.line - 1;
+		const col = s.span.column;
+		const nameEnd = col + s.name.length;
+		// A single-line span uses its exact end column; a wide/multi-line span falls
+		// back to the name width to stay single-line and narrow (injectMarkers needs
+		// start and end on the same line).
+		const sameLineEnd = s.span.endLine === s.span.line && s.span.endColumn > col ? s.span.endColumn : nameEnd;
+		let role: string | undefined;
+		let endCol = sameLineEnd;
+		switch (s.kind) {
+			case 'function':
+				role = 'fn';
+				endCol = nameEnd; // mark only the function name, not the whole call
+				break;
+			case 'table':
+			case 'alias':
+				role = 'ident';
+				break;
+			case 'cte':
+				role = 'ident';
+				endCol = nameEnd; // a CTE declaration's span may cover the whole body; keep it name-only
+				break;
+			case 'column':
+				// Column references only — output/star declarations have wide spans that
+				// overlap their inner refs (the `*` and literals are marked from tokens).
+				if (
+					s.modifiers.includes('reference') &&
+					!s.modifiers.includes('output') &&
+					!s.modifiers.includes('star')
+				) {
+					role = 'ident';
+				}
+				break;
+		}
+		if (role === undefined) continue;
+		push(line, col, endCol, role, s.frame);
+	}
+
+	// Clause keywords, `*`, and literals from the lexical token stream.
+	for (const t of tokenize(blanked, sqllensDialect)) {
+		if (t.channel !== 0) continue; // skip hidden-channel trivia (comments/whitespace)
+		let role: string | undefined;
+		if (t.role === 'number' || t.role === 'string') role = 'lit';
+		else if (t.text === '*') role = 'star';
+		else if (t.role === 'keyword') role = CLAUSE_KEYWORD_ROLE[t.text.toUpperCase()];
+		if (role === undefined) continue;
+		const line = t.line - 1;
+		const col = t.column;
+		const nl = t.text.indexOf('\n');
+		const endCol = col + (nl === -1 ? t.text.length : nl); // clamp a multi-line literal to its first line
+		push(line, col, endCol, role, resolveFrame(line, frameRanges));
+	}
+
+	// Sort by start offset and greedily keep a disjoint set (drop overlaps).
+	candidates.sort((a, b) => a.startOffset - b.startOffset || a.endOffset - b.endOffset);
+	const symbols: SymbolEntry[] = [];
+	let lastEnd = -1;
+	for (const c of candidates) {
+		if (c.startOffset < lastEnd) continue;
+		symbols.push({ line: c.line, col: c.col, endCol: c.endCol, role: c.role, frameName: c.frameName });
+		lastEnd = c.endOffset;
+	}
+
+	if (symbols.length === 0) return undefined;
+
+	const { refMarkers, sourceMarkers, macroSpans } = buildJinjaClassifications(source, jinjaTokens, lineStarts);
+	const annotatedSource = injectMarkers(source, symbols, jinjaSpans, { macroSpans, refMarkers, sourceMarkers });
+	return { annotatedSource, symbols, macroSpans, refMarkers, sourceMarkers };
 }
 
