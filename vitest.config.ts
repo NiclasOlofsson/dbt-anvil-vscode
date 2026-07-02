@@ -8,6 +8,7 @@ export default defineConfig({
 		exclude: ['node_modules', 'dist', 'temp_auto'],
 		alias: {
 			vscode: resolve(import.meta.dirname, './src/test/__mocks__/vscode.ts'),
+			sqllens: resolve(import.meta.dirname, '../sql-dialect-grammars/src/index.ts'),
 		},
 	},
 });

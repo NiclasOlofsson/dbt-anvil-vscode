@@ -1,12 +1,13 @@
 {
 	"compilerOptions": {
-		"module": "Node16",
+		"module": "Preserve",
+		"moduleResolution": "Bundler",
+		"esModuleInterop": true,
 		"target": "ES2022",
 		"lib": [
 			"ES2022"
 		],
 		"sourceMap": true,
-		"rootDir": "src",
 		"strict": true,
 		"noImplicitReturns": true,
 		"noFallthroughCasesInSwitch": true,
@@ -16,7 +17,10 @@
 		"types": [
 			"node"
 		],
-		"outDir": "out/test"
+		"noEmit": true,
+		"paths": {
+			"sqllens": ["../sql-dialect-grammars/src/index.ts"]
+		}
 	},
 	"include": [
 		"src/**/*"

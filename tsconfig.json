@@ -1,17 +1,28 @@
 {
 	"compilerOptions": {
-		"module": "Node16",
+		// esbuild is the bundler (see .esbuild.ts); tsc is typecheck-only. Bundler
+		// resolution (not Node16) so the ESM sqllens source imports cleanly from
+		// this CJS-bundled project. noUnusedParameters intentionally absent —
+		// ESLint's no-unused-vars covers it without tripping on sqllens's
+		// ANTLR-generated code.
+		"module": "Preserve",
+		"moduleResolution": "Bundler",
+		"esModuleInterop": true,
 		"target": "ES2022",
 		"lib": ["ES2022"],
 		"sourceMap": true,
-		"rootDir": "src",
 		"strict": true,
 		"noImplicitReturns": true,
 		"noFallthroughCasesInSwitch": true,
-		"noUnusedParameters": true,
 		"skipLibCheck": true,
 		"types": ["node"],
-		"outDir": "out"
+		"noEmit": true,
+		// sqllens is the sibling sql-dialect-grammars repo consumed as TS source
+		// (esbuild has the matching alias in .esbuild.ts). Its src/generated/ must
+		// exist — run `npm run gen` there after a fresh clone.
+		"paths": {
+			"sqllens": ["../sql-dialect-grammars/src/index.ts"]
+		}
 	},
 	"include": [
 		"src/**/*"

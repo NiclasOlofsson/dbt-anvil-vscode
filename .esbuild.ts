@@ -26,6 +26,10 @@ const commonOptions: esbuild.BuildOptions = {
 	mainFields: ['module', 'main'],
 	plugins: [vscodeExternalPlugin],
 	external: ['vscode', '@duckdb/*', '*.node', 'pyodide'],
+	// sqllens is consumed as TS source from the sibling repo (no build/emit there).
+	// Its src/generated/ (ANTLR output) is gitignored — run `npm run gen` in
+	// ../sql-dialect-grammars before building here.
+	alias: { sqllens: '../sql-dialect-grammars/src/index.ts' },
 };
 
 async function main(): Promise<void> {
