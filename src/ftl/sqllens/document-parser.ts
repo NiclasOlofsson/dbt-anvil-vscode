@@ -21,6 +21,7 @@ import { mergeSqlAndJinjaTokens } from '../ninja-sql-tokens';
 import { renToRawLine, type LineMap } from '../nunjucks-renderer';
 import { extractMacroCalls, extractRefs, extractSources } from '../extractors/jinja-tag-extractors';
 import { enrichTokensWithJinjaSpans } from '../extractors/jinja-token-enrichment';
+import { createSqllensAstIndex } from './ast-index';
 import { extractCtes } from './extract/ctes';
 import { extractTokens } from './extract/tokens';
 import { extractFinalColumns, extractFinalSelect } from './extract/final-select';
@@ -106,11 +107,20 @@ export class SqllensDocumentParser implements DocumentParser {
 			timing: { parseMs: Math.round(parseMs), totalMs: Math.round(performance.now() - t0) },
 			jinjaTokens,
 			ninjaSqlTokens,
-			// `ast` is intentionally undefined: the reflow printer's AstIndex is
-			// blocked on sqllens Join IR nodes (plan Phase 0). The formatting path
-			// guards on `model.ast ?? []` and AstIndex reports `empty`, so a missing
-			// payload never crashes — it just disables AST-aware layout decisions.
+			// `ast` stays undefined (the flat sqlglot serde payload) — the reflow
+			// printer instead reads `astIndex`, built directly from the sqllens IR.
 		};
+
+		// Build the reflow index straight off the winning parse's IR. Only pass1/
+		// pass1b are attached: their blanking is length-preserving so the IR char
+		// offsets align with rawSql and the printer's token stream. A pass2 parse is
+		// nunjucks-rendered (offsets shifted into rendered space), so its index would
+		// mis-address the raw-space tokens — leave it undefined and let the reflow
+		// path fall back to an empty index, matching the isPass2 gating used for the
+		// model's other rendered-space positions.
+		if (pass !== 'pass2') {
+			model.astIndex = createSqllensAstIndex(result, rawSql);
+		}
 
 		if (pass === 'pass2') {
 			// Pass2 positions are in rendered space; remap LINE numbers to raw source.

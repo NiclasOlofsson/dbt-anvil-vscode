@@ -56,7 +56,9 @@ export function reflowDocument(
 	}
 
 	const policy = createIndentPolicy(config);
-	const rendered = printDocument({ stream, ast, source, config, policy, symbols });
+	// Prefer a model-supplied index (the sqllens path builds one from its IR);
+	// otherwise the printer derives one from the flat `ast` payload.
+	const rendered = printDocument({ stream, ast, astIndex: model.astIndex, source, config, policy, symbols });
 
 	if (rendered === source) {
 		return { edit: null, reason: 'document already matches policy' };

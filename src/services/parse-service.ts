@@ -6,6 +6,7 @@ import { stripJinja } from '../providers/common/jinja-utils';
 import type { ILogger } from '../types/logger';
 import type { DocumentParser } from './document-parser';
 import type { AstPayload, JinjaToken, SqlToken } from '../ftl/parse-result';
+import type { AstIndex } from '../ninja/reflow/ast-index';
 import { sqlOnly, type NinjaSqlToken } from '../ftl/ninja-sql-tokens';
 
 export interface ColumnInfo {
@@ -322,6 +323,14 @@ export interface DocumentModel {
 	 * at its own bytes. See `mergeModels` for the merge policy.
 	 */
 	ast?: AstPayload[];
+	/**
+	 * A prebuilt byte-range index for the reflow printer. Set by parsers that
+	 * produce an index directly from their own IR (the sqllens path) rather than
+	 * a flat `ast` payload. When present, the reflow path uses it verbatim; when
+	 * absent, the path falls back to `createAstIndex(ast ?? [])`. Additive — legacy
+	 * (sqlglot) models leave it undefined and are unaffected.
+	 */
+	astIndex?: AstIndex;
 	/**
 	 * Virtual columns synthesised by PIVOT/UNPIVOT clauses, keyed by the
 	 * lowercased source-table name. Used to suppress false "column not found"

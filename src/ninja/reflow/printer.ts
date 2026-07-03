@@ -4,12 +4,18 @@ import type { AstPayload, SqlToken } from '../../ftl/parse-result';
 import type { DialectSymbols } from '../../ftl/sql-parser';
 import type { IndentPolicy } from './indent-policy';
 import { createCapitalisationState, recaseToken } from './capitalisation';
-import { createAstIndex } from './ast-index';
+import { createAstIndex, type AstIndex } from './ast-index';
 import { normaliseTagSpacing } from '../jinja/tag-formatter';
 
 export interface PrinterInput {
 	stream: NinjaSqlToken[];
 	ast: AstPayload[];
+	/**
+	 * A prebuilt byte-range index. When supplied (the sqllens path builds one
+	 * from its IR), it is used verbatim; otherwise the printer derives one from
+	 * `ast` via `createAstIndex`.
+	 */
+	astIndex?: AstIndex;
 	source: string;
 	config: NinjaConfig;
 	policy: IndentPolicy;
@@ -127,7 +133,7 @@ export function printDocument(input: PrinterInput): string {
 	const { stream, ast, source, config, policy, symbols } = input;
 	if (stream.length === 0) return source;
 
-	const astIndex = createAstIndex(ast);
+	const astIndex = input.astIndex ?? createAstIndex(ast);
 
 	// Pre-pass: collect byte ranges of every SQL comment. Jinja tokens that
 	// sit inside a comment range are false positives from the independent
