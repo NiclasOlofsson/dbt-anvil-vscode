@@ -735,7 +735,20 @@
 							"error"
 						],
 						"description": "Log level for dbt Anvil output channel."
-					}
+					},
+						"dbt-anvil.parser.engine": {
+							"type": "string",
+							"default": "legacy",
+							"enum": [
+								"legacy",
+								"sqllens"
+							],
+							"enumDescriptions": [
+								"Parse SQL with the Pyodide/sqlglot engine (WASM CPython). The current default; boots a worker pool on activation.",
+								"Parse SQL with the native TypeScript sqllens engine. No Pyodide worker pool is booted. Experimental — still being validated for parity with the legacy engine."
+							],
+							"markdownDescription": "Selects the SQL parsing engine that powers language intelligence (hover, definition, rename, diagnostics, formatting, lineage). `legacy` uses the Pyodide/sqlglot worker pool; `sqllens` uses the native TypeScript parser and skips booting Pyodide. A window reload is required for a change to take effect."
+						}
 				}
 			},
 			{

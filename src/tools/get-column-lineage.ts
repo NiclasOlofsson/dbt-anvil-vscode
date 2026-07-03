@@ -5,7 +5,8 @@ import type { ILogger } from '../types/logger';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { CompileCache } from '../dbt/compile-cache';
 import type { DescribeCache } from '../dbt/describe-cache';
-import type { ColumnDependency, FtlDocumentParser, LineageResult } from '../ftl/ftl-document-parser';
+import type { ColumnDependency, LineageResult } from '../ftl/ftl-document-parser';
+import type { DocumentParser } from '../services/document-parser';
 import { toolResult } from './tool-helpers';
 
 interface GetColumnLineageInput {
@@ -26,7 +27,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		private readonly logger: ILogger,
 		private readonly compileCache: CompileCache,
 		private readonly describeCache: DescribeCache,
-		private readonly ftlParser: FtlDocumentParser,
+		private readonly ftlParser: DocumentParser,
 	) {}
 
 	private _isResolvedColumns(columns: string[] | undefined): columns is string[] {
@@ -447,6 +448,10 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 		);
 
 		try {
+			if (!this.ftlParser.traceLineageV2) {
+				this.logger.warn('Column lineage unavailable: active parser does not implement traceLineageV2');
+				return null;
+			}
 			const schemaJson = JSON.stringify(schemaMapping);
 			const result = await this.ftlParser.traceLineageV2(sql, columnName, schemaJson);
 			if ('error' in result) {

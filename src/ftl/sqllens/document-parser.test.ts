@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { SqllensDocumentParser } from './document-parser';
+import { decompose } from './decompose';
+import { traceColumnLineage } from './lineage';
 import { buildStarExpander } from './extract/star-expand';
 import { Schema, type ScopeTree } from './api';
 import type { ColumnRefToken, TableRefToken, TokenInfo } from '../../services/parse-service';
@@ -420,5 +422,73 @@ describe('SqllensDocumentParser — getDialectSymbols', () => {
 		expect(a).toBe(b);
 		expect(a!.functions).toBe(b!.functions);
 		expect(a!.keywordTokenTypes).toBe(b!.keywordTokenTypes);
+	});
+});
+
+describe('SqllensDocumentParser — decomposeQuery (JSON-string seam contract)', () => {
+	// The debug adapter consumes decomposeQuery via `JSON.parse(raw)` (debug-adapter.ts),
+	// so the wrapper MUST return a JSON string — not the typed object — and it must be
+	// exactly `JSON.stringify(decompose(...))` for the resolved dialect. If the wrapper
+	// ever returned the object, JSON.parse would throw and the debug adapter would break.
+	const COMPILED = [
+		'WITH base AS (',
+		'  SELECT id, amount',
+		'  FROM raw_sales rs',
+		')',
+		'SELECT id, amount FROM base',
+	].join('\n');
+
+	it('returns a JSON string that parses into the decompose contract shape', async () => {
+		const raw = await parser('databricks').decomposeQuery(COMPILED);
+		expect(typeof raw).toBe('string');
+
+		const parsed = JSON.parse(raw);
+		expect(parsed.success).toBe(true);
+		expect(parsed).toHaveProperty('frames');
+		expect(parsed).toHaveProperty('clauses');
+		expect(parsed).toHaveProperty('refs');
+		expect(parsed.frames.map((f: { name: string }) => f.name)).toEqual(
+			expect.arrayContaining(['base', '_main_']),
+		);
+	});
+
+	it('is byte-for-byte `JSON.stringify(decompose(sql, dialect))` for the adapter dialect', async () => {
+		const raw = await parser('databricks').decomposeQuery(COMPILED);
+		expect(raw).toBe(JSON.stringify(decompose(COMPILED, 'databricks')));
+	});
+
+	it('resolves the dialect from the adapter context (tsql routes to the tsql decompose)', async () => {
+		const raw = await parser('tsql').decomposeQuery(COMPILED);
+		expect(raw).toBe(JSON.stringify(decompose(COMPILED, 'tsql')));
+	});
+});
+
+describe('SqllensDocumentParser — traceLineageV2 (LineageResult | { error } seam shape)', () => {
+	// The canonical two-CTE hop chain lineage.test.ts exercises; the wrapper must produce
+	// the SAME LineageResult get-column-lineage.ts consumes, distinguished from the error
+	// arm by `'error' in result`.
+	const CHAIN = 'WITH a AS (SELECT x+1 AS y FROM t), b AS (SELECT y*2 AS z FROM a) SELECT z FROM b';
+
+	it('returns the LineageResult union arm (not an error) for a traceable column', async () => {
+		const result = await parser('databricks').traceLineageV2(CHAIN, 'z', '{}');
+		expect('error' in result).toBe(false);
+		if ('error' in result) throw new Error('unreachable');
+		expect(result.dependencies).toEqual([{ column: 'x', table: 't' }]);
+		expect(result.via_ctes).toEqual(['b', 'a']);
+	});
+
+	it('parses schemaJson and delegates to traceColumnLineage with the resolved dialect', async () => {
+		const raw = await parser('databricks').traceLineageV2(CHAIN, 'z', '{}');
+		// The wrapper is a thin adapter over the free fn — the parsed empty schema and the
+		// databricks dialect must reproduce the free-fn result exactly.
+		expect(raw).toEqual(traceColumnLineage(CHAIN, 'z', 'databricks', {}));
+	});
+
+	it('maps a malformed schemaJson to the { error } arm rather than throwing', async () => {
+		const result = await parser('databricks').traceLineageV2(CHAIN, 'z', 'not valid json');
+		expect('error' in result).toBe(true);
+		if (!('error' in result)) throw new Error('unreachable');
+		expect(typeof result.error).toBe('string');
+		expect(result.error.length).toBeGreaterThan(0);
 	});
 });

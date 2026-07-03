@@ -7,7 +7,7 @@ import type { CompileCache } from '../dbt/compile-cache';
 import type { DatabaseProvider } from '../providers/database/database-provider';
 import type { DescribeCache } from '../dbt/describe-cache';
 import type { DbtQueryService } from '../services/dbt-query-service';
-import type { FtlDocumentParser } from '../ftl/ftl-document-parser';
+import type { DocumentParser } from '../services/document-parser';
 import type { McpToolRegistry } from '../mcp/host/registry';
 import type { McpToolAnnotations } from '../mcp/shared/protocol';
 import { RunModelsTool } from './run-models';
@@ -84,7 +84,7 @@ export function registerLanguageModelTools(
 	databaseProvider: DatabaseProvider,
 	describeCache: DescribeCache,
 	dbtQueryService: DbtQueryService,
-	ftlParser: FtlDocumentParser,
+	ftlParser: DocumentParser,
 	mcpRegistry?: McpToolRegistry,
 ): void {
 	logger.info('Registering language model tools for Copilot Agent Mode');

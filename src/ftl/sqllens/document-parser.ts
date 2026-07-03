@@ -23,6 +23,8 @@ import { renToRawLine, type LineMap } from '../nunjucks-renderer';
 import { extractMacroCalls, extractRefs, extractSources } from '../extractors/jinja-tag-extractors';
 import { enrichTokensWithJinjaSpans } from '../extractors/jinja-token-enrichment';
 import { createSqllensAstIndex } from './ast-index';
+import { decompose } from './decompose';
+import { traceColumnLineage, type LineageResult } from './lineage';
 import { extractCtes } from './extract/ctes';
 import { extractTokens } from './extract/tokens';
 import { extractFinalColumns, extractFinalSelect } from './extract/final-select';
@@ -74,6 +76,45 @@ export class SqllensDocumentParser implements DocumentParser {
 			this._symbolsCache.set(dialect, symbols);
 		}
 		return Promise.resolve(symbols);
+	}
+
+	/**
+	 * Decompose compiled SQL into debug frames (CTEs + `_main_`) + per-frame stage
+	 * clauses, JSON-stringified — the seam contract the debug adapter `JSON.parse`s
+	 * (`debug-adapter.ts`). Mirrors `FtlDocumentParser.decomposeQuery`; the free
+	 * `decompose()` already documents this `JSON.stringify(decompose(...))` shape.
+	 *
+	 * Dialect resolves via `toSqllensDialect` (total — defaults to `databricks`), so
+	 * unlike the legacy path there is no empty-string no-adapter branch: a real
+	 * decompose is always produced. `decompose()` never throws — it reports slice
+	 * failures as `{ success: false }` inside the JSON.
+	 */
+	decomposeQuery(compiledSql: string): Promise<string> {
+		const dialect = toSqllensDialect(this._context.adapterType);
+		return Promise.resolve(JSON.stringify(decompose(compiledSql, dialect)));
+	}
+
+	/**
+	 * Trace column lineage for one output column, returning the same
+	 * `LineageResult | { error }` union the seam (get-column-lineage tool) consumes.
+	 * Mirrors `FtlDocumentParser.traceLineageV2`'s signature. `schemaJson` is the JSON
+	 * catalog the caller stringifies (`JSON.stringify(schemaMapping)`), parsed back
+	 * into the sqllens `SchemaMapping`; dialect resolves via `toSqllensDialect`, the
+	 * same as `decomposeQuery`.
+	 *
+	 * sqllens's `traceColumnLineage` is total and never signals a structured failure
+	 * itself (the legacy path's `{ error }` came from the pool's `success: false`
+	 * result and a no-adapter guard). To populate the same union member here, a thrown
+	 * schema-parse / trace failure is caught and mapped to `{ error }`.
+	 */
+	traceLineageV2(sql: string, columnName: string, schemaJson: string): Promise<LineageResult | { error: string }> {
+		const dialect = toSqllensDialect(this._context.adapterType);
+		try {
+			const schema = JSON.parse(schemaJson) as SchemaMapping;
+			return Promise.resolve(traceColumnLineage(sql, columnName, dialect, schema));
+		} catch (err) {
+			return Promise.resolve({ error: err instanceof Error ? err.message : String(err) });
+		}
 	}
 
 	parse(sql: string, options?: ParseOptions): Promise<DocumentModel> {

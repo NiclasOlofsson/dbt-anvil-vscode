@@ -1,5 +1,6 @@
 import type { DocumentModel } from './parse-service';
 import type { DialectSymbols } from '../ftl/sql-parser';
+import type { LineageResult } from '../ftl/extractors/lineage-walker';
 
 /**
  * Options passed to a DocumentParser.parse() call.
@@ -26,4 +27,11 @@ export interface DocumentParser {
 	decomposeQuery?(compiledSql: string): Promise<string>;
 	/** Return the dialect symbol lists (functions, keyword types, data types). Only implemented by FtlDocumentParser. */
 	getDialectSymbols?(): Promise<DialectSymbols | undefined>;
+	/**
+	 * Trace column lineage for one output column. Returns the lineage result or a
+	 * structured `{ error }`. Only implemented by parsers backing column lineage
+	 * (FtlDocumentParser, SqllensDocumentParser); bypasses ParseService caching —
+	 * called directly by GetColumnLineageTool.
+	 */
+	traceLineageV2?(sql: string, columnName: string, schemaJson: string): Promise<LineageResult | { error: string }>;
 }
