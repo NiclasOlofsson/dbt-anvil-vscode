@@ -190,7 +190,7 @@ describe('decompose — UNION inside a CTE (legs tagged)', () => {
 	});
 });
 
-describe('decompose — query with joins (contiguous region, join seam)', () => {
+describe('decompose — single JOIN (from excludes joins, one join stage)', () => {
 	const lines = [
 		'SELECT o.id, c.name',                     // 0
 		'FROM orders o',                           // 1
@@ -200,9 +200,18 @@ describe('decompose — query with joins (contiguous region, join seam)', () => 
 	const sql = lines.join('\n');
 	const res = decompose(sql, 'databricks');
 
-	it('joinStages() emits no join stages yet (seam returns [])', () => {
-		const cs = clausesOf(res, '_main_');
-		expect(cs.some(c => c.stage === 'join')).toBe(false);
+	it('emits exactly one join stage, cumulative from FROM through the join', () => {
+		const joins = clausesOf(res, '_main_').filter(c => c.stage === 'join');
+		expect(joins.length).toBe(1);
+		expect(joins[0].sql).toBe('SELECT * FROM orders o\nINNER JOIN customers c ON o.cust = c.id');
+		expect(joins[0].line).toBe(2);
+	});
+
+	it('from stage EXCLUDES the join text now that Join nodes exist', () => {
+		const from = stage(clausesOf(res, '_main_'), 'from')!;
+		expect(from.sql).toBe('SELECT * FROM orders o');
+		expect(from.sql).not.toContain('JOIN');
+		expect(from.line).toBe(1);
 	});
 
 	it('where stage still contains the JOIN text via the contiguous slice', () => {
@@ -214,13 +223,161 @@ describe('decompose — query with joins (contiguous region, join seam)', () => 
 		expect(where.sql).toMatch(/^SELECT/);
 	});
 
-	it('from stage keeps the join text (no separate join node to split it out)', () => {
-		const from = stage(clausesOf(res, '_main_'), 'from')!;
-		expect(from.sql).toContain('INNER JOIN customers c ON o.cust = c.id');
+	it('stage order interleaves from < join < where', () => {
+		const cs = clausesOf(res, '_main_');
+		expect(cs.map(c => c.stage)).toEqual(['from', 'join', 'where', 'select']);
+		expect(cs.map(c => c.order)).toEqual([0, 1, 2, 3]);
 	});
 
 	it('refs list base then joined table in declaration order', () => {
 		expect(res.refs['_main_']).toEqual(['orders', 'customers']);
+	});
+});
+
+describe('decompose — databricks 2-join chain (INNER + LEFT)', () => {
+	const lines = [
+		'SELECT o.id, c.name, p.sku',              // 0
+		'FROM orders o',                           // 1
+		'INNER JOIN customers c ON o.cust = c.id', // 2
+		'LEFT JOIN products p ON o.prod = p.id',   // 3
+		'WHERE o.total > 50',                      // 4
+	];
+	const sql = lines.join('\n');
+	const res = decompose(sql, 'databricks');
+
+	const j1 = 'SELECT * FROM orders o\nINNER JOIN customers c ON o.cust = c.id';
+	const j2 = j1 + '\nLEFT JOIN products p ON o.prod = p.id';
+
+	it('from stage is the base source only — no join text', () => {
+		const from = stage(clausesOf(res, '_main_'), 'from')!;
+		expect(from.sql).toBe('SELECT * FROM orders o');
+		expect(from.line).toBe(1);
+	});
+
+	it('emits two cumulative join stages with exact original formatting', () => {
+		const joins = clausesOf(res, '_main_').filter(c => c.stage === 'join');
+		expect(joins.length).toBe(2);
+		expect(joins[0].sql).toBe(j1);
+		expect(joins[0].line).toBe(2);
+		expect(joins[1].sql).toBe(j2);
+		expect(joins[1].line).toBe(3);
+	});
+
+	it('where stage accumulates both joins', () => {
+		const where = stage(clausesOf(res, '_main_'), 'where')!;
+		expect(where.sql).toBe(j2 + '\nWHERE o.total > 50');
+		expect(where.line).toBe(4);
+	});
+
+	it('order indices interleave from < join1 < join2 < where', () => {
+		const cs = clausesOf(res, '_main_');
+		expect(cs.map(c => c.stage)).toEqual(['from', 'join', 'join', 'where', 'select']);
+		expect(cs.map(c => c.order)).toEqual([0, 1, 2, 3, 4]);
+	});
+
+	it('refs list base then both joined tables in declaration order', () => {
+		expect(res.refs['_main_']).toEqual(['orders', 'customers', 'products']);
+	});
+});
+
+describe('decompose — USING join', () => {
+	const lines = [
+		'SELECT o.id, c.name',               // 0
+		'FROM orders o',                     // 1
+		'INNER JOIN customers c USING (id)', // 2
+	];
+	const sql = lines.join('\n');
+	const res = decompose(sql, 'databricks');
+
+	it('join stage carries the USING clause verbatim', () => {
+		const joins = clausesOf(res, '_main_').filter(c => c.stage === 'join');
+		expect(joins.length).toBe(1);
+		expect(joins[0].sql).toBe('SELECT * FROM orders o\nINNER JOIN customers c USING (id)');
+		expect(joins[0].line).toBe(2);
+	});
+
+	it('from stage excludes the USING join', () => {
+		expect(stage(clausesOf(res, '_main_'), 'from')!.sql).toBe('SELECT * FROM orders o');
+	});
+});
+
+describe('decompose — CROSS JOIN (no ON predicate)', () => {
+	const lines = [
+		'SELECT o.id, r.zone',  // 0
+		'FROM orders o',        // 1
+		'CROSS JOIN regions r', // 2
+	];
+	const sql = lines.join('\n');
+	const res = decompose(sql, 'databricks');
+
+	it('emits a cumulative CROSS JOIN stage', () => {
+		const joins = clausesOf(res, '_main_').filter(c => c.stage === 'join');
+		expect(joins.length).toBe(1);
+		expect(joins[0].sql).toBe('SELECT * FROM orders o\nCROSS JOIN regions r');
+		expect(joins[0].line).toBe(2);
+	});
+
+	it('from stage is the base source only', () => {
+		expect(stage(clausesOf(res, '_main_'), 'from')!.sql).toBe('SELECT * FROM orders o');
+	});
+});
+
+describe('decompose — trino 3-join chain (cumulative cst spans)', () => {
+	const lines = [
+		'SELECT o.id',                             // 0
+		'FROM orders o',                           // 1
+		'INNER JOIN customers c ON o.cust = c.id', // 2
+		'LEFT JOIN products p ON o.prod = p.id',   // 3
+		'JOIN regions r ON r.id = o.reg',          // 4
+	];
+	const sql = lines.join('\n');
+	const res = decompose(sql, 'trino');
+
+	const j1 = 'SELECT * FROM orders o\nINNER JOIN customers c ON o.cust = c.id';
+	const j2 = j1 + '\nLEFT JOIN products p ON o.prod = p.id';
+	const j3 = j2 + '\nJOIN regions r ON r.id = o.reg';
+
+	it('per-join lines are the actual JOIN keyword lines, not the chain start (line 1)', () => {
+		const joins = clausesOf(res, '_main_').filter(c => c.stage === 'join');
+		expect(joins.length).toBe(3);
+		// trino join.cst.start is the chain start (line 1 = the FROM source) for ALL three joins;
+		// the derived lines must instead be each join's own keyword line.
+		expect(joins.map(c => c.line)).toEqual([2, 3, 4]);
+	});
+
+	it('cumulative stage SQL accumulates the chain in source order', () => {
+		const joins = clausesOf(res, '_main_').filter(c => c.stage === 'join');
+		expect(joins[0].sql).toBe(j1);
+		expect(joins[1].sql).toBe(j2);
+		expect(joins[2].sql).toBe(j3);
+	});
+
+	it('from stage excludes every join', () => {
+		const from = stage(clausesOf(res, '_main_'), 'from')!;
+		expect(from.sql).toBe('SELECT * FROM orders o');
+		expect(from.line).toBe(1);
+	});
+});
+
+describe('decompose — comma-separated FROM sources are NOT joins', () => {
+	const lines = [
+		'SELECT a.id, b.id',  // 0
+		'FROM t1 a, t2 b',    // 1
+		'WHERE a.id = b.id',  // 2
+	];
+	const sql = lines.join('\n');
+	const res = decompose(sql, 'databricks');
+
+	it('emits no join stages', () => {
+		expect(clausesOf(res, '_main_').some(c => c.stage === 'join')).toBe(false);
+	});
+
+	it('from stage carries both comma sources', () => {
+		expect(stage(clausesOf(res, '_main_'), 'from')!.sql).toBe('SELECT * FROM t1 a, t2 b');
+	});
+
+	it('refs list both comma sources', () => {
+		expect(res.refs['_main_']).toEqual(['t1', 't2']);
 	});
 });
 

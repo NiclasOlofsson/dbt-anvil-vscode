@@ -115,6 +115,39 @@ function keywordBefore(tokens: Token[], name: string, contentStart: number, lowe
 	return best;
 }
 
+/** Keywords that can lead a JOIN construct, sitting between the previous source and the
+ *  JOIN keyword (`LEFT OUTER JOIN` → lead is LEFT). Used to find the construct start. */
+const JOIN_PREFIX_KEYWORDS = new Set([
+	'INNER', 'LEFT', 'RIGHT', 'FULL', 'OUTER', 'CROSS', 'NATURAL', 'SEMI', 'ANTI', 'ASOF', 'POSITIONAL', 'LATERAL',
+]);
+
+/**
+ * The leading keyword token of the next JOIN construct after `lowerBound` (exclusive).
+ *
+ * Uniform across dialects, including trino's cumulative `join.cst` spans (where `join.cst.start`
+ * is the chain start, not this join's keyword). It anchors on the unambiguous `JOIN` token — the
+ * first `JOIN` strictly after `lowerBound` — then walks back over any contiguous type prefix
+ * (INNER / LEFT OUTER / …) to the construct start. `lowerBound` must be the stop offset of the
+ * preceding chain element (the base source for the first join, the prior join for the rest), which
+ * sits past any subquery/ON-predicate joins nested in that element, so the first `JOIN` found is
+ * always this join's own. Returns the lead token; its `.start` is the construct start and its
+ * `.line` the join's source line. Undefined when no JOIN follows (defensive).
+ */
+function joinLeadToken(tokens: Token[], lowerBound: number): Token | undefined {
+	let joinTok: Token | undefined;
+	for (const t of tokens) {
+		if (t.name.toUpperCase() !== 'JOIN' || t.start <= lowerBound) continue;
+		if (!joinTok || t.start < joinTok.start) joinTok = t;
+	}
+	if (!joinTok) return undefined;
+	let lead = joinTok;
+	for (const t of tokens) {
+		if (t.start <= lowerBound || t.start >= joinTok.start) continue;
+		if (JOIN_PREFIX_KEYWORDS.has(t.name.toUpperCase()) && t.start < lead.start) lead = t;
+	}
+	return lead;
+}
+
 /** Preceding CTE definitions for a frame — every CTE declared before `name`
  *  (all CTEs for `_main_`). These become the WITH prefix of a runnable stage. */
 function precedingCtes(ctes: readonly CteDef[], name: string): CteDef[] {
@@ -185,29 +218,46 @@ interface StageCtx {
 }
 
 /**
- * TODO(sqllens-join): populate once Join IR nodes with spans land (Phase 0).
- *
- * sqllens does not yet model joins as nodes — a SelectExpr carries `from: Source[]`
- * (base + joined tables, flattened) plus detached `joinConditions`, with the JOIN
- * keywords / types living only in the raw text between sources. Until a Join node
- * with its own span exists there is no faithful per-join boundary to slice, so this
- * returns no join stages. The from / where / group / having stages stay correct
- * regardless: they slice the CONTIGUOUS source region (see buildSelectClauses), which
- * already contains the join text.
+ * One 'join' stage per explicit JOIN, in source order — mirrors the Python
+ * `_decompose_query` join loop (sql_parser.py ~1264-1278). Stage i's SQL is the CUMULATIVE
+ * region `SELECT * {from} {joins[..i]}`: the slice from the FROM keyword through join i's end,
+ * so joins 1..i accumulate naturally. This is uniform across dialects — for trino join i's own
+ * `cst` span already reaches back to the FROM source, for the others the FROM-anchored slice
+ * accumulates the preceding joins. The line is join i's own JOIN-keyword line (derived via
+ * `joinLeadToken`, correct even for trino's cumulative `cst.start`, which points at the chain
+ * start). WITH prefixing matches every other stage.
  */
-function joinStages(_sel: SelectExpr, _sql: string): DecomposeClause[] {
-	return [];
+function joinStages(sel: SelectExpr, ctx: StageCtx, fromKwOff: number): Array<Omit<DecomposeClause, 'order'>> {
+	const joins = sel.joins;
+	if (!joins || joins.length === 0) return [];
+	const { sql, tokens, prefixCtes } = ctx;
+	const out: Array<Omit<DecomposeClause, 'order'>> = [];
+	// Lower bound for locating each join's keyword: the stop of the preceding chain element —
+	// the base source for the first join, the prior join (incl. its ON predicate) for the rest.
+	let prevStop = sel.from[0] ? stopOffset(sel.from[0]) : fromKwOff;
+	for (const join of joins) {
+		const lead = joinLeadToken(tokens, prevStop);
+		const joinStop = stopOffset(join as Spanned);
+		out.push({
+			stage: 'join',
+			sql: withPrefix(`SELECT * ${sql.slice(fromKwOff, joinStop + 1).trimEnd()}`, prefixCtes, sql),
+			line: lead ? lead.line - 1 : startLine0(join as Spanned),
+		});
+		prevStop = joinStop;
+	}
+	return out;
 }
 
 /**
  * Build the ordered stage clauses for one SELECT.
  *
- * Contiguous-region strategy (the deliberate divergence from the Python original):
- * because joins are not IR nodes yet, stages that in Python concatenate FROM + joins
- * + WHERE from regenerated fragments instead slice ONE contiguous span of the original
- * text — FROM-keyword → end-of-clause — which necessarily contains any join text
- * sitting between FROM and the next clause. This sidesteps the missing Join nodes and
- * is more faithful (exact source, joins included) than reassembling fragments.
+ * Slicing strategy (the deliberate divergence from the Python original, which regenerates each
+ * stage via sqlglot): the FROM stage slices FROM-keyword → first-join start (base sources only,
+ * joins excluded), then one JOIN stage per join slices the CUMULATIVE FROM → join-i region. The
+ * WHERE / GROUP / HAVING stages slice ONE contiguous span (FROM- or SELECT-keyword → end-of-clause)
+ * that already contains the join text, so they need no per-join reassembly — matching Python, whose
+ * where/group/having concatenate FROM + all joins + the clause. Every span is the exact original
+ * source, so user formatting survives verbatim.
  */
 function buildSelectClauses(sel: SelectExpr, ctx: StageCtx): DecomposeClause[] {
 	const { sql, tokens, prefixCtes } = ctx;
@@ -251,18 +301,26 @@ function buildSelectClauses(sel: SelectExpr, ctx: StageCtx): DecomposeClause[] {
 		? keywordBefore(tokens, ctx.limit.top !== undefined ? 'LIMIT' : 'OFFSET', ctx.fullTextStop + 1, selStart)
 		: undefined;
 
-	// Right edge of the from stage: the first later-clause keyword, else end of the
-	// from region. (The from stage keeps joins — see joinStages seam docs.)
+	// Right edge of the from stage: when the select has explicit joins, stop at the first join's
+	// construct start so the from stage EXCLUDES join text (matching Python's from-stage, which
+	// slices FROM alone). Otherwise stop at the first later-clause keyword, else the end of the
+	// from region. The join text is re-introduced by the per-join stages that follow.
 	const laterKwStarts = [whereClause?.kwOff, groupClause?.kwOff, havingClause?.kwOff, qualifyClause?.kwOff, orderClause?.kwOff, limitTok?.start]
 		.filter((n): n is number => n !== undefined && n > fromKwOff);
-	const fromRegionEnd = laterKwStarts.length > 0 ? Math.min(...laterKwStarts) : fromContentEnd + 1;
+	const firstJoinLead = sel.joins && sel.joins.length > 0
+		? joinLeadToken(tokens, hasFrom ? stopOffset(sel.from[0]) : fromKwOff)
+		: undefined;
+	const fromRegionEnd = firstJoinLead
+		? firstJoinLead.start
+		: laterKwStarts.length > 0 ? Math.min(...laterKwStarts) : fromContentEnd + 1;
 
 	// Full runnable text for select / order / limit. If it already opens with WITH
 	// (e.g. `_main_`, whose span covers the leading CTEs), do not double-prefix.
 	const fullText = sql.slice(ctx.fullTextStart, ctx.fullTextStop + 1);
 	const fullSql = /^\s*with\b/i.test(fullText) ? fullText : withPrefix(fullText, prefixCtes, sql);
 
-	// 1. FROM (+ joins, via the contiguous slice).
+	// 1. FROM — the base source(s) only; join text is excluded (see fromRegionEnd) and emitted by
+	//    the per-join stages below.
 	if (hasFrom) {
 		clauses.push({
 			stage: 'from',
@@ -271,8 +329,8 @@ function buildSelectClauses(sel: SelectExpr, ctx: StageCtx): DecomposeClause[] {
 		});
 	}
 
-	// 2. JOIN stages — empty until Join IR lands (seam).
-	clauses.push(...joinStages(sel, sql).map(c => ({ stage: c.stage, sql: c.sql, line: c.line })));
+	// 2. JOIN stages — one cumulative `SELECT * {from} {joins[..i]}` per join, source order.
+	clauses.push(...joinStages(sel, ctx, fromKwOff));
 
 	// 3. WHERE — contiguous FROM..WHERE (includes join text).
 	if (whereClause && hasFrom) {
