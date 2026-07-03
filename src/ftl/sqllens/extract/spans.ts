@@ -1,0 +1,94 @@
+/**
+ * Position + CST helpers shared by the sqllens-native extractors.
+ *
+ * sqllens carries exact spans on antlr Token objects hung off every IR node's
+ * `cst` back-reference (a `ParserRuleContext`): `cst.start` / `cst.stop` are the
+ * first/last lexer tokens of the node. antlr positions are 1-based line, 0-based
+ * column; the extension's DocumentModel is uniformly 0-based line, 0-based
+ * inclusive start col, 0-based exclusive end col — so every conversion here is
+ * `line - 1` and `endCol = column + text.length`.
+ *
+ * We deliberately model the antlr token/context structurally (not by importing
+ * antlr4ng, which the extension does not depend on directly) — the two fields we
+ * read (`start`/`stop` tokens, each with `start`/`stop`/`line`/`column`/`text`)
+ * are stable and this keeps the boundary narrow.
+ */
+import type { QueryBody, QueryExpr, Scope, ScopeTree, SelectExpr, SyntaxDiagnostic, Token } from '../api';
+
+/** One antlr lexer token, as much of it as the extractors read. */
+export interface AntlrToken {
+	/** 0-based inclusive char offset of the first char. */
+	start: number;
+	/** 0-based inclusive char offset of the last char. */
+	stop: number;
+	/** 1-based line. */
+	line: number;
+	/** 0-based column. */
+	column: number;
+	text: string | null;
+}
+
+/** The bits of a `ParserRuleContext` the extractors read. */
+export interface CstNode {
+	start: AntlrToken | null;
+	stop: AntlrToken | null;
+}
+
+/** Narrow an IR node's `cst` back-reference to the structural shape we read. */
+export function asCst(cst: unknown): CstNode {
+	return cst as CstNode;
+}
+
+export interface Pos {
+	/** 0-based line. */
+	line: number;
+	/** 0-based inclusive start column. */
+	col: number;
+	/** 0-based exclusive end column. */
+	endCol: number;
+}
+
+/** 0-based span of a single antlr token. */
+export function tokenPos(t: AntlrToken): Pos {
+	return { line: t.line - 1, col: t.column, endCol: t.column + (t.text?.length ?? 0) };
+}
+
+/**
+ * The neutral parse result the extractors consume — the tiers of sqllens's
+ * `parse()` + `resolveScopes()` that the DocumentModel is built from. We stop
+ * short of the full `analyze()` (qualify / infer / lineage / symbols) because
+ * the structural model is derivable from scopes + IR + tokens alone.
+ */
+export interface SqllensParse {
+	ast: QueryExpr;
+	/** Lexer + parser syntax-error count (a valid parse is still returned). */
+	errors: number;
+	/** Positioned syntax diagnostics — the source of `syntax_error` warnings. */
+	diagnostics: SyntaxDiagnostic[];
+	scopes: ScopeTree;
+	/** Every lexer token (trivia included, EOF excluded), with exact char spans. */
+	tokens: Token[];
+}
+
+/** Every scope in the tree, root first, depth-first over `children`. */
+export function allScopes(tree: ScopeTree): Scope[] {
+	const out: Scope[] = [];
+	const visit = (s: Scope): void => {
+		out.push(s);
+		for (const c of s.children) visit(c);
+	};
+	visit(tree.root);
+	return out;
+}
+
+/**
+ * The leftmost `SelectExpr` reachable from a query body — a set operation's
+ * output columns come from its left branch, so this unwraps `UNION`/`EXCEPT`/
+ * `INTERSECT` to the branch that names the columns. `undefined` for a pipe body
+ * (its output columns live in the per-stage scopes, not a select projection list).
+ */
+export function leftSelect(body: QueryBody): SelectExpr | undefined {
+	if (body.kind === 'select') return body;
+	if (body.kind === 'setop') return leftSelect(body.left);
+	return undefined;
+}
