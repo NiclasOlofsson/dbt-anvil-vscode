@@ -10,13 +10,13 @@
  */
 import type { ColumnInfo, CteInfo } from '../../../services/parse-service';
 import type { Projection, QueryBody } from '../api';
-import { allScopes, asCst, leftSelect, type SqllensParse } from './spans';
+import { allScopes, asCst, leftSelect, normName, type SqllensParse } from './spans';
 
 /** One output-column entry for a CTE / subquery body projection. */
 function projColumnInfo(p: Projection): ColumnInfo | undefined {
 	// A CTE's `SELECT *` column is read straight off the projection (no wildcard
 	// side-channel): sqllens never destructively expands it, so `isStar` survives.
-	const name = p.isStar ? '*' : p.name;
+	const name = p.isStar ? '*' : (p.name === undefined ? undefined : normName(p.name));
 	if (name === undefined) return undefined;
 
 	const c = asCst(p.cst);
@@ -50,7 +50,7 @@ export function extractCtes(parse: SqllensParse): CteInfo[] {
 	for (const scope of allScopes(parse.scopes)) {
 		// WITH-clause CTEs declared for this scope.
 		for (const [, cteRef] of scope.ctes) {
-			const name = cteRef.def.name;
+			const name = normName(cteRef.def.name);
 			if (seen.has(name)) continue;
 			seen.add(name);
 

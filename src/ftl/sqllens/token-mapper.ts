@@ -562,6 +562,19 @@ function isQuotedIdentifier(text: string): boolean {
 	return c === '"' || c === '`' || c === '[';
 }
 
+/**
+ * A token that carries no SQL meaning — a whitespace/newline run. sqlglot emits
+ * NO whitespace tokens, so the mapper drops these. We test BOTH the role and the
+ * text: some sqllens builds tag a bare `\r\n` / `\n` with a non-`whitespace` role,
+ * and a whitespace-TEXT token must be dropped whatever its role (else it leaks
+ * through as a bogus `\r\n`-typed SqlToken, the top shadow-diff bucket). Dropped
+ * tokens still separate a pending comment from the token it attaches to — the
+ * comment-gap fold `continue`s past them without resetting `pending`.
+ */
+function isWhitespaceToken(tok: Token): boolean {
+	return tok.role === 'whitespace' || /^\s+$/.test(tok.text ?? '');
+}
+
 /** Map one already-de-compounded sqllens token to a sqlglot TokenType name. */
 function singleType(tok: Token, dialect: Dialect): string {
 	switch (tok.role) {
@@ -589,7 +602,7 @@ function singleType(tok: Token, dialect: Dialect): string {
 function nextKeywordCandidate(tokens: Token[], i: number): { tok: Token; index: number } | null {
 	for (let j = i + 1; j < tokens.length; j++) {
 		const t = tokens[j];
-		if (t.role === 'whitespace') continue;
+		if (isWhitespaceToken(t)) continue;
 		if (t.role === 'comment') return null;
 		return { tok: t, index: j };
 	}
@@ -603,7 +616,7 @@ export function mapTokens(tokens: Token[], sql: string, dialect: Dialect): SqlTo
 
 	for (let i = 0; i < tokens.length; i++) {
 		const tok = tokens[i];
-		if (tok.role === 'whitespace') continue;
+		if (isWhitespaceToken(tok)) continue;
 		if (tok.role === 'comment') {
 			// ANTLR's line-comment token swallows the trailing newline; sqlglot's
 			// span ends AT the newline. The printer re-slices source by [start,end),

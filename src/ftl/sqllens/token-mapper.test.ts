@@ -64,6 +64,27 @@ describe('mapTokens — comment folding', () => {
 	});
 });
 
+describe('mapTokens — whitespace never leaks (sqlglot emits no whitespace tokens)', () => {
+	it('drops every whitespace/newline run across blank lines yet keeps comment attachment', () => {
+		// Multi-line SQL with CRLF newlines and blank lines around a comment. sqlglot
+		// emits NO whitespace tokens; a `\r\n`-typed leak was the top shadow-diff bucket.
+		const sql = 'select a\r\n\r\n-- gap comment\r\n\r\nfrom t';
+		const toks = map(sql);
+
+		// No token is a whitespace run (pure-whitespace TEXT) nor a bare-newline TYPE.
+		for (const t of toks) {
+			expect(sql.slice(t.start, t.end + 1)).not.toMatch(/^\s+$/);
+			expect(t.type).not.toMatch(/^\s+$/);
+		}
+		expect(toks.map(t => t.type)).toEqual(['SELECT', 'VAR', 'FROM', 'VAR']);
+
+		// The comment sits before two blank lines and the FROM — it must still
+		// attach to FROM (the whitespace between is dropped without breaking the fold).
+		const from = toks.find(t => t.type === 'FROM')!;
+		expect(from.comments?.map(c => c.text)).toEqual(['-- gap comment']);
+	});
+});
+
 describe('mapTokens — CTE walk for debug-symbols buildCteRanges', () => {
 	// buildCteRanges walks WITH → VAR(name) → ALIAS → L_PAREN … R_PAREN.
 	const sql = 'with c as (select 1) select * from c';

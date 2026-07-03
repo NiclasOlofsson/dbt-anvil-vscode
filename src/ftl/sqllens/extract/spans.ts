@@ -54,6 +54,26 @@ export function tokenPos(t: AntlrToken): Pos {
 }
 
 /**
+ * Normalize a SQL identifier's NAME the way the legacy sqlglot path serializes
+ * it: an UNQUOTED identifier is lowercased (Spark/databricks is case-insensitive
+ * — `Upper_Col` → `upper_col`, and a keyword-as-identifier `NAME` → `name`); a
+ * QUOTED identifier keeps its exact case with the surrounding quotes stripped
+ * (`` `Mixed` `` → `Mixed`, `"Mixed"` → `Mixed`, `[Mixed]` → `Mixed`). This is a
+ * NAME-only transform — source spans (col/endCol) are computed from the raw token
+ * text and are never touched by it. Verified against FtlDocumentParser:
+ * `select Upper_Col, "Mixed"` yields ctes/finalColumns names `upper_col` + `Mixed`.
+ */
+export function normName(raw: string): string {
+	const c = raw[0];
+	if (c === '`' || c === '"' || c === '[') {
+		const close = c === '[' ? ']' : c;
+		const end = raw.length > 1 && raw[raw.length - 1] === close ? raw.length - 1 : raw.length;
+		return raw.slice(1, end);
+	}
+	return raw.toLowerCase();
+}
+
+/**
  * The neutral parse result the extractors consume — the tiers of sqllens's
  * `parse()` + `resolveScopes()` that the DocumentModel is built from. We stop
  * short of the full `analyze()` (qualify / infer / lineage / symbols) because

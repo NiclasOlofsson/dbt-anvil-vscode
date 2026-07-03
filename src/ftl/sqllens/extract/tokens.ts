@@ -20,13 +20,30 @@ import type {
 	TokenInfo,
 } from '../../../services/parse-service';
 import type { Projection, QueryBody, ResolvedSource, Token } from '../api';
-import { allScopes, asCst, type CstNode, type SqllensParse } from './spans';
+import { allScopes, asCst, normName, type CstNode, type SqllensParse } from './spans';
 
 /** Identifier-role tokens fully inside a `[lo, hi]` char range, in source order. */
 function identTokensInRange(tokens: Token[], lo: number, hi: number): Token[] {
 	const out: Token[] = [];
 	for (const t of tokens) {
 		if (t.role !== 'identifier') continue;
+		if (t.start >= lo && t.stop <= hi) out.push(t);
+	}
+	return out;
+}
+
+/**
+ * The dotted name-part tokens inside a `[lo, hi]` range, in source order. Unlike
+ * `identTokensInRange`, this also accepts `keyword`-role tokens: sqllens tags an
+ * identifier that collides with a reserved word (`name`, `x`, …) as role
+ * `keyword`, but legacy sqlglot still treats it as a column/qualifier Identifier.
+ * A column reference's CST span is strictly `part (DOT part)*`, so every
+ * identifier-or-keyword token in the span is a name part (no `AS`, no functions).
+ */
+function namePartTokensInRange(tokens: Token[], lo: number, hi: number): Token[] {
+	const out: Token[] = [];
+	for (const t of tokens) {
+		if (t.role !== 'identifier' && t.role !== 'keyword') continue;
 		if (t.start >= lo && t.stop <= hi) out.push(t);
 	}
 	return out;
@@ -72,7 +89,7 @@ function tableRefForSource(src: ResolvedSource, scopeId: number, tokens: Token[]
 		if (nameTok) {
 			tok = {
 				type: 'table_ref',
-				name: nameTok.text,
+				name: normName(nameTok.text),
 				line: nameTok.line - 1,
 				col: nameTok.column,
 				endCol: nameTok.column + nameTok.text.length,
@@ -82,7 +99,7 @@ function tableRefForSource(src: ResolvedSource, scopeId: number, tokens: Token[]
 			const s = cst.start;
 			tok = {
 				type: 'table_ref',
-				name: canonical,
+				name: normName(canonical),
 				line: s ? s.line - 1 : 0,
 				col: s ? s.column : 0,
 				endCol: (s ? s.column : 0) + canonical.length,
@@ -133,7 +150,7 @@ function columnDefToken(p: Projection): ColumnDefToken | undefined {
 	if (!s) return undefined;
 	return {
 		type: 'column_def',
-		name: p.name,
+		name: normName(p.name),
 		line: s.line - 1,
 		col: s.column,
 		endCol: s.column + (s.text?.length ?? p.name.length),
@@ -150,21 +167,24 @@ function columnRefToken(
 	const stop = c.stop;
 	if (!start || !stop) return undefined;
 
-	// TODO(sqllens-partspans): sqllens carries one CST span for the whole dotted
-	// reference; the column-name and qualifier sub-spans are derived from the
-	// identifier tokens inside the ref's char range until the IR exposes per-part
-	// spans (the plan's named Phase-0 blocker).
-	const idents = identTokensInRange(tokens, start.start, stop.stop);
-	const nameTok = idents.length ? idents[idents.length - 1] : undefined;
-	const name = nameTok ? nameTok.text : ref.parts[ref.parts.length - 1];
+	// sqllens carries one CST span for the whole dotted reference; the column-name
+	// and qualifier sub-spans are derived by scanning the dotted name-part tokens
+	// inside the ref's char range. The LAST part is the column name; the part
+	// directly BEFORE it is the table qualifier (for a 3-part `db.schema.col` the
+	// qualifier is `schema`, matching legacy's `Column.table` child).
+	const parts = namePartTokensInRange(tokens, start.start, stop.stop);
+	const nameTok = parts.length ? parts[parts.length - 1] : undefined;
+	const rawName = nameTok ? nameTok.text : ref.parts[ref.parts.length - 1];
+	const name = normName(rawName);
 	const line = nameTok ? nameTok.line - 1 : stop.line - 1;
 	const col = nameTok ? nameTok.column : stop.column;
+	const endCol = col + (nameTok ? nameTok.text.length : name.length);
 
-	const tok: ColumnRefToken = { type: 'column_ref', name, line, col, endCol: col + name.length, scopeId };
+	const tok: ColumnRefToken = { type: 'column_ref', name, line, col, endCol, scopeId };
 
 	if (ref.parts.length >= 2) {
-		const qTok = idents.length >= 2 ? idents[idents.length - 2] : undefined;
-		tok.table = qTok ? qTok.text : ref.parts[ref.parts.length - 2];
+		const qTok = parts.length >= 2 ? parts[parts.length - 2] : undefined;
+		tok.table = normName(qTok ? qTok.text : ref.parts[ref.parts.length - 2]);
 		if (qTok) {
 			tok.tableLine = qTok.line - 1;
 			tok.tableCol = qTok.column;
@@ -224,13 +244,14 @@ export function extractTokens(parse: SqllensParse): TokenInfo[] {
 		for (const [, cteRef] of scope.ctes) {
 			const s = asCst(cteRef.def.cst).start;
 			if (!s) continue;
-			const name = cteRef.def.name;
+			const rawName = cteRef.def.name;
+			const name = normName(rawName);
 			tokens.push({
 				type: 'table_ref',
 				name,
 				line: s.line - 1,
 				col: s.column,
-				endCol: s.column + name.length,
+				endCol: s.column + rawName.length,
 				cteDefinition: true,
 				scopeId: id,
 			});

@@ -120,6 +120,75 @@ describe('SqllensDocumentParser — realistic dbt model (databricks)', () => {
 	});
 });
 
+describe('SqllensDocumentParser — column-ref per-part spans (1/2/3-part)', () => {
+	// One column per line so line index is stable; `name` is a keyword-role token
+	// in sqllens, which the naive identifier-only scan used to mis-pick.
+	const SQL = [
+		'select',        // 0
+		'  bare,',       // 1
+		'  a.name,',     // 2
+		'  db.sch.col',  // 3
+		'from foo as a', // 4
+	].join('\n');
+	const L = SQL.split('\n');
+
+	it('splits each ref into column + qualifier with exact 0-based spans (endCol exclusive)', async () => {
+		const model = await parser().parse(SQL);
+		const col = (n: string) =>
+			model.tokens.find((t): t is ColumnRefToken => t.type === 'column_ref' && t.name === n)!;
+
+		// 1-part: column only, no qualifier.
+		const bare = col('bare');
+		expect(bare).toMatchObject({ name: 'bare', line: 1, col: 2, endCol: 6 });
+		expect(bare.table).toBeUndefined();
+
+		// 2-part `a.name`: last part is the column, `a` the qualifier.
+		const nm = col('name');
+		expect(nm).toMatchObject({
+			name: 'name', line: 2, col: L[2].indexOf('name'), endCol: L[2].indexOf('name') + 4,
+			table: 'a', tableLine: 2, tableCol: L[2].indexOf('a.name'), tableEndCol: L[2].indexOf('a.name') + 1,
+		});
+
+		// 3-part `db.sch.col`: qualifier is the part DIRECTLY before the column (`sch`),
+		// matching legacy's `Column.table` child — the leading `db` is dropped.
+		const c = col('col');
+		expect(c).toMatchObject({
+			name: 'col', line: 3, col: L[3].indexOf('col'), endCol: L[3].indexOf('col') + 3,
+			table: 'sch', tableCol: L[3].indexOf('sch'), tableEndCol: L[3].indexOf('sch') + 3,
+		});
+	});
+});
+
+describe('SqllensDocumentParser — identifier case normalization', () => {
+	it('lowercases unquoted identifier names and keeps quoted (backtick) case', async () => {
+		// Legacy sqlglot lowercases unquoted identifiers (databricks is case-insensitive)
+		// and preserves a quoted identifier's exact case (quotes stripped). Verified
+		// against FtlDocumentParser: `Upper_Col` -> `upper_col`, `` `Mixed` `` -> `Mixed`.
+		const model = await parser().parse('select Upper_Col, `Mixed`\nfrom foo');
+		expect(model.finalColumns.map(c => c.name)).toEqual(['upper_col', 'Mixed']);
+
+		const colRefNames = model.tokens
+			.filter((t): t is ColumnRefToken => t.type === 'column_ref')
+			.map(t => t.name);
+		expect(colRefNames).toContain('upper_col');
+		expect(colRefNames).toContain('Mixed');
+	});
+});
+
+describe('SqllensDocumentParser — finalSelect span anchored at first identifier', () => {
+	it('anchors a function-wrapped projection at the inner column, not the expression start', async () => {
+		// `sum(amount) as total` — legacy anchors the column span at `amount` (the
+		// first identifier), NOT the `sum` keyword. The alias sub-span is unchanged.
+		const sql = 'select sum(amount) as total\nfrom foo';
+		const model = await parser().parse(sql);
+		const total = model.finalSelect!.columns.find(c => c.name === 'total')!;
+
+		expect(total.line).toBe(0);
+		expect(total.col).toBe('select sum('.length); // start of `amount`, not `sum`
+		expect(total.aliasCol).toBe('select sum(amount) as '.length); // start of `total`
+	});
+});
+
 describe('SqllensDocumentParser — parse-failure and cascade paths', () => {
 	it('reports syntax_error warnings with 0-based positions for broken SQL', async () => {
 		const model = await parser().parse('select a from t )))');

@@ -92,17 +92,17 @@ function discoverCorpus(args: Args): CorpusFile[] {
 	if (args.dir) {
 		const dir = path.resolve(args.dir);
 		const adapter = args.dialect ?? 'databricks';
-		const root = path.relative(ROOT, dir).replaceAll('\\', '/') || dir;
+		const root = path.relative(ROOT, dir).replace(/\\/g, '/') || dir;
 		for (const f of collectSqlFiles(dir, '.sql')) {
-			files.push({ path: f, adapter, label: path.relative(dir, f).replaceAll('\\', '/'), root });
+			files.push({ path: f, adapter, label: path.relative(dir, f).replace(/\\/g, '/'), root });
 		}
 		return files;
 	}
 	for (const rootDef of DEFAULT_ROOTS) {
 		const adapter = args.dialect ?? rootDef.adapter;
-		const root = path.relative(ROOT, rootDef.dir).replaceAll('\\', '/');
+		const root = path.relative(ROOT, rootDef.dir).replace(/\\/g, '/');
 		for (const f of collectSqlFiles(rootDef.dir, rootDef.suffix)) {
-			files.push({ path: f, adapter, label: path.relative(ROOT, f).replaceAll('\\', '/'), root });
+			files.push({ path: f, adapter, label: path.relative(ROOT, f).replace(/\\/g, '/'), root });
 		}
 	}
 	return files;
