@@ -1,6 +1,6 @@
 import { iterJinjaTags, blankJinja } from './jinja-blanker';
 import { buildLineStarts, lineAtOffset } from '../ftl/jinja-spans';
-import { analyze, tokenize, MAIN_FRAME } from '../ftl/sqllens/api';
+import { analyze, tokenize, toSqllensDialect, MAIN_FRAME } from '../ftl/sqllens/api';
 import type { Sym, Dialect } from '../ftl/sqllens/api';
 import type { SqlToken } from '../ftl/parse-result';
 import type { JinjaToken } from '../ftl/jinja-tokenizer';
@@ -715,32 +715,6 @@ const CLAUSE_KEYWORD_ROLE: Record<string, string> = {
 	OFFSET: 'offset',
 	WITH: 'cte',
 };
-
-/** Map a dbt/sqlglot dialect name to the closest sqllens grammar. sqllens ships
- *  eight grammars; adapters outside that set fold onto the nearest relative and
- *  ultimately onto databricks (the widest Spark-family grammar). */
-const SQLGLOT_TO_SQLLENS: Record<string, Dialect> = {
-	databricks: 'databricks',
-	spark: 'databricks',
-	hive: 'databricks',
-	tsql: 'tsql',
-	synapse: 'tsql',
-	sqlserver: 'tsql',
-	fabric: 'tsql',
-	snowflake: 'snowflake',
-	bigquery: 'bigquery',
-	redshift: 'redshift',
-	postgres: 'postgres',
-	postgresql: 'postgres',
-	duckdb: 'duckdb',
-	trino: 'trino',
-	athena: 'trino',
-	presto: 'trino',
-};
-
-function toSqllensDialect(dialect: string): Dialect {
-	return SQLGLOT_TO_SQLLENS[dialect.toLowerCase()] ?? 'databricks';
-}
 
 interface FrameRange {
 	name: string;
