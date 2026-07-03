@@ -101,6 +101,7 @@ export class SqllensDocumentParser implements DocumentParser {
 			parseMs += performance.now() - p0;
 			const res: SqllensParse = {
 				ast: pr.ast,
+				dialect,
 				errors: pr.errors,
 				diagnostics: pr.diagnostics,
 				scopes,

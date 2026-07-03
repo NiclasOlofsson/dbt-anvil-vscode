@@ -13,7 +13,7 @@
  * read (`start`/`stop` tokens, each with `start`/`stop`/`line`/`column`/`text`)
  * are stable and this keeps the boundary narrow.
  */
-import type { QueryBody, QueryExpr, Scope, ScopeTree, SelectExpr, SyntaxDiagnostic, Token } from '../api';
+import type { Dialect, QueryBody, QueryExpr, Scope, ScopeTree, SelectExpr, SyntaxDiagnostic, Token } from '../api';
 
 /** One antlr lexer token, as much of it as the extractors read. */
 export interface AntlrToken {
@@ -53,24 +53,97 @@ export function tokenPos(t: AntlrToken): Pos {
 	return { line: t.line - 1, col: t.column, endCol: t.column + (t.text?.length ?? 0) };
 }
 
+/** How a dialect folds identifier case, split by whether the identifier is quoted. */
+type Casing = 'lower' | 'upper' | 'preserve';
+interface NormPolicy {
+	/** Casing applied to an UNQUOTED identifier. */
+	unquoted: Casing;
+	/** Casing applied to a QUOTED identifier (after its delimiters are stripped). */
+	quoted: Casing;
+}
+
 /**
- * Normalize a SQL identifier's NAME the way the legacy sqlglot path serializes
- * it: an UNQUOTED identifier is lowercased (Spark/databricks is case-insensitive
- * — `Upper_Col` → `upper_col`, and a keyword-as-identifier `NAME` → `name`); a
- * QUOTED identifier keeps its exact case with the surrounding quotes stripped
- * (`` `Mixed` `` → `Mixed`, `"Mixed"` → `Mixed`, `[Mixed]` → `Mixed`). This is a
- * NAME-only transform — source spans (col/endCol) are computed from the raw token
- * text and are never touched by it. Verified against FtlDocumentParser:
- * `select Upper_Col, "Mixed"` yields ctes/finalColumns names `upper_col` + `Mixed`.
+ * Per-dialect identifier-normalization policy, reproducing sqlglot's
+ * `Dialect.normalize_identifier` (dialects/dialect.py:1045) driven by each
+ * dialect's `NORMALIZATION_STRATEGY`. The legacy path's token names are the output
+ * of `normalize_identifiers` (optimizer/normalize_identifiers.py), which `qualify()`
+ * runs unconditionally (optimizer/qualify.py:79) before the AST is serialized — so
+ * these policies match what the legacy DocumentModel CONTAINS, verified through the
+ * shadow-diff harness (snowflake `Foo_Bar`→`FOO_BAR`, `"Out_Col"`→`Out_Col`; tsql
+ * `[Mixed]`→`mixed`; postgres unquoted lowered / quoted preserved).
+ *
+ * Strategy → policy (dialect.py:112 NormalizationStrategy):
+ *   - CASE_INSENSITIVE → both lowercased (quoted included). Spark/Hive/Databricks
+ *     (hive.py:219, via databricks→spark→spark2→hive), tsql (tsql.py:412),
+ *     bigquery (bigquery.py:402), redshift (redshift.py:43), duckdb (duckdb.py:979),
+ *     trino/presto (presto.py:277, trino.py:15 inherits).
+ *   - UPPERCASE → unquoted uppercased, quoted preserved. snowflake (snowflake.py:653).
+ *   - LOWERCASE (base Dialect default, dialect.py:401) → unquoted lowercased, quoted
+ *     preserved. postgres (postgres.py:295, no override).
+ * No sqllens dialect uses CASE_SENSITIVE or CASE_INSENSITIVE_UPPERCASE.
  */
-export function normName(raw: string): string {
+const NORM_POLICY: Record<Dialect, NormPolicy> = {
+	databricks: { unquoted: 'lower', quoted: 'lower' },
+	tsql: { unquoted: 'lower', quoted: 'lower' },
+	bigquery: { unquoted: 'lower', quoted: 'lower' },
+	redshift: { unquoted: 'lower', quoted: 'lower' },
+	duckdb: { unquoted: 'lower', quoted: 'lower' },
+	trino: { unquoted: 'lower', quoted: 'lower' },
+	snowflake: { unquoted: 'upper', quoted: 'preserve' },
+	postgres: { unquoted: 'lower', quoted: 'preserve' },
+};
+
+function applyCasing(s: string, c: Casing): string {
+	if (c === 'lower') return s.toLowerCase();
+	if (c === 'upper') return s.toUpperCase();
+	return s;
+}
+
+/**
+ * Normalize a SQL identifier's NAME the way the legacy sqlglot path serializes it
+ * FOR THE GIVEN DIALECT (see `NORM_POLICY`). The surrounding quotes are always
+ * stripped (`` `Mixed` `` / `"Mixed"` / `[Mixed]` → `Mixed`); the case fold then
+ * depends on the dialect and on whether the identifier was quoted:
+ *   - databricks/tsql/bigquery/redshift/duckdb/trino: everything lowercased —
+ *     `Upper_Col` → `upper_col`, `` `Mixed` `` → `mixed` (case-insensitive engines).
+ *   - snowflake: unquoted uppercased (`Foo_Bar` → `FOO_BAR`), quoted preserved
+ *     (`"Out_Col"` → `Out_Col`).
+ *   - postgres: unquoted lowercased, quoted preserved (`"Mixed"` → `Mixed`).
+ * This is a NAME-only transform — source spans (col/endCol) are computed from the
+ * raw token text and are never touched by it.
+ */
+export function normName(raw: string, dialect: Dialect): string {
+	const policy = NORM_POLICY[dialect];
 	const c = raw[0];
 	if (c === '`' || c === '"' || c === '[') {
 		const close = c === '[' ? ']' : c;
 		const end = raw.length > 1 && raw[raw.length - 1] === close ? raw.length - 1 : raw.length;
-		return raw.slice(1, end);
+		return applyCasing(raw.slice(1, end), policy.quoted);
 	}
-	return raw.toLowerCase();
+	return applyCasing(raw, policy.unquoted);
+}
+
+/**
+ * Recover the raw, delimiter-carrying form of an identifier for `normName`.
+ *
+ * sqllens's IR strips a DOUBLE-QUOTED identifier's delimiters from its `.name` /
+ * `.parts` strings (it keeps backtick/bracket, but not `"…"`), so a `"Mixed"`
+ * reaches `normName` looking unquoted — harmless for the case-INSENSITIVE dialects
+ * (they fold quoted and unquoted the same way) but wrong for snowflake (would
+ * uppercase a name meant to be preserved) and postgres (would lowercase it). The
+ * lexer token always carries the delimiters, so where the IR string is fed to
+ * `normName` we consult the identifier's source token: when it is a quoted form
+ * whose stripped content matches the IR name (case-insensitively), use the token;
+ * otherwise the IR string already carries whatever delimiters exist, so trust it.
+ */
+export function quotedRaw(irName: string, rawTok: string | undefined): string {
+	if (!rawTok || rawTok.length < 2) return irName;
+	const c = rawTok[0];
+	if (c !== '"' && c !== '`' && c !== '[') return irName;
+	const close = c === '[' ? ']' : c;
+	if (rawTok[rawTok.length - 1] !== close) return irName;
+	const inner = rawTok.slice(1, -1);
+	return inner.toLowerCase() === irName.toLowerCase() ? rawTok : irName;
 }
 
 /**
@@ -81,6 +154,8 @@ export function normName(raw: string): string {
  */
 export interface SqllensParse {
 	ast: QueryExpr;
+	/** The dialect the parse ran under — selects the identifier-normalization policy (`normName`). */
+	dialect: Dialect;
 	/** Lexer + parser syntax-error count (a valid parse is still returned). */
 	errors: number;
 	/** Positioned syntax diagnostics — the source of `syntax_error` warnings. */

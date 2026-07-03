@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { SqllensDocumentParser } from './document-parser';
 import { buildStarExpander } from './extract/star-expand';
 import { Schema, type ScopeTree } from './api';
-import type { ColumnRefToken, TableRefToken } from '../../services/parse-service';
+import type { ColumnRefToken, TableRefToken, TokenInfo } from '../../services/parse-service';
 
 function parser(adapterType = 'databricks') {
 	return new SqllensDocumentParser({ adapterType });
@@ -168,21 +168,22 @@ describe('SqllensDocumentParser — quoted per-part spans (partSpans adoption)',
 	// span is anchored at `endCol - unquotedName.length`, so a QUOTED part's span
 	// drops the opening delimiter (and its first char) and keeps the trailing one.
 	// Verified byte-for-byte against FtlDocumentParser: `a.`My Col`` yields the same
-	// col=11/endCol=17 there. The residual name-case difference (databricks
-	// lowercases a quoted name, snowflake uppercases a table) is `normName`'s domain,
-	// not the span logic, and is unchanged by this adoption.
+	// col=11/endCol=17 there. The NAME is dialect-normalized (databricks is
+	// case-insensitive, so a backtick-quoted name is lowercased too) — that's
+	// `normName`'s domain, not the span logic, and the span is unchanged (the
+	// normalized name has the same length as the raw stripped text here).
 	it('places a backtick-quoted column + unquoted qualifier (databricks)', async () => {
 		const sql = 'select a.`My Col` from t as a';
 		const model = await parser('databricks').parse(sql);
 		const col = model.tokens.find(
-			(t): t is ColumnRefToken => t.type === 'column_ref' && t.name === 'My Col',
+			(t): t is ColumnRefToken => t.type === 'column_ref' && t.name === 'my col',
 		)!;
 		const q = sql.indexOf('`My Col`');
 		expect(col).toMatchObject({
-			name: 'My Col',
+			name: 'my col', // databricks lowercases even a quoted identifier
 			line: 0,
 			endCol: q + '`My Col`'.length,          // after the closing backtick
-			col: q + '`My Col`'.length - 'My Col'.length, // legacy quirk: not the opening backtick
+			col: q + '`My Col`'.length - 'my col'.length, // legacy quirk: not the opening backtick
 			table: 'a',
 			tableCol: sql.indexOf('a.'),
 			tableEndCol: sql.indexOf('a.') + 1,
@@ -193,13 +194,13 @@ describe('SqllensDocumentParser — quoted per-part spans (partSpans adoption)',
 		const sql = 'select a.[My Col] from t as a';
 		const model = await parser('tsql').parse(sql);
 		const col = model.tokens.find(
-			(t): t is ColumnRefToken => t.type === 'column_ref' && t.name === 'My Col',
+			(t): t is ColumnRefToken => t.type === 'column_ref' && t.name === 'my col',
 		)!;
 		const q = sql.indexOf('[My Col]');
 		expect(col).toMatchObject({
-			name: 'My Col',
+			name: 'my col', // tsql is case-insensitive: a bracket-quoted name is lowercased
 			endCol: q + '[My Col]'.length,
-			col: q + '[My Col]'.length - 'My Col'.length,
+			col: q + '[My Col]'.length - 'my col'.length,
 			table: 'a',
 		});
 	});
@@ -219,26 +220,53 @@ describe('SqllensDocumentParser — quoted per-part spans (partSpans adoption)',
 			name: 'col',
 			col: sql.indexOf('.col') + 1,
 			endCol: sql.indexOf('.col') + 1 + 'col'.length,
-			table: 'My Table',
+			table: 'my table', // databricks lowercases the quoted qualifier too
 			tableEndCol: tq + '`My Table`'.length,
-			tableCol: tq + '`My Table`'.length - 'My Table'.length,
+			tableCol: tq + '`My Table`'.length - 'my table'.length,
 		});
 	});
 });
 
-describe('SqllensDocumentParser — identifier case normalization', () => {
-	it('lowercases unquoted identifier names and keeps quoted (backtick) case', async () => {
-		// Legacy sqlglot lowercases unquoted identifiers (databricks is case-insensitive)
-		// and preserves a quoted identifier's exact case (quotes stripped). Verified
-		// against FtlDocumentParser: `Upper_Col` -> `upper_col`, `` `Mixed` `` -> `Mixed`.
-		const model = await parser().parse('select Upper_Col, `Mixed`\nfrom foo');
-		expect(model.finalColumns.map(c => c.name)).toEqual(['upper_col', 'Mixed']);
+describe('SqllensDocumentParser — dialect-aware identifier case normalization', () => {
+	// `normName` reproduces sqlglot's per-dialect `normalize_identifier` (which the
+	// legacy path applies via qualify() -> normalize_identifiers before serializing
+	// the AST). Three strategies span the eight sqllens dialects:
+	//   - CASE_INSENSITIVE (databricks/tsql/bigquery/redshift/duckdb/trino): everything
+	//     lowercased, quoted included.
+	//   - UPPERCASE (snowflake): unquoted uppercased, quoted preserved.
+	//   - LOWERCASE (postgres): unquoted lowercased, quoted preserved.
+	// Each case verified against FtlDocumentParser through the shadow-diff harness.
 
-		const colRefNames = model.tokens
+	const colRefNames = (model: { tokens: readonly TokenInfo[] }): string[] =>
+		model.tokens
 			.filter((t): t is ColumnRefToken => t.type === 'column_ref')
 			.map(t => t.name);
-		expect(colRefNames).toContain('upper_col');
-		expect(colRefNames).toContain('Mixed');
+
+	it('databricks: unquoted lowercased, backtick-quoted lowercased', async () => {
+		const model = await parser('databricks').parse('select Upper_Col, `Mixed`\nfrom foo');
+		expect(model.finalColumns.map(c => c.name)).toEqual(['upper_col', 'mixed']);
+		expect(colRefNames(model)).toEqual(expect.arrayContaining(['upper_col', 'mixed']));
+	});
+
+	it('tsql: unquoted lowercased, bracket-quoted lowercased', async () => {
+		const model = await parser('tsql').parse('select Upper_Col, [Mixed]\nfrom foo');
+		expect(model.finalColumns.map(c => c.name)).toEqual(['upper_col', 'mixed']);
+	});
+
+	it('duckdb: unquoted lowercased, double-quoted lowercased (case-insensitive)', async () => {
+		const model = await parser('duckdb').parse('select Upper_Col, "Mixed"\nfrom foo');
+		expect(model.finalColumns.map(c => c.name)).toEqual(['upper_col', 'mixed']);
+	});
+
+	it('snowflake: unquoted UPPERCASED, double-quoted preserved', async () => {
+		const model = await parser('snowflake').parse('select Upper_Col, "Mixed"\nfrom foo');
+		expect(model.finalColumns.map(c => c.name)).toEqual(['UPPER_COL', 'Mixed']);
+		expect(colRefNames(model)).toEqual(expect.arrayContaining(['UPPER_COL', 'Mixed']));
+	});
+
+	it('postgres: unquoted lowercased, double-quoted preserved', async () => {
+		const model = await parser('postgres').parse('select Upper_Col, "Mixed"\nfrom foo');
+		expect(model.finalColumns.map(c => c.name)).toEqual(['upper_col', 'Mixed']);
 	});
 });
 
@@ -285,9 +313,12 @@ describe('SqllensDocumentParser — dialect smoke', () => {
 	});
 
 	it('parses a simple model under snowflake', async () => {
+		// snowflake's NORMALIZATION_STRATEGY is UPPERCASE — unquoted identifiers are
+		// uppercased (matching legacy sqlglot's normalize_identifier), unlike the
+		// lowercasing case-insensitive dialects above.
 		const model = await parser('snowflake').parse('select a, b from t');
-		expect(model.finalColumns.map(c => c.name)).toEqual(['a', 'b']);
-		expect(model.tokens.some(t => t.type === 'table_ref' && t.name === 't')).toBe(true);
+		expect(model.finalColumns.map(c => c.name)).toEqual(['A', 'B']);
+		expect(model.tokens.some(t => t.type === 'table_ref' && t.name === 'T')).toBe(true);
 		expect(model.sqlglotWarnings).toEqual([]);
 	});
 });

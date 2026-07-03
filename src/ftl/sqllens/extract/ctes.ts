@@ -9,15 +9,15 @@
  * as the sqlglot path needed). See EXTRACTOR-MAP §1.
  */
 import type { ColumnInfo, CteInfo } from '../../../services/parse-service';
-import type { Projection, Scope } from '../api';
-import { allScopes, asCst, leftSelect, leftSelectScope, normName, type SqllensParse } from './spans';
+import type { Dialect, Projection, Scope } from '../api';
+import { allScopes, asCst, leftSelect, leftSelectScope, normName, quotedRaw, type SqllensParse } from './spans';
 import { expandedColumnInfos, type StarExpander } from './star-expand';
 
 /** One output-column entry for a CTE / subquery body projection. */
-function projColumnInfo(p: Projection): ColumnInfo | undefined {
+function projColumnInfo(p: Projection, dialect: Dialect): ColumnInfo | undefined {
 	// A CTE's `SELECT *` column is read straight off the projection (no wildcard
 	// side-channel): sqllens never destructively expands it, so `isStar` survives.
-	const name = p.isStar ? '*' : (p.name === undefined ? undefined : normName(p.name));
+	const name = p.isStar ? '*' : (p.name === undefined ? undefined : normName(quotedRaw(p.name, asCst(p.cst).stop?.text ?? undefined), dialect));
 	if (name === undefined) return undefined;
 
 	const c = asCst(p.cst);
@@ -41,7 +41,7 @@ function projColumnInfo(p: Projection): ColumnInfo | undefined {
  * star — a qualified `t.*`, a mixed `*, extra`, a set-op branch, and any FROM subquery
  * — is expanded, matching legacy's post-qualify extraction.
  */
-function columnsOf(scope: Scope, expander: StarExpander | undefined, isCte: boolean): ColumnInfo[] {
+function columnsOf(scope: Scope, expander: StarExpander | undefined, isCte: boolean, dialect: Dialect): ColumnInfo[] {
 	const sel = leftSelect(scope.body);
 	if (!sel) return [];
 	const selScope = leftSelectScope(scope);
@@ -58,11 +58,11 @@ function columnsOf(scope: Scope, expander: StarExpander | undefined, isCte: bool
 		if (p.isStar && expander && !soleBareStar) {
 			const cols = expander.expandStar(selScope, p);
 			if (cols) {
-				out.push(...expandedColumnInfos(p, cols));
+				out.push(...expandedColumnInfos(p, cols, dialect));
 				continue;
 			}
 		}
-		const info = projColumnInfo(p);
+		const info = projColumnInfo(p, dialect);
 		if (info) out.push(info);
 	}
 	return out;
@@ -75,11 +75,11 @@ export function extractCtes(parse: SqllensParse, expander?: StarExpander): CteIn
 	for (const scope of allScopes(parse.scopes)) {
 		// WITH-clause CTEs declared for this scope.
 		for (const [, cteRef] of scope.ctes) {
-			const name = normName(cteRef.def.name);
+			const c = asCst(cteRef.def.cst);
+			const name = normName(quotedRaw(cteRef.def.name, c.start?.text ?? undefined), parse.dialect);
 			if (seen.has(name)) continue;
 			seen.add(name);
 
-			const c = asCst(cteRef.def.cst);
 			const startTok = c.start;
 			const stopTok = c.stop;
 			const startLine = startTok ? startTok.line - 1 : 0;
@@ -88,7 +88,7 @@ export function extractCtes(parse: SqllensParse, expander?: StarExpander): CteIn
 				name,
 				line: startLine,
 				endLine: stopTok ? stopTok.line - 1 : startLine,
-				columns: columnsOf(cteRef.scope, expander, true),
+				columns: columnsOf(cteRef.scope, expander, true, parse.dialect),
 			};
 			if (startTok) entry.col = startTok.column;
 			if (stopTok) entry.endCol = stopTok.column + (stopTok.text?.length ?? 1);
@@ -110,7 +110,7 @@ export function extractCtes(parse: SqllensParse, expander?: StarExpander): CteIn
 				name: alias,
 				line: startLine,
 				endLine: aliasTok ? aliasTok.line - 1 : startLine,
-				columns: columnsOf(src.scope, expander, false),
+				columns: columnsOf(src.scope, expander, false, parse.dialect),
 				isSubquery: true,
 			};
 			if (aliasTok) {

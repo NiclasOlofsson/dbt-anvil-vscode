@@ -18,7 +18,7 @@
  * (`infer_schema=True` + its CTE-schema supplement).
  */
 import type { ColumnInfo, FinalSelectColumnInfo } from '../../../services/parse-service';
-import type { Projection, Qualification, ResolvedSource, Schema, Scope, ScopeTree } from '../api';
+import type { Dialect, Projection, Qualification, ResolvedSource, Schema, Scope, ScopeTree } from '../api';
 import { qualify } from '../api';
 import { asCst, normName } from './spans';
 
@@ -166,10 +166,10 @@ function starAnchor(p: Projection): { line: number; endCol: number } | undefined
 
 /** Expanded-star entries as `ColumnInfo[]` (finalColumns / CteInfo.columns). Names are
  *  normalized through `normName` for parity with the legacy lowercase serialization. */
-export function expandedColumnInfos(p: Projection, cols: ExpandedColumn[]): ColumnInfo[] {
+export function expandedColumnInfos(p: Projection, cols: ExpandedColumn[], dialect: Dialect): ColumnInfo[] {
 	const a = starAnchor(p);
 	return cols.map(ec => {
-		const name = normName(ec.name);
+		const name = normName(ec.name, dialect);
 		const info: ColumnInfo = { name, line: a ? a.line : 0 };
 		if (a) info.col = a.endCol - name.length;
 		return info;
@@ -179,10 +179,10 @@ export function expandedColumnInfos(p: Projection, cols: ExpandedColumn[]): Colu
 /** Expanded-star entries as `FinalSelectColumnInfo[]`. Legacy's post-qualify synthesized
  *  columns are qualified `Column` nodes, so each carries `expression` (the column name)
  *  and `table` (the source qualifier); the span is the star anchor. */
-export function expandedFinalSelectColumns(p: Projection, cols: ExpandedColumn[]): FinalSelectColumnInfo[] {
+export function expandedFinalSelectColumns(p: Projection, cols: ExpandedColumn[], dialect: Dialect): FinalSelectColumnInfo[] {
 	const a = starAnchor(p);
 	return cols.map(ec => {
-		const name = normName(ec.name);
+		const name = normName(ec.name, dialect);
 		const entry: FinalSelectColumnInfo = {
 			name,
 			line: a ? a.line : 0,

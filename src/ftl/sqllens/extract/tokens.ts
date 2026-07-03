@@ -19,8 +19,8 @@ import type {
 	TableRefToken,
 	TokenInfo,
 } from '../../../services/parse-service';
-import type { PartSpan, Projection, QueryBody, ResolvedSource, Token } from '../api';
-import { allScopes, asCst, normName, type CstNode, type SqllensParse } from './spans';
+import type { Dialect, PartSpan, Projection, QueryBody, ResolvedSource, Token } from '../api';
+import { allScopes, asCst, normName, quotedRaw, type CstNode, type SqllensParse } from './spans';
 
 /** Identifier-role tokens fully inside a `[lo, hi]` char range, in source order. */
 function identTokensInRange(tokens: Token[], lo: number, hi: number): Token[] {
@@ -77,7 +77,7 @@ function addAlias(tok: TableRefToken, alias: string | undefined, aliasCst?: CstN
 	// the legacy `synthesized` flag has no analog here (EXTRACTOR-MAP §2).
 }
 
-function tableRefForSource(src: ResolvedSource, scopeId: number, tokens: Token[]): TableRefToken | undefined {
+function tableRefForSource(src: ResolvedSource, scopeId: number, tokens: Token[], dialect: Dialect): TableRefToken | undefined {
 	if (src.kind === 'table' || src.kind === 'cte') {
 		const source = src.source;
 		const cst = asCst(source.cst);
@@ -89,7 +89,7 @@ function tableRefForSource(src: ResolvedSource, scopeId: number, tokens: Token[]
 		if (nameTok) {
 			tok = {
 				type: 'table_ref',
-				name: normName(nameTok.text),
+				name: normName(nameTok.text, dialect),
 				line: nameTok.line - 1,
 				col: nameTok.column,
 				endCol: nameTok.column + nameTok.text.length,
@@ -99,7 +99,7 @@ function tableRefForSource(src: ResolvedSource, scopeId: number, tokens: Token[]
 			const s = cst.start;
 			tok = {
 				type: 'table_ref',
-				name: normName(canonical),
+				name: normName(canonical, dialect),
 				line: s ? s.line - 1 : 0,
 				col: s ? s.column : 0,
 				endCol: (s ? s.column : 0) + canonical.length,
@@ -136,7 +136,7 @@ function tableRefForSource(src: ResolvedSource, scopeId: number, tokens: Token[]
 	return undefined;
 }
 
-function columnDefToken(p: Projection): ColumnDefToken | undefined {
+function columnDefToken(p: Projection, dialect: Dialect): ColumnDefToken | undefined {
 	if (p.isStar || p.name === undefined) return undefined;
 	// A bare column projection whose output name echoes the column is a reference,
 	// not a declaration — matches sqllens's own symbol emitter (symbols.ts).
@@ -150,7 +150,7 @@ function columnDefToken(p: Projection): ColumnDefToken | undefined {
 	if (!s) return undefined;
 	return {
 		type: 'column_def',
-		name: normName(p.name),
+		name: normName(quotedRaw(p.name, s.text ?? undefined), dialect),
 		line: s.line - 1,
 		col: s.column,
 		endCol: s.column + (s.text?.length ?? p.name.length),
@@ -165,10 +165,10 @@ function columnDefToken(p: Projection): ColumnDefToken | undefined {
  *  opening quote (and its first char) and keeps the trailing quote — a legacy quirk
  *  reproduced here so the two paths agree in shadow-diff. `rawText` is the source
  *  token incl. quotes; `column` its 0-based start col; `line1` its 1-based line. */
-function namePartPos(rawText: string, column: number, line1: number): {
+function namePartPos(rawText: string, column: number, line1: number, dialect: Dialect): {
 	name: string; line: number; col: number; endCol: number;
 } {
-	const name = normName(rawText);
+	const name = normName(rawText, dialect);
 	const endCol = column + rawText.length;
 	return { name, line: line1 - 1, col: endCol - name.length, endCol };
 }
@@ -178,6 +178,7 @@ function columnRefToken(
 	scopeId: number,
 	tokens: Token[],
 	byStart: Map<number, Token>,
+	dialect: Dialect,
 ): ColumnRefToken | undefined {
 	const c = asCst(ref.cst);
 	const start = c.start;
@@ -205,24 +206,24 @@ function columnRefToken(
 	if (usePartSpans) {
 		const nameSpan = spans[spans.length - 1];
 		const nameTok = byStart.get(nameSpan.start);
-		namePos = namePartPos(nameTok?.text ?? ref.parts[ref.parts.length - 1], nameSpan.column, nameSpan.line);
+		namePos = namePartPos(nameTok?.text ?? ref.parts[ref.parts.length - 1], nameSpan.column, nameSpan.line, dialect);
 		if (ref.parts.length >= 2) {
 			const qSpan = spans[spans.length - 2];
 			const qTok = byStart.get(qSpan.start);
-			qualPos = namePartPos(qTok?.text ?? ref.parts[ref.parts.length - 2], qSpan.column, qSpan.line);
+			qualPos = namePartPos(qTok?.text ?? ref.parts[ref.parts.length - 2], qSpan.column, qSpan.line, dialect);
 			qualName = qualPos.name;
 		}
 	} else {
 		const parts = namePartTokensInRange(tokens, start.start, stop.stop);
 		const nameTok = parts.length ? parts[parts.length - 1] : undefined;
 		namePos = nameTok
-			? namePartPos(nameTok.text, nameTok.column, nameTok.line)
-			: { name: normName(ref.parts[ref.parts.length - 1]), line: stop.line - 1, col: stop.column, endCol: stop.column + normName(ref.parts[ref.parts.length - 1]).length };
+			? namePartPos(nameTok.text, nameTok.column, nameTok.line, dialect)
+			: { name: normName(ref.parts[ref.parts.length - 1], dialect), line: stop.line - 1, col: stop.column, endCol: stop.column + normName(ref.parts[ref.parts.length - 1], dialect).length };
 		if (ref.parts.length >= 2) {
 			const qTok = parts.length >= 2 ? parts[parts.length - 2] : undefined;
 			// Legacy still records `table` from the IR part even with no source span.
-			qualName = normName(qTok ? qTok.text : ref.parts[ref.parts.length - 2]);
-			if (qTok) qualPos = namePartPos(qTok.text, qTok.column, qTok.line);
+			qualName = normName(qTok ? qTok.text : ref.parts[ref.parts.length - 2], dialect);
+			if (qTok) qualPos = namePartPos(qTok.text, qTok.column, qTok.line, dialect);
 		}
 	}
 
@@ -302,7 +303,7 @@ export function extractTokens(parse: SqllensParse): TokenInfo[] {
 			const s = asCst(cteRef.def.cst).start;
 			if (!s) continue;
 			const rawName = cteRef.def.name;
-			const name = normName(rawName);
+			const name = normName(quotedRaw(rawName, s.text ?? undefined), parse.dialect);
 			tokens.push({
 				type: 'table_ref',
 				name,
@@ -315,7 +316,7 @@ export function extractTokens(parse: SqllensParse): TokenInfo[] {
 		}
 
 		for (const src of scope.sources.values()) {
-			const tok = tableRefForSource(src, id, neutral);
+			const tok = tableRefForSource(src, id, neutral, parse.dialect);
 			if (tok) {
 				tokens.push(tok);
 				sourceRefs.push(tok);
@@ -324,7 +325,7 @@ export function extractTokens(parse: SqllensParse): TokenInfo[] {
 
 		if (scope.body.kind === 'select') {
 			for (const p of scope.body.projections) {
-				const def = columnDefToken(p);
+				const def = columnDefToken(p, parse.dialect);
 				if (def) tokens.push(def);
 			}
 		}
@@ -334,7 +335,7 @@ export function extractTokens(parse: SqllensParse): TokenInfo[] {
 	for (const scope of scopes) {
 		const id = scopeId.get(scope)!;
 		for (const ref of columnRefsOf(scope.body)) {
-			const tok = columnRefToken(ref, id, neutral, byStart);
+			const tok = columnRefToken(ref, id, neutral, byStart, parse.dialect);
 			if (tok) tokens.push(tok);
 		}
 	}

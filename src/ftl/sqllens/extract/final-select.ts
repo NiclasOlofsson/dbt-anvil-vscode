@@ -12,8 +12,8 @@ import type {
 	FinalSelectColumnInfo,
 	FinalSelectInfo,
 } from '../../../services/parse-service';
-import type { Expr, Projection } from '../api';
-import { asCst, leftSelect, leftSelectScope, normName, type AntlrToken, type CstNode, type SqllensParse } from './spans';
+import type { Dialect, Expr, Projection } from '../api';
+import { asCst, leftSelect, leftSelectScope, normName, quotedRaw, type AntlrToken, type CstNode, type SqllensParse } from './spans';
 import { expandedColumnInfos, expandedFinalSelectColumns, type StarExpander } from './star-expand';
 
 /**
@@ -22,12 +22,12 @@ import { expandedColumnInfos, expandedFinalSelectColumns, type StarExpander } fr
  * `t.*` surfaces as `'*'`. Mirrors the legacy final-select naming, with the
  * identifier NAME normalized (unquoted → lowercase) as the sqlglot path does.
  */
-function projName(p: Projection): string | undefined {
+function projName(p: Projection, dialect: Dialect): string | undefined {
 	if (p.isStar) {
 		const star = p.expr.kind === 'star' ? p.expr : undefined;
 		return star && star.qualifier ? '*' : undefined;
 	}
-	return p.name === undefined ? undefined : normName(p.name);
+	return p.name === undefined ? undefined : normName(quotedRaw(p.name, asCst(p.cst).stop?.text ?? undefined), dialect);
 }
 
 /**
@@ -106,11 +106,11 @@ export function extractFinalColumns(parse: SqllensParse, expander?: StarExpander
 		if (p.isStar && expander) {
 			const cols = expander.expandStar(scope, p);
 			if (cols) {
-				out.push(...expandedColumnInfos(p, cols));
+				out.push(...expandedColumnInfos(p, cols, parse.dialect));
 				continue;
 			}
 		}
-		const name = projName(p);
+		const name = projName(p, parse.dialect);
 		if (name === undefined) continue;
 		const c = asCst(p.cst);
 		const t = p.isStar ? c.start : (c.stop ?? c.start);
@@ -121,8 +121,8 @@ export function extractFinalColumns(parse: SqllensParse, expander?: StarExpander
 	return out;
 }
 
-function finalSelectColumn(p: Projection): FinalSelectColumnInfo | undefined {
-	const name = projName(p);
+function finalSelectColumn(p: Projection, dialect: Dialect): FinalSelectColumnInfo | undefined {
+	const name = projName(p, dialect);
 	if (name === undefined) return undefined;
 
 	const c = asCst(p.cst);
@@ -160,8 +160,13 @@ function finalSelectColumn(p: Projection): FinalSelectColumnInfo | undefined {
 
 	const expr = p.expr;
 	if (expr.kind === 'column') {
-		entry.expression = normName(expr.parts[expr.parts.length - 1]);
-		if (expr.parts.length >= 2) entry.table = normName(expr.parts[expr.parts.length - 2]);
+		// The column-name part is the expr's LAST token, so `cst.stop` carries its
+		// delimiters (recovering a `"…"` the IR string stripped); the qualifier part
+		// has no single-token handle here, so it uses the (backtick/bracket-carrying)
+		// IR string — correct for every dialect but a double-quoted qualifier, which
+		// no corpus exercises.
+		entry.expression = normName(quotedRaw(expr.parts[expr.parts.length - 1], asCst(expr.cst).stop?.text ?? undefined), dialect);
+		if (expr.parts.length >= 2) entry.table = normName(expr.parts[expr.parts.length - 2], dialect);
 	} else if (expr.kind !== 'star') {
 		// A function / case / cast / arithmetic / literal — the candidate for the
 		// `aliasing.expression-no-alias` rule.
@@ -217,11 +222,11 @@ export function extractFinalSelect(parse: SqllensParse, expander?: StarExpander)
 		if (p.isStar && expander) {
 			const cols = expander.expandStar(scope, p);
 			if (cols) {
-				columns.push(...expandedFinalSelectColumns(p, cols));
+				columns.push(...expandedFinalSelectColumns(p, cols, parse.dialect));
 				continue;
 			}
 		}
-		const col = finalSelectColumn(p);
+		const col = finalSelectColumn(p, parse.dialect);
 		if (col) columns.push(col);
 	}
 
