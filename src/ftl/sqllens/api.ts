@@ -8,6 +8,7 @@
  * migration consumes more of the API.
  */
 import { mapAdapterToDialect } from '../dialect-map';
+import { adapterDialect } from 'sqllens';
 import type { Dialect } from 'sqllens';
 
 export {
@@ -19,6 +20,7 @@ export {
 	deriveSymbols,
 	resolveScopes,
 	dialectSymbols,
+	adapterDialect,
 	Schema,
 	SqlDocument,
 	MAIN_FRAME,
@@ -67,33 +69,35 @@ export const SQLLENS_DIALECTS = [
 ] as const;
 
 /**
- * Map a canonical sqlglot dialect name (what `mapAdapterToDialect` returns) to
- * one of the eight dialects sqllens actually implements. sqllens's `databricks`
- * grammar is Spark-based, so Spark/Hive family adapters route there; Athena is
- * Presto/Trino. Anything unrecognised falls back to `databricks` (the widest,
- * most permissive grammar) so the parser never throws on an unknown adapter.
+ * Close-relative remaps sqllens's own `adapterDialect()` deliberately refuses
+ * ("never guesses" — only corpus-gated adapters are mapped upstream). The
+ * extension accepts a best-effort parse for near-identical SQL surfaces rather
+ * than dropping intelligence entirely.
  */
-const SQLLENS_BY_SQLGLOT: Record<string, Dialect> = {
-	databricks: 'databricks',
-	spark: 'databricks',
-	spark2: 'databricks',
+const RELATIVE_DIALECTS: Record<string, Dialect> = {
 	hive: 'databricks',
-	tsql: 'tsql',
-	fabric: 'tsql',
-	snowflake: 'snowflake',
-	bigquery: 'bigquery',
-	redshift: 'redshift',
-	postgres: 'postgres',
+	spark2: 'databricks',
+	fabricspark: 'databricks',
 	materialize: 'postgres',
 	risingwave: 'postgres',
-	duckdb: 'duckdb',
-	trino: 'trino',
-	athena: 'trino',
-	presto: 'trino',
+	postgresql: 'postgres',
 };
 
-/** Resolve a dbt adapter type to the sqllens `Dialect` gate value. */
+/**
+ * Resolve a dbt adapter type to the sqllens `Dialect` gate value: sqllens's
+ * own adapter map first, then the relatives layer (accepting the sqlglot
+ * canonical name as input too), finally `databricks` — the fallback keeps the
+ * shadow/test paths total; the ParseService wiring decides whether an unmapped
+ * adapter should instead degrade to no SQL intelligence.
+ */
 export function toSqllensDialect(adapterType: string | undefined): Dialect {
+	if (!adapterType) return 'databricks';
+	const direct = adapterDialectOrRelative(adapterType);
+	if (direct) return direct;
 	const sqlglot = mapAdapterToDialect(adapterType);
-	return (sqlglot && SQLLENS_BY_SQLGLOT[sqlglot]) || 'databricks';
+	return (sqlglot && adapterDialectOrRelative(sqlglot)) || 'databricks';
+}
+
+function adapterDialectOrRelative(name: string): Dialect | undefined {
+	return adapterDialect(name) ?? RELATIVE_DIALECTS[name.trim().toLowerCase()];
 }
