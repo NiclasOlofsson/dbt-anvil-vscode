@@ -160,6 +160,60 @@ describe('traceColumnLineage — star expansion', () => {
 	});
 });
 
+describe('traceColumnLineage — dialect-true identifier folding', () => {
+	// These pin the resolution path to sqllens's per-dialect fold (foldIdentifier), not a uniform
+	// lowercase. Snowflake folds unquoted → UPPER and preserves quoted; Databricks folds backticks
+	// case-insensitively; Postgres preserves quoted. A uniform lowercase fold gets Snowflake/Postgres
+	// quoted case-sensitivity wrong (it would wrongly bind "Mixed" to mixed) and Snowflake's UPPER
+	// source keys wrong (a qualified `A.col` would miss the source keyed `A`).
+
+	it('snowflake binds a qualified UPPER ref to a lowercase-defined CTE (both fold to UPPER)', () => {
+		// `A.Y` must bind to CTE `a`'s column `y`: source key is folded `A`, column folds `Y`.
+		// Under a uniform-lowercase fold the qualifier `A` would miss the source keyed `A`.
+		const sql = 'WITH a AS (SELECT x AS y FROM t), b AS (SELECT A.Y AS z FROM a) SELECT z FROM b';
+		const result = trace(sql, 'z', 'snowflake');
+		expect(result.dependencies).toEqual([{ column: 'x', table: 't' }]);
+		expect(result.via_ctes).toEqual(['b', 'a']);
+		expect(byId(result.transformations, 'cte:b')!.sources).toEqual(['cte:a']);
+		expect(byId(result.transformations, 'cte:a')!.sources).toEqual(['table:t']);
+	});
+
+	it('snowflake keeps quoted "Mixed" case-sensitive — unquoted `mixed` does NOT bind to it', () => {
+		// "Mixed" is preserved; `mixed` folds to MIXED — a different column. The hop into `a` must
+		// NOT happen (a uniform-lowercase fold would wrongly bind them and recurse into `a`).
+		const sql = 'WITH a AS (SELECT x AS "Mixed" FROM t), b AS (SELECT mixed AS z FROM a) SELECT z FROM b';
+		const result = trace(sql, 'z', 'snowflake');
+		expect(byId(result.transformations, 'cte:a')).toBeUndefined();
+		expect(result.via_ctes).not.toContain('a');
+		expect(byId(result.transformations, 'cte:b')!.sources).not.toContain('cte:a');
+	});
+
+	it('snowflake DOES bind quoted "Mixed" to a matching-case quoted "Mixed" (case preserved, not folded away)', () => {
+		// The positive twin: identical-case quoted identifiers bind, proving the negative above is
+		// case-sensitivity — not a parse failure.
+		const sql = 'WITH a AS (SELECT x AS "Mixed" FROM t), b AS (SELECT "Mixed" AS z FROM a) SELECT z FROM b';
+		const result = trace(sql, 'z', 'snowflake');
+		expect(result.via_ctes).toEqual(['b', 'a']);
+		expect(byId(result.transformations, 'cte:b')!.sources).toEqual(['cte:a']);
+		expect(byId(result.transformations, 'cte:a')!.sources).toEqual(['table:t']);
+	});
+
+	it('postgres keeps quoted "Mixed" case-sensitive — unquoted `mixed` does NOT bind to it', () => {
+		const sql = 'WITH a AS (SELECT x AS "Mixed" FROM t), b AS (SELECT mixed AS z FROM a) SELECT z FROM b';
+		const result = trace(sql, 'z', 'postgres');
+		expect(byId(result.transformations, 'cte:a')).toBeUndefined();
+		expect(result.via_ctes).not.toContain('a');
+	});
+
+	it('databricks folds backtick-quoted identifiers case-insensitively (binds `mixed` to `Mixed`)', () => {
+		const sql = 'WITH a AS (SELECT x AS `Mixed` FROM t) SELECT `mixed` AS z FROM a';
+		const result = trace(sql, 'z', 'databricks');
+		expect(result.dependencies).toEqual([{ column: 'x', table: 't' }]);
+		expect(result.via_ctes).toEqual(['a']);
+		expect(byId(result.transformations, 'cte:a')!.sources).toEqual(['table:t']);
+	});
+});
+
 describe('traceColumnLineage — schema-fed base columns', () => {
 	it('binds an unqualified column across a join using the schema', () => {
 		const sql = 'SELECT customer_name FROM orders o JOIN customers c ON c.id = o.customer_id';

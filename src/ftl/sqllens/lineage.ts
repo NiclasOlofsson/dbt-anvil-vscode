@@ -28,10 +28,11 @@
  * Expression snippets are sliced from the ORIGINAL sql at the CST span of the producing
  * expression — never reconstructed from the IR.
  */
-import { lineage as sqllensLineage, parse, resolveScopes, Schema } from 'sqllens';
+import { foldIdentifier, lineage as sqllensLineage, parse, resolveScopes, Schema } from 'sqllens';
 import type {
 	Dialect,
 	Expr,
+	IdentKind,
 	Origin,
 	Projection,
 	ResolvedSource,
@@ -108,9 +109,9 @@ export function traceColumnLineage(
 	const schemaObj = new Schema(schema ?? {});
 
 	const origins = sqllensLineage(tree, schemaObj).originsOf(columnName);
-	const dependencies = dependenciesFromOrigins(origins);
+	const dependencies = dependenciesFromOrigins(origins, dialect);
 
-	const walker = new HopWalker(sql, tree);
+	const walker = new HopWalker(sql, tree, dialect);
 	walker.trace(columnName);
 
 	return {
@@ -121,7 +122,7 @@ export function traceColumnLineage(
 }
 
 /** Convert sqllens's flat base-table origins into the consumed `ColumnDependency[]` (deduped). */
-function dependenciesFromOrigins(origins: Origin[]): ColumnDependency[] {
+function dependenciesFromOrigins(origins: Origin[], dialect: string): ColumnDependency[] {
 	const out: ColumnDependency[] = [];
 	for (const o of origins) {
 		const parts = o.table;
@@ -129,7 +130,8 @@ function dependenciesFromOrigins(origins: Origin[]): ColumnDependency[] {
 		const dep: ColumnDependency = { column: o.column, table };
 		if (parts.length >= 2) dep.schema = parts[parts.length - 2];
 		if (parts.length >= 3) dep.database = parts[parts.length - 3];
-		if (!out.some(d => eq(d.column, dep.column) && eq(d.table, dep.table))) out.push(dep);
+		if (!out.some(d => foldEq(d.column, dep.column, dialect) && foldEq(d.table, dep.table, dialect, 'table')))
+			out.push(dep);
 	}
 	return out;
 }
@@ -159,6 +161,7 @@ class HopWalker {
 	constructor(
 		private readonly sql: string,
 		private readonly tree: ScopeTree,
+		private readonly dialect: string,
 	) {}
 
 	/** Walk the tree from the root output column, populating transforms + via_ctes. */
@@ -171,7 +174,7 @@ class HopWalker {
 			return;
 		}
 
-		const producer = findProjection(root, columnName, undefined);
+		const producer = findProjection(root, columnName, undefined, this.dialect);
 		if (!producer) return; // column not projected — empty result (matches sqlglot)
 
 		const refs = columnRefsIn(producer.expr);
@@ -200,10 +203,10 @@ class HopWalker {
 	private walkRef(scope: Scope, ref: ColRef): void {
 		const b = this.resolveRef(scope, ref.parts);
 		if (!b) return; // unresolvable ref — its leaves are still carried by `dependencies`
-		this.handleBinding(scope, b.source, b.column);
+		this.handleBinding(b.source, b.column);
 	}
 
-	private handleBinding(scope: Scope, src: ResolvedSource, column: string): void {
+	private handleBinding(src: ResolvedSource, column: string): void {
 		if (src.kind === 'table') {
 			this.ensureTransform(sourceId(src), 'table', column, undefined, []);
 			return;
@@ -217,7 +220,7 @@ class HopWalker {
 		}
 
 		const name = derivedName(src);
-		const key = `${this.scopeId(child)}::${normalize(column)}`;
+		const key = `${this.scopeId(child)}::${foldIdentifier(column, this.dialect)}`;
 		if (this.seen.has(key)) return;
 		this.seen.add(key);
 		this.addVia(src, name);
@@ -227,13 +230,13 @@ class HopWalker {
 			return;
 		}
 
-		const producer = findProjection(child, column, aliasesOf(src));
+		const producer = findProjection(child, column, aliasesOf(src), this.dialect);
 		if (!producer) {
 			// A `*` / bare-source column: try to resolve it fresh one scope deeper.
 			const fresh = this.resolveRef(child, [column]);
 			if (fresh) {
 				this.ensureTransform(sourceId(src), 'cte', column, undefined, [sourceId(fresh.source)]);
-				this.handleBinding(child, fresh.source, fresh.column);
+				this.handleBinding(fresh.source, fresh.column);
 			} else {
 				// star-expansion / needs-schema — summarize, don't drop.
 				this.ensureTransform(sourceId(src), 'cte', column, undefined, [], true);
@@ -251,12 +254,12 @@ class HopWalker {
 	private handleUnion(id: string, scope: Scope, column: string): void {
 		const branchScopes = unionBranches(scope);
 		const outputs = scope.outputs;
-		const idx = outputs !== 'unknown' ? outputs.findIndex(o => eq(o, column)) : -1;
+		const idx = outputs !== 'unknown' ? outputs.findIndex(o => foldEq(o, column, this.dialect)) : -1;
 		const branches: TransformationBranch[] = [];
 		let anySummarized = false;
 
 		for (const bs of branchScopes) {
-			const producer = branchProducer(bs, column, idx);
+			const producer = branchProducer(bs, column, idx, this.dialect);
 			if (!producer) {
 				branches.push({ sources: [] });
 				anySummarized = true;
@@ -285,7 +288,7 @@ class HopWalker {
 	/** The original-sql slice for a producing projection, unless it is a bare echo of the column. */
 	private exprSnippet(producer: Projection, column: string): string | undefined {
 		const text = sliceCst(this.sql, producer.expr.cst);
-		if (text === '' || eq(text.trim(), column)) return undefined;
+		if (text === '' || foldEq(text.trim(), column, this.dialect)) return undefined;
 		return truncateExpression(text.trim());
 	}
 
@@ -326,7 +329,7 @@ class HopWalker {
 	 * the caller then relies on the flat `dependencies` for those leaves.
 	 */
 	private resolveRef(scope: Scope, parts: string[]): Binding | undefined {
-		const split = splitRef(parts, key => hasVisibleSource(scope, key));
+		const split = splitRef(parts, key => hasVisibleSource(scope, key), this.dialect);
 
 		if (split.qualifier !== undefined) {
 			for (let s: Scope | undefined = scope; s; s = s.parent) {
@@ -341,7 +344,7 @@ class HopWalker {
 		// scope — the column belongs to a relation here, not a correlated outer one; if that
 		// scope has a single source, bind to it (the common `SELECT x FROM t` / passthrough leaf).
 		for (let s: Scope | undefined = scope; s; s = s.parent) {
-			const r = resolveByColumnName(s, split.column);
+			const r = resolveByColumnName(s, split.column, this.dialect);
 			if (r === 'ambiguous') return undefined;
 			if (r === 'needs-schema') {
 				const lone = loneSource(s);
@@ -428,14 +431,18 @@ function hasVisibleSource(scope: Scope, key: string): boolean {
  * none-known-but-some-unknown is `needs-schema` (a bare table might carry it); truly none
  * is `undefined` (try an enclosing scope for correlation).
  */
-function resolveByColumnName(scope: Scope, column: string): ResolvedSource | 'ambiguous' | 'needs-schema' | undefined {
-	const n = normalize(column);
+function resolveByColumnName(
+	scope: Scope,
+	column: string,
+	dialect: string,
+): ResolvedSource | 'ambiguous' | 'needs-schema' | undefined {
+	const n = foldIdentifier(column, dialect);
 	const matches: ResolvedSource[] = [];
 	let anyUnknown = false;
 	for (const src of scope.sources.values()) {
 		const cols = sourceOutputs(src);
 		if (cols === 'unknown') anyUnknown = true;
-		else if (cols.some(c => normalize(c) === n)) matches.push(src);
+		else if (cols.some(c => foldIdentifier(c, dialect) === n)) matches.push(src);
 	}
 	if (matches.length === 1) return matches[0];
 	if (matches.length > 1) return 'ambiguous';
@@ -459,22 +466,27 @@ function unionBranches(scope: Scope): Scope[] {
 }
 
 /** The projection producing `column` in a union-branch scope: by output position, else by name. */
-function branchProducer(scope: Scope, column: string, idx: number): Projection | undefined {
+function branchProducer(scope: Scope, column: string, idx: number, dialect: string): Projection | undefined {
 	if (scope.body.kind !== 'select') return undefined;
 	const projs = scope.body.projections;
 	if (idx >= 0 && idx < projs.length && !projs[idx].isStar) return projs[idx];
-	return findProjection(scope, column, undefined);
+	return findProjection(scope, column, undefined, dialect);
 }
 
 /** The projection producing `column` in a select scope (by declared alias order, else by name). */
-function findProjection(scope: Scope, column: string, aliases: string[] | undefined): Projection | undefined {
+function findProjection(
+	scope: Scope,
+	column: string,
+	aliases: string[] | undefined,
+	dialect: string,
+): Projection | undefined {
 	if (scope.body.kind !== 'select') return undefined;
 	const projs = (scope.body as SelectExpr).projections;
 	if (aliases) {
-		const i = aliases.findIndex(a => eq(a, column));
+		const i = aliases.findIndex(a => foldEq(a, column, dialect));
 		return i >= 0 ? projs[i] : undefined;
 	}
-	return projs.find(p => !p.isStar && p.name !== undefined && eq(p.name, column));
+	return projs.find(p => !p.isStar && p.name !== undefined && foldEq(p.name, column, dialect));
 }
 
 // ── reference splitting (mirrors scope.ts splitColumnRef) ────────────────────
@@ -484,12 +496,23 @@ interface SplitRef {
 	column: string;
 }
 
-function splitRef(parts: string[], isSource: (key: string) => boolean): SplitRef {
-	if (parts.length >= 3 && isSource(normalize(parts[1]))) {
-		return { qualifier: normalize(parts[1]), column: parts[2] };
+function splitRef(parts: string[], isSource: (key: string) => boolean, dialect: string): SplitRef {
+	// Mirror sqllens's splitColumnRef: a qualifier part is folded as "other", then (only if that
+	// misses and differs) as "table" — the two folds diverge only for BigQuery's case-preserving
+	// table identifiers. The matched, folded key is what indexes the (folded) source map.
+	const keyOf = (part: string): string | undefined => {
+		const k = foldIdentifier(part, dialect);
+		if (isSource(k)) return k;
+		const kt = foldIdentifier(part, dialect, 'table');
+		return kt !== k && isSource(kt) ? kt : undefined;
+	};
+	if (parts.length >= 3) {
+		const key = keyOf(parts[1]);
+		if (key !== undefined) return { qualifier: key, column: parts[2] };
 	}
-	if (parts.length >= 2 && isSource(normalize(parts[0]))) {
-		return { qualifier: normalize(parts[0]), column: parts[1] };
+	if (parts.length >= 2) {
+		const key = keyOf(parts[0]);
+		if (key !== undefined) return { qualifier: key, column: parts[1] };
 	}
 	return { column: parts[0] ?? '' };
 }
@@ -566,6 +589,8 @@ function sliceCst(sql: string, cst: unknown): string {
 	return sql.slice(start, stop + 1);
 }
 
+/** Delimiter strip used only for the DISPLAY id of a table source (`table:<name>`) — never for
+ *  comparison. Comparison always goes through {@link foldEq} / {@link foldIdentifier}. */
 function stripQuotes(name: string): string {
 	if (name.length >= 2) {
 		const first = name[0];
@@ -575,10 +600,10 @@ function stripQuotes(name: string): string {
 	return name;
 }
 
-function normalize(name: string): string {
-	return stripQuotes(name).toLowerCase();
-}
-
-function eq(a: string, b: string): boolean {
-	return normalize(a) === normalize(b);
+/** Identifier equality under the dialect's true fold — the single comparison the whole resolution
+ *  path uses (column/alias/output names default to kind "other"; a table name part passes "table").
+ *  This is the drop-in for the old uniform lowercase `eq`, now dialect-correct (Snowflake folds
+ *  UPPER, quoted "Mixed" stays case-sensitive, Databricks backticks fold case-insensitively). */
+function foldEq(a: string, b: string, dialect: string, kind?: IdentKind): boolean {
+	return foldIdentifier(a, dialect, kind) === foldIdentifier(b, dialect, kind);
 }
