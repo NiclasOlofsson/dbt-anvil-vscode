@@ -14,7 +14,7 @@ import type { DocumentModel } from '../../services/parse-service';
 import type { DocumentParser, ParseOptions } from '../../services/document-parser';
 import type { DialectSymbols } from '../sql-parser';
 import { performance } from 'node:perf_hooks';
-import { dialectSymbols, parse, resolveScopes, toSqllensDialect, type Dialect } from './api';
+import { dialectSymbols, parse, resolveScopes, Schema, toSqllensDialect, type Dialect, type SchemaMapping } from './api';
 import { tokenizeJinja } from '../jinja-tokenizer';
 import { parseWithJinjaFallback, type ParsePass } from '../parse-with-jinja-fallback';
 import { keywordTokenTypesFor, mapTokens } from './token-mapper';
@@ -26,6 +26,7 @@ import { createSqllensAstIndex } from './ast-index';
 import { extractCtes } from './extract/ctes';
 import { extractTokens } from './extract/tokens';
 import { extractFinalColumns, extractFinalSelect } from './extract/final-select';
+import { buildStarExpander } from './extract/star-expand';
 import { mapDiagnostics } from './extract/warnings';
 import type { SqllensParse } from './extract/spans';
 
@@ -75,16 +76,17 @@ export class SqllensDocumentParser implements DocumentParser {
 		return Promise.resolve(symbols);
 	}
 
-	parse(sql: string, _options?: ParseOptions): Promise<DocumentModel> {
+	parse(sql: string, options?: ParseOptions): Promise<DocumentModel> {
 		// sqllens is synchronous; the Promise-returning signature matches the
-		// DocumentParser seam. `_options.schema` (the sqlglot qualify hint) is
-		// intentionally unused: the structural model reads projections directly,
-		// `select *` stays `*`, and the schema-only `aliases` field is dead on the
-		// current path (EXTRACTOR-MAP).
-		return Promise.resolve(this._parse(sql));
+		// DocumentParser seam. `options.schema` (the sqlglot qualify hint, a 2-level
+		// `{ table: { column: type } }` map — assignable directly to sqllens's nested
+		// `SchemaMapping`) feeds `SELECT *` expansion; when absent, an EMPTY schema still
+		// expands CTE/subquery-sourced stars, which is all the legacy path does without an
+		// external catalog anyway (`infer_schema=True`).
+		return Promise.resolve(this._parse(sql, options?.schema));
 	}
 
-	private _parse(rawSql: string): DocumentModel {
+	private _parse(rawSql: string, schema?: Record<string, Record<string, string>>): DocumentModel {
 		const t0 = performance.now();
 		const dialect = toSqllensDialect(this._context.adapterType);
 		const jinjaTokens = tokenizeJinja(rawSql);
@@ -116,10 +118,26 @@ export class SqllensDocumentParser implements DocumentParser {
 		// exactly as the sqlglot path does.
 		const tokenSource = (pass === 'pass2' && pass1) ? pass1 : result;
 
-		const ctes = extractCtes(result);
+		// Schema-fed `SELECT *` expansion — wired ONLY when the caller supplies a schema.
+		// The expander runs qualify() (read-only; it never disturbs the other extractors) over
+		// the winning parse's scopes and, given a catalog, expands stars sourced from those
+		// tables AND from CTEs/subqueries inferable from the same query. Gating on a non-empty
+		// schema is deliberate: without a catalog the legacy path's synthesised columns carry
+		// no real source token, so sqlglot anchors them via internal fall-backs (`line:0`, or
+		// the FROM-table identifier) we cannot reproduce structurally — expanding then would
+		// trade a name diff for a position diff, not close it. Star diagnostics are NOT mapped
+		// into warnings: the legacy path emits no comparable per-column warning
+		// (validate_qualify_columns=False), and scope_warnings are stripped before shadow
+		// comparison, so surfacing them would be pure noise (EXTRACTOR-MAP §7). The expander is
+		// also undefined if qualify throws — then every extractor falls back to unexpanded output.
+		const expander = (schema && Object.keys(schema).length > 0)
+			? buildStarExpander(result.scopes, new Schema(schema as SchemaMapping))
+			: undefined;
+
+		const ctes = extractCtes(result, expander);
 		const tokens = extractTokens(result);
-		const finalColumns = extractFinalColumns(result);
-		const finalSelect = extractFinalSelect(result);
+		const finalColumns = extractFinalColumns(result, expander);
+		const finalSelect = extractFinalSelect(result, expander);
 		const refs = extractRefs(jinjaTokens);
 		const sources = extractSources(jinjaTokens);
 		const macroCalls = extractMacroCalls(jinjaTokens);

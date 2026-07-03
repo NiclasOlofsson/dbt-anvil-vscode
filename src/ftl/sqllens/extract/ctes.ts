@@ -9,8 +9,9 @@
  * as the sqlglot path needed). See EXTRACTOR-MAP §1.
  */
 import type { ColumnInfo, CteInfo } from '../../../services/parse-service';
-import type { Projection, QueryBody } from '../api';
-import { allScopes, asCst, leftSelect, normName, type SqllensParse } from './spans';
+import type { Projection, Scope } from '../api';
+import { allScopes, asCst, leftSelect, leftSelectScope, normName, type SqllensParse } from './spans';
+import { expandedColumnInfos, type StarExpander } from './star-expand';
 
 /** One output-column entry for a CTE / subquery body projection. */
 function projColumnInfo(p: Projection): ColumnInfo | undefined {
@@ -32,18 +33,42 @@ function projColumnInfo(p: Projection): ColumnInfo | undefined {
 	return info;
 }
 
-function columnsOf(body: QueryBody): ColumnInfo[] {
-	const sel = leftSelect(body);
+/**
+ * Output columns of a CTE / subquery body, stars expanded when a schema-fed expander
+ * resolves them. The `isCte` flag reproduces the legacy asymmetry: a WITH-clause CTE
+ * whose body is a single BARE `SELECT *` keeps its `*` entry (legacy's `wildcardCtes`
+ * side-channel restores the wildcard rather than expanding it), whereas every other
+ * star — a qualified `t.*`, a mixed `*, extra`, a set-op branch, and any FROM subquery
+ * — is expanded, matching legacy's post-qualify extraction.
+ */
+function columnsOf(scope: Scope, expander: StarExpander | undefined, isCte: boolean): ColumnInfo[] {
+	const sel = leftSelect(scope.body);
 	if (!sel) return [];
+	const selScope = leftSelectScope(scope);
+
+	const soleBareStar =
+		isCte &&
+		scope.body.kind === 'select' &&
+		sel.projections.length === 1 &&
+		sel.projections[0].isStar &&
+		!(sel.projections[0].expr.kind === 'star' && sel.projections[0].expr.qualifier);
+
 	const out: ColumnInfo[] = [];
 	for (const p of sel.projections) {
+		if (p.isStar && expander && !soleBareStar) {
+			const cols = expander.expandStar(selScope, p);
+			if (cols) {
+				out.push(...expandedColumnInfos(p, cols));
+				continue;
+			}
+		}
 		const info = projColumnInfo(p);
 		if (info) out.push(info);
 	}
 	return out;
 }
 
-export function extractCtes(parse: SqllensParse): CteInfo[] {
+export function extractCtes(parse: SqllensParse, expander?: StarExpander): CteInfo[] {
 	const result: CteInfo[] = [];
 	const seen = new Set<string>();
 
@@ -63,7 +88,7 @@ export function extractCtes(parse: SqllensParse): CteInfo[] {
 				name,
 				line: startLine,
 				endLine: stopTok ? stopTok.line - 1 : startLine,
-				columns: columnsOf(cteRef.scope.body),
+				columns: columnsOf(cteRef.scope, expander, true),
 			};
 			if (startTok) entry.col = startTok.column;
 			if (stopTok) entry.endCol = stopTok.column + (stopTok.text?.length ?? 1);
@@ -85,7 +110,7 @@ export function extractCtes(parse: SqllensParse): CteInfo[] {
 				name: alias,
 				line: startLine,
 				endLine: aliasTok ? aliasTok.line - 1 : startLine,
-				columns: columnsOf(src.scope.body),
+				columns: columnsOf(src.scope, expander, false),
 				isSubquery: true,
 			};
 			if (aliasTok) {

@@ -13,7 +13,8 @@ import type {
 	FinalSelectInfo,
 } from '../../../services/parse-service';
 import type { Expr, Projection } from '../api';
-import { asCst, leftSelect, normName, type AntlrToken, type CstNode, type SqllensParse } from './spans';
+import { asCst, leftSelect, leftSelectScope, normName, type AntlrToken, type CstNode, type SqllensParse } from './spans';
+import { expandedColumnInfos, expandedFinalSelectColumns, type StarExpander } from './star-expand';
 
 /**
  * The output name of a projection, or `undefined` to skip it. A bare `*` (no
@@ -91,12 +92,24 @@ function isExplicitAlias(p: Projection): boolean {
 	return !(last !== undefined && last.toLowerCase() === p.name.toLowerCase());
 }
 
-export function extractFinalColumns(parse: SqllensParse): ColumnInfo[] {
+export function extractFinalColumns(parse: SqllensParse, expander?: StarExpander): ColumnInfo[] {
 	const sel = leftSelect(parse.ast.body);
 	if (!sel) return [];
+	// The output scope holds the FROM sources star expansion resolves against (the left
+	// branch for a set operation, matching `leftSelect` above).
+	const scope = leftSelectScope(parse.scopes.root);
 
 	const out: ColumnInfo[] = [];
 	for (const p of sel.projections) {
+		// The top-level output always expands a resolvable star (legacy has no
+		// wildcard-CTE suppression here — qualify() rewrites the star into real columns).
+		if (p.isStar && expander) {
+			const cols = expander.expandStar(scope, p);
+			if (cols) {
+				out.push(...expandedColumnInfos(p, cols));
+				continue;
+			}
+		}
 		const name = projName(p);
 		if (name === undefined) continue;
 		const c = asCst(p.cst);
@@ -190,9 +203,10 @@ function identifierBounds(
 	return { startLine: sL, startCol: sC, endLine: eL, endCol: eC };
 }
 
-export function extractFinalSelect(parse: SqllensParse): FinalSelectInfo | undefined {
+export function extractFinalSelect(parse: SqllensParse, expander?: StarExpander): FinalSelectInfo | undefined {
 	const sel = leftSelect(parse.ast.body);
 	if (!sel) return undefined;
+	const scope = leftSelectScope(parse.scopes.root);
 
 	const selStart = asCst(sel.cst).start;
 	const selLine = selStart ? selStart.line - 1 : 0;
@@ -200,6 +214,13 @@ export function extractFinalSelect(parse: SqllensParse): FinalSelectInfo | undef
 
 	const columns: FinalSelectColumnInfo[] = [];
 	for (const p of sel.projections) {
+		if (p.isStar && expander) {
+			const cols = expander.expandStar(scope, p);
+			if (cols) {
+				columns.push(...expandedFinalSelectColumns(p, cols));
+				continue;
+			}
+		}
 		const col = finalSelectColumn(p);
 		if (col) columns.push(col);
 	}

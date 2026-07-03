@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { SqllensDocumentParser } from './document-parser';
+import { buildStarExpander } from './extract/star-expand';
+import { Schema, type ScopeTree } from './api';
 import type { ColumnRefToken, TableRefToken } from '../../services/parse-service';
 
 function parser(adapterType = 'databricks') {
@@ -287,6 +289,70 @@ describe('SqllensDocumentParser — dialect smoke', () => {
 		expect(model.finalColumns.map(c => c.name)).toEqual(['a', 'b']);
 		expect(model.tokens.some(t => t.type === 'table_ref' && t.name === 't')).toBe(true);
 		expect(model.sqlglotWarnings).toEqual([]);
+	});
+});
+
+describe('SqllensDocumentParser — schema-fed SELECT * expansion', () => {
+	// A 2-level `{ table: { column: type } }` map — the exact shape ParseService builds
+	// from the manifest indexer + describe cache, assignable directly to sqllens Schema.
+	const T_SCHEMA = { t: { aa: 'int', bb: 'string' } };
+
+	it('expands a top-level `select * from t` into the schema columns, anchored at the star', async () => {
+		const sql = 'select * from t';
+		const model = await parser('databricks').parse(sql, { schema: T_SCHEMA });
+
+		expect(model.finalColumns.map(c => c.name)).toEqual(['aa', 'bb']);
+		// Every expanded column anchors at the `*` token: col = starEndCol - name.length.
+		const starEnd = sql.indexOf('*') + 1;
+		expect(model.finalColumns.find(c => c.name === 'aa')!.col).toBe(starEnd - 'aa'.length);
+		expect(model.finalColumns.find(c => c.name === 'bb')!.col).toBe(starEnd - 'bb'.length);
+
+		// finalSelect columns carry the qualified source (`t.aa`) as table + expression.
+		const fs = model.finalSelect!.columns;
+		expect(fs.map(c => c.name)).toEqual(['aa', 'bb']);
+		expect(fs.every(c => c.table === 't')).toBe(true);
+		expect(fs.find(c => c.name === 'aa')!.expression).toBe('aa');
+	});
+
+	it('expands a CTE-chain wildcard by inference once a schema is supplied for the base table', async () => {
+		// `b` is a pure `select *` CTE — legacy keeps its `*` (wildcardCtes side-channel),
+		// but the TOP-level `select * from b` still expands via the inferred CTE columns.
+		// A schema only for the base `t` is enough — the CTE columns are inferred from it.
+		const sql = 'with a as (select x, y from t),\nb as (select * from a)\nselect * from b';
+		const model = await parser('databricks').parse(sql, { schema: { t: { x: 'int', y: 'int' } } });
+
+		expect(model.finalColumns.map(c => c.name)).toEqual(['x', 'y']);
+		expect(model.ctes.find(c => c.name === 'a')!.columns.map(c => c.name)).toEqual(['x', 'y']);
+		// The sole-bare-star CTE keeps its wildcard entry, matching the legacy path.
+		expect(model.ctes.find(c => c.name === 'b')!.columns.map(c => c.name)).toEqual(['*']);
+	});
+
+	it('expands a mixed `*, extra` CTE body (not a sole bare star) into real columns', async () => {
+		const sql = 'with a as (select x, y from t),\nb as (select *, 1 as extra from a)\nselect extra from b';
+		const model = await parser('databricks').parse(sql, { schema: { t: { x: 'int', y: 'int' } } });
+		// b is NOT a pure `select *` → legacy expands it; sqllens must too.
+		expect(model.ctes.find(c => c.name === 'b')!.columns.map(c => c.name)).toEqual(['x', 'y', 'extra']);
+	});
+
+	it('honors a Databricks `* EXCEPT (…)` exclude modifier', async () => {
+		const sql = 'select * except (bb) from t';
+		const model = await parser('databricks').parse(sql, { schema: { t: { aa: 'int', bb: 'int', cc: 'int' } } });
+		expect(model.finalColumns.map(c => c.name)).toEqual(['aa', 'cc']);
+	});
+
+	it('leaves an unresolvable star unexpanded when no schema covers the table', async () => {
+		// Base table `t`, no schema, no CTE to infer from — legacy cannot expand either,
+		// so the star is dropped from finalColumns (bare `*` names nothing concrete).
+		const model = await parser('databricks').parse('select * from t');
+		expect(model.finalColumns).toEqual([]);
+		expect(model.finalSelect!.columns).toEqual([]);
+	});
+
+	it('falls back cleanly when qualify() throws (expander is undefined)', async () => {
+		// A malformed scope tree makes qualify() throw; buildStarExpander swallows it and
+		// returns undefined so extraction proceeds unexpanded rather than crashing.
+		const broken = { root: undefined } as unknown as ScopeTree;
+		expect(buildStarExpander(broken, new Schema({}))).toBeUndefined();
 	});
 });
 

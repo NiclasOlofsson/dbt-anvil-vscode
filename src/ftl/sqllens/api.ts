@@ -40,6 +40,7 @@ export type {
 	ParseResultIR,
 	PartSpan,
 	Projection,
+	Qualification,
 	QueryBody,
 	QueryExpr,
 	ResolvedSource,

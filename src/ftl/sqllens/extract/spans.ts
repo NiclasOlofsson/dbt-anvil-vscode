@@ -112,3 +112,14 @@ export function leftSelect(body: QueryBody): SelectExpr | undefined {
 	if (body.kind === 'setop') return leftSelect(body.left);
 	return undefined;
 }
+
+/**
+ * The scope whose `body` is `leftSelect(scope.body)` — the setop analog of `leftSelect`
+ * for scopes. A set operation's output columns (and its FROM sources, for star
+ * expansion) live on the left branch's scope, so this unwraps `branches.left` in
+ * lockstep with `leftSelect` unwrapping `body.left`. A non-setop scope is returned
+ * unchanged (a pipe scope has no left-select projections to expand).
+ */
+export function leftSelectScope(scope: Scope): Scope {
+	return scope.branches ? leftSelectScope(scope.branches.left) : scope;
+}
