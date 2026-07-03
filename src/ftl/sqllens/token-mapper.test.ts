@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { tokenize } from 'sqllens';
 import type { Dialect } from './api';
-import { mapTokens } from './token-mapper';
+import { keywordTokenTypesFor, mapTokens } from './token-mapper';
 
 function map(sql: string, dialect: Dialect = 'databricks') {
 	return mapTokens(tokenize(sql, dialect), sql, dialect);
@@ -35,6 +35,30 @@ describe('mapTokens — clause & compound naming', () => {
 		expect(types('select count(*)\nfrom t\norder by 1')).toEqual([
 			'SELECT', 'VAR', 'L_PAREN', 'STAR', 'R_PAREN', 'FROM', 'VAR', 'ORDER_BY', 'NUMBER',
 		]);
+	});
+});
+
+describe('keywordTokenTypesFor', () => {
+	// The union of the mapper's KEYWORDS/COMPOUNDS/DIALECT_* table VALUES — the
+	// sqlglot TokenType NAMES a mapped token's `.type` can carry. UPPERCASE (matches
+	// token.type); the document parser lowercases these into its DialectSymbols.
+	it('unions base keyword + compound token-type names', () => {
+		const s = keywordTokenTypesFor('databricks');
+		expect(s.has('SELECT')).toBe(true);
+		expect(s.has('GROUP_BY')).toBe(true); // from COMPOUNDS
+		expect(s.has('ORDER_BY')).toBe(true);
+		expect(s.has('ALIAS')).toBe(true); // AS -> ALIAS
+		// VAR is an identifier fallback, never a keyword type.
+		expect(s.has('VAR')).toBe(false);
+	});
+
+	it('folds in the dialect layer (tsql TOP)', () => {
+		expect(keywordTokenTypesFor('tsql').has('TOP')).toBe(true);
+		expect(keywordTokenTypesFor('databricks').has('TOP')).toBe(false);
+	});
+
+	it('caches — repeat calls return the identical set instance', () => {
+		expect(keywordTokenTypesFor('snowflake')).toBe(keywordTokenTypesFor('snowflake'));
 	});
 });
 

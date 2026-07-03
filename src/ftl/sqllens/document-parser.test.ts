@@ -159,6 +159,71 @@ describe('SqllensDocumentParser — column-ref per-part spans (1/2/3-part)', () 
 	});
 });
 
+describe('SqllensDocumentParser — quoted per-part spans (partSpans adoption)', () => {
+	// A quoted mixed-case column on an unquoted qualifier. sqllens adopts the IR
+	// `partSpans` (one span per dotted part) to place the column-name and qualifier
+	// sub-spans. The span QUIRK is inherited from legacy sqlglot: an identifier's
+	// span is anchored at `endCol - unquotedName.length`, so a QUOTED part's span
+	// drops the opening delimiter (and its first char) and keeps the trailing one.
+	// Verified byte-for-byte against FtlDocumentParser: `a.`My Col`` yields the same
+	// col=11/endCol=17 there. The residual name-case difference (databricks
+	// lowercases a quoted name, snowflake uppercases a table) is `normName`'s domain,
+	// not the span logic, and is unchanged by this adoption.
+	it('places a backtick-quoted column + unquoted qualifier (databricks)', async () => {
+		const sql = 'select a.`My Col` from t as a';
+		const model = await parser('databricks').parse(sql);
+		const col = model.tokens.find(
+			(t): t is ColumnRefToken => t.type === 'column_ref' && t.name === 'My Col',
+		)!;
+		const q = sql.indexOf('`My Col`');
+		expect(col).toMatchObject({
+			name: 'My Col',
+			line: 0,
+			endCol: q + '`My Col`'.length,          // after the closing backtick
+			col: q + '`My Col`'.length - 'My Col'.length, // legacy quirk: not the opening backtick
+			table: 'a',
+			tableCol: sql.indexOf('a.'),
+			tableEndCol: sql.indexOf('a.') + 1,
+		});
+	});
+
+	it('places a bracket-quoted column + unquoted qualifier (tsql)', async () => {
+		const sql = 'select a.[My Col] from t as a';
+		const model = await parser('tsql').parse(sql);
+		const col = model.tokens.find(
+			(t): t is ColumnRefToken => t.type === 'column_ref' && t.name === 'My Col',
+		)!;
+		const q = sql.indexOf('[My Col]');
+		expect(col).toMatchObject({
+			name: 'My Col',
+			endCol: q + '[My Col]'.length,
+			col: q + '[My Col]'.length - 'My Col'.length,
+			table: 'a',
+		});
+	});
+
+	it('handles a quoted mixed-case QUALIFIER with a plain column (`"My Table".col`)', async () => {
+		// sqllens parses this as qualifier=`My Table`, column=`col` — the structurally
+		// correct reading. (Legacy sqlglot mis-parses a quoted qualifier here, treating
+		// the quoted part as the column and dropping `.col`; sqllens is more faithful,
+		// an accepted divergence, not a span regression.)
+		const sql = 'select `My Table`.col from t';
+		const model = await parser('databricks').parse(sql);
+		const col = model.tokens.find(
+			(t): t is ColumnRefToken => t.type === 'column_ref' && t.name === 'col',
+		)!;
+		const tq = sql.indexOf('`My Table`');
+		expect(col).toMatchObject({
+			name: 'col',
+			col: sql.indexOf('.col') + 1,
+			endCol: sql.indexOf('.col') + 1 + 'col'.length,
+			table: 'My Table',
+			tableEndCol: tq + '`My Table`'.length,
+			tableCol: tq + '`My Table`'.length - 'My Table'.length,
+		});
+	});
+});
+
 describe('SqllensDocumentParser — identifier case normalization', () => {
 	it('lowercases unquoted identifier names and keeps quoted (backtick) case', async () => {
 		// Legacy sqlglot lowercases unquoted identifiers (databricks is case-insensitive)
@@ -222,5 +287,41 @@ describe('SqllensDocumentParser — dialect smoke', () => {
 		expect(model.finalColumns.map(c => c.name)).toEqual(['a', 'b']);
 		expect(model.tokens.some(t => t.type === 'table_ref' && t.name === 't')).toBe(true);
 		expect(model.sqlglotWarnings).toEqual([]);
+	});
+});
+
+describe('SqllensDocumentParser — getDialectSymbols', () => {
+	// The sets are LOWERCASE: every consumer (cap-keywords/functions/types, the reflow
+	// printer) tests membership with `set.has(x.toLowerCase())`, matching the sqlglot
+	// path's contract. keywordTokenTypes are sqlglot TokenType NAMES (select, group_by,
+	// alias…), NOT keyword words; functions/types come from sqllens's own membership
+	// sets, lowercased.
+	it('exposes keyword TokenTypes, functions, and types for databricks', async () => {
+		const symbols = await parser('databricks').getDialectSymbols();
+		expect(symbols).toBeDefined();
+		// Compound + single keyword token-type names.
+		expect(symbols!.keywordTokenTypes.has('group_by')).toBe(true);
+		expect(symbols!.keywordTokenTypes.has('alias')).toBe(true); // the AS keyword
+		expect(symbols!.keywordTokenTypes.has('select')).toBe(true);
+		// A word mapped to VAR (removed keyword) must NOT be a keyword type.
+		expect(symbols!.keywordTokenTypes.has('var')).toBe(false);
+		// A known function and type.
+		expect(symbols!.functions.has('coalesce')).toBe(true);
+		expect(symbols!.types.has('int')).toBe(true);
+	});
+
+	it('carries the tsql-specific TOP keyword type and NVARCHAR type', async () => {
+		const symbols = await parser('tsql').getDialectSymbols();
+		expect(symbols!.keywordTokenTypes.has('top')).toBe(true);
+		expect(symbols!.types.has('nvarchar')).toBe(true);
+	});
+
+	it('caches per dialect — repeat calls return the identical instance', async () => {
+		const p = parser('databricks');
+		const a = await p.getDialectSymbols();
+		const b = await p.getDialectSymbols();
+		expect(a).toBe(b);
+		expect(a!.functions).toBe(b!.functions);
+		expect(a!.keywordTokenTypes).toBe(b!.keywordTokenTypes);
 	});
 });

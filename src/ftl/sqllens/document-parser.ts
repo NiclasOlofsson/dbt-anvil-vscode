@@ -12,11 +12,12 @@
  */
 import type { DocumentModel } from '../../services/parse-service';
 import type { DocumentParser, ParseOptions } from '../../services/document-parser';
+import type { DialectSymbols } from '../sql-parser';
 import { performance } from 'node:perf_hooks';
-import { parse, resolveScopes, toSqllensDialect } from './api';
+import { dialectSymbols, parse, resolveScopes, toSqllensDialect, type Dialect } from './api';
 import { tokenizeJinja } from '../jinja-tokenizer';
 import { parseWithJinjaFallback, type ParsePass } from '../parse-with-jinja-fallback';
-import { mapTokens } from './token-mapper';
+import { keywordTokenTypesFor, mapTokens } from './token-mapper';
 import { mergeSqlAndJinjaTokens } from '../ninja-sql-tokens';
 import { renToRawLine, type LineMap } from '../nunjucks-renderer';
 import { extractMacroCalls, extractRefs, extractSources } from '../extractors/jinja-tag-extractors';
@@ -37,7 +38,42 @@ export interface AdapterContext {
 }
 
 export class SqllensDocumentParser implements DocumentParser {
+	/** Resolved symbol lists per sqllens dialect. Mirrors FtlDocumentParser's
+	 *  `_symbolsCache`, but keyed by the sqllens `Dialect` and holding the resolved
+	 *  value (sqllens is synchronous — no Promise to memoise). Repeat calls return
+	 *  the identical `DialectSymbols` instance. */
+	private readonly _symbolsCache = new Map<Dialect, DialectSymbols>();
+
 	constructor(private readonly _context: AdapterContext) {}
+
+	/**
+	 * The dialect symbol lists the ninja capitalisation rules + reflow printer test
+	 * mapped tokens against. Shapes mirror the sqlglot path's `DialectSymbols`
+	 * (LOWERCASE — every consumer does `set.has(x.toLowerCase())`, and the interface
+	 * documents lowercase):
+	 *   - `functions` / `types` — sqllens's own `dialectSymbols(dialect)` membership
+	 *     sets (canonical UPPERCASE), lowercased here.
+	 *   - `keywordTokenTypes` — sqlglot TokenType NAMES the token-mapper can emit for
+	 *     this dialect (`keywordTokenTypesFor`), lowercased. These are token `.type`
+	 *     values (SELECT, GROUP_BY, ALIAS…), NOT keyword words, so sqllens's own
+	 *     `keywords` set (grammar literals) is deliberately NOT used for them.
+	 */
+	getDialectSymbols(): Promise<DialectSymbols | undefined> {
+		const dialect = toSqllensDialect(this._context.adapterType);
+		let symbols = this._symbolsCache.get(dialect);
+		if (!symbols) {
+			const s = dialectSymbols(dialect);
+			const lower = (set: ReadonlySet<string>): ReadonlySet<string> =>
+				new Set([...set].map(x => x.toLowerCase()));
+			symbols = {
+				functions: lower(s.functions),
+				keywordTokenTypes: lower(keywordTokenTypesFor(dialect)),
+				types: lower(s.types),
+			};
+			this._symbolsCache.set(dialect, symbols);
+		}
+		return Promise.resolve(symbols);
+	}
 
 	parse(sql: string, _options?: ParseOptions): Promise<DocumentModel> {
 		// sqllens is synchronous; the Promise-returning signature matches the

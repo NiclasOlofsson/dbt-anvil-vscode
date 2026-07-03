@@ -19,7 +19,7 @@ import type {
 	TableRefToken,
 	TokenInfo,
 } from '../../../services/parse-service';
-import type { Projection, QueryBody, ResolvedSource, Token } from '../api';
+import type { PartSpan, Projection, QueryBody, ResolvedSource, Token } from '../api';
 import { allScopes, asCst, normName, type CstNode, type SqllensParse } from './spans';
 
 /** Identifier-role tokens fully inside a `[lo, hi]` char range, in source order. */
@@ -157,44 +157,96 @@ function columnDefToken(p: Projection): ColumnDefToken | undefined {
 	};
 }
 
+/** 0-based span of a single dotted name-part, computed the way legacy sqlglot
+ *  serializes an identifier: the span is anchored at `endCol - unquotedName.length`,
+ *  NOT at the raw token start. For an UNQUOTED part this is identity (name width ==
+ *  token width). For a QUOTED part legacy's `Column.this` is the quote-stripped name
+ *  while its `_col` sits AFTER the closing quote, so the reported span drops the
+ *  opening quote (and its first char) and keeps the trailing quote — a legacy quirk
+ *  reproduced here so the two paths agree in shadow-diff. `rawText` is the source
+ *  token incl. quotes; `column` its 0-based start col; `line1` its 1-based line. */
+function namePartPos(rawText: string, column: number, line1: number): {
+	name: string; line: number; col: number; endCol: number;
+} {
+	const name = normName(rawText);
+	const endCol = column + rawText.length;
+	return { name, line: line1 - 1, col: endCol - name.length, endCol };
+}
+
 function columnRefToken(
-	ref: { parts: string[]; cst: unknown },
+	ref: { parts: string[]; partSpans?: PartSpan[]; cst: unknown },
 	scopeId: number,
 	tokens: Token[],
+	byStart: Map<number, Token>,
 ): ColumnRefToken | undefined {
 	const c = asCst(ref.cst);
 	const start = c.start;
 	const stop = c.stop;
 	if (!start || !stop) return undefined;
 
-	// sqllens carries one CST span for the whole dotted reference; the column-name
-	// and qualifier sub-spans are derived by scanning the dotted name-part tokens
-	// inside the ref's char range. The LAST part is the column name; the part
-	// directly BEFORE it is the table qualifier (for a 3-part `db.schema.col` the
-	// qualifier is `schema`, matching legacy's `Column.table` child).
-	const parts = namePartTokensInRange(tokens, start.start, stop.stop);
-	const nameTok = parts.length ? parts[parts.length - 1] : undefined;
-	const rawName = nameTok ? nameTok.text : ref.parts[ref.parts.length - 1];
-	const name = normName(rawName);
-	const line = nameTok ? nameTok.line - 1 : stop.line - 1;
-	const col = nameTok ? nameTok.column : stop.column;
-	const endCol = col + (nameTok ? nameTok.text.length : name.length);
+	// The IR column ref's LAST part is the column name; the part directly BEFORE it
+	// is the table qualifier (for a 3-part `db.schema.col` the qualifier is `schema`,
+	// matching legacy's `Column.table` child).
+	//
+	// Prefer `partSpans` when the IR carries them: they are per-part source spans read
+	// straight off each part's own token, so no token-stream guessing is needed. The
+	// contract is ALL-OR-NOTHING — present ⇒ same length as `parts`, 1:1 aligned — so a
+	// present array is safe to index positionally. When ABSENT (a synthesized part: a
+	// dotted getText() split, a `$n` positional, a dot-fused path) fall back to scanning
+	// the dotted name-part tokens inside the ref's char range. TODO(sqllens-partspans)
+	// is retired for the present case; the scan stays as the documented fallback.
+	const spans = ref.partSpans;
+	const usePartSpans = spans !== undefined && spans.length === ref.parts.length && spans.length >= 1;
 
-	const tok: ColumnRefToken = { type: 'column_ref', name, line, col, endCol, scopeId };
+	let namePos: { name: string; line: number; col: number; endCol: number };
+	let qualPos: { name: string; line: number; col: number; endCol: number } | undefined;
+	let qualName: string | undefined; // the qualifier name even when its span is unknown
 
-	if (ref.parts.length >= 2) {
-		const qTok = parts.length >= 2 ? parts[parts.length - 2] : undefined;
-		tok.table = normName(qTok ? qTok.text : ref.parts[ref.parts.length - 2]);
-		if (qTok) {
-			tok.tableLine = qTok.line - 1;
-			tok.tableCol = qTok.column;
-			tok.tableEndCol = qTok.column + qTok.text.length;
+	if (usePartSpans) {
+		const nameSpan = spans[spans.length - 1];
+		const nameTok = byStart.get(nameSpan.start);
+		namePos = namePartPos(nameTok?.text ?? ref.parts[ref.parts.length - 1], nameSpan.column, nameSpan.line);
+		if (ref.parts.length >= 2) {
+			const qSpan = spans[spans.length - 2];
+			const qTok = byStart.get(qSpan.start);
+			qualPos = namePartPos(qTok?.text ?? ref.parts[ref.parts.length - 2], qSpan.column, qSpan.line);
+			qualName = qualPos.name;
+		}
+	} else {
+		const parts = namePartTokensInRange(tokens, start.start, stop.stop);
+		const nameTok = parts.length ? parts[parts.length - 1] : undefined;
+		namePos = nameTok
+			? namePartPos(nameTok.text, nameTok.column, nameTok.line)
+			: { name: normName(ref.parts[ref.parts.length - 1]), line: stop.line - 1, col: stop.column, endCol: stop.column + normName(ref.parts[ref.parts.length - 1]).length };
+		if (ref.parts.length >= 2) {
+			const qTok = parts.length >= 2 ? parts[parts.length - 2] : undefined;
+			// Legacy still records `table` from the IR part even with no source span.
+			qualName = normName(qTok ? qTok.text : ref.parts[ref.parts.length - 2]);
+			if (qTok) qualPos = namePartPos(qTok.text, qTok.column, qTok.line);
+		}
+	}
+
+	const tok: ColumnRefToken = {
+		type: 'column_ref',
+		name: namePos.name,
+		line: namePos.line,
+		col: namePos.col,
+		endCol: namePos.endCol,
+		scopeId,
+	};
+
+	if (ref.parts.length >= 2 && qualName !== undefined) {
+		tok.table = qualName;
+		if (qualPos) {
+			tok.tableLine = qualPos.line;
+			tok.tableCol = qualPos.col;
+			tok.tableEndCol = qualPos.endCol;
 		}
 	}
 	return tok;
 }
 
-function columnRefsOf(body: QueryBody): ReadonlyArray<{ parts: string[]; cst: unknown }> {
+function columnRefsOf(body: QueryBody): ReadonlyArray<{ parts: string[]; partSpans?: PartSpan[]; cst: unknown }> {
 	if (body.kind === 'select') return body.columns;
 	if (body.kind === 'setop') return body.columns;
 	return []; // pipe: references live in per-stage child scopes
@@ -233,6 +285,11 @@ export function extractTokens(parse: SqllensParse): TokenInfo[] {
 	const neutral = parse.tokens;
 	const scopes = allScopes(parse.scopes);
 	const scopeId = new Map(scopes.map((s, i) => [s, i] as const));
+
+	// Index every lexer token by its start offset so a `partSpans` entry resolves
+	// straight to the raw source token (its quoted text feeds normName).
+	const byStart = new Map<number, Token>();
+	for (const t of neutral) byStart.set(t.start, t);
 
 	const tokens: TokenInfo[] = [];
 	const sourceRefs: TableRefToken[] = [];
@@ -277,7 +334,7 @@ export function extractTokens(parse: SqllensParse): TokenInfo[] {
 	for (const scope of scopes) {
 		const id = scopeId.get(scope)!;
 		for (const ref of columnRefsOf(scope.body)) {
-			const tok = columnRefToken(ref, id, neutral);
+			const tok = columnRefToken(ref, id, neutral, byStart);
 			if (tok) tokens.push(tok);
 		}
 	}

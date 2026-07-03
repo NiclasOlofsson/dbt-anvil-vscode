@@ -538,6 +538,31 @@ const DIALECT_COMPOUNDS: Partial<Record<Dialect, Record<string, string>>> = {
 	},
 };
 
+/**
+ * The set of sqlglot `TokenType` NAMES the mapper can emit as a keyword for a
+ * dialect — the union of the VALUES of the base `KEYWORDS` + `COMPOUNDS` tables
+ * and the dialect's `DIALECT_KEYWORDS` + `DIALECT_COMPOUNDS` overlays. This is the
+ * membership set a keyword-capitalisation rule tests a mapped token's `.type`
+ * against (`DialectSymbols.keywordTokenTypes`); the values here are exactly the
+ * `.type` strings `mapTokens` produces. `VAR` is excluded — a word mapped to VAR
+ * is a removed keyword lexed as an identifier, not a keyword. UPPERCASE (matching
+ * `token.type`); cached per dialect. The extension lowercases when adapting to its
+ * lowercase `DialectSymbols` contract.
+ */
+const _keywordTypeCache = new Map<Dialect, ReadonlySet<string>>();
+export function keywordTokenTypesFor(dialect: Dialect): ReadonlySet<string> {
+	const cached = _keywordTypeCache.get(dialect);
+	if (cached) return cached;
+	const out = new Set<string>();
+	const add = (v: string): void => { if (v !== 'VAR') out.add(v); };
+	for (const v of Object.values(KEYWORDS)) add(v);
+	for (const v of Object.values(COMPOUNDS)) add(v);
+	for (const v of Object.values(DIALECT_KEYWORDS[dialect] ?? {})) add(v);
+	for (const v of Object.values(DIALECT_COMPOUNDS[dialect] ?? {})) add(v);
+	_keywordTypeCache.set(dialect, out);
+	return out;
+}
+
 function buildLineStarts(sql: string): number[] {
 	const starts = [0];
 	for (let i = 0; i < sql.length; i++) {
