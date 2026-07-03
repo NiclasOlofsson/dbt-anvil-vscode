@@ -99,4 +99,26 @@ describe('mapTokens — per-dialect', () => {
 		const toks = map('select `a b` from t', 'databricks');
 		expect(toks[1].type).toBe('IDENTIFIER');
 	});
+
+	it('tsql: TOP is recognized as its own keyword', () => {
+		expect(types('select top 10 x from t', 'tsql')).toEqual([
+			'SELECT', 'TOP', 'NUMBER', 'VAR', 'FROM', 'VAR',
+		]);
+	});
+
+	it('databricks: VOID is a dialect-specific type keyword', () => {
+		expect(types('create table t (c void)', 'databricks')).toEqual([
+			'CREATE', 'TABLE', 'VAR', 'L_PAREN', 'VAR', 'VOID', 'R_PAREN',
+		]);
+	});
+
+	it('snowflake: WAREHOUSE is a dialect-specific keyword', () => {
+		expect(types('use warehouse x', 'snowflake')).toEqual(['USE', 'WAREHOUSE', 'VAR']);
+	});
+
+	it('a base keyword (FROM) maps the same across all dialects', () => {
+		for (const dialect of ['databricks', 'tsql', 'snowflake', 'bigquery', 'redshift'] as const) {
+			expect(types('select 1 from t', dialect)).toEqual(['SELECT', 'NUMBER', 'FROM', 'VAR']);
+		}
+	});
 });

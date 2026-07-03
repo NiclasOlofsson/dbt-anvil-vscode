@@ -358,6 +358,186 @@ const COMPOUNDS: Record<string, string> = {
 	'START WITH': 'START_WITH',
 };
 
+/** Per-dialect additions/overrides on top of the base KEYWORDS map above,
+ *  transcribed from each vendored dialect's `Tokenizer.KEYWORDS` in
+ *  resources/ftl/vendor/sqlglot/dialects/{tsql,snowflake,bigquery,databricks,
+ *  spark,spark2,hive,redshift,postgres}.py, following each class's
+ *  inheritance chain (databricks -> spark -> spark2 -> hive; redshift ->
+ *  postgres). Consulted BEFORE the base KEYWORDS map in `singleType`. Entries
+ *  identical to the base value (e.g. tsql's `REAL` -> FLOAT, postgres's
+ *  `TEMP` -> TEMPORARY) are omitted as redundant. A dialect that *removes* a
+ *  base keyword (`KEYWORDS.pop(...)`) is modeled here by mapping it to
+ *  'VAR', matching sqlglot's fallback-to-identifier.
+ *
+ *  Not transcribed (out of scope for a *word*-keyed KEYWORDS layer):
+ *   - symbol/operator overrides living in the same Python KEYWORDS dict but
+ *     keyed on punctuation, not words (Postgres/Redshift `~`, `@>`, `?&`, …
+ *     and the `/*+` hint marker every dialect here pops) — these belong with
+ *     OPERATOR_TOKENS, which has no per-dialect variant yet;
+ *   - Snowflake's `"FILE://": URI_START`, keyed on a URI scheme marker, not a
+ *     plain word. */
+const DIALECT_KEYWORDS: Partial<Record<Dialect, Record<string, string>>> = {
+	tsql: {
+		DATETIME2: 'DATETIME2',
+		DATETIMEOFFSET: 'TIMESTAMPTZ',
+		DECLARE: 'DECLARE',
+		EXEC: 'COMMAND',
+		GO: 'COMMAND',
+		IMAGE: 'IMAGE',
+		MONEY: 'MONEY',
+		NTEXT: 'TEXT',
+		OPTION: 'OPTION',
+		OUTPUT: 'RETURNING',
+		PRINT: 'COMMAND',
+		PROC: 'PROCEDURE',
+		ROWVERSION: 'ROWVERSION',
+		SMALLDATETIME: 'SMALLDATETIME',
+		SMALLMONEY: 'SMALLMONEY',
+		SQL_VARIANT: 'VARIANT',
+		SYSTEM_USER: 'CURRENT_USER',
+		TOP: 'TOP',
+		TIMESTAMP: 'ROWVERSION',
+		TINYINT: 'UTINYINT',
+		UNIQUEIDENTIFIER: 'UUID',
+		XML: 'XML',
+	},
+	snowflake: {
+		BYTEINT: 'INT',
+		GET: 'GET',
+		MATCH_CONDITION: 'MATCH_CONDITION',
+		MATCH_RECOGNIZE: 'MATCH_RECOGNIZE',
+		MINUS: 'EXCEPT',
+		PUT: 'PUT',
+		REMOVE: 'COMMAND',
+		RM: 'COMMAND',
+		SAMPLE: 'TABLE_SAMPLE',
+		SQL_DOUBLE: 'DOUBLE',
+		SQL_VARCHAR: 'VARCHAR',
+		STAGE: 'STAGE',
+		STREAMLIT: 'STREAMLIT',
+		TAG: 'TAG',
+		TIMESTAMP_TZ: 'TIMESTAMPTZ',
+		TOP: 'TOP',
+		WAREHOUSE: 'WAREHOUSE',
+		// Snowflake treats FLOAT as a synonym for DOUBLE.
+		FLOAT: 'DOUBLE',
+	},
+	bigquery: {
+		BYTEINT: 'INT',
+		BYTES: 'BINARY',
+		// The bare word starts a BEGIN…EXCEPTION…END block (command); the
+		// two-word phrase below is the actual transaction-start keyword.
+		BEGIN: 'COMMAND',
+		CURRENT_DATETIME: 'CURRENT_DATETIME',
+		DATETIME: 'TIMESTAMP',
+		DECLARE: 'DECLARE',
+		ELSEIF: 'COMMAND',
+		EXCEPTION: 'COMMAND',
+		EXPORT: 'EXPORT',
+		FLOAT64: 'DOUBLE',
+		LOOP: 'COMMAND',
+		MODEL: 'MODEL',
+		RECORD: 'STRUCT',
+		REPEAT: 'COMMAND',
+		TIMESTAMP: 'TIMESTAMPTZ',
+		WHILE: 'COMMAND',
+		// KEYWORDS.pop(...): identifiers in BigQuery, not keywords.
+		DIV: 'VAR',
+		VALUES: 'VAR',
+	},
+	databricks: {
+		// Hive (base of the databricks -> spark -> spark2 -> hive chain).
+		MINUS: 'EXCEPT',
+		REFRESH: 'REFRESH',
+		SERDEPROPERTIES: 'SERDE_PROPERTIES',
+		// Spark2 override.
+		TIMESTAMP: 'TIMESTAMPTZ',
+		// Databricks's own addition.
+		VOID: 'VOID',
+	},
+	redshift: {
+		// Postgres (Redshift's base).
+		BIGSERIAL: 'BIGSERIAL',
+		CSTRING: 'PSEUDO_TYPE',
+		DECLARE: 'COMMAND',
+		DO: 'COMMAND',
+		EXEC: 'COMMAND',
+		HSTORE: 'HSTORE',
+		INT8: 'BIGINT',
+		MONEY: 'MONEY',
+		NAME: 'NAME',
+		OID: 'OBJECT_IDENTIFIER',
+		ONLY: 'ONLY',
+		POINT: 'POINT',
+		REFRESH: 'COMMAND',
+		REINDEX: 'COMMAND',
+		RESET: 'COMMAND',
+		SERIAL: 'SERIAL',
+		SMALLSERIAL: 'SMALLSERIAL',
+		REGCLASS: 'OBJECT_IDENTIFIER',
+		REGCOLLATION: 'OBJECT_IDENTIFIER',
+		REGCONFIG: 'OBJECT_IDENTIFIER',
+		REGDICTIONARY: 'OBJECT_IDENTIFIER',
+		REGNAMESPACE: 'OBJECT_IDENTIFIER',
+		REGOPER: 'OBJECT_IDENTIFIER',
+		REGOPERATOR: 'OBJECT_IDENTIFIER',
+		REGPROC: 'OBJECT_IDENTIFIER',
+		REGPROCEDURE: 'OBJECT_IDENTIFIER',
+		REGROLE: 'OBJECT_IDENTIFIER',
+		REGTYPE: 'OBJECT_IDENTIFIER',
+		FLOAT: 'DOUBLE',
+		XML: 'XML',
+		// Redshift's own additions.
+		HLLSKETCH: 'HLLSKETCH',
+		MINUS: 'EXCEPT',
+		SUPER: 'SUPER',
+		TOP: 'TOP',
+		UNLOAD: 'COMMAND',
+		VARBYTE: 'VARBINARY',
+		// KEYWORDS.pop(...): identifiers in Postgres/Redshift, not keywords.
+		DIV: 'VAR',
+		VALUES: 'VAR',
+	},
+};
+
+/** Per-dialect additions to COMPOUNDS above (two-word phrases sqlglot lexes
+ *  as one token), transcribed the same way and checked before COMPOUNDS.
+ *  Three-word phrases (Hive/Databricks `TIMESTAMP AS OF`, `VERSION AS OF`)
+ *  are not transcribed — the fold below only joins adjacent *pairs*. */
+const DIALECT_COMPOUNDS: Partial<Record<Dialect, Record<string, string>>> = {
+	tsql: {
+		'CLUSTERED INDEX': 'INDEX',
+		'NONCLUSTERED INDEX': 'INDEX',
+		'FOR SYSTEM_TIME': 'TIMESTAMP_SNAPSHOT',
+		'UPDATE STATISTICS': 'COMMAND',
+	},
+	snowflake: {
+		'FILE FORMAT': 'FILE_FORMAT',
+		'NCHAR VARYING': 'VARCHAR',
+		'SEMANTIC VIEW': 'SEMANTIC_VIEW',
+		'STORAGE INTEGRATION': 'STORAGE_INTEGRATION',
+	},
+	bigquery: {
+		'ANY TYPE': 'VARIANT',
+		'BEGIN TRANSACTION': 'BEGIN',
+		'FOR SYSTEM_TIME': 'TIMESTAMP_SNAPSHOT',
+		'NOT DETERMINISTIC': 'VOLATILE',
+	},
+	databricks: {
+		'ADD ARCHIVE': 'COMMAND',
+		'ADD ARCHIVES': 'COMMAND',
+		'ADD FILE': 'COMMAND',
+		'ADD FILES': 'COMMAND',
+		'ADD JAR': 'COMMAND',
+		'ADD JARS': 'COMMAND',
+		'MSCK REPAIR': 'COMMAND',
+	},
+	redshift: {
+		'BINARY VARYING': 'VARBINARY',
+		'CONSTRAINT TRIGGER': 'COMMAND',
+	},
+};
+
 function buildLineStarts(sql: string): number[] {
 	const starts = [0];
 	for (let i = 0; i < sql.length; i++) {
@@ -383,7 +563,7 @@ function isQuotedIdentifier(text: string): boolean {
 }
 
 /** Map one already-de-compounded sqllens token to a sqlglot TokenType name. */
-function singleType(tok: Token): string {
+function singleType(tok: Token, dialect: Dialect): string {
 	switch (tok.role) {
 		case 'string':
 			return 'STRING';
@@ -395,6 +575,8 @@ function singleType(tok: Token): string {
 	const bySymbol = OPERATOR_TOKENS[tok.text];
 	if (bySymbol) return bySymbol;
 	const upper = tok.text.toUpperCase();
+	const dialectKw = DIALECT_KEYWORDS[dialect]?.[upper];
+	if (dialectKw) return dialectKw;
 	const kw = KEYWORDS[upper];
 	if (kw) return kw;
 	// A word ANTLR reserved that sqlglot does not know is an identifier (VAR);
@@ -415,7 +597,6 @@ function nextKeywordCandidate(tokens: Token[], i: number): { tok: Token; index: 
 }
 
 export function mapTokens(tokens: Token[], sql: string, dialect: Dialect): SqlToken[] {
-	void dialect;
 	const lineStarts = buildLineStarts(sql);
 	const out: SqlToken[] = [];
 	let pending: CommentSpan[] = [];
@@ -438,7 +619,8 @@ export function mapTokens(tokens: Token[], sql: string, dialect: Dialect): SqlTo
 		if (tok.role === 'keyword') {
 			const nx = nextKeywordCandidate(tokens, i);
 			if (nx && nx.tok.role === 'keyword') {
-				const compound = COMPOUNDS[`${tok.text.toUpperCase()} ${nx.tok.text.toUpperCase()}`];
+				const pairKey = `${tok.text.toUpperCase()} ${nx.tok.text.toUpperCase()}`;
+				const compound = DIALECT_COMPOUNDS[dialect]?.[pairKey] ?? COMPOUNDS[pairKey];
 				if (compound) {
 					type = compound;
 					endTok = nx.tok;
@@ -446,7 +628,7 @@ export function mapTokens(tokens: Token[], sql: string, dialect: Dialect): SqlTo
 				}
 			}
 		}
-		if (type === undefined) type = singleType(tok);
+		if (type === undefined) type = singleType(tok, dialect);
 
 		const line = lineAtOffset(endTok.stop, lineStarts);
 		const st: SqlToken = {
