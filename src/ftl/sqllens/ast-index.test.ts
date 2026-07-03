@@ -15,6 +15,7 @@ function sqllensParse(sql: string, dialect: Dialect = 'databricks'): SqllensPars
 	const pr = parse(sql, dialect);
 	return {
 		ast: pr.ast,
+		dialect,
 		errors: pr.errors,
 		diagnostics: pr.diagnostics,
 		scopes: resolveScopes(pr.ast, dialect),
