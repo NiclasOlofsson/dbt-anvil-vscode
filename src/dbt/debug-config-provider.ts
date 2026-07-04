@@ -21,7 +21,9 @@ export class SqlDebugConfigProvider implements vscode.DebugConfigurationProvider
 			}
 			config.type = DEBUG_TYPE;
 			config.request = 'launch';
-			config.name = 'Run SQL';
+			// F5 is Start Debugging → the CTE stepping debugger (noDebug stays unset/false).
+			// Running without stepping is Ctrl+F5 or the Execute Query command (noDebug: true).
+			config.name = 'Debug SQL';
 		}
 
 		// Fill in defaults from settings

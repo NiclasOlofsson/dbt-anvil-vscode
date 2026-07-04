@@ -1298,7 +1298,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 	);
 
-	// -------- Debug adapter (F5 → run SQL) --------
+	// -------- Debug adapter (F5 → debug SQL; Ctrl+F5 / Execute Query → run) --------
 	const symbolSqlProvider = new SymbolSqlProvider();
 	const dataPipelineProvider = new DataPipelineProvider(context.extensionUri);
 	context.subscriptions.push(
