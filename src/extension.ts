@@ -42,6 +42,8 @@ import { ConfigCodeActionProvider } from './providers/common/config-code-action-
 import { DbtCallHierarchyProvider } from './providers/sql/call-hierarchy-provider';
 import { ParseService } from './services/parse-service';
 import { FtlDocumentParser } from './ftl/ftl-document-parser';
+import { SqllensDocumentParser } from './ftl/sqllens/document-parser';
+import type { DocumentParser } from './services/document-parser';
 import { DbtQueryService } from './services/dbt-query-service';
 import { StatusBarManager } from './views/status-bar';
 import { ExternalDbtMonitor } from './dbt/external-dbt-monitor';
@@ -461,15 +463,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// were restored from disk (mtime validation happens on first access per entry).
 	void compileCache.warmAll(projectDir, restoredCompileEntries);
 
-	// -------- Parse service (FTL — Pyodide worker pool, true CPU parallelism) --------
-	const pyodideDir = path.join(context.extensionPath, 'node_modules', 'pyodide');
-	const vendorDir = path.join(context.extensionPath, 'resources', 'ftl', 'vendor');
-	const scriptsDir = path.join(context.extensionPath, 'resources', 'ftl');
-	const ftlParser = FtlDocumentParser.create(pyodideDir, vendorDir, scriptsDir, manifestIndexer, { logger });
-	await ftlParser.ready();
-	logger.info('Parse service: FTL worker pool ready');
-	const parseService = new ParseService(ftlParser, logger, { describeCache, indexer: manifestIndexer });
-	context.subscriptions.push(ftlParser);
+	// -------- Parse service — engine routed by dbt-anvil.parser.engine (window-reload to switch) --------
+	// 'sqllens' (default): native TS parser, no Pyodide boot / no WASM worker pool.
+	// 'legacy': the sqlglot-on-Pyodide worker pool (kept until the Phase-3 cutover deletes it).
+	const engine = vscode.workspace.getConfiguration('dbt-anvil').get<'legacy' | 'sqllens'>('parser.engine', 'sqllens');
+	let documentParser: DocumentParser;
+	let ftlParser: FtlDocumentParser | undefined;
+	if (engine === 'sqllens') {
+		documentParser = new SqllensDocumentParser(manifestIndexer);
+		logger.info('Parse service: sqllens native parser (Pyodide not booted)');
+	} else {
+		const pyodideDir = path.join(context.extensionPath, 'node_modules', 'pyodide');
+		const vendorDir = path.join(context.extensionPath, 'resources', 'ftl', 'vendor');
+		const scriptsDir = path.join(context.extensionPath, 'resources', 'ftl');
+		ftlParser = FtlDocumentParser.create(pyodideDir, vendorDir, scriptsDir, manifestIndexer, { logger });
+		await ftlParser.ready();
+		documentParser = ftlParser;
+		logger.info('Parse service: FTL worker pool ready');
+	}
+	const parseService = new ParseService(documentParser, logger, { describeCache, indexer: manifestIndexer });
+	if (ftlParser) context.subscriptions.push(ftlParser);
 
 	context.subscriptions.push(
 		manifestWatcher.onEnrichmentInvalidated((evicted) => {
@@ -509,7 +522,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	});
 
 	// -------- Register language model tools (Copilot + MCP registry) --------
-	registerLanguageModelTools(context, manifestIndexer, executionService, manifestLoader, logger, compileCache, databaseProvider, describeCache, dbtQueryService, ftlParser, mcpSubsystem.registry);
+	registerLanguageModelTools(context, manifestIndexer, executionService, manifestLoader, logger, compileCache, databaseProvider, describeCache, dbtQueryService, documentParser, mcpSubsystem.registry);
 
 	// Surface a one-time toast when the Claude Code config actually changed,
 	// since Claude Code doesn't hot-reload ~/.claude.json.
@@ -524,7 +537,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// -------- Register tree views --------
 	const modelExplorerProvider = new ModelExplorerProvider(manifestIndexer, logger, projectDir, context.globalState);
 	const lineageGraphProvider = new LineageGraphProvider(manifestIndexer, logger, context.globalState, context.workspaceState);
-	const columnLineageTool = new GetColumnLineageTool(manifestIndexer, logger, compileCache, describeCache, ftlParser);
+	const columnLineageTool = new GetColumnLineageTool(manifestIndexer, logger, compileCache, describeCache, documentParser);
 	lineageGraphProvider.setColumnLineageTool(columnLineageTool);
 	lineageGraphProvider.setExecutionService(executionService);
 	// Initialise context keys so the correct toolbar icons show from the start

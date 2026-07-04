@@ -738,16 +738,16 @@
 					},
 						"dbt-anvil.parser.engine": {
 							"type": "string",
-							"default": "legacy",
+							"default": "sqllens",
 							"enum": [
-								"legacy",
-								"sqllens"
+								"sqllens",
+								"legacy"
 							],
 							"enumDescriptions": [
-								"Parse SQL with the Pyodide/sqlglot engine (WASM CPython). The current default; boots a worker pool on activation.",
-								"Parse SQL with the native TypeScript sqllens engine. No Pyodide worker pool is booted. Experimental — still being validated for parity with the legacy engine."
+								"Parse SQL with the native TypeScript sqllens engine (default). No Pyodide worker pool is booted — faster activation, lower memory.",
+								"Parse SQL with the Pyodide/sqlglot engine (WASM CPython). Boots a worker pool on activation; the fallback engine, kept until it is removed."
 							],
-							"markdownDescription": "Selects the SQL parsing engine that powers language intelligence (hover, definition, rename, diagnostics, formatting, lineage). `legacy` uses the Pyodide/sqlglot worker pool; `sqllens` uses the native TypeScript parser and skips booting Pyodide. A window reload is required for a change to take effect."
+							"markdownDescription": "Selects the SQL parsing engine that powers language intelligence (hover, definition, rename, diagnostics, formatting, lineage). `sqllens` (default) uses the native TypeScript parser and skips booting Pyodide; `legacy` uses the Pyodide/sqlglot worker pool. A window reload is required for a change to take effect."
 						}
 				}
 			},
