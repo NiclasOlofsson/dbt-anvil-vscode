@@ -45,6 +45,10 @@ import type {
 	ScopeTree,
 } from 'sqllens';
 
+/** The `via` trail's element type (ITEM 13 `ViaStep`), derived off `LineageHop` so it tracks
+ *  sqllens's shape without a deep import: `{ scope, kind: 'rename' | 'expand' }`. */
+type ViaTrail = NonNullable<LineageHop['via']>;
+
 // ── Result contract (mirrors src/ftl/extractors/lineage-walker.ts) ──────────
 
 export interface ColumnDependency {
@@ -78,6 +82,13 @@ export interface Transformation {
 	 * summarized hop. Absent (rather than false) for a fully-walked hop.
 	 */
 	summarized?: true;
+	/**
+	 * True when this node was reached by DESCENDING through a `SELECT *` (schema-inferred),
+	 * as opposed to a written passthrough/rename — the ITEM 13 `ViaStep.kind === 'expand'`
+	 * provenance. The edge is only as trustworthy as the schema (OpenLineage's INDIRECT), so
+	 * the panel can render it distinctly from a written edge. Absent for written edges.
+	 */
+	inferred?: true;
 }
 
 export interface LineageResult {
@@ -433,18 +444,28 @@ class SpineRenderer {
 	 *  are CTE/subquery scopes (each has a `ScopeCtx`); a scope without one is skipped (never a CTE
 	 *  the contract needs). `unresolved` flags the whole chain summarized — the flow reached a dead
 	 *  end, so every hop it passed through is an incomplete (summarized) node. */
-	private emitViaChain(via: readonly Scope[], tailIds: string[], column: string, unresolved: boolean): string[] {
+	private emitViaChain(via: ViaTrail, tailIds: string[], column: string, unresolved: boolean): string[] {
 		// via_ctes are recorded consumer-first (the order the flow passes through them).
-		for (const scope of via) {
+		for (const { scope } of via) {
 			const info = this.ctx.get(scope);
 			if (info?.isCte) this.addVia(info.name);
 		}
 		// The chain is linked tail-first: the last scope feeds `tailIds`, each earlier feeds the next.
+		// ITEM 13: a step's kind === 'expand' (schema-inferred star descent) marks its node `inferred`.
 		let nextIds = tailIds;
 		for (let i = via.length - 1; i >= 0; i--) {
-			const info = this.ctx.get(via[i]);
+			const { scope, kind } = via[i];
+			const info = this.ctx.get(scope);
 			if (!info) continue;
-			this.ensureTransform(info.id, 'cte', column, undefined, nextIds, unresolved ? true : undefined);
+			this.ensureTransform(
+				info.id,
+				'cte',
+				column,
+				undefined,
+				nextIds,
+				unresolved ? true : undefined,
+				kind === 'expand' ? true : undefined,
+			);
 			nextIds = [info.id];
 		}
 		return nextIds;
@@ -464,6 +485,7 @@ class SpineRenderer {
 		expression: string | undefined,
 		sources: string[],
 		summarized?: true,
+		inferred?: true,
 	): void {
 		const existing = this.transformMap.get(id);
 		if (existing) {
@@ -471,11 +493,13 @@ class SpineRenderer {
 			if (expression && !existing.expression) existing.expression = expression;
 			if (sources.length > 0) existing.sources = [...new Set([...existing.sources, ...sources])].sort();
 			if (summarized && !existing.summarized && existing.type !== 'table') existing.summarized = true;
+			if (inferred && !existing.inferred && existing.type !== 'table') existing.inferred = true;
 			return;
 		}
 		const t: Transformation = { id, type, column, sources };
 		if (expression) t.expression = expression;
 		if (summarized) t.summarized = true;
+		if (inferred) t.inferred = true;
 		this.transformMap.set(id, t);
 	}
 

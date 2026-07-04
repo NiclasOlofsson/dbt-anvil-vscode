@@ -138,6 +138,8 @@ describe('traceColumnLineage — star expansion', () => {
 		expect(result.dependencies).toEqual([{ column: 'customer_id', table: 'orders' }]);
 		expect(result.via_ctes).toContain('s');
 		expect(byId(result.transformations, 'table:orders')).toMatchObject({ column: 'customer_id' });
+		// ITEM 13: reached by descending through `SELECT *` → schema-inferred provenance.
+		expect(byId(result.transformations, 'cte:s')?.inferred).toBe(true);
 	});
 
 	it('resolves a multi-source star hop through the schema to a real edge (not summarized)', () => {
@@ -159,6 +161,7 @@ describe('traceColumnLineage — star expansion', () => {
 		const s = byId(result.transformations, 'cte:s');
 		expect(s).toBeDefined();
 		expect(s?.summarized).toBeUndefined(); // resolved, so no false "incomplete" flag
+		expect(s?.inferred).toBe(true); // ITEM 13: schema-inferred via `*` (lower trust), not written
 		expect(s?.sources).toEqual(['table:customers']); // the real, schema-resolved edge
 		expect(result.via_ctes).toContain('s');
 		// The leaf is not dropped — dependencies still resolve it via the schema-aware origin walk.
@@ -182,6 +185,10 @@ describe('traceColumnLineage — dialect-true identifier folding', () => {
 		expect(result.via_ctes).toEqual(['b', 'a']);
 		expect(byId(result.transformations, 'cte:b')!.sources).toEqual(['cte:a']);
 		expect(byId(result.transformations, 'cte:a')!.sources).toEqual(['table:t']);
+		// ITEM 13: these are WRITTEN rename-collapse steps — NOT schema-inferred (makes the
+		// rename-vs-expand distinction load-bearing, not always-true).
+		expect(byId(result.transformations, 'cte:b')!.inferred).toBeUndefined();
+		expect(byId(result.transformations, 'cte:a')!.inferred).toBeUndefined();
 	});
 
 	it('snowflake keeps quoted "Mixed" case-sensitive — unquoted `mixed` does NOT bind to it', () => {
