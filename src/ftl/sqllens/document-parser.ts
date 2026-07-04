@@ -14,7 +14,7 @@ import type { DocumentModel } from '../../services/parse-service';
 import type { DocumentParser, ParseOptions } from '../../services/document-parser';
 import type { DialectSymbols } from '../sql-parser';
 import { performance } from 'node:perf_hooks';
-import { dialectSymbols, parse, resolveScopes, Schema, toSqllensDialect, type Dialect, type SchemaMapping } from './api';
+import { dialectSymbols, parse, qualify, resolveScopes, Schema, toSqllensDialect, type Dialect, type Qualification, type SchemaMapping } from './api';
 import { tokenizeJinja } from '../jinja-tokenizer';
 import { parseWithJinjaFallback, type ParsePass } from '../parse-with-jinja-fallback';
 import { keywordTokenTypesFor, mapTokens } from './token-mapper';
@@ -214,12 +214,18 @@ export class SqllensDocumentParser implements DocumentParser {
 		// (validate_qualify_columns=False), and scope_warnings are stripped before shadow
 		// comparison, so surfacing them would be pure noise (EXTRACTOR-MAP §7). The expander is
 		// also undefined if qualify throws — then every extractor falls back to unexpanded output.
+		const schemaObj = new Schema((schema ?? {}) as SchemaMapping);
 		const expander = (schema && Object.keys(schema).length > 0)
-			? buildStarExpander(result.scopes, new Schema(schema as SchemaMapping))
+			? buildStarExpander(result.scopes, schemaObj)
 			: undefined;
+		// sqllens qualify is read-only — it never rewrites a bare column to add the qualifier
+		// sqlglot's mutating qualify did. extractTokens consumes this column→source binding to
+		// resolve bare columns to their table. Fail-soft (undefined) to match the expander.
+		let qualification: Qualification | undefined;
+		try { qualification = qualify(result.scopes, schemaObj); } catch { /* alias-only resolution */ }
 
 		const ctes = extractCtes(result, expander);
-		const tokens = extractTokens(result);
+		const tokens = extractTokens(result, qualification);
 		const finalColumns = extractFinalColumns(result, expander);
 		const finalSelect = extractFinalSelect(result, expander);
 		const refs = extractRefs(jinjaTokens);

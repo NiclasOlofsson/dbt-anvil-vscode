@@ -19,7 +19,7 @@ import type {
 	TableRefToken,
 	TokenInfo,
 } from '../../../services/parse-service';
-import type { Dialect, PartSpan, Projection, QueryBody, ResolvedSource, Token } from '../api';
+import type { ColumnRef, Dialect, PartSpan, Projection, Qualification, QueryBody, ResolvedSource, Token } from '../api';
 import { allScopes, asCst, normName, quotedRaw, type CstNode, type SqllensParse } from './spans';
 
 /** Identifier-role tokens fully inside a `[lo, hi]` char range, in source order. */
@@ -284,7 +284,7 @@ function resolveTableRefs(tokens: TokenInfo[], sourceRefs: TableRefToken[]): voi
 	}
 }
 
-export function extractTokens(parse: SqllensParse): TokenInfo[] {
+export function extractTokens(parse: SqllensParse, qualification?: Qualification): TokenInfo[] {
 	const neutral = parse.tokens;
 	const scopes = allScopes(parse.scopes);
 	const scopeId = new Map(scopes.map((s, i) => [s, i] as const));
@@ -296,6 +296,9 @@ export function extractTokens(parse: SqllensParse): TokenInfo[] {
 
 	const tokens: TokenInfo[] = [];
 	const sourceRefs: TableRefToken[] = [];
+	// Maps each resolved FROM/JOIN source to its emitted table_ref token, so a bare column's
+	// qualify binding (bindingOf → ResolvedSource) can be pointed at the right table_ref.
+	const srcToRef = new Map<ResolvedSource, TableRefToken>();
 
 	// Pass 1: declaration sites — CTE defs, FROM/JOIN sources, projection aliases.
 	for (const scope of scopes) {
@@ -322,6 +325,7 @@ export function extractTokens(parse: SqllensParse): TokenInfo[] {
 			if (tok) {
 				tokens.push(tok);
 				sourceRefs.push(tok);
+				srcToRef.set(src, tok);
 			}
 		}
 
@@ -338,7 +342,24 @@ export function extractTokens(parse: SqllensParse): TokenInfo[] {
 		const id = scopeId.get(scope)!;
 		for (const ref of columnRefsOf(scope.body)) {
 			const tok = columnRefToken(ref, id, neutral, byStart, parse.dialect);
-			if (tok) tokens.push(tok);
+			if (!tok) continue;
+			// A BARE column (no written qualifier) can't be resolved by resolveTableRefs' alias
+			// matching. sqlglot's mutating qualify() rewrote `city` → `addr.city` so the qualifier
+			// was present; sqllens is read-only and never rewrites, so consume its column→source
+			// binding (Qualification.bindingOf, keyed off ref.parts) to point the token at the
+			// source it binds to. Qualified columns stay with resolveTableRefs below.
+			if (!tok.table && qualification) {
+				const bound = qualification.bindingOf(scope, ref as unknown as ColumnRef)?.source;
+				const rt = bound && srcToRef.get(bound);
+				if (rt) {
+					tok.resolvedTableRef = rt;
+					// Reflect the resolved qualifier the way legacy's mutating qualify did (bare
+					// `city` gains table `addr`): the DocumentModel's `.table` field is "which table
+					// this column belongs to", which providers consume for column navigation.
+					tok.table = rt.alias ?? rt.name;
+				}
+			}
+			tokens.push(tok);
 		}
 	}
 

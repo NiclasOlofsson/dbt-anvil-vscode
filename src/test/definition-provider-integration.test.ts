@@ -21,18 +21,12 @@
  * Does not require a Python environment with dbt — only Pyodide/sqlglot via FTL.
  */
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import * as path from 'node:path';
-import { FtlDocumentParser } from '../ftl/ftl-document-parser';
-import type { AdapterContext } from '../ftl/ftl-document-parser';
+import { SqllensDocumentParser, type AdapterContext } from '../ftl/sqllens/document-parser';
 import { ParseService } from '../services/parse-service';
 import type { ColumnDefToken, ColumnRefToken, DocumentModel, TableRefToken } from '../services/parse-service';
 import { DbtDefinitionProvider } from '../providers/sql/definition-provider';
 import * as vscode from 'vscode';
 import { createMockLogger } from './helpers';
-
-const PYODIDE_DIR = path.join(__dirname, '..', '..', 'node_modules', 'pyodide');
-const VENDOR_DIR = path.join(__dirname, '..', '..', 'resources', 'ftl', 'vendor');
-const SCRIPTS_DIR = path.join(__dirname, '..', '..', 'resources', 'ftl');
 
 // The SQL under test — mirrors a real warehouse enrichment model.
 // Line numbers are 0-based; use SQL.split('\n') to derive positions.
@@ -89,11 +83,9 @@ describe('definition-provider integration (FTL)', () => {
 	let model: DocumentModel;
 
 	beforeAll(async () => {
-		const ftlParser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR, { adapterType: 'ansi' } as AdapterContext);
-		await ftlParser.ready();
-		model = await ftlParser.parse(SQL, { schema: SQL_SCHEMA });
-		ftlParser.dispose();
-	}, 60_000);
+		const parser = new SqllensDocumentParser({ adapterType: 'ansi' } as AdapterContext);
+		model = await parser.parse(SQL, { schema: SQL_SCHEMA });
+	});
 
 	// ---- DocumentModel structure ----
 	//
@@ -736,11 +728,9 @@ describe('definition-provider integration (FTL)', () => {
 		let model2: DocumentModel;
 
 		beforeAll(async () => {
-			const ftlParser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR, { adapterType: 'ansi' } as AdapterContext);
-			await ftlParser.ready();
-			model2 = await ftlParser.parse(SQL2, { schema: { model_a: { col_a: 'TEXT' }, model_b: { col_b: 'TEXT' } } });
-			ftlParser.dispose();
-		}, 30_000);
+			const parser = new SqllensDocumentParser({ adapterType: 'ansi' } as AdapterContext);
+			model2 = await parser.parse(SQL2, { schema: { model_a: { col_a: 'TEXT' }, model_b: { col_b: 'TEXT' } } });
+		});
 
 		it('bridge emits two table_ref tokens with alias addr at different lines', () => {
 			const addrRefs = model2.tokens
@@ -851,11 +841,9 @@ describe('definition-provider integration (FTL)', () => {
 		let model3: DocumentModel;
 
 		beforeAll(async () => {
-			const ftlParser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR, { adapterType: 'ansi' } as AdapterContext);
-			await ftlParser.ready();
-			model3 = await ftlParser.parse(SQL3, { schema: { gold__address: { street: 'TEXT' } } });
-			ftlParser.dispose();
-		}, 30_000);
+			const parser = new SqllensDocumentParser({ adapterType: 'ansi' } as AdapterContext);
+			model3 = await parser.parse(SQL3, { schema: { gold__address: { street: 'TEXT' } } });
+		});
 
 		it('addr.street in `enriched` resolves to the address_with_country table_ref (line 6), not gold__address (line 2)', () => {
 			// SQL3 line 5: "    select addr.street" — inside the `enriched` CTE body (lines 4–7).

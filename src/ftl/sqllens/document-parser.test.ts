@@ -141,10 +141,14 @@ describe('SqllensDocumentParser — column-ref per-part spans (1/2/3-part)', () 
 		const col = (n: string) =>
 			model.tokens.find((t): t is ColumnRefToken => t.type === 'column_ref' && t.name === n)!;
 
-		// 1-part: column only, no qualifier.
+		// 1-part bare column: no qualifier IN SOURCE, but qualify binds it to the single FROM
+		// source `foo as a` — matching legacy sqlglot's qualify, which rewrote bare `bare` →
+		// `a.bare`. So `.table` is the resolved alias `a` (consumed from Qualification.bindingOf),
+		// with NO tableCol span since the qualifier is synthesized, not a real source token.
 		const bare = col('bare');
 		expect(bare).toMatchObject({ name: 'bare', line: 1, col: 2, endCol: 6 });
-		expect(bare.table).toBeUndefined();
+		expect(bare.table).toBe('a');
+		expect(bare.tableCol).toBeUndefined();
 
 		// 2-part `a.name`: last part is the column, `a` the qualifier.
 		const nm = col('name');
