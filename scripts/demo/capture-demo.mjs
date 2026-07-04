@@ -1252,18 +1252,25 @@ async function main() {
 			await win.keyboard.press('Shift+Alt+H');
 			await waitForReady(win, 15000).catch(() => { });
 			await win.waitForTimeout(1500);
-			await setAllTreeItemsExpanded(win, true, '.part.panel', 3);
-			await setAllTreeItemsExpanded(win, true, '.part.sidebar', 3);
-			await win.waitForTimeout(1500);
-			const outgoingBtn = win.locator('[aria-label="Show Outgoing Calls"]').first();
-			if (await outgoingBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-				await outgoingBtn.click();
-			} else {
-				await runCommand(win, 'Calls: Show Outgoing Calls').catch(() => { });
-			}
-			await win.waitForTimeout(1500);
-			await setAllTreeItemsExpanded(win, true, '.part.panel', 3);
-			await setAllTreeItemsExpanded(win, true, '.part.sidebar', 3);
+			// Switch call direction by toolbar button (fall back to the command), then expand.
+			const showCalls = async (label, command) => {
+				const btn = win.locator(`[aria-label="${label}"]`).first();
+				if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) await btn.click();
+				else await runCommand(win, command).catch(() => { });
+				await win.waitForTimeout(1000);
+				await setAllTreeItemsExpanded(win, true, '.part.panel', 3);
+				await setAllTreeItemsExpanded(win, true, '.part.sidebar', 3);
+			};
+			// INCOMING first — models that ref reg_season_end (its callers). The default view
+			// lands on outgoing, so switch to incoming explicitly and hold so it reads in the clip.
+			await showCalls('Show Incoming Calls', 'Calls: Show Incoming Calls');
+			await win.waitForTimeout(2500);
+			// Re-focus the root row so the OUTGOING toggle pivots on reg_season_end — the deep
+			// incoming expansion leaves a descendant focused, and the toggle follows focus.
+			await win.locator('.monaco-list-row', { hasText: /reg_season_end/ }).first().click({ timeout: 2000 }).catch(() => { });
+			await win.waitForTimeout(500);
+			// OUTGOING — models reg_season_end refs (its callees).
+			await showCalls('Show Outgoing Calls', 'Calls: Show Outgoing Calls');
 			await win.waitForTimeout(1500);
 			await screenshot(win, 'call-hierarchy', 'Call Hierarchy — models that call this one, and the models it calls', 4000);
 			logEvent('call-hierarchy.post-demo');
