@@ -14,13 +14,14 @@ import type { DocumentModel } from '../../services/parse-service';
 import type { DocumentParser, ParseOptions } from '../../services/document-parser';
 import type { DialectSymbols } from '../sql-parser';
 import { performance } from 'node:perf_hooks';
-import { dialectSymbols, parse, parseTemplated, qualify, resolveScopes, Schema, toSqllensDialect, type Dialect, type Qualification, type SchemaMapping } from './api';
+import { dialectSymbols, parse, parseTemplated, qualify, resolveScopes, Schema, toSqllensDialect, type Dialect, type Qualification, type SchemaMapping, type TagNode } from './api';
 import { tokenizeJinja } from '../jinja-tokenizer';
 import { parseWithJinjaFallback, type ParsePass } from '../parse-with-jinja-fallback';
 import { keywordTokenTypesFor, mapTokens } from './token-mapper';
 import { mergeSqlAndJinjaTokens } from '../ninja-sql-tokens';
 import { renToRawLine, type LineMap } from '../nunjucks-renderer';
 import { extractMacroCalls, extractRefs, extractSources } from '../extractors/jinja-tag-extractors';
+import { tagInfos } from './extract/tag-infos';
 import { enrichTokensWithJinjaSpans } from '../extractors/jinja-token-enrichment';
 import { createSqllensAstIndex } from './ast-index';
 import { decompose } from './decompose';
@@ -207,6 +208,10 @@ export class SqllensDocumentParser implements DocumentParser {
 		let result: SqllensParse;
 		let pass: ParsePass;
 		let lineMap: LineMap | undefined;
+		// The R2 tag-AST from the native templated parse, when it wins. `undefined`
+		// on the fallback path (`pass` alone can't tell native pass1 from a fallback
+		// pass1 blank). Drives tag-sourced refs; absent -> the jinja-tokenizer extractors.
+		let templatedTags: TagNode[] | undefined;
 
 		const tp0 = performance.now();
 		const templated = parseTemplated(rawSql, dialect);
@@ -223,6 +228,7 @@ export class SqllensDocumentParser implements DocumentParser {
 			};
 			pass = 'pass1'; // length-preserving raw coords — same contract as a pass1 blank
 			pass1 = result;
+			templatedTags = templated.tags;
 		} else {
 			({ result, pass, lineMap } = parseWithJinjaFallback(rawSql, runOnce, r => r.errors === 0));
 		}
@@ -269,7 +275,16 @@ export class SqllensDocumentParser implements DocumentParser {
 		const tokens = extractTokens(result, qualification, tokenStarExpander);
 		const finalColumns = extractFinalColumns(result, expander);
 		const finalSelect = extractFinalSelect(result, expander);
-		const refs = extractRefs(jinjaTokens);
+		// On the NATIVE templated path, refs come from the R2 tag-AST (span-accurate,
+		// and covers the 2-arg `ref('pkg','model')` form the tokenizer extractor drops).
+		// On the fallback path there is no tag-AST -> the jinja-tokenizer extractor.
+		// SOURCES and MACRO CALLS stay on the tokenizer extractors on BOTH paths: the
+		// `source` tag node has no callee span (so `SourceInfo.col` is underivable), and
+		// `{% … %}` block-tag macro calls surface as `control` nodes in R2 (no call
+		// detail). Both are tracked as upstream asks — see extract/tag-infos.ts.
+		const refs = templatedTags !== undefined
+			? tagInfos(templatedTags, rawSql).refs
+			: extractRefs(jinjaTokens);
 		const sources = extractSources(jinjaTokens);
 		const macroCalls = extractMacroCalls(jinjaTokens);
 		enrichTokensWithJinjaSpans(tokens, refs, sources);
@@ -304,24 +319,13 @@ export class SqllensDocumentParser implements DocumentParser {
 		// path fall back to an empty index, matching the isPass2 gating used for the
 		// model's other rendered-space positions.
 		//
-		// Multi-statement sources are also left without an index: sqllens parses a
-		// single statement, and on `a; b; c` input it returns statement 1's IR with a
-		// CST span stretched to EOF (errors === 0). Indexing that would report a
-		// 'Select' enclosure for every token of the FOLLOWING statements with none of
-		// their inner structure, and the printer would misclassify e.g. window-paren
-		// commas in statement 2 as SELECT-list commas. No index → the printer's
-		// token-stream fallbacks take over, which is exactly the legacy behavior.
-		//
-		// WORKAROUND(sqllens-multistmt-span): this masks a real sqllens bug — a
-		// multi-statement parse returns statement 1's IR with the CST span stretched to
-		// EOF instead of bounding it (or parsing all statements). Upstream 58c170d fixed
-		// DATABRICKS ONLY (probed 2026-07-04: `a; b; c` span bounded on databricks,
-		// stretched to EOF on the other 7 dialects — duckdb/tsql/snowflake/postgres/
-		// trino/bigquery/redshift). REMOVE this guard (and `hasMultipleStatements`
-		// below) once ALL dialects bound the span / parse each statement. Reported on
-		// docs/anvil/CHANNEL.md; tracked in project memory. Grep
-		// `sqllens-multistmt-span` to find every site tied to this bug.
-		if (pass !== 'pass2' && !hasMultipleStatements(sqlTokens)) {
+		// Multi-statement sources: sqllens parses statement 1 only, and since upstream
+		// 2428f56 its CST span is BOUNDED to statement 1 on ALL 8 dialects (independently
+		// probed 2026-07-05; guarded upstream by an all-dialect span test). Indexing is
+		// therefore safe: statement 1 gets AST-index precision, later statements have no
+		// enclosure and fall back to the printer's token-stream passes. (The former
+		// sqllens-multistmt-span workaround is retired.)
+		if (pass !== 'pass2') {
 			model.astIndex = createSqllensAstIndex(result, rawSql);
 		}
 
@@ -335,20 +339,6 @@ export class SqllensDocumentParser implements DocumentParser {
 
 		return model;
 	}
-}
-
-/**
- * True when the mapped token stream contains a statement separator with more
- * SQL after it — i.e. the source holds 2+ statements. A trailing `;` at the
- * end of a single statement does NOT count.
- */
-function hasMultipleStatements(sqlTokens: ReadonlyArray<{ type: string }>): boolean {
-	for (let i = 0; i < sqlTokens.length - 1; i++) {
-		if (sqlTokens[i].type === 'SEMICOLON' && sqlTokens[i + 1].type !== 'SEMICOLON') {
-			return true;
-		}
-	}
-	return false;
 }
 
 /** Remap every SQL-derived LINE number in the model from rendered to raw space. */
