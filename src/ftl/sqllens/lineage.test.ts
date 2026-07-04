@@ -238,3 +238,29 @@ describe('traceColumnLineage — schema-fed base columns', () => {
 		expect(result.dependencies).toEqual([{ column: 'customer_name', table: 'customers' }]);
 	});
 });
+
+describe('traceColumnLineage — jinja-templated model source (the raw-file contract)', () => {
+	// The get-column-lineage tool feeds the RAW model file (`original_file_path`), which is
+	// jinja-templated — NOT compiled SQL. `{{ ref('m') }}` must resolve to the upstream model
+	// `m`, so the jinja is blanked (length-preserving, ref/source names kept) before parsing.
+	// If that blank is removed, `parse()` chokes on `{{ }}` and lineage silently returns empty
+	// deps for every column — the exact stage-4 regression this guards against.
+	it('resolves a `{{ ref() }}` FROM to the upstream model, never empty', () => {
+		const sql = 'select a.id as gold_addresskey, a.state as state\nfrom {{ ref(\'silver__address\') }} a';
+		const result = trace(sql, 'gold_addresskey');
+		expect(result.dependencies).toEqual([{ column: 'id', table: 'silver__address' }]);
+	});
+
+	it('traces through a CTE fed by a `{{ ref() }}`', () => {
+		const sql = 'with s as (select id, region from {{ ref(\'silver__geo\') }})\nselect id as gold_countrykey from s';
+		const result = trace(sql, 'gold_countrykey');
+		expect(result.dependencies).toEqual([{ column: 'id', table: 'silver__geo' }]);
+		expect(result.via_ctes).toEqual(['s']);
+	});
+
+	it('a `{{ config() }}`-topped model still parses and traces (no-output macro)', () => {
+		const sql = '{{ config(materialized=\'table\') }}\nselect x as location_id from {{ ref(\'silver__loc\') }}';
+		const result = trace(sql, 'location_id');
+		expect(result.dependencies).toEqual([{ column: 'x', table: 'silver__loc' }]);
+	});
+});

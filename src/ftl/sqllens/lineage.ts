@@ -33,6 +33,7 @@
  * expression — never reconstructed from the IR.
  */
 import { foldIdentifier, lineage as sqllensLineage, lineageOf, parse, resolveScopes, Schema } from 'sqllens';
+import { blankJinja } from '../../dbt/jinja-blanker';
 import type {
 	Dialect,
 	IdentKind,
@@ -118,7 +119,13 @@ export function traceColumnLineage(
 	dialect: Dialect,
 	schema?: SchemaMapping,
 ): LineageResult {
-	const ast = parse(sql, dialect).ast;
+	// The lineage tool feeds the RAW model file (jinja-templated), so blank the jinja before
+	// parsing — length-preserving, and `{{ ref('x') }}` / `{{ source(...) }}` keep their real
+	// names, so origins resolve to the upstream model/table (the legacy Pyodide path did the
+	// same). Compiled/plain SQL has no tags → blankJinja is a no-op. Offsets are preserved, so
+	// the ORIGINAL `sql` still slices correct expression snippets in the renderer below.
+	const blanked = blankJinja(sql).blanked;
+	const ast = parse(blanked, dialect).ast;
 	const tree = resolveScopes(ast, dialect);
 	const schemaObj = new Schema(schema ?? {});
 
