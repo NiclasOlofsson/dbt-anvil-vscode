@@ -18,43 +18,59 @@
  *     column on the ref/source/macro identifier's line, and end columns were computed
  *     as `startCol + byteLength` (nonsense once the tag wraps). Here EACH field's
  *     line/col is derived from ITS OWN span offset, so a multi-line tag is span-accurate.
- *     `line`/`col` still point at the leading identifier (`ref` / macro name), matching
- *     the old single-line behavior where it mattered. The enrichment back-fill
- *     (`enrichTokensWithJinjaSpans`) keys on `ref.line` + `ref.jinjaCol`, which are the
+ *     `line`/`col` still point at the leading identifier (`ref` / `source` / macro name),
+ *     matching the old single-line behavior where it mattered. The enrichment back-fill
+ *     (`enrichTokensWithJinjaSpans`) keys on `line` + `jinjaCol`, which are the
  *     identifier line and the `{{` column on that line — identical to the old extractor
- *     for single-line tags, so aliases keep back-filling.
+ *     for single-line tags, so aliases keep back-filling (ref AND source).
  *
  *   - 2-ARGUMENT `ref('pkg','model')`. The old `extractRefs` only matched `ref ( STRING )`
  *     and silently emitted NOTHING for the 2-arg package form. The tag-AST takes the LAST
  *     positional string as the model (dbt's actual semantics), so this emits a correct
  *     ref where the old extractor dropped it. Span-accurate, strictly more correct.
  *
- * SOURCES are deliberately NOT emitted here. The `source` TagNode carries
- * `sourceNameSpan` / `tableNameSpan` / `tagSpan` but NO span for the bare `source`
- * callee identifier (ref has `callSpan`; source has no equivalent), so `SourceInfo.col`
- * — the column of the `source` identifier — cannot be produced. Rather than fabricate
- * it by scanning the raw text, sources stay on the old `extractSources` extractor and
- * the missing-span is raised upstream. `sources` is always `[]` here.
+ * SOURCES are now tag-sourced: the `source` TagNode carries `callSpan` (the sibling of
+ * ref's callSpan, over the whole `source(…)` call), so `SourceInfo.line/col` — the bare
+ * `source` identifier position — is derived from `callSpan.start`, exactly like ref.
+ * name/table content cols come from the (quote-excluded) sourceName/tableName spans, and
+ * jinja cols from tagSpan.
  *
- * MACRO CALLS are produced from `{{ … }}` EXPRESSION-tag macro nodes only; they are
- * field-for-field equal to the old extractor for simple single-line calls (used by the
- * comparison test). They are NOT wired into the live model: `{% set/if/call … %}`
- * BLOCK-tag macro calls surface as `control` nodes (no call detail) in R2, nested calls
- * capture the top-level call only, and multi-line macro tags diverge (span-accurate vs
- * lossy) — so the live path keeps ALL macro calls on `extractMacroCalls` until the
- * block-tag coverage lands upstream.
+ * MACRO CALLS are produced from BOTH tag regions, mirroring the old extractor which
+ * scanned `{{ … }}` AND `{% … %}`:
+ *   - `{{ … }}` EXPRESSION tags surface as `macro` TagNodes (each IS a MacroCall).
+ *   - `{% … %}` BLOCK tags surface as `control` TagNodes carrying `calls: MacroCall[]`
+ *     (every embedded call, source order, nested included) — `{% set x = m(1) %}`,
+ *     `{% if m() %}`, `{% for x in m() %}`, `{% call m() %}`, `{% do run_query(m()) %}`.
+ * Both are filtered by the SAME `NOT_MACRO_CALLS` set the old extractor used (so `ref`
+ * / `source` / jinja keywords / dbt globals `config`/`var`/`env_var` never surface as
+ * macro calls — e.g. the `config` callee in `{% if config(...) %}`), and a macro's own
+ * declaration (`{% macro foo(a) %}` → `foo`) is skipped exactly as the old extractor
+ * skipped a callee immediately preceded by the `macro` keyword.
+ *
+ * ONE residual divergence (documented, gate-safe): NESTED macro calls inside `{{ … }}`
+ * EXPRESSION tags. The old extractor's paren-scan emits BOTH the outer and every inner
+ * call (`{{ outer(inner()) }}` → `outer` AND `inner`); a `macro` TagNode exposes only
+ * the top-level call (its nested calls live inside its arg spans, not as separate
+ * nodes — only `control` nodes got the generic `calls` walk). So a real inner macro in
+ * an expression tag is dropped here. This does NOT occur in the corpus (the only nested
+ * expression calls are `elo_calc(…, var(…))`, whose inner `var` is filtered anyway), so
+ * the shadow-diff `macroCalls` class stays at 0; see tag-infos.test.ts for the pinned
+ * case and the migration report for the upstream ask (expose nested calls on expression
+ * macro nodes, symmetric to `control.calls`).
  */
-import type { TagNode } from '../api';
+import type { MacroCall, PartSpan, TagNode } from '../api';
 import { buildLineStarts, colAtOffset, lineAtOffset } from '../../jinja-spans';
+import { NOT_MACRO_CALLS } from '../../extractors/jinja-tag-extractors';
 import type { MacroCallArgInfo, MacroCallInfo, RefInfo, SourceInfo } from '../../../services/parse-service';
 
 export interface TagInfos {
 	refs: RefInfo[];
-	/** Always empty — see the file header: the source TagNode has no callee span, so
-	 *  `SourceInfo.col` is underivable and sources stay on the old extractor. */
 	sources: SourceInfo[];
 	macroCalls: MacroCallInfo[];
 }
+
+/** offset -> line, and offset -> column, over the raw document. */
+type Conv = (off: number) => number;
 
 /**
  * Project sqllens R2 tag nodes onto the extension's ref / source / macro consumer
@@ -62,10 +78,11 @@ export interface TagInfos {
  */
 export function tagInfos(tags: TagNode[], rawSql: string): TagInfos {
 	const lineStarts = buildLineStarts(rawSql);
-	const ln = (off: number): number => lineAtOffset(off, lineStarts);
-	const cl = (off: number): number => colAtOffset(off, lineStarts);
+	const ln: Conv = (off) => lineAtOffset(off, lineStarts);
+	const cl: Conv = (off) => colAtOffset(off, lineStarts);
 
 	const refs: RefInfo[] = [];
+	const sources: SourceInfo[] = [];
 	const macroCalls: MacroCallInfo[] = [];
 
 	for (const tag of tags) {
@@ -83,45 +100,85 @@ export function tagInfos(tags: TagNode[], rawSql: string): TagInfos {
 				jinjaCol: cl(tag.tagSpan.start),
 				jinjaEndCol: cl(tag.tagSpan.end),
 			});
+		} else if (tag.kind === 'source') {
+			sources.push({
+				sourceName: tag.sourceName,
+				tableName: tag.tableName,
+				// line/col anchor on the bare `source` identifier (callSpan starts at the
+				// callee, exactly like ref) — matches the old extractor's `id.line`/`id.col`.
+				line: ln(tag.callSpan.start),
+				col: cl(tag.callSpan.start),
+				// source/table string CONTENT (quotes excluded — the spans are content-only).
+				sourceNameCol: cl(tag.sourceNameSpan.start),
+				sourceNameEndCol: cl(tag.sourceNameSpan.end),
+				tableNameCol: cl(tag.tableNameSpan.start),
+				tableNameEndCol: cl(tag.tableNameSpan.end),
+				// full `{{ … }}` tag span.
+				jinjaCol: cl(tag.tagSpan.start),
+				jinjaEndCol: cl(tag.tagSpan.end),
+			});
 		} else if (tag.kind === 'macro') {
-			macroCalls.push(macroInfo(tag, ln, cl));
+			// `{{ … }}` expression macro node — itself a MacroCall + kind/tagSpan.
+			// (`ref`/`source`/`var`/`env_var`/`config` are separate kinds, never `macro`,
+			// so the NOT_MACRO_CALLS guard is a defensive mirror of the old extractor here.)
+			if (!NOT_MACRO_CALLS.has(tag.name)) {
+				macroCalls.push(macroInfo(tag, tag.tagSpan, ln, cl));
+			}
+		} else if (tag.kind === 'control') {
+			// `{% … %}` block tag — each embedded call, filtered like the old extractor.
+			let declSkipped = false;
+			for (const call of tag.calls) {
+				// Skip the macro's OWN declaration (`{% macro foo(a) %}` → `foo`): the old
+				// extractor skips a callee immediately preceded by the `macro` keyword. The
+				// declaration is the first call in source order, so drop the first `calls`
+				// entry whose name is the declared macro name.
+				if (tag.keyword === 'macro' && !declSkipped && call.name === tag.name) {
+					declSkipped = true;
+					continue;
+				}
+				// `ref`/`source`/jinja keywords/dbt globals (`config`/`var`/`env_var`) that
+				// appear as callees INSIDE a control tag are not user macro calls.
+				if (NOT_MACRO_CALLS.has(call.name)) continue;
+				macroCalls.push(macroInfo(call, tag.tagSpan, ln, cl));
+			}
 		}
-		// source / control / var / env_var / config / other: not emitted here
-		// (sources -> old extractor; the rest are not ref/source/macro-call sites).
+		// var / env_var / config / other: not ref/source/macro-call sites.
 	}
 
-	return { refs, sources: [], macroCalls };
+	return { refs, sources, macroCalls };
 }
 
-/** Map one macro TagNode to a MacroCallInfo, converting every span offset to line/col. */
-function macroInfo(
-	tag: Extract<TagNode, { kind: 'macro' }>,
-	ln: (off: number) => number,
-	cl: (off: number) => number,
-): MacroCallInfo {
-	const args: MacroCallArgInfo[] = tag.args.map(a => ({
+/**
+ * Map one MacroCall to a MacroCallInfo, converting every span offset to line/col.
+ * `tagSpan` is the OWNING tag's span: a `{{ }}` macro node passes its own `tagSpan`;
+ * a `{% %}` control-tag call passes the control node's `tagSpan` (the call has no tag
+ * span of its own) — mirroring the old extractor's `jinjaLine`/`jinjaCol`/`jinjaEndCol`
+ * = the enclosing tag opener for both regions.
+ */
+function macroInfo(mc: MacroCall, tagSpan: PartSpan, ln: Conv, cl: Conv): MacroCallInfo {
+	const args: MacroCallArgInfo[] = mc.args.map(a => ({
 		line: ln(a.span.start),
 		col: cl(a.span.start),
 		endCol: cl(a.span.end),
 	}));
 
 	return {
-		name: tag.name,
-		...(tag.packageName !== undefined ? { packageName: tag.packageName } : {}),
+		name: mc.name,
+		...(mc.packageName !== undefined ? { packageName: mc.packageName } : {}),
 		// bare macro-name identifier.
-		line: ln(tag.nameSpan.start),
-		col: cl(tag.nameSpan.start),
-		endCol: cl(tag.nameSpan.end),
-		...(tag.packageSpan !== undefined
-			? { packageCol: cl(tag.packageSpan.start), packageEndCol: cl(tag.packageSpan.end) }
+		line: ln(mc.nameSpan.start),
+		col: cl(mc.nameSpan.start),
+		endCol: cl(mc.nameSpan.end),
+		...(mc.packageSpan !== undefined
+			? { packageCol: cl(mc.packageSpan.start), packageEndCol: cl(mc.packageSpan.end) }
 			: {}),
 		// full enclosing tag.
-		jinjaCol: cl(tag.tagSpan.start),
-		jinjaEndCol: cl(tag.tagSpan.end),
-		jinjaLine: ln(tag.tagSpan.start),
+		jinjaCol: cl(tagSpan.start),
+		jinjaEndCol: cl(tagSpan.end),
+		jinjaLine: ln(tagSpan.start),
 		// argument list `( … )`.
-		...(tag.argsSpan !== undefined
-			? { argsCol: cl(tag.argsSpan.start), argsEndCol: cl(tag.argsSpan.end) }
+		...(mc.argsSpan !== undefined
+			? { argsCol: cl(mc.argsSpan.start), argsEndCol: cl(mc.argsSpan.end) }
 			: {}),
 		args,
 	};

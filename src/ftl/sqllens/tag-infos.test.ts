@@ -2,12 +2,12 @@
  * `tagInfos` (R2 tag-AST -> ref/source/macro consumer shapes) versus the legacy
  * jinja-tokenizer extractors, on the SAME snippets used by the extractor tests
  * (src/test/ftl/ftl-document-parser.test.ts). The contract: for SINGLE-LINE tags
- * the two producers are FIELD-FOR-FIELD equal, so swapping refs onto `tagInfos`
- * on the native path is position-preserving (the shadow-diff refs class cannot
- * grow). The cases where they legitimately differ — multi-line spans, the 2-arg
- * `ref` form, nested/block-tag macro calls, sources — are pinned here with the
- * NEW correct values and a note on WHY, so the divergences are intentional, not
- * regressions.
+ * the two producers are FIELD-FOR-FIELD equal, so swapping refs/sources/macroCalls
+ * onto `tagInfos` on the native path is position-preserving (the shadow-diff refs /
+ * sources / macroCalls classes cannot grow). The cases where they legitimately
+ * differ — multi-line spans, the 2-arg `ref` form, and nested `{{ }}` macro calls —
+ * are pinned here with the NEW correct values and a note on WHY, so the divergences
+ * are intentional, not regressions.
  */
 import { describe, expect, it } from 'vitest';
 import { parseTemplated } from './api';
@@ -74,30 +74,86 @@ describe('tagInfos.refs — deliberate divergences (new is more correct)', () =>
 });
 
 // ---------------------------------------------------------------------------
-// sources — blocked: the source tag node has no callee span
+// sources — field-for-field parity on single-line tags (unblocked by the shipped
+// `source` callSpan); span-accurate divergence on multi-line.
 // ---------------------------------------------------------------------------
 
-describe('tagInfos.sources — blocked (source tag has no callee span)', () => {
-	it('emits nothing while extractSources produces the SourceInfo (documented gap)', () => {
-		const sql = 'select * from {{ source(\'jaffle_shop\', \'raw_orders\') }}';
-		// `SourceInfo.col` is the column of the bare `source` identifier; the source
-		// TagNode carries sourceName/tableName/tag spans but NO callee span, so col is
-		// underivable. tagInfos emits nothing; sources stay on extractSources.
-		expect(fromTags(sql).sources).toEqual([]);
-		expect(extractSources(tokenizeJinja(sql))).toHaveLength(1);
+describe('tagInfos.sources — field-for-field parity with extractSources (single-line)', () => {
+	const cases = [
+		'select * from {{ source(\'jaffle_shop\', \'raw_orders\') }}',
+		'select * from {{ source("nba", "nba_elo") }}', // double-quoted
+		// trailing SQL alias `a` — the alias is back-filled later by enrichment, not by
+		// either extractor here, so both produce the same alias-less SourceInfo.
+		'from {{ source("nba", "nba_elo") }} a',
+	];
+	for (const sql of cases) {
+		it(`matches extractSources for ${JSON.stringify(sql)}`, () => {
+			expect(fromTags(sql).sources).toEqual(extractSources(tokenizeJinja(sql)));
+		});
+	}
+
+	it('produces the documented field values for the canonical source', () => {
+		// select * from {{ source('jaffle_shop', 'raw_orders') }}
+		//               ^14 {{  ^17 source  ^25 'jaffle_shop' content  ^49 'raw_orders' content
+		expect(fromTags('select * from {{ source(\'jaffle_shop\', \'raw_orders\') }}').sources).toEqual([{
+			sourceName: 'jaffle_shop', tableName: 'raw_orders',
+			line: 0, col: 17,
+			sourceNameCol: 25, sourceNameEndCol: 36,
+			tableNameCol: 40, tableNameEndCol: 50,
+			jinjaCol: 14, jinjaEndCol: 55,
+		}]);
+	});
+});
+
+describe('tagInfos.sources — deliberate divergence (new is span-accurate)', () => {
+	it('is span-accurate on a multi-line source (extractSources was single-line lossy)', () => {
+		// The `source` identifier + `{{` are on line 0; the name/table strings on lines 1/2;
+		// the closing `}}` on line 3. Each field derives from its OWN span offset, so the
+		// closing `jinjaEndCol` is a REAL column (4) on the closing line. The old extractor
+		// computed jinjaEndCol as `open.col + byteLength` = 46 — a column that does not exist
+		// on any line once the tag wraps.
+		const sql = 'select * from {{ source(\n  "sch",\n  "tbl"\n) }}';
+		expect(fromTags(sql).sources).toEqual([{
+			sourceName: 'sch', tableName: 'tbl',
+			line: 0, col: 17,
+			sourceNameCol: 3, sourceNameEndCol: 6,
+			tableNameCol: 3, tableNameEndCol: 6,
+			jinjaCol: 14, jinjaEndCol: 4,
+		}]);
+		// The old extractor's jinjaEndCol is the single-line-lossy 46.
+		expect(extractSources(tokenizeJinja(sql))[0].jinjaEndCol).toBe(46);
 	});
 });
 
 // ---------------------------------------------------------------------------
-// macroCalls — field-for-field parity for single-line expression tags;
-// documented gaps for nested calls and {% … %} block tags.
+// macroCalls — field-for-field parity for single-line expression tags AND for
+// {% … %} block tags (unblocked by the shipped `control.calls`); one residual
+// divergence for nested calls inside {{ }} expression tags.
 // ---------------------------------------------------------------------------
 
 describe('tagInfos.macroCalls — field-for-field parity with extractMacroCalls (single-line expr)', () => {
 	const cases = [
 		'select {{ my_macro(\'a\') }} from t',
-		'select {{ dbt_utils.pivot(\'col\', [\'a\']) }} from t', // package-qualified
-		'select {{ my_macro(\'a\', \'b\', \'c\') }} from t',       // per-arg spans
+		'select {{ dbt_utils.pivot(\'col\', [\'a\']) }} from t',   // package-qualified
+		'select {{ my_macro(\'a\', \'b\', \'c\') }} from t', // per-arg spans
+		// package-qualified with a nested-paren arg: the comma inside `var('a', 2)` must
+		// NOT split the outer arg list (2 args: the var(…) call and 'x').
+		'select {{ dbt_utils.pivot(var(\'a\', 2), \'x\') }} from t',
+	];
+	for (const sql of cases) {
+		it(`matches extractMacroCalls for ${JSON.stringify(sql)}`, () => {
+			expect(fromTags(sql).macroCalls).toEqual(extractMacroCalls(tokenizeJinja(sql)));
+		});
+	}
+});
+
+describe('tagInfos.macroCalls — {% … %} block tags now surface via control.calls', () => {
+	const cases = [
+		'{% set x = my_macro(1) %}\nselect 1',
+		'{% if my_macro() %}select 1{% endif %}',
+		'{% for x in my_macro() %}select 1{% endfor %}',
+		'{% call my_macro() %}body{% endcall %}\nselect 1',
+		'{% do run_query(my_macro()) %}\nselect 1', // do-block, two calls (source order)
 	];
 	for (const sql of cases) {
 		it(`matches extractMacroCalls for ${JSON.stringify(sql)}`, () => {
@@ -105,36 +161,43 @@ describe('tagInfos.macroCalls — field-for-field parity with extractMacroCalls 
 		});
 	}
 
-	it('splits args at the top level only, matching the old extractor for the outer call', () => {
-		// Nested parens: `inner(1, 2)` is ONE arg. The old extractor emits BOTH outer and
-		// inner; the tag-AST emits only the top-level `outer`, but the OUTER call's fields
-		// (including its two args) match field-for-field.
-		const sql = 'select {{ outer(inner(1, 2), \'x\') }} from t';
+	it('skips the macro DEFINITION site — {% macro foo(a) %} emits no call for foo', () => {
+		// The old extractor skips a callee immediately preceded by the `macro` keyword;
+		// the tag-AST surfaces `foo` in control.calls, so tagInfos drops the declaration
+		// (name === the declared macro name) to match.
+		const sql = '{% macro foo(a) %}\nselect 1';
+		expect(extractMacroCalls(tokenizeJinja(sql))).toEqual([]);
+		expect(fromTags(sql).macroCalls).toEqual([]);
+	});
+
+	it('does NOT emit ref / source / config / var / env_var callees as macro calls', () => {
+		for (const sql of [
+			'{% if config(materialized=\'x\') %}select 1{% endif %}', // config inside a control tag
+			'select {{ config(materialized=\'table\') }}',
+			'select {{ var(\'x\') }}',
+			'select {{ env_var(\'X\') }}',
+		]) {
+			expect(fromTags(sql).macroCalls).toEqual(extractMacroCalls(tokenizeJinja(sql)));
+			expect(fromTags(sql).macroCalls).toEqual([]);
+		}
+	});
+});
+
+describe('tagInfos.macroCalls — residual divergence: nested {{ }} expression calls', () => {
+	it('emits only the top-level call for a nested {{ }} macro (old emits both levels)', () => {
+		// RESIDUAL GAP: the old extractor's paren-scan emits BOTH outer and inner; a `macro`
+		// TagNode exposes only the top-level call (nested calls live inside its arg spans, not
+		// as separate nodes — only `control` nodes got the generic `calls` walk). So a real
+		// inner macro in an EXPRESSION tag is dropped. Gate-safe (no such case in the corpus:
+		// the only nested expression calls are `x(…, var(…))`, whose inner `var` is filtered).
+		const sql = 'select {{ outer(inner(1, 2), 3) }} from t';
+		expect(extractMacroCalls(tokenizeJinja(sql)).map(m => m.name).sort()).toEqual(['inner', 'outer']);
+		expect(fromTags(sql).macroCalls.map(m => m.name)).toEqual(['outer']);
+		// The OUTER call's fields (name/spans/args) still match field-for-field — only the
+		// separate `inner` entry is missing.
 		const tagOuter = fromTags(sql).macroCalls.find(m => m.name === 'outer')!;
 		const oldOuter = extractMacroCalls(tokenizeJinja(sql)).find(m => m.name === 'outer')!;
 		expect(tagOuter).toEqual(oldOuter);
 		expect(tagOuter.args).toHaveLength(2);
-	});
-});
-
-describe('tagInfos.macroCalls — coverage gaps (why macros stay on the old extractor)', () => {
-	it('captures only the top-level call for nested macros (old emits both levels)', () => {
-		const sql = 'select {{ outer(inner(1)) }} from t';
-		expect(extractMacroCalls(tokenizeJinja(sql)).map(m => m.name).sort()).toEqual(['inner', 'outer']);
-		expect(fromTags(sql).macroCalls.map(m => m.name)).toEqual(['outer']);
-	});
-
-	it('does not cover {% set/if/call %} block-tag macro calls (R2 emits control nodes)', () => {
-		for (const sql of [
-			'{% set rows = my_macro(\'a\') %}\nselect 1',
-			'{% if my_macro(\'x\') %}select 1{% endif %}',
-			'{% call my_macro() %}body{% endcall %}\nselect 1',
-		]) {
-			// The old extractor DOES capture the block-tag macro call...
-			expect(extractMacroCalls(tokenizeJinja(sql)).some(m => m.name === 'my_macro')).toBe(true);
-			// ...the tag-AST classifies the whole `{% … %}` as a control node, so no macro
-			// call surfaces. Hence macros stay on extractMacroCalls on the live path.
-			expect(fromTags(sql).macroCalls).toEqual([]);
-		}
 	});
 });

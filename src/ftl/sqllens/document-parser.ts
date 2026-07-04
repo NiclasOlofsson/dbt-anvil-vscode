@@ -10,7 +10,7 @@
  *
  * Runs alongside `FtlDocumentParser` until cutover — neither touches the other.
  */
-import type { DocumentModel } from '../../services/parse-service';
+import type { DocumentModel, RefInfo, SourceInfo } from '../../services/parse-service';
 import type { DocumentParser, ParseOptions } from '../../services/document-parser';
 import type { DialectSymbols } from '../sql-parser';
 import { performance } from 'node:perf_hooks';
@@ -286,17 +286,26 @@ export class SqllensDocumentParser implements DocumentParser {
 		const tokens = extractTokens(result, qualification, tokenStarExpander);
 		const finalColumns = extractFinalColumns(result, expander);
 		const finalSelect = extractFinalSelect(result, expander);
-		// On the NATIVE templated path, refs come from the R2 tag-AST (span-accurate,
-		// and covers the 2-arg `ref('pkg','model')` form the tokenizer extractor drops).
-		// On the fallback path there is no tag-AST -> the jinja-tokenizer extractor.
-		// SOURCES and MACRO CALLS stay on the tokenizer extractors on BOTH paths: the
-		// `source` tag node has no callee span (so `SourceInfo.col` is underivable), and
-		// `{% … %}` block-tag macro calls surface as `control` nodes in R2 (no call
-		// detail). Both are tracked as upstream asks — see extract/tag-infos.ts.
-		const refs = templatedTags !== undefined
-			? tagInfos(templatedTags, rawSql).refs
-			: extractRefs(jinjaTokens);
-		const sources = extractSources(jinjaTokens);
+		// On the NATIVE templated path, refs + sources come from the R2 tag-AST (span-accurate;
+		// covers the 2-arg `ref('pkg','model')` form the tokenizer extractor drops; sources
+		// anchor on the shipped `source` callSpan). On the fallback path there is no tag-AST ->
+		// the jinja-tokenizer extractors.
+		//
+		// macroCalls STAY on the tokenizer extractor on BOTH paths (never-worse): the R2 macro
+		// TagNode exposes only the TOP-LEVEL call, so a nested inner macro in a `{{ }}` expression
+		// tag (`{{ outer(inner()) }}`) would be dropped vs the tokenizer's paren-scan — a real
+		// (if rare) hover/signature-help regression. Held until sqllens exposes nested calls on
+		// expression macro nodes (upstream ask, symmetric to `control.calls`). The tokenizer reads
+		// the C2-derived jinjaTokens on the native path, so block-tag calls are still covered.
+		// tagInfos still computes macroCalls (A/B-tested, ready to flip the moment nested lands).
+		let refs: RefInfo[];
+		let sources: SourceInfo[];
+		if (templatedTags !== undefined) {
+			({ refs, sources } = tagInfos(templatedTags, rawSql));
+		} else {
+			refs = extractRefs(jinjaTokens);
+			sources = extractSources(jinjaTokens);
+		}
 		const macroCalls = extractMacroCalls(jinjaTokens);
 		enrichTokensWithJinjaSpans(tokens, refs, sources);
 

@@ -50,6 +50,7 @@ export type {
 	Projection,
 	TemplatedParseResult,
 	TagNode,
+	MacroCall,
 	Qualification,
 	QueryBody,
 	QueryExpr,

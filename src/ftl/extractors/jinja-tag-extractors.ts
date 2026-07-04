@@ -7,7 +7,7 @@ import type { MacroCallInfo, MacroCallArgInfo, RefInfo, SourceInfo, SqlglotWarni
  * user-defined macro calls. `ref` and `source` have dedicated extractors;
  * the rest are control flow, statement keywords, or jinja built-ins.
  */
-const NOT_MACRO_CALLS = new Set([
+export const NOT_MACRO_CALLS = new Set([
 	'ref', 'source',
 	'if', 'elif', 'else', 'endif',
 	'for', 'endfor', 'in',
