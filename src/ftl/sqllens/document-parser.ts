@@ -14,7 +14,7 @@ import type { DocumentModel } from '../../services/parse-service';
 import type { DocumentParser, ParseOptions } from '../../services/document-parser';
 import type { DialectSymbols } from '../sql-parser';
 import { performance } from 'node:perf_hooks';
-import { dialectSymbols, parse, parseTemplated, resolveScopes, Schema, toSqllensDialect, type Dialect, type SchemaMapping } from './api';
+import { dialectSymbols, parse, resolveScopes, Schema, toSqllensDialect, type Dialect, type SchemaMapping } from './api';
 import { tokenizeJinja } from '../jinja-tokenizer';
 import { parseWithJinjaFallback, type ParsePass } from '../parse-with-jinja-fallback';
 import { keywordTokenTypesFor, mapTokens } from './token-mapper';
@@ -152,38 +152,7 @@ export class SqllensDocumentParser implements DocumentParser {
 			return res;
 		};
 
-		// inc1 (CHANNEL ITEM 10): parse the jinja-SQL NATIVELY first. sqllens's
-		// parseTemplated segments the jinja and runs the SQL grammar over a length/
-		// newline-preserving placeholder, so its AST + SQL tokens come back in raw-source
-		// coordinates — exactly where a length-preserving pass1 blank landed — and its
-		// no-output-aware placeholder means config-topped models parse. Only when the
-		// native parse still carries syntax errors (the residual unknown-callable-at-
-		// statement class) do we fall back to the proven three-pass blank cascade. So this
-		// never regresses below today's behavior; it just skips the blanking when the
-		// native parse already succeeds. (Retiring the cascade for THIS path; jinja-blanker
-		// stays alive for its other consumers until cutover.)
-		let result: SqllensParse;
-		let pass: ParsePass;
-		let lineMap: LineMap | undefined;
-
-		const tp0 = performance.now();
-		const templated = parseTemplated(rawSql, dialect);
-		if (templated.sql.errors === 0) {
-			const scopes = resolveScopes(templated.sql.ast, dialect);
-			parseMs += performance.now() - tp0;
-			result = {
-				ast: templated.sql.ast,
-				dialect,
-				errors: templated.sql.errors,
-				diagnostics: templated.sql.diagnostics,
-				scopes,
-				tokens: templated.sql.tokens,
-			};
-			pass = 'pass1'; // native parse is length-preserving / raw-coords, like a pass1 blank
-			pass1 = result;
-		} else {
-			({ result, pass, lineMap } = parseWithJinjaFallback(rawSql, runOnce, r => r.errors === 0));
-		}
+		const { result, pass, lineMap } = parseWithJinjaFallback(rawSql, runOnce, r => r.errors === 0);
 
 		// On pass2 the parsed text is nunjucks-rendered (offsets shifted). Pass1's
 		// blanking is length-preserving, so its token stream stays in raw-source
