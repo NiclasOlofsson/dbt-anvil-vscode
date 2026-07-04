@@ -696,8 +696,7 @@ export function printDocument(input: PrinterInput): string {
 				(willBePredicateBool && config.layout.operatorPosition === 'leading')
 				|| willBeJoinOnOrUsing
 				|| (typeUpper === 'THEN'
-					&& (enclosing.includes('Case') || enclosing.includes('If')
-						|| multiLineWhenThens.has(tok.start))
+					&& multiLineWhenThens.has(tok.start)
 					&& policy.indentedThen);
 			const carriedExtraIndent = oneShotExtraIndent || (willTriggerContinuationIndent ? 1 : 0);
 			for (const c of tok.comments) {
@@ -748,10 +747,15 @@ export function printDocument(input: PrinterInput): string {
 		// metadata on Select nodes (common for CTE-body selects in sqlglot's
 		// serde dump), fall back to the token-stream pre-pass that classifies
 		// commas by tracking zone openings/closings off SELECT and FROM/WHERE.
+		// `Case`/`If` are in the exclusion list because a comma inside a CASE
+		// span (e.g. the type args of `cast(x as decimal(20, 6))` in a WHEN
+		// result) can never separate SELECT targets — CASE...END closes
+		// before any target comma. The legacy sqlglot serde never carried
+		// Case spans so the arm couldn't over-fire; the sqllens astIndex does.
 		const isSelectListComma = typeUpper === 'COMMA'
 			&& (
 				(enclosing.includes('Select')
-					&& !hasInnerEnclosure(enclosing, 'Select', ['Paren', 'Func', 'Subquery', 'Anonymous', 'Where', 'Group', 'Order', 'Having']))
+					&& !hasInnerEnclosure(enclosing, 'Select', ['Paren', 'Func', 'Subquery', 'Anonymous', 'Where', 'Group', 'Order', 'Having', 'Case', 'If']))
 				|| selectListCommaOffsets.has(tok.start)
 			);
 		// GROUP BY / ORDER BY list-separator commas — same wrap mechanics as
@@ -867,14 +871,19 @@ export function printDocument(input: PrinterInput): string {
 				isJoinOnOrUsing = true;
 			}
 		}
-		// `indented_then` — a THEN keyword whose ancestor chain includes
-		// `Case`/`If` lives on a new indented line, mirroring sqlfluff's
-		// indented_then policy. Token-stream fallback (multiLineWhenThens)
-		// covers cases where sqlglot's AST didn't propagate Case/If
-		// metadata to the THEN token's position.
+		// `indented_then` — a THEN whose WHEN body spans multiple lines gets
+		// its own indented line, mirroring sqlfluff's indented_then policy
+		// as scoped by the `ninja.layout.indent-then` rule: an inline
+		// `when x then y` is legal and stays inline; only a multi-line WHEN
+		// forces THEN onto its own line. `multiLineWhenThens` (token-stream
+		// pass) is the sole trigger — being enclosed by a Case/If node is
+		// deliberately NOT sufficient. sqlglot's serde never carried Case
+		// position metadata, so an enclosure-based trigger never fired on
+		// legacy real output; the sqllens astIndex DOES carry real Case
+		// spans, and an enclosure trigger would break every THEN in every
+		// CASE, diverging from the committed format oracles.
 		const isIndentedThen = typeUpper === 'THEN'
-			&& (enclosing.includes('Case') || enclosing.includes('If')
-				|| multiLineWhenThens.has(tok.start))
+			&& multiLineWhenThens.has(tok.start)
 			&& policy.indentedThen;
 		// `indented_joins` — a JOIN start token whose parent is `From`
 		// (top-level, not nested) indents one level deeper. This is an

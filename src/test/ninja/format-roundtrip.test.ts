@@ -1,33 +1,31 @@
 /**
  * End-to-end formatter roundtrip test.
  *
- * Parses a representative "kitchen-sink" SQL file with the real Pyodide
- * sqlglot parser, runs it through the same pipeline as
+ * Parses a representative "kitchen-sink" SQL file with the native sqllens
+ * parser (SqllensDocumentParser — synchronous, no Pyodide boot), runs it
+ * through the same pipeline as
  * NinjaFormattingProvider.provideDocumentFormattingEdits (minus the VS Code
  * config plumbing), and asserts the output matches a committed expected file.
+ * The *.out.sql oracles were produced by the legacy Pyodide/sqlglot path, so
+ * this suite is also the byte-parity gate for the native parser cutover.
  *
  * Also asserts idempotence — running the formatter twice produces the same
  * result as running it once, which catches rules whose fixes don't converge.
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { describe, expect, it, beforeAll } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-import { initPyodide } from '../../ftl/pyodide-loader';
-import { PyodideSqlParser } from '../../ftl/pyodide-sql-parser';
-import { FtlDocumentParser } from '../../ftl/ftl-document-parser';
+import { SqllensDocumentParser } from '../../ftl/sqllens/document-parser';
 
 import { reflowDocument } from '../../ninja/reflow/engine';
 import { DEFAULT_CONFIG, type NinjaConfig } from '../../ninja/config';
 import { PRESETS, type FormatPreset } from '../../ninja/presets';
 import { mockDocument } from './helpers';
 
-const PYODIDE_DIR = path.join(__dirname, '..', '..', '..', 'node_modules', 'pyodide');
-const VENDOR_DIR  = path.join(__dirname, '..', '..', '..', 'resources', 'ftl', 'vendor');
-const SCRIPTS_DIR = path.join(__dirname, '..', '..', '..', 'resources', 'ftl');
 const FIXTURES_DIR = path.join(__dirname, 'fixtures', 'format');
 
-let documentParser: FtlDocumentParser;
+const documentParser = new SqllensDocumentParser({ adapterType: 'duckdb' });
 
 /**
  * Merge a named preset into DEFAULT_CONFIG so tests don't depend on
@@ -90,11 +88,6 @@ function fixturePreset(name: string): FormatPreset {
 }
 
 describe('Ninja formatter roundtrip', () => {
-	beforeAll(async () => {
-		const runtime = await initPyodide(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR);
-		documentParser = new FtlDocumentParser(PyodideSqlParser.create(runtime.pyodide), { adapterType: 'duckdb' });
-	}, 60_000);
-
 	for (const name of FIXTURES) {
 		describe(name, () => {
 			const inputPath    = path.join(FIXTURES_DIR, `${name}.in.sql`);

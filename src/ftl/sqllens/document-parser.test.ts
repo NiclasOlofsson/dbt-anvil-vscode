@@ -417,14 +417,18 @@ describe('SqllensDocumentParser — schema-fed SELECT * expansion', () => {
 describe('SqllensDocumentParser — getDialectSymbols', () => {
 	// The sets are LOWERCASE: every consumer (cap-keywords/functions/types, the reflow
 	// printer) tests membership with `set.has(x.toLowerCase())`, matching the sqlglot
-	// path's contract. keywordTokenTypes are sqlglot TokenType NAMES (select, group_by,
-	// alias…), NOT keyword words; functions/types come from sqllens's own membership
-	// sets, lowercased.
+	// path's contract. keywordTokenTypes are sqlglot TokenType NAMES (select, alias…),
+	// NOT keyword words; functions come from sqllens's own membership set, lowercased;
+	// types mirror sqlglot's DataType.Type enum (the legacy dialect-independent set).
 	it('exposes keyword TokenTypes, functions, and types for databricks', async () => {
 		const symbols = await parser('databricks').getDialectSymbols();
 		expect(symbols).toBeDefined();
-		// Compound + single keyword token-type names.
-		expect(symbols!.keywordTokenTypes.has('group_by')).toBe(true);
+		// Single-word keyword token-type names only. Compound names (group_by,
+		// order_by…) are excluded, mirroring the legacy `_get_dialect_symbols`
+		// `isalpha()` filter (sql_parser.py) — keyword recasing never touches
+		// multi-word tokens, so `GROUP BY` keeps its source casing (the format
+		// oracles encode exactly that, see kitchen-sink.out.sql).
+		expect(symbols!.keywordTokenTypes.has('group_by')).toBe(false);
 		expect(symbols!.keywordTokenTypes.has('alias')).toBe(true); // the AS keyword
 		expect(symbols!.keywordTokenTypes.has('select')).toBe(true);
 		// A word mapped to VAR (removed keyword) must NOT be a keyword type.

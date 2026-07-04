@@ -40,6 +40,34 @@ export interface AdapterContext {
 	readonly adapterType: string | undefined;
 }
 
+/**
+ * Verbatim mirror of sqlglot's `DataType.Type` enum values, lowercased — the
+ * `DialectSymbols.types` contract the legacy path exposed (`_get_dialect_symbols`
+ * in resources/ftl/sql_parser.py enumerates every enum member, for EVERY
+ * dialect). Captured from the live Pyodide parser (sqlglot vendored in
+ * resources/ftl/vendor). The type-capitalisation consumers (reflow recase,
+ * cap-types rule) match bare identifier words against this set, so its exact
+ * membership is behavior: `a.NAME` is recased because `name` is an enum member.
+ */
+const SQLGLOT_DATA_TYPE_NAMES: ReadonlySet<string> = new Set([
+	'aggregatefunction', 'array', 'bigdecimal', 'bigint', 'bignum', 'bigserial', 'binary', 'bit',
+	'blob', 'boolean', 'bpchar', 'char', 'date', 'date32', 'datemultirange', 'daterange',
+	'datetime', 'datetime2', 'datetime64', 'decfloat', 'decimal', 'decimal128', 'decimal256', 'decimal32',
+	'decimal64', 'double', 'dynamic', 'enum', 'enum16', 'enum8', 'file', 'fixedstring',
+	'float', 'geography', 'geographypoint', 'geometry', 'hllsketch', 'hstore', 'image', 'inet',
+	'int', 'int128', 'int256', 'int4multirange', 'int4range', 'int8multirange', 'int8range', 'interval',
+	'ipaddress', 'ipprefix', 'ipv4', 'ipv6', 'json', 'jsonb', 'linestring', 'list',
+	'longblob', 'longtext', 'lowcardinality', 'map', 'mediumblob', 'mediumint', 'mediumtext', 'money',
+	'multilinestring', 'multipolygon', 'name', 'nchar', 'nested', 'nothing', 'null', 'nummultirange',
+	'numrange', 'nvarchar', 'object', 'point', 'polygon', 'range', 'ring', 'rowversion',
+	'serial', 'set', 'simpleaggregatefunction', 'smalldatetime', 'smallint', 'smallmoney', 'smallserial', 'struct',
+	'super', 'tdigest', 'text', 'time', 'time_ns', 'timestamp', 'timestamp_ms', 'timestamp_ns',
+	'timestamp_s', 'timestampltz', 'timestampntz', 'timestamptz', 'timetz', 'tinyblob', 'tinyint', 'tinytext',
+	'tsmultirange', 'tsrange', 'tstzmultirange', 'tstzrange', 'ubigint', 'udecimal', 'udouble', 'uint',
+	'uint128', 'uint256', 'umediumint', 'union', 'unknown', 'user-defined', 'usmallint', 'utinyint',
+	'uuid', 'varbinary', 'varchar', 'variant', 'vector', 'xml', 'year',
+]);
+
 export class SqllensDocumentParser implements DocumentParser {
 	/** Resolved symbol lists per sqllens dialect. Mirrors FtlDocumentParser's
 	 *  `_symbolsCache`, but keyed by the sqllens `Dialect` and holding the resolved
@@ -54,12 +82,22 @@ export class SqllensDocumentParser implements DocumentParser {
 	 * mapped tokens against. Shapes mirror the sqlglot path's `DialectSymbols`
 	 * (LOWERCASE — every consumer does `set.has(x.toLowerCase())`, and the interface
 	 * documents lowercase):
-	 *   - `functions` / `types` — sqllens's own `dialectSymbols(dialect)` membership
-	 *     sets (canonical UPPERCASE), lowercased here.
+	 *   - `functions` — sqllens's own `dialectSymbols(dialect)` membership set
+	 *     (canonical UPPERCASE), lowercased here.
 	 *   - `keywordTokenTypes` — sqlglot TokenType NAMES the token-mapper can emit for
 	 *     this dialect (`keywordTokenTypesFor`), lowercased. These are token `.type`
-	 *     values (SELECT, GROUP_BY, ALIAS…), NOT keyword words, so sqllens's own
-	 *     `keywords` set (grammar literals) is deliberately NOT used for them.
+	 *     values (SELECT, ALIAS…), NOT keyword words, so sqllens's own `keywords` set
+	 *     (grammar literals) is deliberately NOT used for them. Mirroring the legacy
+	 *     `_get_dialect_symbols` (sql_parser.py — `if name.isalpha()`), names that are
+	 *     not purely alphabetic (GROUP_BY, ORDER_BY, PARTITION_BY…) are FILTERED OUT:
+	 *     legacy keyword recasing never saw compound token types, so `GROUP BY`
+	 *     keeps its source casing, and the format oracles encode that.
+	 *   - `types` — the legacy contract is sqlglot's `DataType.Type` enum names,
+	 *     dialect-INDEPENDENT (`_get_dialect_symbols` enumerates the whole enum), so
+	 *     the same static mirror (`SQLGLOT_DATA_TYPE_NAMES`) is used here. sqllens's
+	 *     own per-dialect type-word set is deliberately not used: it both misses
+	 *     enum names the legacy recasing matched (`name`, `interval`, `map`…) and
+	 *     adds dialect aliases legacy never recased (`int4`, `string`…).
 	 */
 	getDialectSymbols(): Promise<DialectSymbols | undefined> {
 		const dialect = toSqllensDialect(this._context.adapterType);
@@ -70,8 +108,12 @@ export class SqllensDocumentParser implements DocumentParser {
 				new Set([...set].map(x => x.toLowerCase()));
 			symbols = {
 				functions: lower(s.functions),
-				keywordTokenTypes: lower(keywordTokenTypesFor(dialect)),
-				types: lower(s.types),
+				keywordTokenTypes: new Set(
+					[...keywordTokenTypesFor(dialect)]
+						.map(x => x.toLowerCase())
+						.filter(x => /^[a-z]+$/.test(x)),
+				),
+				types: SQLGLOT_DATA_TYPE_NAMES,
 			};
 			this._symbolsCache.set(dialect, symbols);
 		}
@@ -214,7 +256,15 @@ export class SqllensDocumentParser implements DocumentParser {
 		// mis-address the raw-space tokens — leave it undefined and let the reflow
 		// path fall back to an empty index, matching the isPass2 gating used for the
 		// model's other rendered-space positions.
-		if (pass !== 'pass2') {
+		//
+		// Multi-statement sources are also left without an index: sqllens parses a
+		// single statement, and on `a; b; c` input it returns statement 1's IR with a
+		// CST span stretched to EOF (errors === 0). Indexing that would report a
+		// 'Select' enclosure for every token of the FOLLOWING statements with none of
+		// their inner structure, and the printer would misclassify e.g. window-paren
+		// commas in statement 2 as SELECT-list commas. No index → the printer's
+		// token-stream fallbacks take over, which is exactly the legacy behavior.
+		if (pass !== 'pass2' && !hasMultipleStatements(sqlTokens)) {
 			model.astIndex = createSqllensAstIndex(result, rawSql);
 		}
 
@@ -228,6 +278,20 @@ export class SqllensDocumentParser implements DocumentParser {
 
 		return model;
 	}
+}
+
+/**
+ * True when the mapped token stream contains a statement separator with more
+ * SQL after it — i.e. the source holds 2+ statements. A trailing `;` at the
+ * end of a single statement does NOT count.
+ */
+function hasMultipleStatements(sqlTokens: ReadonlyArray<{ type: string }>): boolean {
+	for (let i = 0; i < sqlTokens.length - 1; i++) {
+		if (sqlTokens[i].type === 'SEMICOLON' && sqlTokens[i + 1].type !== 'SEMICOLON') {
+			return true;
+		}
+	}
+	return false;
 }
 
 /** Remap every SQL-derived LINE number in the model from rendered to raw space. */
