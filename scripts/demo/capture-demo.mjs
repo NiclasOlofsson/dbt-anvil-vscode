@@ -1239,13 +1239,15 @@ async function main() {
 		console.log('[11] Call Hierarchy');
 		markSegmentStart('call-hierarchy');
 		if (shouldRun('call-hierarchy')) try {
-			// PRE-DEMO
+			// PRE-DEMO: open a mid-DAG model DIRECTLY and put the cursor on the model body
+			// (line 1, 'with' — NOT on a ref) so the hierarchy roots on THIS model. reg_season_end
+			// has three models that call it and refs its own upstream, so both directions are real.
 			await resetLayout(win);
-			await openFile(win, 'season_summary.sql');
+			await openFile(win, 'reg_season_end.sql');
 			await win.click('.monaco-editor .view-lines');
-			await goToLine(win, 20, 22);
-			// DEMO: show incoming calls (who refs this model) first, then toggle to
-			// outgoing calls (what this model refs) so both directions are demonstrated.
+			await goToLine(win, 1, 1);
+			// DEMO: incoming calls (models that ref reg_season_end) first, then toggle to
+			// outgoing (models reg_season_end refs) so both directions show over the clip.
 			await syncAndLogDemo(win, 'call-hierarchy.demo');
 			await win.keyboard.press('Shift+Alt+H');
 			await waitForReady(win, 15000).catch(() => { });
@@ -1263,7 +1265,7 @@ async function main() {
 			await setAllTreeItemsExpanded(win, true, '.part.panel', 3);
 			await setAllTreeItemsExpanded(win, true, '.part.sidebar', 3);
 			await win.waitForTimeout(1500);
-			await screenshot(win, 'call-hierarchy', 'Call Hierarchy — incoming & outgoing model calls', 4000);
+			await screenshot(win, 'call-hierarchy', 'Call Hierarchy — models that call this one, and the models it calls', 4000);
 			logEvent('call-hierarchy.post-demo');
 			// POST-DEMO
 			await pressEscape(win);
@@ -1297,23 +1299,19 @@ async function main() {
 		console.log('[13] Lineage');
 		markSegmentStart('lineage');
 		if (shouldRun('lineage')) try {
-			// PRE-DEMO: open file, show lineage, maximize, fit, wait for enrichment
+			// PRE-DEMO: open file, show lineage, fit, wait for enrichment. The panel stays at
+			// its normal docked size — the graph fits well there; maximizing it just shrank the
+			// cards inside a big empty frame.
 			await resetLayout(win);
 			await openFile(win, 'season_summary.sql');
 			await runCommand(win, 'dbt Anvil: Show Lineage');
 			await waitForReady(win, 30000).catch(() => { });
 			// Wait for the lineage webview to actually mount instead of a blanket 5s —
 			// returns as soon as #canvas-wrap exists, falls through after ~15s to the
-			// existing maximize/fit/col-toggle checks below.
+			// existing fit/col-toggle checks below.
 			for (let i = 0; i < 30; i++) {
 				if (await findWebviewFrame(win, '#canvas-wrap')) break;
 				await win.waitForTimeout(500);
-			}
-			const maximizeBtn = win.locator('.part.panel .codicon-panel-maximize').first();
-			if (await maximizeBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-				await maximizeBtn.click();
-			} else {
-				await runCommand(win, 'View: Toggle Maximized Panel Size');
 			}
 			const lineageFrame = await findWebviewFrame(win, '#canvas-wrap');
 			if (!lineageFrame) throw new Error('Lineage webview frame not found');
@@ -1353,8 +1351,6 @@ async function main() {
 			// POST-DEMO
 			await removeHighlight(win);
 			await removeCursor(win);
-			await runCommand(win, 'View: Toggle Maximized Panel Size');
-			await win.waitForTimeout(400);
 		} catch (e) {
 			console.warn(`  ⚠ lineage: ${e.message}`);
 		}
@@ -1427,12 +1423,14 @@ async function main() {
 			await openFile(win, 'query.sql');
 			await goToLine(win, 2, 1);
 			await initCustomCursor(win);
-			// DEMO: F5 runs the statement at cursor
+			// DEMO: run the statement at cursor via the Execute Query command (noDebug run).
+			// NOT F5 — F5 is VS Code's Start Debugging and launches the CTE stepping debugger,
+			// not a run. Execute Query is dbt-anvil.executeQuery, which runs and shows the grid.
 			await syncAndLogDemo(win, 'query-results.demo');
-			await win.keyboard.press('F5');
-			// F5 launches the dbt-sql "Run SQL" config — it runs via the debug adapter and
-			// does NOT set a "dbt: db query" status, so poll for the result-grid webview to
-			// appear instead of waiting on the status bar.
+			await runCommand(win, 'Execute Query');
+			// executeQuery runs via the debug adapter in noDebug mode and does NOT set a
+			// "dbt: db query" status, so poll for the result-grid webview to appear instead
+			// of waiting on the status bar.
 			let resultsFrame = null;
 			for (let i = 0; i < 60 && !resultsFrame; i++) {
 				await win.waitForTimeout(1000);

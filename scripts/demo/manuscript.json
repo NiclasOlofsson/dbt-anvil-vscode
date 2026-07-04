@@ -166,7 +166,7 @@
       "id": "call-hierarchy",
       "frame": "call-hierarchy",
       "useVideo": true,
-      "caption": "Call Hierarchy — full blast radius. Everything upstream and downstream at once.",
+      "caption": "Call Hierarchy — every model that calls this one, and every model it calls. Toggle both ways.",
       "duration": {
         "from": {
           "event": "call-hierarchy.demo",
