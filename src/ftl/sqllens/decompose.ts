@@ -159,11 +159,15 @@ function precedingCtes(ctes: readonly CteDef[], name: string): CteDef[] {
 	return out;
 }
 
+/** Verbatim `name AS (...)` prefix parts for a list of real CTE defs. */
+function ctePrefixParts(ctes: readonly CteDef[], rawSql: string): string[] {
+	return ctes.map(c => rawSql.slice(startOffset(c), stopOffset(c) + 1));
+}
+
 /** Prepend `WITH <preceding CTE defs>` so a mid-pipeline stage runs standalone. */
-function withPrefix(sql: string, prefixCtes: CteDef[], rawSql: string): string {
-	if (prefixCtes.length === 0) return sql;
-	const parts = prefixCtes.map(c => rawSql.slice(startOffset(c), stopOffset(c) + 1));
-	return `WITH ${parts.join(', ')}\n${sql}`;
+function withPrefix(sql: string, prefixParts: string[]): string {
+	if (prefixParts.length === 0) return sql;
+	return `WITH ${prefixParts.join(', ')}\n${sql}`;
 }
 
 /** Flatten a (possibly nested) set-op into its SELECT legs, left-to-right — the
@@ -176,18 +180,23 @@ function collectLegs(body: QueryBody): SelectExpr[] {
 
 /** Top-level FROM/JOIN target names for a frame, in declaration order. The debug
  *  adapter indexes these positionally against the frame's from/join stages, so
- *  there is exactly one entry per top-level source (base first, then joined). */
-function tableRefs(body: QueryBody): string[] {
+ *  there is exactly one entry per top-level source (base first, then joined).
+ *  `promotedNames` maps subquery sources promoted to synthetic CTE frames onto
+ *  their frame names, so refs point at the steppable frame (matching the legacy
+ *  decompose, which rewrote the AST source to a table named after the CTE). */
+function tableRefs(body: QueryBody, promotedNames?: ReadonlyMap<Source, string>): string[] {
 	const refs: string[] = [];
 	const visitSelect = (sel: SelectExpr): void => {
-		for (const src of sel.from) refs.push(sourceName(src));
+		for (const src of sel.from) refs.push(sourceName(src, promotedNames));
 	};
 	if (body.kind === 'select') visitSelect(body);
 	else if (body.kind === 'setop') for (const leg of collectLegs(body)) visitSelect(leg);
 	return refs;
 }
 
-function sourceName(src: Source): string {
+function sourceName(src: Source, promotedNames?: ReadonlyMap<Source, string>): string {
+	const promoted = promotedNames?.get(src);
+	if (promoted !== undefined) return promoted;
 	switch (src.kind) {
 		case 'table':
 			return src.name[src.name.length - 1] ?? '';
@@ -207,7 +216,8 @@ function sourceName(src: Source): string {
 interface StageCtx {
 	sql: string;
 	tokens: Token[];
-	prefixCtes: CteDef[];
+	/** Rendered `name AS (...)` texts for the WITH prefix of runnable stages. */
+	prefixParts: string[];
 	/** QueryExpr-level ORDER BY (sqllens models it on QueryExpr, not SelectExpr). */
 	orderBy?: readonly unknown[];
 	/** QueryExpr-level LIMIT / OFFSET. */
@@ -230,7 +240,7 @@ interface StageCtx {
 function joinStages(sel: SelectExpr, ctx: StageCtx, fromKwOff: number): Array<Omit<DecomposeClause, 'order'>> {
 	const joins = sel.joins;
 	if (!joins || joins.length === 0) return [];
-	const { sql, tokens, prefixCtes } = ctx;
+	const { sql, tokens, prefixParts } = ctx;
 	const out: Array<Omit<DecomposeClause, 'order'>> = [];
 	// Lower bound for locating each join's keyword: the stop of the preceding chain element —
 	// the base source for the first join, the prior join (incl. its ON predicate) for the rest.
@@ -240,7 +250,7 @@ function joinStages(sel: SelectExpr, ctx: StageCtx, fromKwOff: number): Array<Om
 		const joinStop = stopOffset(join as Spanned);
 		out.push({
 			stage: 'join',
-			sql: withPrefix(`SELECT * ${sql.slice(fromKwOff, joinStop + 1).trimEnd()}`, prefixCtes, sql),
+			sql: withPrefix(`SELECT * ${sql.slice(fromKwOff, joinStop + 1).trimEnd()}`, prefixParts),
 			line: lead ? lead.line - 1 : startLine0(join as Spanned),
 		});
 		prevStop = joinStop;
@@ -260,7 +270,7 @@ function joinStages(sel: SelectExpr, ctx: StageCtx, fromKwOff: number): Array<Om
  * source, so user formatting survives verbatim.
  */
 function buildSelectClauses(sel: SelectExpr, ctx: StageCtx): DecomposeClause[] {
-	const { sql, tokens, prefixCtes } = ctx;
+	const { sql, tokens, prefixParts } = ctx;
 	const clauses: Array<Omit<DecomposeClause, 'order'>> = [];
 	const selStart = startOffset(sel);
 
@@ -317,14 +327,14 @@ function buildSelectClauses(sel: SelectExpr, ctx: StageCtx): DecomposeClause[] {
 	// Full runnable text for select / order / limit. If it already opens with WITH
 	// (e.g. `_main_`, whose span covers the leading CTEs), do not double-prefix.
 	const fullText = sql.slice(ctx.fullTextStart, ctx.fullTextStop + 1);
-	const fullSql = /^\s*with\b/i.test(fullText) ? fullText : withPrefix(fullText, prefixCtes, sql);
+	const fullSql = /^\s*with\b/i.test(fullText) ? fullText : withPrefix(fullText, prefixParts);
 
 	// 1. FROM — the base source(s) only; join text is excluded (see fromRegionEnd) and emitted by
 	//    the per-join stages below.
 	if (hasFrom) {
 		clauses.push({
 			stage: 'from',
-			sql: withPrefix(`SELECT * ${sql.slice(fromKwOff, fromRegionEnd).trimEnd()}`, prefixCtes, sql),
+			sql: withPrefix(`SELECT * ${sql.slice(fromKwOff, fromRegionEnd).trimEnd()}`, prefixParts),
 			line: fromKwLine,
 		});
 	}
@@ -336,7 +346,7 @@ function buildSelectClauses(sel: SelectExpr, ctx: StageCtx): DecomposeClause[] {
 	if (whereClause && hasFrom) {
 		clauses.push({
 			stage: 'where',
-			sql: withPrefix(`SELECT * ${sql.slice(fromKwOff, whereClause.contentEnd + 1).trimEnd()}`, prefixCtes, sql),
+			sql: withPrefix(`SELECT * ${sql.slice(fromKwOff, whereClause.contentEnd + 1).trimEnd()}`, prefixParts),
 			line: whereClause.kwLine,
 		});
 	}
@@ -345,7 +355,7 @@ function buildSelectClauses(sel: SelectExpr, ctx: StageCtx): DecomposeClause[] {
 	if (groupClause && hasFrom) {
 		clauses.push({
 			stage: 'group',
-			sql: withPrefix(sql.slice(selectKwOff, groupClause.contentEnd + 1).trimEnd(), prefixCtes, sql),
+			sql: withPrefix(sql.slice(selectKwOff, groupClause.contentEnd + 1).trimEnd(), prefixParts),
 			line: groupClause.kwLine,
 		});
 	}
@@ -354,7 +364,7 @@ function buildSelectClauses(sel: SelectExpr, ctx: StageCtx): DecomposeClause[] {
 	if (havingClause && groupClause && hasFrom) {
 		clauses.push({
 			stage: 'having',
-			sql: withPrefix(sql.slice(selectKwOff, havingClause.contentEnd + 1).trimEnd(), prefixCtes, sql),
+			sql: withPrefix(sql.slice(selectKwOff, havingClause.contentEnd + 1).trimEnd(), prefixParts),
 			line: havingClause.kwLine,
 		});
 	}
@@ -426,7 +436,7 @@ function extractClauses(body: QueryBody, ctx: Omit<StageCtx, 'orderBy' | 'limit'
 	// PipeExpr / anything else: a single select stage over the whole text — the
 	// Python original only handled Select/Union, so this is a conservative fallback.
 	const fullText = ctx.sql.slice(startOffset(qe), stopOffset(qe) + 1);
-	const fullSql = /^\s*with\b/i.test(fullText) ? fullText : withPrefix(fullText, ctx.prefixCtes, ctx.sql);
+	const fullSql = /^\s*with\b/i.test(fullText) ? fullText : withPrefix(fullText, ctx.prefixParts);
 	return [{ stage: 'select', sql: fullSql, line: startLine0(qe), order: 0 }];
 }
 
@@ -448,6 +458,140 @@ function extractSetopClauses(body: SetOpExpr, ctx: Omit<StageCtx, 'orderBy' | 'l
 	return combined.map((c, order) => ({ ...c, order }));
 }
 
+// ── Synthetic frame promotion ──────────────────────────────────────────────────
+//
+// The legacy decompose (sql_parser.py `promote_subqueries` / `promote_unions`)
+// rewrote the sqlglot AST, inserting synthetic CTEs so FROM/JOIN subqueries and
+// UNION legs become steppable frames. The native version does not mutate the IR;
+// it keeps an ordered list of frame ENTRIES (real CTEs + synthetics) and derives
+// each synthetic frame's clauses straight from the original node spans. Stage SQL
+// for the ENCLOSING frames keeps the subquery / union text inline (verbatim
+// slicing — still runnable as-is), so unlike the legacy version no one references
+// the synthetic names and they are deliberately left out of later frames' WITH
+// prefixes.
+
+interface RealEntry {
+	kind: 'real';
+	name: string;
+	cte: CteDef;
+}
+
+interface SyntheticEntry {
+	kind: 'synthetic';
+	name: string;
+	line: number;
+	endLine: number;
+	/** Subquery promotion: the full inner query (ORDER BY / LIMIT live here). */
+	query?: QueryExpr;
+	/** Union-leg promotion: the leg SELECT. */
+	leg?: SelectExpr;
+}
+
+type CteEntry = RealEntry | SyntheticEntry;
+
+/** Insert before the entry named `beforeName`; append when absent — the legacy
+ *  `insert_before`, where `_main_` never matches so main-level synthetics land last. */
+function insertEntryBefore(entries: CteEntry[], entry: CteEntry, beforeName: string): void {
+	const idx = entries.findIndex(e => e.name === beforeName);
+	if (idx < 0) entries.push(entry);
+	else entries.splice(idx, 0, entry);
+}
+
+/** First SELECT of a body — the legacy `node.find(exp.Select)` (first union leg
+ *  when the body is a set-op). */
+function firstSelect(body: QueryBody): SelectExpr | undefined {
+	return body.kind === 'select' ? body : body.kind === 'setop' ? collectLegs(body)[0] : undefined;
+}
+
+/**
+ * Promote FROM/JOIN subqueries to synthetic CTE frames — legacy `promote_subqueries`
+ * (sql_parser.py ~1457). Scope order: each real CTE body first, then `_main_`. Name:
+ * the subquery alias when it does not collide with an existing frame name, else
+ * `__subq_N__`. A promoted subquery inside CTE X is inserted before X; main-level
+ * ones append at the end. Nested subqueries inside a promoted body are promoted
+ * first (they land at the very end — same as the legacy insert order). The frame's
+ * line range is the inner query's own span (the legacy version approximated this
+ * with an identifier + paren-matching heuristic over the same region).
+ */
+function promoteSubqueries(entries: CteEntry[], ast: QueryExpr, promotedNames: Map<Source, string>): void {
+	const existing = new Set(entries.map(e => e.name));
+	let counter = 0;
+	const makeName = (preferred: string): string => {
+		if (preferred && !existing.has(preferred)) {
+			existing.add(preferred);
+			return preferred;
+		}
+		counter += 1;
+		const name = `__subq_${counter}__`;
+		existing.add(name);
+		return name;
+	};
+
+	const promoteInSelect = (sel: SelectExpr | undefined, beforeName: string): void => {
+		if (!sel) return;
+		for (const src of sel.from) {
+			if (src.kind !== 'subquery') continue;
+			const name = makeName(src.alias ?? '');
+			// Nested subqueries first, keyed to this (not-yet-inserted) name → appended.
+			promoteInSelect(firstSelect(src.query.body), name);
+			promotedNames.set(src, name);
+			insertEntryBefore(entries, {
+				kind: 'synthetic',
+				name,
+				line: startLine0(src.query),
+				endLine: stopLine0(src.query),
+				query: src.query,
+			}, beforeName);
+		}
+	};
+
+	for (const e of [...entries]) {
+		if (e.kind === 'real') promoteInSelect(firstSelect(e.cte.body.body), e.name);
+	}
+	promoteInSelect(firstSelect(ast.body), '_main_');
+}
+
+/**
+ * Promote set-op legs to synthetic `__union_N__` frames — legacy `promote_unions`
+ * (sql_parser.py ~1552). Runs after subquery promotion; the counter is shared across
+ * scopes, top-level legs numbered first, then each real CTE body's legs in declaration
+ * order. Range rules: a non-last leg ends at its own last line, so a bare
+ * `UNION ALL` keyword line between legs falls OUTSIDE every synthetic range
+ * (setBreakpoints must not verify it); the last leg extends to the end of the
+ * statement (top level) or the containing CTE's closing paren.
+ */
+function promoteUnions(entries: CteEntry[], ast: QueryExpr, lastLine: number): void {
+	const existing = new Set(entries.map(e => e.name));
+	let counter = 0;
+	const makeName = (): string => {
+		for (;;) {
+			counter += 1;
+			const name = `__union_${counter}__`;
+			if (!existing.has(name)) {
+				existing.add(name);
+				return name;
+			}
+		}
+	};
+
+	const promoteLegs = (body: SetOpExpr, beforeName: string, enclosingEnd: number): void => {
+		const legs = collectLegs(body);
+		if (legs.length < 2) return;
+		legs.forEach((leg, i) => {
+			const start = startLine0(leg);
+			const end = i + 1 < legs.length ? Math.max(start, stopLine0(leg)) : Math.max(start, enclosingEnd);
+			insertEntryBefore(entries, { kind: 'synthetic', name: makeName(), line: start, endLine: end, leg }, beforeName);
+		});
+	};
+
+	if (ast.body.kind === 'setop') promoteLegs(ast.body, '_main_', lastLine);
+	for (const e of [...entries]) {
+		if (e.kind !== 'real') continue;
+		const body = e.cte.body.body;
+		if (body.kind === 'setop') promoteLegs(body, e.name, stopLine0(e.cte));
+	}
+}
+
 /**
  * Decompose compiled SQL into debug frames (CTEs + `_main_`) and per-frame stage
  * clauses. Returns the typed contract object; the debug-adapter seam JSON-stringifies
@@ -464,19 +608,43 @@ export function decompose(compiledSql: string, dialect: Dialect): DecomposeResul
 		const clauses: Record<string, DecomposeClause[]> = {};
 		const refs: Record<string, string[]> = {};
 
-		// CTE frames, in declaration order.
+		// Ordered frame entries: real CTEs in declaration order, then the two
+		// promotion passes splice in synthetic subquery / union-leg frames.
+		const entries: CteEntry[] = [];
 		for (const cte of ast.ctes) {
-			const name = cte.name;
-			if (!name) continue;
-			frames.push({
-				name,
-				type: 'cte',
-				line: startLine0(cte),
-				endLine: stopLine0(cte),
-			});
-			const ctx = { sql: compiledSql, tokens, prefixCtes: precedingCtes(ast.ctes, name) };
-			clauses[name] = extractClauses(cte.body.body, ctx, cte.body);
-			refs[name] = tableRefs(cte.body.body);
+			if (cte.name) entries.push({ kind: 'real', name: cte.name, cte });
+		}
+		const promotedNames = new Map<Source, string>();
+		promoteSubqueries(entries, ast, promotedNames);
+		promoteUnions(entries, ast, newlineCount(compiledSql));
+
+		// CTE frames (real + synthetic), in entry order. WITH prefixes carry only the
+		// REAL CTEs declared before the entry — synthetic bodies are self-contained
+		// verbatim slices that nothing references (see the promotion note above).
+		const realBefore: CteDef[] = [];
+		for (const entry of entries) {
+			const prefixParts = ctePrefixParts(realBefore, compiledSql);
+			const ctx = { sql: compiledSql, tokens, prefixParts };
+			if (entry.kind === 'real') {
+				const { name, cte } = entry;
+				frames.push({ name, type: 'cte', line: startLine0(cte), endLine: stopLine0(cte) });
+				clauses[name] = extractClauses(cte.body.body, ctx, cte.body);
+				refs[name] = tableRefs(cte.body.body, promotedNames);
+				realBefore.push(cte);
+			} else {
+				frames.push({ name: entry.name, type: 'cte', line: entry.line, endLine: entry.endLine });
+				if (entry.query) {
+					clauses[entry.name] = extractClauses(entry.query.body, ctx, entry.query);
+					refs[entry.name] = tableRefs(entry.query.body, promotedNames);
+				} else if (entry.leg) {
+					clauses[entry.name] = buildSelectClauses(entry.leg, {
+						...ctx,
+						fullTextStart: startOffset(entry.leg),
+						fullTextStop: stopOffset(entry.leg),
+					});
+					refs[entry.name] = tableRefs(entry.leg, promotedNames);
+				}
+			}
 		}
 
 		// _main_ frame — the top-level query. Its span covers the leading WITH, so its
@@ -488,9 +656,13 @@ export function decompose(compiledSql: string, dialect: Dialect): DecomposeResul
 			line: startLine0(ast.body),
 			endLine: newlineCount(compiledSql),
 		});
-		const mainCtx = { sql: compiledSql, tokens, prefixCtes: precedingCtes(ast.ctes, mainName) };
+		const mainCtx = {
+			sql: compiledSql,
+			tokens,
+			prefixParts: ctePrefixParts(precedingCtes(ast.ctes, mainName), compiledSql),
+		};
 		clauses[mainName] = extractClauses(ast.body, mainCtx, ast);
-		refs[mainName] = tableRefs(ast.body);
+		refs[mainName] = tableRefs(ast.body, promotedNames);
 
 		return { success: true, frames, clauses, refs };
 	} catch (err) {

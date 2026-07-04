@@ -403,6 +403,255 @@ describe('decompose — tsql dialect', () => {
 	});
 });
 
+// ── Subquery promotion — ported from the legacy oracle
+//    (src/test/debug-symbols-integration.test.ts, 'decompose_query subquery promotion'). ──
+
+describe('decompose — subquery promotion to synthetic CTE frames', () => {
+	it('promotes a FROM subquery to a synthetic CTE frame', () => {
+		const sql = [
+			'SELECT t.id, t.name',
+			'FROM (SELECT id, name FROM raw_customers WHERE active = 1) t',
+		].join('\n');
+
+		const result = decompose(sql, 'duckdb');
+		expect(result.success).toBe(true);
+
+		// Synthetic frame promoted from the FROM subquery (alias 't' used as CTE name)
+		const syntheticFrame = result.frames.find(f => f.name === 't');
+		expect(syntheticFrame, 'synthetic frame for FROM subquery').toBeDefined();
+		expect(syntheticFrame!.type).toBe('cte');
+
+		// _main_ refs should now point to the synthetic CTE 't'
+		expect(result.refs['_main_']).toContain('t');
+	});
+
+	it('promotes a JOIN subquery to a synthetic CTE frame', () => {
+		const sql = [
+			'WITH base AS (SELECT id FROM raw_orders)',
+			'SELECT b.id, w.total',
+			'FROM base b',
+			'INNER JOIN (SELECT order_id, sum(amount) AS total FROM raw_items GROUP BY ALL) w',
+			'  ON b.id = w.order_id',
+		].join('\n');
+
+		const result = decompose(sql, 'duckdb');
+		expect(result.success).toBe(true);
+
+		// 'w' is the JOIN subquery alias → becomes a synthetic CTE named 'w'
+		const syntheticFrame = result.frames.find(f => f.name === 'w');
+		expect(syntheticFrame, 'synthetic frame for JOIN subquery').toBeDefined();
+		expect(syntheticFrame!.type).toBe('cte');
+
+		// _main_ (which sees base and w) should ref both
+		expect(result.refs['_main_']).toContain('w');
+
+		// base CTE should still exist
+		expect(result.frames.find(f => f.name === 'base')).toBeDefined();
+	});
+
+	it('handles a subquery with no alias using a generated name', () => {
+		const sql = 'SELECT * FROM (SELECT id FROM raw_customers) AS anon_sub';
+
+		const result = decompose(sql, 'duckdb');
+		expect(result.success).toBe(true);
+
+		// 'anon_sub' alias used as CTE name
+		expect(result.frames.find(f => f.name === 'anon_sub')).toBeDefined();
+	});
+
+	it('generates __subq_N__ for a truly alias-less subquery (legacy naming scheme)', () => {
+		const result = decompose('SELECT * FROM (SELECT id FROM raw_customers)', 'duckdb');
+		expect(result.success).toBe(true);
+
+		const synthetic = result.frames.find(f => f.name === '__subq_1__');
+		expect(synthetic, '__subq_1__ frame').toBeDefined();
+		expect(synthetic!.type).toBe('cte');
+		expect(result.refs['_main_']).toContain('__subq_1__');
+	});
+
+	it('synthetic frame clauses are runnable slices of the subquery body', () => {
+		const sql = [
+			'SELECT t.id',
+			'FROM (SELECT id FROM raw_customers WHERE active = 1) t',
+		].join('\n');
+
+		const result = decompose(sql, 'duckdb');
+		const cs = clausesOf(result, 't');
+		expect(cs.map(c => c.stage)).toEqual(['from', 'where', 'select']);
+		expect(stage(cs, 'select')!.sql).toBe('SELECT id FROM raw_customers WHERE active = 1');
+		expect(result.refs['t']).toEqual(['raw_customers']);
+	});
+});
+
+// ── UNION leg promotion — ported from the legacy oracle
+//    (src/test/debug-symbols-integration.test.ts, 'decompose_query UNION leg promotion'). ──
+
+describe('decompose — top-level UNION leg promotion', () => {
+	it('promotes each leg of a top-level UNION ALL into its own __union_N__ frame', () => {
+		const sql = [
+			'SELECT id, name FROM raw_a WHERE active = 1', // 0
+			'UNION ALL',                                   // 1
+			'SELECT id, name FROM raw_b WHERE active = 1', // 2
+		].join('\n');
+
+		const result = decompose(sql, 'duckdb');
+		expect(result.success).toBe(true);
+
+		const u1 = result.frames.find(f => f.name === '__union_1__');
+		const u2 = result.frames.find(f => f.name === '__union_2__');
+		expect(u1, '__union_1__ frame').toBeDefined();
+		expect(u2, '__union_2__ frame').toBeDefined();
+
+		// Branch 1 occupies line 0; branch 2 starts at line 2. Both frame
+		// ranges are tight — line 1 (UNION ALL keyword) falls in the gap.
+		expect(u1!.line).toBe(0);
+		expect(u1!.endLine).toBe(0);
+		expect(u2!.line).toBe(2);
+		expect(u2!.endLine).toBe(2);
+	});
+
+	it('leaves a UNION-keyword-only line outside any frame range', () => {
+		const sql = [
+			'SELECT 1 AS x',   // 0
+			'UNION ALL',       // 1 ← should NOT match any frame
+			'SELECT 2 AS x',   // 2
+		].join('\n');
+
+		const result = decompose(sql, 'duckdb');
+		expect(result.success).toBe(true);
+
+		// Simulate the frame-matching logic: for each source-line, does any
+		// synthetic union frame contain it?
+		const unionFrames = result.frames.filter(f => f.name.startsWith('__union_'));
+		expect(unionFrames.length).toBeGreaterThanOrEqual(2);
+
+		// Line 1 is the UNION keyword. Assert no union frame covers it
+		// (excluding _main_ which always covers the whole range).
+		const coveringUnion = unionFrames.find(f => 1 >= f.line && 1 <= f.endLine);
+		expect(coveringUnion, 'UNION-keyword line should fall between __union_1__ and __union_2__').toBeUndefined();
+	});
+
+	it('promotes UNION legs inside a CTE body', () => {
+		const sql = [
+			'WITH foo AS (',                  // 0
+			'  SELECT id FROM raw_a',         // 1
+			'  UNION ALL',                    // 2
+			'  SELECT id FROM raw_b',         // 3
+			')',                              // 4
+			'SELECT * FROM foo',              // 5
+		].join('\n');
+
+		const result = decompose(sql, 'duckdb');
+		expect(result.success).toBe(true);
+
+		// Original CTE still present.
+		expect(result.frames.find(f => f.name === 'foo')).toBeDefined();
+
+		// Two synthetic leg frames.
+		const legs = result.frames.filter(f => f.name.startsWith('__union_'));
+		expect(legs.length).toBe(2);
+	});
+
+	it('concatenates clauses across UNION branches in _main_', () => {
+		const sql = [
+			'SELECT id FROM raw_a WHERE x = 1',  // 0
+			'UNION ALL',                         // 1
+			'SELECT id FROM raw_b WHERE y = 2',  // 2
+		].join('\n');
+
+		const result = decompose(sql, 'duckdb');
+		expect(result.success).toBe(true);
+
+		const mainClauses = result.clauses['_main_'];
+		expect(mainClauses, '_main_ clauses').toBeDefined();
+
+		// Both branches' FROM/WHERE/SELECT should appear, in source order.
+		const stages = mainClauses.map(c => c.stage);
+		expect(stages.filter(s => s === 'from').length).toBe(2);
+		expect(stages.filter(s => s === 'where').length).toBe(2);
+		expect(stages.filter(s => s === 'select').length).toBe(2);
+
+		// Lines must be monotonically non-decreasing.
+		for (let i = 1; i < mainClauses.length; i++) {
+			expect(mainClauses[i].line).toBeGreaterThanOrEqual(mainClauses[i - 1].line);
+		}
+	});
+
+	it('still succeeds (no regression) on a plain SELECT with no UNION', () => {
+		const result = decompose('SELECT id FROM t WHERE id = 1', 'duckdb');
+		expect(result.success).toBe(true);
+		expect(result.frames.find(f => f.name === '_main_')).toBeDefined();
+		// No synthetic union frames.
+		expect(result.frames.filter(f => f.name.startsWith('__union_'))).toHaveLength(0);
+	});
+
+	it('records SELECT clause line at the SELECT keyword, not the first projection', () => {
+		// SELECT keyword on its own line, projections indented on the next line.
+		// A breakpoint on the SELECT keyword line must resolve to the SELECT
+		// clause (previously it resolved to WHERE because find_clause_line
+		// picked up the first identifier's line instead of the keyword's).
+		const sql = [
+			'SELECT',           // 0 ← SELECT keyword
+			'  id,',            // 1 ← first projected identifier
+			'  name',           // 2
+			'FROM t',           // 3
+			'WHERE id = 1',     // 4
+		].join('\n');
+
+		const result = decompose(sql, 'duckdb');
+		expect(result.success).toBe(true);
+		const selectClause = result.clauses['_main_'].find(c => c.stage === 'select');
+		expect(selectClause, 'SELECT clause').toBeDefined();
+		expect(selectClause!.line).toBe(0);
+	});
+
+	it('records branch-2 SELECT clause at the SELECT keyword line (UNION with multi-line legs)', () => {
+		// Mirrors the gold__item.sql shape: branch 2 is all literals with the
+		// SELECT keyword on its own line. Previously this clause was recorded
+		// one line too late, so a breakpoint on the SELECT keyword matched
+		// branch 1's WHERE instead of branch 2's SELECT.
+		const sql = [
+			'SELECT id FROM t',         // 0
+			'UNION ALL',                // 1
+			'SELECT',                   // 2 ← branch 2 SELECT keyword
+			'  \'-1\' AS id,',          // 3 ← first identifier (alias)
+			'  \'nd\' AS name',         // 4
+		].join('\n');
+
+		const result = decompose(sql, 'duckdb');
+		expect(result.success).toBe(true);
+
+		const mainClauses = result.clauses['_main_'];
+		const selectLines = mainClauses.filter(c => c.stage === 'select').map(c => c.line);
+		// Two SELECTs, branch 1 at line 0, branch 2 at line 2 (keyword line).
+		expect(selectLines).toEqual([0, 2]);
+	});
+
+	it('last leg frame extends to the end of the statement; leg clauses are per-leg slices', () => {
+		const sql = [
+			'SELECT id FROM raw_a',  // 0
+			'UNION ALL',             // 1
+			'SELECT id FROM raw_b',  // 2
+			'ORDER BY id',           // 3
+		].join('\n');
+
+		const result = decompose(sql, 'duckdb');
+		expect(result.success).toBe(true);
+
+		const u2 = result.frames.find(f => f.name === '__union_2__')!;
+		expect(u2.line).toBe(2);
+		expect(u2.endLine).toBe(3); // last leg runs to end of statement (legacy rule)
+
+		// Each __union_N__ frame carries its own untagged from/select stages.
+		const cs1 = clausesOf(result, '__union_1__');
+		expect(cs1.map(c => c.stage)).toEqual(['from', 'select']);
+		expect(stage(cs1, 'from')!.sql).toBe('SELECT * FROM raw_a');
+		expect(cs1.every(c => c.union_leg === undefined)).toBe(true);
+		expect(result.refs['__union_1__']).toEqual(['raw_a']);
+		expect(result.refs['__union_2__']).toEqual(['raw_b']);
+	});
+});
+
 describe('decompose — error handling', () => {
 	it('returns success:false for empty input', () => {
 		const res = decompose('', 'databricks');
