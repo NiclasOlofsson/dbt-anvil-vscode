@@ -49,3 +49,6 @@ experiments/
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
 .mcp.json
+
+# Personal editor config (holds local debug-target paths)
+.vscode/launch.json

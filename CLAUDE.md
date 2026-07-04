@@ -32,6 +32,10 @@ npm run package:marketplace    # Bump patch version + create .vsix
 
 Press **F5** in VS Code to launch the Extension Development Host after starting `npm run watch`.
 
+## Conventions
+
+- **No defensive coding.** The codebase is small and well-typed. Don't add `if (!x) return null` guards or invented fallback values — they add noise and hide bugs. If a value is unexpectedly missing, throw (or return `undefined` and let the bug surface at its source) rather than papering over it.
+
 ## Architecture
 
 dbt Anvil is a VS Code extension (TypeScript + persistent Python subprocess) providing language intelligence for [dbt Core](https://docs.getdbt.com/) projects. It activates when a workspace contains `dbt_project.yml`.

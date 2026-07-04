@@ -1,11 +1,13 @@
-# Features to add
+# Roadmap
 
-## ✅ Graph lineage, for aggregations
+Ideas and planned work for the extension. Rough notes, not commitments — discussion and contributions welcome. Items marked _(done)_ have shipped and are kept here for context.
 
-Currently it can provide a trace through the model on a column level for "asdfsf" + "adsaf" columns. Looks fancy. Example fullname -> firstname, lastname.
+## Graph lineage, for aggregations _(done)_
+
+Currently it can provide a trace through the model on a column level for concatenated columns, e.g. fullname -> firstname, lastname.
 However,it can't visualize aggregations correctly, like count(orders). It should be able to at least visualize these aggregations somehow. Maybe a dotted line or something to the model where it is origin is (like orders for count(orders))
 
-## ✅ Process bridge improvment considerations
+## Process bridge improvement considerations _(done)_
 
 They're completely separable. The four sqlglot handlers (parse_document, get_column_lineage, get_scope_columns, get_columns) are:
 
@@ -26,13 +28,7 @@ Option A is simpler and cleaner — two processes, clear separation, no threadin
 
 This would mean: a hover during a dbt run doesn't have to wait for the run to finish. parse_document and scope_columns would be completely non-blocking relative to dbt commands.
 
-## Performance info
-
-C:\Development\dbt_oatanalytics\target\perf_info.json
-
-Have intersting information that we should look into.
-
-## ✅ Build profiler
+## Build profiler _(done)_
 
 Have something running in the background that can profile models in the database.
 
@@ -50,9 +46,7 @@ Make replacement for SQL fluff. Completely. Formatting and .. well we have synta
 
 ## Cool new provider features
 
-VS Code has a rich context menu of language features. We already cover most of them, but a few are missing or incomplete. Example from VS Code:
-
-![VS Code context menu](images/vscode-context-menu.png)
+VS Code has a rich context menu of language features. We already cover most of them, but a few are missing or incomplete.
 
 **Missing providers:**
 
@@ -90,7 +84,7 @@ Support selection of different profiles from the project and user home. Differen
 
 We have to make SQL and YAML play better togeter. For a model, they are one and the same and just two different views. Its almost like the code-behind views we had in visual studio back in the days (winforms). So navigation should be seamless .. it should offer
 
-## ✅ World-class query result view
+## World-class query result view _(done)_
 
 Rewrote the query result webview from scratch. Goal: best table view outside of Excel — sleek, minimal UI with contextual power features.
 
@@ -116,19 +110,19 @@ Rewrote the query result webview from scratch. Goal: best table view outside of 
 | **Multi-format export** | CSV, TSV, JSON, Markdown, and "Open in Editor" — from toolbar, context menu, or footer |
 | **Sort improvements** | NULLs sort to bottom; re-indexes data after sort for correct selection behavior |
 
-## ✅ Model editors
+## Model editors _(done)_
 
 Please remove the top codelense because we have the buttons in the editor/title that works just fine.
 Also no "icons" in the Code lense. Use Text and ... to signify that it's a command.
 
-## ✅ Profiler fix
+## Profiler fix _(done)_
 I don't like how the checkmark is shown. We can use a small green circle instead.
 We should add the full model node at the end, directly when we first open the tree and start running. it's uggly when it's added in the end.
 On the containing treenode (root) we don't have to show any status at all, just the model name.
 
-## ✅ Debug
+## Debug _(done)_
 
-Seipel suggested I'd implement breakpoints. Not sure how I would do it, but since we have the debugger interface implemented, we could just as well use it. Can do it on a CTE level, as well as line level. Up to us how we do it, and what we make out of it. But it's a cool idea that I haven't seen elsewhere. Also with cache, this can be really rewarding and we can do stuff stepping back, that many can't do .. which is cool.
+It was suggested I'd implement breakpoints. Not sure how I would do it, but since we have the debugger interface implemented, we could just as well use it. Can do it on a CTE level, as well as line level. Up to us how we do it, and what we make out of it. But it's a cool idea that I haven't seen elsewhere. Also with cache, this can be really rewarding and we can do stuff stepping back, that many can't do .. which is cool.
 
 For debugging, dynamic breaks .. i could imagine pausing on events we emit, like before parse, after parse, etc. Like we create our own stuff for that.
 
