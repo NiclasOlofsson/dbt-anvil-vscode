@@ -125,20 +125,15 @@ describe('sample project DocumentModel (sqllens — live engine)', () => {
 // qualify() dialect regression (sqllens twin) — GROUP BY ALL (DuckDB) + cross-CTE
 // SELECT * expansion.
 //
-// KNOWN DIVERGENCE (skipped, pending a scope decision — do NOT delete): legacy
-// sqlglot qualify() expands `SELECT * FROM cte_interim_calcs` in cte_final into
-// resolved column_ref tokens (name=home_team, resolvedTableRef=cte_interim_calcs).
-// sqllens does NOT emit those tokens for a cross-CTE star and leaves ~28 refs
-// unresolved on this model — though `finalColumns` still resolves correctly (all 20).
-// This is a representation divergence in star-expansion/column-resolution, the exact
-// "qualify parity vs sqlglot" open risk the migration plan flagged. Downstream it
-// changes the unused-column ninja rule. Decision owed: fix sqllens cross-CTE star
-// token emission, or accept the divergence and retarget this test at the behavior
-// that matters (finalColumns / the ninja rule directly). Left as skip so it stays
-// visible in the run, not hidden.
+// Legacy sqlglot qualify() expands `SELECT * FROM cte_interim_calcs` in cte_final
+// into resolved column_ref tokens (name=home_team, resolvedTableRef=cte_interim_calcs).
+// The native path restores that format in extractTokens Pass 3: synthetic zero-width
+// column_refs re-emitted from the star expander, one per expanded column, resolved to
+// the source's table_ref. Downstream this is what keeps the unused-columns ninja rule
+// from false-flagging every star-consumed CTE column.
 // ---------------------------------------------------------------------------
 describe('qualify() dialect regression (sqllens)', () => {
-	it.skip('reg_season_predictions — SELECT * in cte_final expands to column_refs for cte_interim_calcs columns', async () => {
+	it('reg_season_predictions — SELECT * in cte_final expands to column_refs for cte_interim_calcs columns', async () => {
 		const filePath = path.join(
 			SAMPLES_ROOT, 'nba-monte-carlo', 'models', 'nba', 'analysis', 'reg_season_predictions.sql',
 		);

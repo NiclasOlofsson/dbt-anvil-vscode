@@ -20,6 +20,7 @@ import type {
 	TokenInfo,
 } from '../../../services/parse-service';
 import type { ColumnRef, Dialect, PartSpan, Projection, Qualification, QueryBody, ResolvedSource, Token } from '../api';
+import type { StarExpander } from './star-expand';
 import { allScopes, asCst, normName, quotedRaw, type CstNode, type SqllensParse } from './spans';
 
 /** Identifier-role tokens fully inside a `[lo, hi]` char range, in source order. */
@@ -284,7 +285,7 @@ function resolveTableRefs(tokens: TokenInfo[], sourceRefs: TableRefToken[]): voi
 	}
 }
 
-export function extractTokens(parse: SqllensParse, qualification?: Qualification): TokenInfo[] {
+export function extractTokens(parse: SqllensParse, qualification?: Qualification, starExpander?: StarExpander): TokenInfo[] {
 	const neutral = parse.tokens;
 	const scopes = allScopes(parse.scopes);
 	const scopeId = new Map(scopes.map((s, i) => [s, i] as const));
@@ -360,6 +361,51 @@ export function extractTokens(parse: SqllensParse, qualification?: Qualification
 				}
 			}
 			tokens.push(tok);
+		}
+	}
+
+	// Pass 3: synthetic column_refs for `SELECT *`-expanded columns. Legacy sqlglot's
+	// mutating qualify() rewrote each star into explicit Column nodes, so the token
+	// stream carried one column_ref per expanded column with `resolvedTableRef`
+	// pointing at the source it came from — consumers (the unused-columns ninja rule's
+	// buildReferencedColumnsMap) key on name + resolvedTableRef to see a CTE's columns
+	// as "referenced" through a downstream `SELECT *`. sqllens never rewrites, so the
+	// expansion is re-emitted here from the star expander (qualify columnsOf data).
+	// Spans are deliberately ZERO-WIDTH at the star's start token (legacy's synthetic
+	// tokens had broken positions; nothing keys on them): `col === endCol` never
+	// matches position hit-testing (`col < endCol`), so hover/definition on the `*`
+	// stay unaffected, and no negative range can be produced. Appended AFTER the real
+	// refs so first-match-by-name consumers keep finding user-written tokens.
+	if (starExpander) {
+		for (const scope of scopes) {
+			if (scope.body.kind !== 'select') continue;
+			const id = scopeId.get(scope)!;
+			for (const p of scope.body.projections) {
+				if (p.expr.kind !== 'star') continue;
+				const expanded = starExpander.expandStar(scope, p);
+				if (!expanded) continue; // unresolvable star — leave unexpanded, like legacy
+				const anchor = asCst(p.cst).start;
+				for (const ec of expanded) {
+					// `ec.table` is the scope-source key the column came from (FROM order,
+					// as the expander walks `scope.sources`); map it back to the emitted
+					// table_ref through the same srcToRef built in Pass 1.
+					const src = ec.table !== undefined ? scope.sources.get(ec.table) : undefined;
+					const rt = src ? srcToRef.get(src) : undefined;
+					if (!rt) continue; // source with no table_ref analog (lateral/pivot/…)
+					tokens.push({
+						type: 'column_ref',
+						name: normName(ec.name, parse.dialect),
+						line: anchor ? anchor.line - 1 : rt.line,
+						col: anchor ? anchor.column : rt.col,
+						endCol: anchor ? anchor.column : rt.col,
+						scopeId: id,
+						// The qualifier legacy's qualify_columns would have prepended —
+						// keeps ambiguity/alias rules seeing these as qualified refs.
+						table: rt.alias ?? rt.name,
+						resolvedTableRef: rt,
+					});
+				}
+			}
 		}
 	}
 

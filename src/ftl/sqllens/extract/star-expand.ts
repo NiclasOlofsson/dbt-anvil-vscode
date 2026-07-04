@@ -42,17 +42,23 @@ export interface StarExpander {
 /**
  * Build a star expander over a parsed scope tree + a `Schema` catalog. Runs sqllens
  * `qualify()` once (read-only — it never mutates the IR) to resolve derived-source
- * columns. Returns `undefined` if qualify throws, so extraction falls back cleanly to
- * unexpanded output (item 3 of the wiring: qualification failures never break parsing).
- * Partial failures need no special handling — an unresolvable source makes a single
- * star return `undefined`, leaving just that star unexpanded.
+ * columns; pass `prebuilt` to reuse a Qualification the caller already ran over the
+ * same tree + schema instead. Returns `undefined` if qualify throws, so extraction
+ * falls back cleanly to unexpanded output (item 3 of the wiring: qualification
+ * failures never break parsing). Partial failures need no special handling — an
+ * unresolvable source makes a single star return `undefined`, leaving just that
+ * star unexpanded.
  */
-export function buildStarExpander(scopes: ScopeTree, schema: Schema): StarExpander | undefined {
+export function buildStarExpander(scopes: ScopeTree, schema: Schema, prebuilt?: Qualification): StarExpander | undefined {
 	let q: Qualification;
-	try {
-		q = qualify(scopes, schema);
-	} catch {
-		return undefined;
+	if (prebuilt) {
+		q = prebuilt;
+	} else {
+		try {
+			q = qualify(scopes, schema);
+		} catch {
+			return undefined;
+		}
 	}
 	return {
 		expandStar: (scope, proj) => expandStar(scope, proj, schema, q),

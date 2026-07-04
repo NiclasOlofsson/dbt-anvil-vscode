@@ -202,7 +202,8 @@ export class SqllensDocumentParser implements DocumentParser {
 		// exactly as the sqlglot path does.
 		const tokenSource = (pass === 'pass2' && pass1) ? pass1 : result;
 
-		// Schema-fed `SELECT *` expansion — wired ONLY when the caller supplies a schema.
+		// Schema-fed `SELECT *` expansion. For the COLUMN-list extractors (ctes /
+		// finalColumns / finalSelect) it is wired ONLY when the caller supplies a schema.
 		// The expander runs qualify() (read-only; it never disturbs the other extractors) over
 		// the winning parse's scopes and, given a catalog, expands stars sourced from those
 		// tables AND from CTEs/subqueries inferable from the same query. Gating on a non-empty
@@ -215,17 +216,26 @@ export class SqllensDocumentParser implements DocumentParser {
 		// comparison, so surfacing them would be pure noise (EXTRACTOR-MAP §7). The expander is
 		// also undefined if qualify throws — then every extractor falls back to unexpanded output.
 		const schemaObj = new Schema((schema ?? {}) as SchemaMapping);
-		const expander = (schema && Object.keys(schema).length > 0)
-			? buildStarExpander(result.scopes, schemaObj)
-			: undefined;
 		// sqllens qualify is read-only — it never rewrites a bare column to add the qualifier
 		// sqlglot's mutating qualify did. extractTokens consumes this column→source binding to
 		// resolve bare columns to their table. Fail-soft (undefined) to match the expander.
 		let qualification: Qualification | undefined;
 		try { qualification = qualify(result.scopes, schemaObj); } catch { /* alias-only resolution */ }
+		// TOKEN star expansion is UNGATED (empty schema still expands CTE/subquery-sourced
+		// stars): legacy qualify ran with infer_schema=True unconditionally, so the token
+		// stream carried synthetic column_refs for star-consumed CTE columns with or without
+		// a catalog — the unused-columns rule depends on them. Token spans are zero-width
+		// (extractTokens Pass 3), so the position-anchoring concern gating `expander` below
+		// does not apply here. Reuses `qualification` rather than running qualify() again.
+		const tokenStarExpander = qualification
+			? buildStarExpander(result.scopes, schemaObj, qualification)
+			: undefined;
+		const expander = (schema && Object.keys(schema).length > 0)
+			? tokenStarExpander
+			: undefined;
 
 		const ctes = extractCtes(result, expander);
-		const tokens = extractTokens(result, qualification);
+		const tokens = extractTokens(result, qualification, tokenStarExpander);
 		const finalColumns = extractFinalColumns(result, expander);
 		const finalSelect = extractFinalSelect(result, expander);
 		const refs = extractRefs(jinjaTokens);
