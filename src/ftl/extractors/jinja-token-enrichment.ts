@@ -15,9 +15,14 @@ export function enrichTokensWithJinjaSpans(
 	refs: RefInfo[],
 	sources: SourceInfo[],
 ): void {
+	// Match the table_ref by POSITION (line + col of the `{{`), not by name. Under the
+	// blank cascade the FROM identifier IS the model name (blankJinja substitutes it), but
+	// under the native parseTemplated path it is an opaque placeholder (`jjj…`) occupying the
+	// tag's char range — so a name equality would miss it. The tag's start position is unique
+	// to the one table it stands for, so line+col identifies it under either scheme.
 	for (const ref of refs) {
 		const tok = tokens.find((t): t is TableRefToken =>
-			t.type === 'table_ref' && t.name === ref.model && t.line === ref.line && t.col === ref.jinjaCol,
+			t.type === 'table_ref' && t.line === ref.line && t.col === ref.jinjaCol,
 		);
 		if (tok && ref.jinjaEndCol !== undefined) {
 			tok.endCol = ref.jinjaEndCol;
@@ -26,7 +31,7 @@ export function enrichTokensWithJinjaSpans(
 	}
 	for (const src of sources) {
 		const tok = tokens.find((t): t is TableRefToken =>
-			t.type === 'table_ref' && t.name === src.tableName && t.line === src.line && t.col === src.jinjaCol,
+			t.type === 'table_ref' && t.line === src.line && t.col === src.jinjaCol,
 		);
 		if (tok && src.jinjaEndCol !== undefined) {
 			tok.endCol = src.jinjaEndCol;
