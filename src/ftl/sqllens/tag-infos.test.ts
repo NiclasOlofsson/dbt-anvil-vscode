@@ -126,9 +126,9 @@ describe('tagInfos.sources — deliberate divergence (new is span-accurate)', ()
 });
 
 // ---------------------------------------------------------------------------
-// macroCalls — field-for-field parity for single-line expression tags AND for
-// {% … %} block tags (unblocked by the shipped `control.calls`); one residual
-// divergence for nested calls inside {{ }} expression tags.
+// macroCalls — field-for-field parity for single-line expression tags, for
+// {% … %} block tags (via `control.calls`), AND for nested calls inside {{ }}
+// expression tags (via `macro.calls`, af1170c) — the whole C1 macro surface.
 // ---------------------------------------------------------------------------
 
 describe('tagInfos.macroCalls — field-for-field parity with extractMacroCalls (single-line expr)', () => {
@@ -183,21 +183,14 @@ describe('tagInfos.macroCalls — {% … %} block tags now surface via control.c
 	});
 });
 
-describe('tagInfos.macroCalls — residual divergence: nested {{ }} expression calls', () => {
-	it('emits only the top-level call for a nested {{ }} macro (old emits both levels)', () => {
-		// RESIDUAL GAP: the old extractor's paren-scan emits BOTH outer and inner; a `macro`
-		// TagNode exposes only the top-level call (nested calls live inside its arg spans, not
-		// as separate nodes — only `control` nodes got the generic `calls` walk). So a real
-		// inner macro in an EXPRESSION tag is dropped. Gate-safe (no such case in the corpus:
-		// the only nested expression calls are `x(…, var(…))`, whose inner `var` is filtered).
+describe('tagInfos.macroCalls — nested {{ }} expression calls now surface via macro.calls (af1170c)', () => {
+	it('emits BOTH outer and inner, field-for-field with extractMacroCalls', () => {
+		// af1170c gave the expression `macro` node `calls: MacroCall[]` (source order, nested
+		// included, symmetric to control.calls), so the inner call is no longer dropped — the
+		// last C1 field gap. Full parity with the old paren-scan; macroCalls come off tags now.
 		const sql = 'select {{ outer(inner(1, 2), 3) }} from t';
-		expect(extractMacroCalls(tokenizeJinja(sql)).map(m => m.name).sort()).toEqual(['inner', 'outer']);
-		expect(fromTags(sql).macroCalls.map(m => m.name)).toEqual(['outer']);
-		// The OUTER call's fields (name/spans/args) still match field-for-field — only the
-		// separate `inner` entry is missing.
-		const tagOuter = fromTags(sql).macroCalls.find(m => m.name === 'outer')!;
-		const oldOuter = extractMacroCalls(tokenizeJinja(sql)).find(m => m.name === 'outer')!;
-		expect(tagOuter).toEqual(oldOuter);
-		expect(tagOuter.args).toHaveLength(2);
+		expect(fromTags(sql).macroCalls).toEqual(extractMacroCalls(tokenizeJinja(sql)));
+		// source order: outer (the top-level call) before its nested inner.
+		expect(fromTags(sql).macroCalls.map(m => m.name)).toEqual(['outer', 'inner']);
 	});
 });

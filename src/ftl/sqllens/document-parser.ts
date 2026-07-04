@@ -10,7 +10,7 @@
  *
  * Runs alongside `FtlDocumentParser` until cutover — neither touches the other.
  */
-import type { DocumentModel, RefInfo, SourceInfo } from '../../services/parse-service';
+import type { DocumentModel, MacroCallInfo, RefInfo, SourceInfo } from '../../services/parse-service';
 import type { DocumentParser, ParseOptions } from '../../services/document-parser';
 import type { DialectSymbols } from '../sql-parser';
 import { performance } from 'node:perf_hooks';
@@ -291,22 +291,22 @@ export class SqllensDocumentParser implements DocumentParser {
 		// anchor on the shipped `source` callSpan). On the fallback path there is no tag-AST ->
 		// the jinja-tokenizer extractors.
 		//
-		// macroCalls STAY on the tokenizer extractor on BOTH paths (never-worse): the R2 macro
-		// TagNode exposes only the TOP-LEVEL call, so a nested inner macro in a `{{ }}` expression
-		// tag (`{{ outer(inner()) }}`) would be dropped vs the tokenizer's paren-scan — a real
-		// (if rare) hover/signature-help regression. Held until sqllens exposes nested calls on
-		// expression macro nodes (upstream ask, symmetric to `control.calls`). The tokenizer reads
-		// the C2-derived jinjaTokens on the native path, so block-tag calls are still covered.
-		// tagInfos still computes macroCalls (A/B-tested, ready to flip the moment nested lands).
+		// macroCalls flipped to tags as of sqllens `af1170c`: the expression `macro` node now
+		// carries `calls: MacroCall[]` (nested included, symmetric to `control.calls`), so the
+		// last never-worse hold — a nested inner macro in `{{ outer(inner()) }}` being dropped
+		// vs the tokenizer's paren-scan — is gone (tag-infos.ts + tag-infos.test.ts parity).
+		// On the FALLBACK path (no tag-AST) the jinja-tokenizer extractors still stand in; they
+		// read the C2-derived jinjaTokens, so block-tag calls stay covered there too.
 		let refs: RefInfo[];
 		let sources: SourceInfo[];
+		let macroCalls: MacroCallInfo[];
 		if (templatedTags !== undefined) {
-			({ refs, sources } = tagInfos(templatedTags, rawSql));
+			({ refs, sources, macroCalls } = tagInfos(templatedTags, rawSql));
 		} else {
 			refs = extractRefs(jinjaTokens);
 			sources = extractSources(jinjaTokens);
+			macroCalls = extractMacroCalls(jinjaTokens);
 		}
-		const macroCalls = extractMacroCalls(jinjaTokens);
 		enrichTokensWithJinjaSpans(tokens, refs, sources);
 
 		// blankJinja is length-preserving for pass1/pass1b, so tokenSource token

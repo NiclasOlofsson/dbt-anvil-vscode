@@ -47,16 +47,12 @@
  * declaration (`{% macro foo(a) %}` → `foo`) is skipped exactly as the old extractor
  * skipped a callee immediately preceded by the `macro` keyword.
  *
- * ONE residual divergence (documented, gate-safe): NESTED macro calls inside `{{ … }}`
- * EXPRESSION tags. The old extractor's paren-scan emits BOTH the outer and every inner
- * call (`{{ outer(inner()) }}` → `outer` AND `inner`); a `macro` TagNode exposes only
- * the top-level call (its nested calls live inside its arg spans, not as separate
- * nodes — only `control` nodes got the generic `calls` walk). So a real inner macro in
- * an expression tag is dropped here. This does NOT occur in the corpus (the only nested
- * expression calls are `elo_calc(…, var(…))`, whose inner `var` is filtered anyway), so
- * the shadow-diff `macroCalls` class stays at 0; see tag-infos.test.ts for the pinned
- * case and the migration report for the upstream ask (expose nested calls on expression
- * macro nodes, symmetric to `control.calls`).
+ * NESTED macro calls inside `{{ … }}` EXPRESSION tags are covered as of sqllens
+ * `af1170c`: the `macro` TagNode now carries `calls: MacroCall[]` (source order, nested
+ * included, `calls[0]` == the node's own top-level call) symmetric to `control.calls`,
+ * so `{{ outer(inner()) }}` surfaces BOTH — field-for-field with the old paren-scan.
+ * This was the last held gap; macroCalls now come off the tag-AST on the native path
+ * (see tag-infos.test.ts for the parity cases).
  */
 import type { MacroCall, PartSpan, TagNode } from '../api';
 import { buildLineStarts, colAtOffset, lineAtOffset } from '../../jinja-spans';
@@ -118,11 +114,14 @@ export function tagInfos(tags: TagNode[], rawSql: string): TagInfos {
 				jinjaEndCol: cl(tag.tagSpan.end),
 			});
 		} else if (tag.kind === 'macro') {
-			// `{{ … }}` expression macro node — itself a MacroCall + kind/tagSpan.
-			// (`ref`/`source`/`var`/`env_var`/`config` are separate kinds, never `macro`,
-			// so the NOT_MACRO_CALLS guard is a defensive mirror of the old extractor here.)
-			if (!NOT_MACRO_CALLS.has(tag.name)) {
-				macroCalls.push(macroInfo(tag, tag.tagSpan, ln, cl));
+			// `{{ … }}` expression macro node. `calls` (af1170c) is the top-level call
+			// (`calls[0]`, == the node's own name/args) PLUS every nested call in source
+			// order, symmetric to `control.calls` — so `{{ outer(inner()) }}` surfaces
+			// BOTH, matching the old tokenizer's paren-scan. Filtered by the same
+			// NOT_MACRO_CALLS set (`ref`/`source`/`var`/`env_var`/`config` never surface).
+			for (const call of tag.calls) {
+				if (NOT_MACRO_CALLS.has(call.name)) continue;
+				macroCalls.push(macroInfo(call, tag.tagSpan, ln, cl));
 			}
 		} else if (tag.kind === 'control') {
 			// `{% … %}` block tag — each embedded call, filtered like the old extractor.
