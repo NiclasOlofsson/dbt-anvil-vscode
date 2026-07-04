@@ -264,6 +264,13 @@ export class SqllensDocumentParser implements DocumentParser {
 		// their inner structure, and the printer would misclassify e.g. window-paren
 		// commas in statement 2 as SELECT-list commas. No index → the printer's
 		// token-stream fallbacks take over, which is exactly the legacy behavior.
+		//
+		// WORKAROUND(sqllens-multistmt-span): this masks a real sqllens bug — a
+		// multi-statement parse returns statement 1's IR with the CST span stretched to
+		// EOF instead of bounding it (or parsing all statements). REMOVE this guard (and
+		// `hasMultipleStatements` below) once sqllens bounds the span / parses each
+		// statement. Reported on docs/anvil/CHANNEL.md; tracked in project memory. Grep
+		// `sqllens-multistmt-span` to find every site tied to this bug.
 		if (pass !== 'pass2' && !hasMultipleStatements(sqlTokens)) {
 			model.astIndex = createSqllensAstIndex(result, rawSql);
 		}
