@@ -10,35 +10,38 @@
  *
  * Two independent derivations feed the result:
  *
- * 1. **dependencies** — the flat base-table origins of the traced column, taken straight
- *    from sqllens's own `lineage()` origin walk (`Lineage.originsOf`). That walk already
- *    handles every hard case correctly (unions attribute both legs, joins bind to the
- *    right table, `*` expands against the schema), so the base-table leaves are never
- *    dropped regardless of how far the hop walk below can go.
+ * 1. **dependencies** — the flat base-table origins of the traced column, from sqllens's
+ *    own `lineage()` origin walk (`Lineage.originsOf`). Unions attribute both legs, joins
+ *    bind to the right table, `*` expands against the schema — the base-table leaves are
+ *    never dropped regardless of how far the hop rendering below goes.
  *
- * 2. **transformations / via_ctes** — the per-hop chain (`b.z ← a.y ← t.x`) that sqllens's
- *    flat `lineage()` collapses. This is reconstructed extension-side from the scope tree,
- *    the same way sqlglot's `to_node` walks: resolve the column from the output scope, find
- *    the projection producing it in the resolved CTE/subquery scope, and recurse into that
- *    projection's column refs. A hop that cannot be walked structurally (a `*` producer that
- *    needs a schema to expand, an ambiguous unqualified ref) is SUMMARIZED — the node is
- *    still emitted and flagged (`summarized: true`) so the UI can render it, and the flat
- *    origins from (1) still cover its leaves. Nothing is silently dropped.
+ * 2. **transformations / via_ctes** — rendered from sqllens's per-hop lineage SPINE
+ *    (`lineageOf` → `LineageHop`), which rides the same shared binder as (1). This file
+ *    no longer contains any name-resolution logic of its own — the former schema-free
+ *    resolver clone is gone; only the name-anchored ENTRY (find the root projection for
+ *    the traced column) and the RENDERING of the hop DAG into the panel's contract live
+ *    here. Spine shape divergences are absorbed in the renderer:
+ *      - the spine collapses the outer passthrough → the renderer re-synthesizes the
+ *        `outer_query` node from the head hop's context;
+ *      - base tables are `terminal` Origins, never hops → rendered as `table:` leaves;
+ *      - an `"unresolved"` terminal → the hop is flagged `summarized` (leaves stay
+ *        covered by `dependencies`);
+ *      - set-op fan-out (one hop per leg) → rendered as ONE `union` transformation with
+ *        a branch per leg, in leg order.
  *
  * Expression snippets are sliced from the ORIGINAL sql at the CST span of the producing
  * expression — never reconstructed from the IR.
  */
-import { foldIdentifier, lineage as sqllensLineage, parse, resolveScopes, Schema } from 'sqllens';
+import { foldIdentifier, lineage as sqllensLineage, lineageOf, parse, resolveScopes, Schema } from 'sqllens';
 import type {
 	Dialect,
-	Expr,
 	IdentKind,
+	LineageHop,
 	Origin,
 	Projection,
 	ResolvedSource,
 	Scope,
 	SchemaMapping,
-	SelectExpr,
 	ScopeTree,
 } from 'sqllens';
 
@@ -111,13 +114,13 @@ export function traceColumnLineage(
 	const origins = sqllensLineage(tree, schemaObj).originsOf(columnName);
 	const dependencies = dependenciesFromOrigins(origins, dialect);
 
-	const walker = new HopWalker(sql, tree, dialect);
-	walker.trace(columnName);
+	const renderer = new SpineRenderer(sql, tree, dialect);
+	renderer.trace(columnName, schemaObj);
 
 	return {
 		dependencies,
-		via_ctes: walker.viaCtes,
-		transformations: walker.transformations(columnName),
+		via_ctes: renderer.viaCtes,
+		transformations: renderer.transformations(columnName),
 	};
 }
 
@@ -136,26 +139,56 @@ function dependenciesFromOrigins(origins: Origin[], dialect: string): ColumnDepe
 	return out;
 }
 
-// ── Hop walk over the scope tree ────────────────────────────────────────────
+// ── Scope context: map every reachable scope back to the source that owns it ─
 
-/** A column reference lifted out of an expression tree: its dotted parts + CST span. */
-interface ColRef {
-	parts: string[];
-	cst: unknown;
+/** What a hop's scope tells the renderer: the transformation id / display name of the source
+ *  whose child scope it is, and — for a set-op LEG scope — the id of the union source it
+ *  belongs to plus the ordered list of sibling leg scopes. */
+interface ScopeCtx {
+	id: string;
+	name: string;
+	isCte: boolean;
+	/** Set when this scope is one LEG of a union-bodied source (the id above is the union's). */
+	unionLegs?: Scope[];
 }
 
-/** A resolved binding: the source a reference comes from and the column name in it. */
-interface Binding {
-	source: ResolvedSource;
-	column: string;
+/** Walk the whole scope tree once, mapping child scopes → their owning source's rendering
+ *  context. Set-op child scopes additionally map every leaf leg scope to the same union ctx. */
+function buildScopeCtx(root: Scope, dialect: string): Map<Scope, ScopeCtx> {
+	const map = new Map<Scope, ScopeCtx>();
+	const visit = (scope: Scope): void => {
+		for (const src of scope.sources.values()) {
+			const child = childScopeOf(src);
+			if (!child || map.has(child)) continue;
+			const ctx: ScopeCtx = { id: sourceId(src), name: derivedName(src), isCte: src.kind === 'cte' };
+			map.set(child, ctx);
+			if (child.body.kind === 'setop') {
+				const legs = unionBranches(child);
+				const legCtx: ScopeCtx = { ...ctx, unionLegs: legs };
+				for (const leg of legs) if (!map.has(leg)) map.set(leg, legCtx);
+			}
+			visit(child);
+		}
+		for (const cte of scope.ctes.values()) visit(cte.scope);
+		if (scope.branches) {
+			visit(scope.branches.left);
+			visit(scope.branches.right);
+		}
+		for (const child of scope.children) visit(child);
+	};
+	visit(root);
+	void dialect;
+	return map;
 }
 
-class HopWalker {
+// ── Rendering the spine into the panel contract ─────────────────────────────
+
+class SpineRenderer {
 	private readonly transformMap = new Map<string, Transformation>();
 	private readonly outerQuerySources = new Set<string>();
-	private readonly seen = new Set<string>();
-	private readonly scopeIds = new Map<Scope, number>();
-	private scopeCounter = 0;
+	private readonly renderedHops = new Set<LineageHop>();
+	private readonly renderedUnions = new Set<string>();
+	private ctx!: Map<Scope, ScopeCtx>;
 	readonly viaCtes: string[] = [];
 
 	constructor(
@@ -164,25 +197,28 @@ class HopWalker {
 		private readonly dialect: string,
 	) {}
 
-	/** Walk the tree from the root output column, populating transforms + via_ctes. */
-	trace(columnName: string): void {
+	/** Name-anchored entry: locate the root producer for `columnName`, get its spine via
+	 *  `lineageOf`, and render. Column not projected → empty result (matches sqlglot). */
+	trace(columnName: string, schema: Schema): void {
 		const root = this.tree.root;
+		this.ctx = buildScopeCtx(root, this.dialect);
 
 		// Top-level union: the outer query itself is a set operation — attribute both legs.
 		if (root.body.kind === 'setop') {
-			this.handleUnion('query', root, columnName);
+			this.renderTopLevelUnion(root, columnName, schema);
 			return;
 		}
 
-		const producer = findProjection(root, columnName, undefined, this.dialect);
-		if (!producer) return; // column not projected — empty result (matches sqlglot)
+		const producer = rootProjection(root, columnName, this.dialect);
+		if (!producer) return;
 
-		const refs = columnRefsIn(producer.expr);
-		for (const ref of refs) {
-			const b = this.resolveRef(root, ref.parts);
-			if (b) this.outerQuerySources.add(sourceId(b.source));
-		}
-		for (const ref of refs) this.walkRef(root, ref);
+		const head = lineageOf(producer, root, schema);
+		// outer_query sources: the source the root read (a collapsed head lives IN that source's
+		// scope); an anchored head's expression feeds directly from its children.
+		const headCtx = this.ctx.get(head.scope);
+		if (headCtx) this.outerQuerySources.add(headCtx.id);
+		else for (const id of this.hopSources(head, producer.name ?? columnName)) this.outerQuerySources.add(id);
+		this.renderHead(head, root);
 	}
 
 	/** Assemble the ordered transformation list (outer_query first, like the sqlglot path). */
@@ -199,95 +235,224 @@ class HopWalker {
 		return list;
 	}
 
-	/** Resolve one reference in `scope` and record the hop for the source it binds to. */
-	private walkRef(scope: Scope, ref: ColRef): void {
-		const b = this.resolveRef(scope, ref.parts);
-		if (!b) return; // unresolvable ref — its leaves are still carried by `dependencies`
-		this.handleBinding(b.source, b.column);
-	}
+	// ── head handling ──────────────────────────────────────────────────────────
 
-	private handleBinding(src: ResolvedSource, column: string): void {
-		if (src.kind === 'table') {
-			this.ensureTransform(sourceId(src), 'table', column, undefined, []);
+	/** The head hop is either (a) a producer inside a source scope (collapsed passthrough /
+	 *  computed CTE column) → render it as that source's transformation; or (b) an anchor in
+	 *  the ROOT scope (computed root projection, union fork, base-table read) → its own node
+	 *  is the outer query itself, so only its children are rendered. An anchored head whose
+	 *  flow is entirely unresolved is attributed to the root's LONE source when there is one
+	 *  (the only place the flow can have gone — a summarized hop, not a resolution claim). */
+	private renderHead(head: LineageHop, root: Scope): void {
+		const info = this.ctx.get(head.scope);
+		if (info) {
+			this.renderHop(head);
 			return;
 		}
-
-		const child = childScopeOf(src);
-		if (!child) {
-			// lateral / pivot / un-modelled source — summarize (leaves covered by dependencies).
-			this.ensureTransform(sourceId(src), 'cte', column, undefined, [], true);
-			return;
-		}
-
-		const name = derivedName(src);
-		const key = `${this.scopeId(child)}::${foldIdentifier(column, this.dialect)}`;
-		if (this.seen.has(key)) return;
-		this.seen.add(key);
-		this.addVia(src, name);
-
-		if (child.body.kind === 'setop') {
-			this.handleUnion(sourceId(src), child, column);
-			return;
-		}
-
-		const producer = findProjection(child, column, aliasesOf(src), this.dialect);
-		if (!producer) {
-			// A `*` / bare-source column: try to resolve it fresh one scope deeper.
-			const fresh = this.resolveRef(child, [column]);
-			if (fresh) {
-				this.ensureTransform(sourceId(src), 'cte', column, undefined, [sourceId(fresh.source)]);
-				this.handleBinding(fresh.source, fresh.column);
-			} else {
-				// star-expansion / needs-schema — summarize, don't drop.
-				this.ensureTransform(sourceId(src), 'cte', column, undefined, [], true);
+		if (head.terminal === 'unresolved' && head.downstream.length === 0) {
+			const lone = loneSourceCtx(root, this.ctx);
+			if (lone) {
+				if (lone.isCte) this.addVia(lone.name);
+				this.ensureTransform(lone.id, 'cte', head.projection?.name ?? '', undefined, [], true);
+				this.outerQuerySources.add(lone.id);
 			}
 			return;
 		}
-
-		const refs = columnRefsIn(producer.expr);
-		const sources = this.refSources(child, refs);
-		this.ensureTransform(sourceId(src), 'cte', column, this.exprSnippet(producer, column), sources);
-		for (const ref of refs) this.walkRef(child, ref);
+		// Head anchored at the root: render children only (the root IS the outer_query node).
+		this.renderChildren(head);
 	}
 
-	/** A set-op hop: one branch per union leg, each attributing its own producer + sources. */
-	private handleUnion(id: string, scope: Scope, column: string): void {
-		const branchScopes = unionBranches(scope);
-		const outputs = scope.outputs;
-		const idx = outputs !== 'unknown' ? outputs.findIndex(o => foldEq(o, column, this.dialect)) : -1;
+	// ── hop rendering ──────────────────────────────────────────────────────────
+
+	/** Render one producer hop as a transformation under its owning source's id, then recurse. */
+	private renderHop(hop: LineageHop): void {
+		if (this.renderedHops.has(hop)) return; // DAG: shared hops render once
+		this.renderedHops.add(hop);
+
+		const info = this.ctx.get(hop.scope);
+		if (!info) {
+			// A hop with no owning source (shouldn't occur below the head) — render children.
+			this.renderChildren(hop);
+			return;
+		}
+		if (info.unionLegs) {
+			// A leg hop reached directly (head collapsed into one leg) — render the whole union.
+			this.renderUnion(info, [hop]);
+			return;
+		}
+
+		if (info.isCte) this.addVia(info.name);
+		const column = hop.projection?.name ?? '';
+		this.ensureTransform(
+			info.id,
+			'cte',
+			column,
+			this.exprSnippet(hop, column),
+			this.hopSources(hop, column),
+			hop.terminal === 'unresolved' ? true : undefined,
+		);
+		this.renderChildren(hop);
+	}
+
+	/** Render a hop's children: downstream hops (grouping union legs), then table leaves. */
+	private renderChildren(hop: LineageHop): void {
+		// Group downstream hops that are legs of the same union; render others directly.
+		const legGroups = new Map<string, { info: ScopeCtx; hops: LineageHop[] }>();
+		for (const d of hop.downstream) {
+			const info = this.ctx.get(d.scope);
+			if (info?.unionLegs) {
+				const g = legGroups.get(info.id) ?? { info, hops: [] };
+				g.hops.push(d);
+				legGroups.set(info.id, g);
+			} else {
+				this.renderHop(d);
+			}
+		}
+		for (const g of legGroups.values()) this.renderUnion(g.info, g.hops);
+
+		if (Array.isArray(hop.terminal)) for (const o of hop.terminal) this.renderTableLeaf(o);
+	}
+
+	/** One `union` transformation for a set-op source: a branch per leg, in leg order. */
+	private renderUnion(info: ScopeCtx, legHops: LineageHop[]): void {
+		if (info.isCte) this.addVia(info.name);
+		if (this.renderedUnions.has(info.id)) {
+			for (const h of legHops) if (!this.renderedHops.has(h)) this.renderLegBody(h);
+			return;
+		}
+		this.renderedUnions.add(info.id);
+
+		const byScope = new Map<Scope, LineageHop>();
+		for (const h of legHops) byScope.set(h.scope, h);
+
 		const branches: TransformationBranch[] = [];
 		let anySummarized = false;
+		for (const leg of info.unionLegs ?? []) {
+			const h = byScope.get(leg);
+			if (!h) {
+				// This leg contributed no hop (a star/bare leg whose ref resolved straight to an
+				// origin, or an unresolvable leg) — its leaves live in `dependencies`.
+				branches.push({ sources: [] });
+				anySummarized = true;
+				continue;
+			}
+			const column = h.projection?.name ?? '';
+			const branch: TransformationBranch = { sources: this.hopSources(h, column) };
+			const snippet = this.exprSnippet(h, column);
+			if (snippet) branch.expression = snippet;
+			branches.push(branch);
+		}
 
-		for (const bs of branchScopes) {
-			const producer = branchProducer(bs, column, idx, this.dialect);
+		const transform: Transformation = {
+			id: info.id,
+			type: 'union',
+			column: legHops[0]?.projection?.name ?? '',
+			sources: [],
+			branches,
+		};
+		if (anySummarized) transform.summarized = true;
+		this.transformMap.set(info.id, transform);
+
+		for (const h of legHops) this.renderLegBody(h);
+	}
+
+	/** Recurse into a leg hop's children without emitting a per-leg transformation (the leg's
+	 *  expression/sources live on its union branch). */
+	private renderLegBody(hop: LineageHop): void {
+		if (this.renderedHops.has(hop)) return;
+		this.renderedHops.add(hop);
+		this.renderChildren(hop);
+	}
+
+	/** Top-level set-op: the panel's `query`-id union node, one branch per leg. */
+	private renderTopLevelUnion(root: Scope, columnName: string, schema: Schema): void {
+		const legs = unionBranches(root);
+		const outputs = root.outputs;
+		const idx = outputs !== 'unknown' ? outputs.findIndex(o => foldEq(o, columnName, this.dialect)) : -1;
+
+		const branches: TransformationBranch[] = [];
+		let anySummarized = false;
+		for (const leg of legs) {
+			const producer = legProjection(leg, columnName, idx, this.dialect);
 			if (!producer) {
 				branches.push({ sources: [] });
 				anySummarized = true;
 				continue;
 			}
-			const refs = columnRefsIn(producer.expr);
-			branches.push({ expression: this.exprSnippet(producer, column), sources: this.refSources(bs, refs) });
-			for (const ref of refs) this.walkRef(bs, ref);
+			const hop = lineageOf(producer, leg, schema);
+			const column = hop.projection?.name ?? columnName;
+			const branch: TransformationBranch = { sources: this.hopSources(hop, column) };
+			const snippet = this.exprSnippet(hop, column);
+			if (snippet) branch.expression = snippet;
+			branches.push(branch);
+			this.renderedHops.add(hop);
+			this.renderChildren(hop);
 		}
 
-		const transform: Transformation = { id, type: 'union', column, sources: [], branches };
+		const transform: Transformation = { id: 'query', type: 'union', column: columnName, sources: [], branches };
 		if (anySummarized) transform.summarized = true;
-		this.transformMap.set(id, transform);
+		this.transformMap.set('query', transform);
 	}
 
-	/** The distinct source ids the given refs bind to within `scope`. */
-	private refSources(scope: Scope, refs: ColRef[]): string[] {
+	// ── leaves / feeds / snippets ─────────────────────────────────────────────
+
+	private renderTableLeaf(origin: Origin): void {
+		const id = `table:${stripQuotes(origin.table[origin.table.length - 1] ?? '')}`;
+		this.ensureTransform(id, 'table', origin.column, undefined, []);
+	}
+
+	/** The source ids a hop feeds from — its DIRECT reach (downstream hops' owning sources +
+	 *  terminal origins' tables), BEFORE the collapsed/descended trail is inserted. Sorted, deduped. */
+	private directFeedIds(hop: LineageHop): string[] {
 		const ids = new Set<string>();
-		for (const ref of refs) {
-			const b = this.resolveRef(scope, ref.parts);
-			if (b) ids.add(sourceId(b.source));
+		for (const d of hop.downstream) {
+			const info = this.ctx.get(d.scope);
+			if (info) ids.add(info.id);
+		}
+		if (Array.isArray(hop.terminal)) {
+			for (const o of hop.terminal) ids.add(`table:${stripQuotes(o.table[o.table.length - 1] ?? '')}`);
 		}
 		return [...ids].sort();
 	}
 
-	/** The original-sql slice for a producing projection, unless it is a bare echo of the column. */
-	private exprSnippet(producer: Projection, column: string): string | undefined {
-		const text = sliceCst(this.sql, producer.expr.cst);
+	/** The source ids a hop feeds from, WITH its ITEM 12 `via` trail materialized: the ordered
+	 *  scopes the walk collapsed (pure renames) or descended (star / bare source) through are
+	 *  emitted as chained `cte:` transformation nodes between the hop and its direct reach, and
+	 *  the hop's sources become the head of that chain. Without a trail this is `directFeedIds`.
+	 *  `column` names the flowing column for the emitted trail nodes (a display detail — the trail
+	 *  carries scopes, not per-scope columns; not asserted by the contract). */
+	private hopSources(hop: LineageHop, column: string): string[] {
+		const direct = this.directFeedIds(hop);
+		if (!hop.via?.length) return direct;
+		return this.emitViaChain(hop.via, direct, column, hop.terminal === 'unresolved');
+	}
+
+	/** Materialize a `via` trail as a chain of `cte:` nodes: the last scope feeds `tailIds`, each
+	 *  earlier scope feeds the next. Returns the id(s) the trail's CONSUMER should point at (the
+	 *  first scope's id, or `tailIds` when the trail records no source-backed scope). Trail scopes
+	 *  are CTE/subquery scopes (each has a `ScopeCtx`); a scope without one is skipped (never a CTE
+	 *  the contract needs). `unresolved` flags the whole chain summarized — the flow reached a dead
+	 *  end, so every hop it passed through is an incomplete (summarized) node. */
+	private emitViaChain(via: readonly Scope[], tailIds: string[], column: string, unresolved: boolean): string[] {
+		// via_ctes are recorded consumer-first (the order the flow passes through them).
+		for (const scope of via) {
+			const info = this.ctx.get(scope);
+			if (info?.isCte) this.addVia(info.name);
+		}
+		// The chain is linked tail-first: the last scope feeds `tailIds`, each earlier feeds the next.
+		let nextIds = tailIds;
+		for (let i = via.length - 1; i >= 0; i--) {
+			const info = this.ctx.get(via[i]);
+			if (!info) continue;
+			this.ensureTransform(info.id, 'cte', column, undefined, nextIds, unresolved ? true : undefined);
+			nextIds = [info.id];
+		}
+		return nextIds;
+	}
+
+	/** The original-sql slice for a hop's expression, unless it is a bare echo of the column. */
+	private exprSnippet(hop: LineageHop, column: string): string | undefined {
+		const text = sliceCst(this.sql, hop.expr.cst);
 		if (text === '' || foldEq(text.trim(), column, this.dialect)) return undefined;
 		return truncateExpression(text.trim());
 	}
@@ -314,56 +479,38 @@ class HopWalker {
 		this.transformMap.set(id, t);
 	}
 
-	private addVia(src: ResolvedSource, name: string): void {
-		if (src.kind !== 'cte') return; // only real WITH-clause CTEs count as via_ctes
+	private addVia(name: string): void {
 		if (name && !this.viaCtes.includes(name)) this.viaCtes.push(name);
 	}
+}
 
-	// ── schema-free-ish name resolution (mirrors scope.ts resolveColumn) ──────
+/** The rendering context of a scope's SINGLE source, when it has exactly one — the only
+ *  place an unresolved flow can have gone (presentation attribution, not resolution). */
+function loneSourceCtx(scope: Scope, ctx: Map<Scope, ScopeCtx>): ScopeCtx | undefined {
+	if (scope.sources.size !== 1) return undefined;
+	const src = [...scope.sources.values()][0];
+	const child = childScopeOf(src);
+	if (child) return ctx.get(child);
+	return { id: sourceId(src), name: derivedName(src), isCte: src.kind === 'cte' };
+}
 
-	/**
-	 * Bind a reference's parts to a visible source. Qualified refs (`t.c`) bind by
-	 * qualifier alone (no schema needed). Unqualified refs bind to the single source
-	 * whose known outputs include the column; failing that, to the one bare table in
-	 * scope (a base-column leaf). Returns undefined when genuinely ambiguous/unknown —
-	 * the caller then relies on the flat `dependencies` for those leaves.
-	 */
-	private resolveRef(scope: Scope, parts: string[]): Binding | undefined {
-		const split = splitRef(parts, key => hasVisibleSource(scope, key), this.dialect);
+// ── name-anchored entry helpers (contract-side matching, no resolution) ─────
 
-		if (split.qualifier !== undefined) {
-			for (let s: Scope | undefined = scope; s; s = s.parent) {
-				const source = s.sources.get(split.qualifier);
-				if (source) return { source, column: split.column };
-			}
-			return undefined;
-		}
+/** The root projection producing `columnName` (by declared name, dialect-true fold). */
+function rootProjection(root: Scope, columnName: string, dialect: string): Projection | undefined {
+	if (root.body.kind !== 'select') return undefined;
+	return root.body.projections.find(
+		p => !p.isStar && p.name !== undefined && foldEq(p.name, columnName, dialect),
+	);
+}
 
-		// Unqualified: resolve against each scope's sources, walking outward for correlation.
-		// A `needs-schema` (a source with unknown columns might have it) STOPS the walk at that
-		// scope — the column belongs to a relation here, not a correlated outer one; if that
-		// scope has a single source, bind to it (the common `SELECT x FROM t` / passthrough leaf).
-		for (let s: Scope | undefined = scope; s; s = s.parent) {
-			const r = resolveByColumnName(s, split.column, this.dialect);
-			if (r === 'ambiguous') return undefined;
-			if (r === 'needs-schema') {
-				const lone = loneSource(s);
-				return lone ? { source: lone, column: split.column } : undefined;
-			}
-			if (r) return { source: r, column: split.column };
-			// r === undefined (no source here could have it) → try the enclosing scope.
-		}
-		return undefined;
-	}
-
-	private scopeId(scope: Scope): number {
-		let id = this.scopeIds.get(scope);
-		if (id === undefined) {
-			id = this.scopeCounter++;
-			this.scopeIds.set(scope, id);
-		}
-		return id;
-	}
+/** The projection producing `columnName` in one top-level union leg: by output position
+ *  (positional set-op matching), else by name. */
+function legProjection(leg: Scope, columnName: string, idx: number, dialect: string): Projection | undefined {
+	if (leg.body.kind !== 'select') return undefined;
+	const projs = leg.body.projections;
+	if (idx >= 0 && idx < projs.length && !projs[idx].isStar) return projs[idx];
+	return projs.find(p => !p.isStar && p.name !== undefined && foldEq(p.name, columnName, dialect));
 }
 
 // ── source helpers ──────────────────────────────────────────────────────────
@@ -402,173 +549,12 @@ function derivedName(src: ResolvedSource): string {
 	return '';
 }
 
-function aliasesOf(src: ResolvedSource): string[] | undefined {
-	if (src.kind === 'cte') return src.ref.def.columnAliases;
-	if (src.kind === 'subquery') return src.source.columnAliases;
-	return undefined;
-}
-
-/** A resolved source's known output columns, or "unknown" when a schema is required. */
-function sourceOutputs(src: ResolvedSource): string[] | 'unknown' {
-	if (src.kind === 'table') return src.source.columnAliases ?? 'unknown';
-	if (src.kind === 'cte') return src.ref.scope.outputs;
-	if (src.kind === 'subquery') return src.scope.outputs;
-	if (src.kind === 'relation') return src.scope.outputs;
-	if (src.kind === 'graphtable') return src.scope.outputs;
-	if (src.kind === 'lateral') return src.source.columns;
-	return 'unknown'; // pivot — needs schema
-}
-
-/** True if `key` names a source in this scope or any enclosing one (for correlation). */
-function hasVisibleSource(scope: Scope, key: string): boolean {
-	for (let s: Scope | undefined = scope; s; s = s.parent) if (s.sources.has(key)) return true;
-	return false;
-}
-
-/**
- * Resolve an unqualified name against a single scope's sources (schema-free), mirroring
- * scope.ts `resolveByColumnName`: a single known-column match binds; several is ambiguous;
- * none-known-but-some-unknown is `needs-schema` (a bare table might carry it); truly none
- * is `undefined` (try an enclosing scope for correlation).
- */
-function resolveByColumnName(
-	scope: Scope,
-	column: string,
-	dialect: string,
-): ResolvedSource | 'ambiguous' | 'needs-schema' | undefined {
-	const n = foldIdentifier(column, dialect);
-	const matches: ResolvedSource[] = [];
-	let anyUnknown = false;
-	for (const src of scope.sources.values()) {
-		const cols = sourceOutputs(src);
-		if (cols === 'unknown') anyUnknown = true;
-		else if (cols.some(c => foldIdentifier(c, dialect) === n)) matches.push(src);
-	}
-	if (matches.length === 1) return matches[0];
-	if (matches.length > 1) return 'ambiguous';
-	return anyUnknown ? 'needs-schema' : undefined;
-}
-
-/** The single source of a scope (any kind), if there is exactly one — else undefined.
- *  A lone source is where an otherwise-unresolvable column must come from (a base table,
- *  or a `SELECT *` passthrough CTE the column flows straight through). */
-function loneSource(scope: Scope): ResolvedSource | undefined {
-	if (scope.sources.size !== 1) return undefined;
-	return [...scope.sources.values()][0];
-}
-
 /** Flatten a set-op scope into its leaf branch scopes (handles nested `a UNION b UNION c`). */
 function unionBranches(scope: Scope): Scope[] {
 	if (scope.body.kind === 'setop' && scope.branches) {
 		return [...unionBranches(scope.branches.left), ...unionBranches(scope.branches.right)];
 	}
 	return [scope];
-}
-
-/** The projection producing `column` in a union-branch scope: by output position, else by name. */
-function branchProducer(scope: Scope, column: string, idx: number, dialect: string): Projection | undefined {
-	if (scope.body.kind !== 'select') return undefined;
-	const projs = scope.body.projections;
-	if (idx >= 0 && idx < projs.length && !projs[idx].isStar) return projs[idx];
-	return findProjection(scope, column, undefined, dialect);
-}
-
-/** The projection producing `column` in a select scope (by declared alias order, else by name). */
-function findProjection(
-	scope: Scope,
-	column: string,
-	aliases: string[] | undefined,
-	dialect: string,
-): Projection | undefined {
-	if (scope.body.kind !== 'select') return undefined;
-	const projs = (scope.body as SelectExpr).projections;
-	if (aliases) {
-		const i = aliases.findIndex(a => foldEq(a, column, dialect));
-		return i >= 0 ? projs[i] : undefined;
-	}
-	return projs.find(p => !p.isStar && p.name !== undefined && foldEq(p.name, column, dialect));
-}
-
-// ── reference splitting (mirrors scope.ts splitColumnRef) ────────────────────
-
-interface SplitRef {
-	qualifier?: string;
-	column: string;
-}
-
-function splitRef(parts: string[], isSource: (key: string) => boolean, dialect: string): SplitRef {
-	// Mirror sqllens's splitColumnRef: a qualifier part is folded as "other", then (only if that
-	// misses and differs) as "table" — the two folds diverge only for BigQuery's case-preserving
-	// table identifiers. The matched, folded key is what indexes the (folded) source map.
-	const keyOf = (part: string): string | undefined => {
-		const k = foldIdentifier(part, dialect);
-		if (isSource(k)) return k;
-		const kt = foldIdentifier(part, dialect, 'table');
-		return kt !== k && isSource(kt) ? kt : undefined;
-	};
-	if (parts.length >= 3) {
-		const key = keyOf(parts[1]);
-		if (key !== undefined) return { qualifier: key, column: parts[2] };
-	}
-	if (parts.length >= 2) {
-		const key = keyOf(parts[0]);
-		if (key !== undefined) return { qualifier: key, column: parts[1] };
-	}
-	return { column: parts[0] ?? '' };
-}
-
-// ── expression traversal ────────────────────────────────────────────────────
-
-/** Every column reference directly within an expression (not descending into subqueries). */
-function columnRefsIn(expr: Expr): ColRef[] {
-	const out: ColRef[] = [];
-	const visit = (e: Expr): void => {
-		switch (e.kind) {
-			case 'column':
-				out.push({ parts: e.parts, cst: e.cst });
-				break;
-			case 'binary':
-				visit(e.left);
-				visit(e.right);
-				break;
-			case 'unary':
-				visit(e.operand);
-				break;
-			case 'cast':
-				visit(e.expr);
-				break;
-			case 'function':
-				e.args.forEach(visit);
-				e.window?.partitionBy.forEach(visit);
-				e.window?.orderBy.forEach(visit);
-				break;
-			case 'case':
-				e.whens.forEach(w => {
-					visit(w.when);
-					visit(w.then);
-				});
-				if (e.elseExpr) visit(e.elseExpr);
-				break;
-			case 'predicate':
-				visit(e.operand);
-				e.args.forEach(visit);
-				break;
-			case 'subscript':
-				visit(e.base);
-				visit(e.index);
-				break;
-			case 'lambda':
-				visit(e.body);
-				break;
-			case 'with':
-				e.bindings.forEach(b => visit(b.value));
-				visit(e.result);
-				break;
-			// literal / star / subquery / exists / other → no directly-owned column refs
-		}
-	};
-	visit(expr);
-	return out;
 }
 
 // ── CST slicing / name normalization ─────────────────────────────────────────
@@ -600,10 +586,8 @@ function stripQuotes(name: string): string {
 	return name;
 }
 
-/** Identifier equality under the dialect's true fold — the single comparison the whole resolution
- *  path uses (column/alias/output names default to kind "other"; a table name part passes "table").
- *  This is the drop-in for the old uniform lowercase `eq`, now dialect-correct (Snowflake folds
- *  UPPER, quoted "Mixed" stays case-sensitive, Databricks backticks fold case-insensitively). */
+/** Identifier equality under the dialect's true fold — the single comparison this file uses
+ *  (column/alias/output names default to kind "other"; a table name part passes "table"). */
 function foldEq(a: string, b: string, dialect: string, kind?: IdentKind): boolean {
 	return foldIdentifier(a, dialect, kind) === foldIdentifier(b, dialect, kind);
 }

@@ -140,9 +140,13 @@ describe('traceColumnLineage — star expansion', () => {
 		expect(byId(result.transformations, 'table:orders')).toMatchObject({ column: 'customer_id' });
 	});
 
-	it('summarizes (does not drop) a multi-source star hop that needs a schema to expand', () => {
-		// `SELECT *` over a JOIN cannot be attributed without a schema — the hop is kept and
-		// flagged summarized, while the flat dependencies still carry the base-table leaves.
+	it('resolves a multi-source star hop through the schema to a real edge (not summarized)', () => {
+		// `SELECT *` over a JOIN, WITH a schema: the spine expands the star and binds customer_name
+		// to customers — so cte:s is a COMPLETE edge s → customers, NOT a summarized placeholder.
+		// (The old clone flagged summarized because it could not structurally expand the star; the
+		// spine can, so marking it summarized would falsely claim incomplete flow. Provenance — that
+		// this mapping is schema-inferred via `*` rather than written — is a separate signal owed by
+		// sqllens's via trail, tracked as CHANNEL ITEM 13; it is NOT the summarized flag.)
 		const joinStar = [
 			'WITH s AS (SELECT * FROM orders o JOIN customers c ON c.id = o.customer_id)',
 			'SELECT customer_name FROM s',
@@ -154,7 +158,9 @@ describe('traceColumnLineage — star expansion', () => {
 		const result = trace(joinStar, 'customer_name', 'databricks', joinSchema);
 		const s = byId(result.transformations, 'cte:s');
 		expect(s).toBeDefined();
-		expect(s?.summarized).toBe(true);
+		expect(s?.summarized).toBeUndefined(); // resolved, so no false "incomplete" flag
+		expect(s?.sources).toEqual(['table:customers']); // the real, schema-resolved edge
+		expect(result.via_ctes).toContain('s');
 		// The leaf is not dropped — dependencies still resolve it via the schema-aware origin walk.
 		expect(result.dependencies).toEqual([{ column: 'customer_name', table: 'customers' }]);
 	});
