@@ -160,31 +160,32 @@ function probeVideoDimensions(videoPath) {
 }
 
 /**
- * Scan the video around expectedFlashPts (±scanRadius/2 seconds) for a full-white
- * frame (mean luma > 200). Returns the absolute PTS of the flash closest to
- * expectedFlashPts, or null if none found.
- * pts_time from ffmpeg showinfo is relative to -ss, so we add scanStartSec back.
+ * Linear-decode the whole recording once and return the PTS (seconds) of every sync
+ * flash — a full-white frame (luma mean > 200) injected during capture. No seeking:
+ * showinfo reports each frame's true pts_time as it decodes, so this is immune to the
+ * sparse-keyframe seek imprecision the old per-segment scan-seeks fought, and it can't
+ * hang the way seeking into VP8 could. Consecutive bright frames (the 80–150ms overlay
+ * spans 2–4 frames) are collapsed to a single flash — its first PTS.
  */
-function detectFlashPtsSec(videoFile, expectedFlashPts, cropFilter = '', scanRadiusSec = 3) {
-	const scanStartSec = Math.max(0, expectedFlashPts - scanRadiusSec / 2).toFixed(3);
+function detectFlashes(videoFile, cropFilter = '') {
 	const probe = spawnSync(ffmpegPath, [
-		'-ss', scanStartSec, '-t', String(scanRadiusSec),
 		'-i', videoFile,
 		'-vf', `${cropFilter}showinfo`,
-		'-f', 'null', '-',
-	], { encoding: 'utf8' });
-	// Collect all bright frames, return the one closest to expectedFlashPts
-	const candidates = [];
+		'-an', '-f', 'null', '-',
+	], { encoding: 'utf8', maxBuffer: 1 << 30 });
+	const flashes = [];
+	let lastPts = -Infinity;
 	for (const line of probe.stderr.split('\n')) {
 		if (!line.includes('showinfo')) continue;
 		const meanM = line.match(/mean:\[(\d+)/);
-		if (meanM && parseInt(meanM[1]) > 200) {
-			const ptMatch = line.match(/pts_time:([\d.]+)/);
-			if (ptMatch) candidates.push(parseFloat(scanStartSec) + parseFloat(ptMatch[1]));
-		}
+		const ptMatch = line.match(/pts_time:([\d.]+)/);
+		if (!meanM || !ptMatch || parseInt(meanM[1], 10) <= 200) continue;
+		const pts = parseFloat(ptMatch[1]);
+		if (pts - lastPts < 0.3) { lastPts = pts; continue; } // later frame of the same flash
+		flashes.push(pts);
+		lastPts = pts;
 	}
-	if (candidates.length === 0) return null;
-	return candidates.reduce((a, b) => Math.abs(a - expectedFlashPts) <= Math.abs(b - expectedFlashPts) ? a : b);
+	return flashes;
 }
 
 /**
@@ -409,30 +410,13 @@ async function main() {
 		? path.resolve(repoRoot, recording.videoFile.replaceAll('\\', '/'))
 		: null;
 
-	// Playwright records WebM (VP8) which has sparse keyframes — input-side -ss snaps
-	// to the nearest keyframe and seeking into a long recording is inaccurate or hangs.
-	// Transcode to a keyframe-dense MP4 (every frame is a keyframe with -g 1) once,
-	// cache it alongside the WebM (invalidated by mtime), then seek into that.
-	let videoFile = rawVideoFile;
-	if (rawVideoFile && fs.existsSync(rawVideoFile)) {
-		const seekablePath = rawVideoFile.replace(/\.webm$/i, '.seekable.mp4');
-		const webmMtime = fs.statSync(rawVideoFile).mtimeMs;
-		const cacheMtime = fs.existsSync(seekablePath) ? fs.statSync(seekablePath).mtimeMs : 0;
-		if (cacheMtime < webmMtime) {
-			console.log('  Transcoding WebM to seekable MP4 (one-time, cached)…');
-			ffRun([
-				'-i', rawVideoFile,
-				'-g', '1',
-				'-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
-				'-an',
-				seekablePath,
-			], 'transcode-seekable');
-			console.log('  Transcode complete.');
-		} else {
-			console.log('  Using cached seekable MP4.');
-		}
-		videoFile = seekablePath;
-	}
+	// Seek directly into the raw Playwright recording — no transcode. The old code
+	// rebuilt the whole WebM as an all-keyframe MP4 (-g 1) so it could seek to each
+	// flash; that intra-only rebuild inflated a 41 MB recording to ~870 MB and was the
+	// bulk of render time. Flash anchors now come from one linear showinfo pass
+	// (detectFlashes) and ffmpeg's default accurate_seek makes the per-clip input-side
+	// -ss frame-accurate on sparse-keyframe VP8 without a rebuild.
+	const videoFile = rawVideoFile;
 
 	// If the recorded video is taller than the screenshots (e.g. Playwright records at
 	// 1920×1080 but the maximized VS Code window is only 1920×1020 due to the taskbar),
@@ -446,23 +430,49 @@ async function main() {
 		}
 	}
 
-	// Compute frame-accurate video offset using the global sync flash frame.
-	// During capture a full-white overlay was shown for 80ms and its wall-clock time
-	// logged as 'sync.flash'. We scan the seekable MP4 near videoStartOffsetMs to find
-	// the bright frame and get its exact PTS. Individual segments may also carry per-
-	// segment 'X.sync' events (see syncAndLogDemo in capture-demo.mjs) which override
-	// this global offset to eliminate per-segment WebM PTS drift.
+	// One linear showinfo pass over the recording finds every sync flash (full-white
+	// frames injected during capture). From those we derive a frame-accurate
+	// wall-clock→video offset: a global one from 'sync.flash', and a per-segment one from
+	// each 'X.sync' that corrects accumulated VP8 PTS drift. Segments whose flash never
+	// painted (renderer too busy for the ~150ms overlay) fall back to the global offset —
+	// the same behaviour the old per-segment scan had when it found nothing.
+	const cropFilter = videoCropToHeight ? `crop=iw:${videoCropToHeight}:0:0,` : '';
 	let videoStartOffsetMs = recording.videoStartOffsetMs ?? 0;
-	const syncEvent = recording.events?.find(e => e.name === 'sync.flash');
-	if (videoFile && fs.existsSync(videoFile) && syncEvent) {
-		const expectedFlashPts = (syncEvent.tMs - videoStartOffsetMs) / 1000;
-		const cropFilter = videoCropToHeight ? `crop=iw:${videoCropToHeight}:0:0,` : '';
-		const flashPtsSec = detectFlashPtsSec(videoFile, expectedFlashPts, cropFilter, 3);
-		if (flashPtsSec !== null) {
-			videoStartOffsetMs = syncEvent.tMs - Math.round(flashPtsSec * 1000);
-			console.log(`  Global sync flash at pts=${flashPtsSec.toFixed(3)}s → videoStartOffsetMs=${videoStartOffsetMs}ms`);
-		} else {
-			console.warn('  ⚠ Global sync flash not detected — falling back to videoStartOffsetMs from recording');
+	const segmentOffsetMs = new Map();
+	if (videoFile && fs.existsSync(videoFile)) {
+		const flashes = detectFlashes(videoFile, cropFilter);
+		const nearestFlash = (targetSec, tolSec) => {
+			let best = null;
+			for (const p of flashes) {
+				if (Math.abs(p - targetSec) > tolSec) continue;
+				if (best === null || Math.abs(p - targetSec) < Math.abs(best - targetSec)) best = p;
+			}
+			return best;
+		};
+		const syncEvent = recording.events?.find(e => e.name === 'sync.flash');
+		if (syncEvent) {
+			const pts = nearestFlash((syncEvent.tMs - videoStartOffsetMs) / 1000, 3);
+			if (pts !== null) {
+				videoStartOffsetMs = syncEvent.tMs - Math.round(pts * 1000);
+				console.log(`  Global sync flash at pts=${pts.toFixed(3)}s → videoStartOffsetMs=${videoStartOffsetMs}ms`);
+			} else {
+				console.warn('  ⚠ Global sync flash not detected — using videoStartOffsetMs from recording');
+			}
+		}
+		// Per-segment anchors: predict from the (now frame-accurate) global offset, then
+		// snap to the nearest real flash within ±1.5s. Segments are ≥9s apart, so no mismatch.
+		for (const clip of resolvedClips) {
+			if (!clip.useVideo) continue;
+			const segEvent = recording.events?.find(e => e.name === `${clip.id}.sync`);
+			if (!segEvent) continue;
+			const pts = nearestFlash((segEvent.tMs - videoStartOffsetMs) / 1000, 1.5);
+			if (pts !== null) {
+				const off = segEvent.tMs - Math.round(pts * 1000);
+				segmentOffsetMs.set(clip.id, off);
+				console.log(`  [${clip.id}] per-segment sync at pts=${pts.toFixed(3)}s → offset=${off}ms`);
+			} else {
+				console.warn(`  [${clip.id}] ⚠ per-segment sync flash not detected — using global offset`);
+			}
 		}
 	}
 
@@ -486,7 +496,6 @@ async function main() {
 	}
 
 	// Clips
-	const cropFilter = videoCropToHeight ? `crop=iw:${videoCropToHeight}:0:0,` : '';
 	for (const clip of resolvedClips) {
 		const captionPng = path.join(workDir, `${clip.id}-caption.png`);
 		writeCaptionPng(clip.caption, outputWidth, captionHeight, captionPng);
@@ -497,24 +506,9 @@ async function main() {
 			if (!videoFile) fail(`Clip '${clip.id}' is marked useVideo but recording has no videoFile`);
 			if (!fs.existsSync(videoFile)) fail(`Video file not found: ${rel(videoFile)}`);
 
-			// Use per-segment sync event if present (eliminates WebM PTS drift accumulation).
-			// capture-demo.mjs injects a white flash just before each .demo event and logs
-			// it as 'X.sync'. We scan for that flash to get an exact per-segment PTS, giving
-			// drift-corrected video offsets for each clip independently.
-			const segSyncName = `${clip.id}.sync`;
-			const segSyncEvent = recording.events?.find(e => e.name === segSyncName);
-			let effectiveOffsetMs = videoStartOffsetMs;
-			if (segSyncEvent && videoFile) {
-				const approxPts = (segSyncEvent.tMs - videoStartOffsetMs) / 1000;
-				const segFlashPts = detectFlashPtsSec(videoFile, approxPts, cropFilter, 15);
-				if (segFlashPts !== null) {
-					effectiveOffsetMs = segSyncEvent.tMs - Math.round(segFlashPts * 1000);
-					console.log(`  [${clip.id}] Per-segment sync at pts=${segFlashPts.toFixed(3)}s → effectiveOffset=${effectiveOffsetMs}ms`);
-				} else {
-					console.warn(`  [${clip.id}] ⚠ Per-segment sync flash not detected — using global offset`);
-				}
-			}
-
+			// Per-segment drift-corrected offset from the linear flash pass above; falls
+			// back to the global offset for segments whose flash never painted.
+			const effectiveOffsetMs = segmentOffsetMs.get(clip.id) ?? videoStartOffsetMs;
 			const seekMs = Math.max(0, clip.window.startMs - effectiveOffsetMs);
 			console.log(`  Rendering video clip '${clip.id}' (${(clip.durationMs / 1000).toFixed(1)}s from ${(seekMs / 1000).toFixed(1)}s)…`);
 			renderVideoClipMp4({ ...clip, window: { ...clip.window, startMs: seekMs } }, videoFile, captionPng, hasWatermark ? watermarkPath : null, videoFilter, sizing, mp4Path);

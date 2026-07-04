@@ -247,21 +247,25 @@ function logEvent(name, data = {}) {
 }
 
 /**
- * Inject a 2-frame white flash (80ms), log 'X.sync' at injection time, then
- * log 'X.demo' after the flash clears. The generator uses 'X.sync' to find
- * the exact PTS of this segment in the video, giving per-segment drift
- * calibration that handles accumulated WebM timestamp drift.
+ * Inject a white flash, wait for the compositor to actually paint it, then log
+ * 'X.sync' and 'X.demo'. The generator scans the recording for the flash's PTS to
+ * drift-correct this segment's clip. The old version held the flash for a bare 80ms
+ * with no paint guarantee, so when the renderer was busy the overlay was added and
+ * removed without a single frame ever showing it — 5/17 flashes never landed and
+ * silently lost per-segment drift correction. Force a paint (double rAF) and hold
+ * ~150ms (≥3 frames @25fps) so a white frame reliably registers in the video.
  */
 async function syncAndLogDemo(win, eventName) {
 	const syncName = eventName.replace(/\.demo$/, '.sync');
-	await win.evaluate(() => {
+	await win.evaluate(() => new Promise((resolve) => {
 		const d = document.createElement('div');
 		d.id = '__seg-sync__';
 		d.style.cssText = 'position:fixed;inset:0;background:#fff;z-index:2147483647;pointer-events:none;';
 		document.body.appendChild(d);
-	});
+		requestAnimationFrame(() => requestAnimationFrame(resolve));
+	}));
 	logEvent(syncName);
-	await win.waitForTimeout(80);
+	await win.waitForTimeout(150);
 	await win.evaluate(() => document.getElementById('__seg-sync__')?.remove());
 	await win.waitForTimeout(400);
 	logEvent(eventName);
@@ -311,12 +315,19 @@ async function openFile(win, filename) {
 	await win.waitForSelector('.monaco-editor .view-lines', { timeout: 10000 });
 	// Wait for the quick-input to fully dismiss before continuing
 	await win.waitForSelector('.quick-input-widget', { state: 'hidden', timeout: 2000 }).catch(() => { });
-	await win.waitForTimeout(2000);
+	// Wait until the intended file is actually the active editor (its tab is active) rather
+	// than a blanket ~6s sleep — the editor is interactive as soon as its content is laid
+	// out. Falls through to the short settle after 8s if the tab selector ever changes.
+	await win.waitForFunction((s) => {
+		const tab = document.querySelector('.tabs-container .tab.active .tab-label, .title .label-name');
+		return !!tab && (tab.textContent || '').toLowerCase().includes(s);
+	}, stem.toLowerCase(), { timeout: 8000 }).catch(() => { });
+	await win.waitForTimeout(300);
 	// Reset to line 1 col 1 so horizontal scroll starts at the leftmost position.
 	// VS Code remembers cursor/scroll per file; Ctrl+Home guarantees col 0 is visible
 	// before any subsequent goToLine call positions the cursor.
 	await win.keyboard.press('Control+Home');
-	await win.waitForTimeout(4000);
+	await win.waitForTimeout(400);
 }
 
 async function goToLine(win, line, col = 1) {
@@ -771,12 +782,11 @@ async function main() {
 		await browserWindow.evaluate(bw => bw.maximize());
 		await win.waitForTimeout(500);
 
-		// Sync flash: inject a full-white overlay for exactly 2 frames (80ms at 25fps).
-		// The renderer scans the seekable MP4 for the first bright frame and uses its
-		// exact PTS to compute a frame-accurate time offset. Shorter = more precise:
-		// 2 frames gives a ±1-frame (~40ms) sync window while still reliably registering
-		// in the compressed video. 1 frame risks being missed due to paint latency.
-		await win.evaluate(() => {
+		// Global sync flash: a full-white overlay that anchors the whole recording's
+		// wall-clock→video offset. The renderer finds it in one linear showinfo pass. Force
+		// a paint (double rAF) before logging and hold ~150ms so it reliably lands in the
+		// video even if the renderer is busy at startup (see syncAndLogDemo for the same fix).
+		await win.evaluate(() => new Promise((resolve) => {
 			const el = document.createElement('div');
 			el.id = '__demo-sync-flash__';
 			Object.assign(el.style, {
@@ -786,9 +796,10 @@ async function main() {
 				pointerEvents: 'none',
 			});
 			document.body.appendChild(el);
-		});
+			requestAnimationFrame(() => requestAnimationFrame(resolve));
+		}));
 		logEvent('sync.flash');
-		await win.waitForTimeout(80);
+		await win.waitForTimeout(150);
 		await win.evaluate(() => document.getElementById('__demo-sync-flash__')?.remove());
 		await win.waitForTimeout(100);
 		const windowSize = await win.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
@@ -1291,7 +1302,13 @@ async function main() {
 			await openFile(win, 'season_summary.sql');
 			await runCommand(win, 'dbt Anvil: Show Lineage');
 			await waitForReady(win, 30000).catch(() => { });
-			await win.waitForTimeout(5000);
+			// Wait for the lineage webview to actually mount instead of a blanket 5s —
+			// returns as soon as #canvas-wrap exists, falls through after ~15s to the
+			// existing maximize/fit/col-toggle checks below.
+			for (let i = 0; i < 30; i++) {
+				if (await findWebviewFrame(win, '#canvas-wrap')) break;
+				await win.waitForTimeout(500);
+			}
 			const maximizeBtn = win.locator('.part.panel .codicon-panel-maximize').first();
 			if (await maximizeBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
 				await maximizeBtn.click();
