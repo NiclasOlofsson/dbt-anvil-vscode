@@ -9,26 +9,15 @@
  * before the final-newline guard, any `\r\n` in the buffer is replaced
  * with `\n`.
  */
-import * as path from 'path';
-import { describe, expect, it, beforeAll } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-import { initPyodide } from '../../../ftl/pyodide-loader';
-import { PyodideSqlParser } from '../../../ftl/pyodide-sql-parser';
-import { FtlDocumentParser } from '../../../ftl/ftl-document-parser';
+import { SqllensDocumentParser } from '../../../ftl/sqllens/document-parser';
 import { reflowDocument } from '../../../ninja/reflow/engine';
 import { DEFAULT_CONFIG } from '../../../ninja/config';
 import { mockDocument } from '../helpers';
 
-const PYODIDE_DIR = path.join(__dirname, '..', '..', '..', '..', 'node_modules', 'pyodide');
-const VENDOR_DIR  = path.join(__dirname, '..', '..', '..', '..', 'resources', 'ftl', 'vendor');
-const SCRIPTS_DIR = path.join(__dirname, '..', '..', '..', '..', 'resources', 'ftl');
-
-let documentParser: FtlDocumentParser;
-
-beforeAll(async () => {
-	const runtime = await initPyodide(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR);
-	documentParser = new FtlDocumentParser(PyodideSqlParser.create(runtime.pyodide), { adapterType: 'duckdb' });
-}, 60_000);
+// The live parser (native sqllens). Synchronous — no startup needed.
+const documentParser = new SqllensDocumentParser({ adapterType: 'duckdb' });
 
 describe('CRLF normalization', () => {
 	it('strips leaked CRLF from comments so output is pure LF', async () => {

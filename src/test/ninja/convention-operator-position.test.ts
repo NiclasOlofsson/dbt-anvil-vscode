@@ -1,30 +1,18 @@
-import * as path from 'node:path';
-import { beforeAll, afterAll, describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { mockDocument, cfg, applyEditsToText } from './helpers';
 import { operatorPositionRule } from '../../ninja/rules/convention-operator-position';
-import { FtlDocumentParser } from '../../ftl/ftl-document-parser';
-import type { AdapterContext } from '../../ftl/ftl-document-parser';
+import { SqllensDocumentParser, type AdapterContext } from '../../ftl/sqllens/document-parser';
 import { FixAction } from '../../ninja/violation';
 import type { DocumentModel } from '../../services/parse-service';
 
 const RULE = 'ninja.convention.operator-position';
 
-const PYODIDE_DIR = path.join(__dirname, '..', '..', '..', 'node_modules', 'pyodide');
-const VENDOR_DIR = path.join(__dirname, '..', '..', '..', 'resources', 'ftl', 'vendor');
-const SCRIPTS_DIR = path.join(__dirname, '..', '..', '..', 'resources', 'ftl');
+// 'ansi' has no native sqllens dialect; the parser maps it to databricks, which parses
+// this plain ANSI SQL. Live parser, synchronous — no startup/teardown.
 const ANSI_CONTEXT: AdapterContext = { adapterType: 'ansi' };
 
 describe(RULE, () => {
-	let parser: FtlDocumentParser;
-
-	beforeAll(async () => {
-		parser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR, ANSI_CONTEXT);
-		await parser.ready();
-	}, 60_000);
-
-	afterAll(() => {
-		parser.dispose();
-	});
+	const parser = new SqllensDocumentParser(ANSI_CONTEXT);
 
 	async function check(sql: string, operatorPosition: 'trailing' | 'leading') {
 		const m: DocumentModel = await parser.parse(sql);
