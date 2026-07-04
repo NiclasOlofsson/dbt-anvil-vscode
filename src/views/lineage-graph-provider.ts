@@ -2238,6 +2238,7 @@ body.layout-panel-open .layout-panel {
 		});
 		if (!msg.columns) return;
 
+		const expandedBefore = expandedCards.size;
 		const highlightedEls = [];
 		for (const c of msg.columns) {
 			const sel = '.col-item[data-model="' + CSS.escape(c.model) + '"][data-col="' + CSS.escape(c.column) + '"]';
@@ -2272,11 +2273,16 @@ body.layout-panel-open .layout-panel {
 		if (graphData) {
 			/* Defer one frame so expanded col-list DOM updates are applied,
 			 * then request a fresh dagre pass from the extension host. */
+			const willRelayout = expandedCards.size > expandedBefore;
 			requestAnimationFrame(function() {
 				requestDagreRelayout();
 				requestAnimationFrame(function() {
 					drawEdges(graphData);
-					drawColumnEdges(highlightedEls, msg.columnEdges || []);
+					/* Draw column edges here ONLY when no relayout is coming. If a card was
+					 * newly expanded, the host recomputes the layout and its setGraph response
+					 * runs redrawColumnEdges against the settled positions; drawing now would
+					 * flash the edges against the stale pre-relayout layout for ~1s. */
+					if (!willRelayout) drawColumnEdges(highlightedEls, msg.columnEdges || []);
 				});
 			});
 		}
