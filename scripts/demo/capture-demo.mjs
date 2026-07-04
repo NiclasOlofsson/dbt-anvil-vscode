@@ -1458,8 +1458,8 @@ async function main() {
 				const topLeftCol = colValues[0];
 				const bottomRightRow = rowValues[Math.min(2, rowValues.length - 1)];
 				const bottomRightCol = colValues[Math.min(3, colValues.length - 1)];
-				const topLeft = resultsFrame.locator(`td[data-row="${topLeftRow}"][data-col="${topLeftCol}"]:not(.row-num)`);
-				const bottomRight = resultsFrame.locator(`td[data-row="${bottomRightRow}"][data-col="${bottomRightCol}"]:not(.row-num)`);
+				const topLeft = resultsFrame.locator(`td[data-row="${topLeftRow}"][data-col="${topLeftCol}"]:not(.row-num)`).first();
+				const bottomRight = resultsFrame.locator(`td[data-row="${bottomRightRow}"][data-col="${bottomRightCol}"]:not(.row-num)`).first();
 				const tlBbox = await topLeft.boundingBox();
 				const brBbox = await bottomRight.boundingBox();
 				if (tlBbox && brBbox) {
