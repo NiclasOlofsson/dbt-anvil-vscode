@@ -32,8 +32,7 @@
  * Expression snippets are sliced from the ORIGINAL sql at the CST span of the producing
  * expression — never reconstructed from the IR.
  */
-import { foldIdentifier, lineage as sqllensLineage, lineageOf, parse, resolveScopes, Schema } from 'sqllens';
-import { blankJinja } from '../../dbt/jinja-blanker';
+import { foldIdentifier, lineage as sqllensLineage, lineageOf, parseTemplated, resolveScopes, Schema } from 'sqllens';
 import type {
 	Dialect,
 	IdentKind,
@@ -119,13 +118,13 @@ export function traceColumnLineage(
 	dialect: Dialect,
 	schema?: SchemaMapping,
 ): LineageResult {
-	// The lineage tool feeds the RAW model file (jinja-templated), so blank the jinja before
-	// parsing — length-preserving, and `{{ ref('x') }}` / `{{ source(...) }}` keep their real
-	// names, so origins resolve to the upstream model/table (the legacy Pyodide path did the
-	// same). Compiled/plain SQL has no tags → blankJinja is a no-op. Offsets are preserved, so
-	// the ORIGINAL `sql` still slices correct expression snippets in the renderer below.
-	const blanked = blankJinja(sql).blanked;
-	const ast = parse(blanked, dialect).ast;
+	// The lineage tool feeds the RAW model file (jinja-templated). parseTemplated handles the
+	// jinja natively: the R3 tag-applied ast carries `{{ ref('x') }}` / `{{ source(...) }}` as
+	// first-class sources named after the real model, so origins resolve to the upstream
+	// model/table with no blanking. Plain/compiled SQL passes through unchanged, and the
+	// placeholder is length-preserving, so the ORIGINAL `sql` still slices correct expression
+	// snippets in the renderer below. (Retired the interim blankJinja from 12d2643.)
+	const ast = parseTemplated(sql, dialect).sql.ast;
 	const tree = resolveScopes(ast, dialect);
 	const schemaObj = new Schema(schema ?? {});
 

@@ -130,14 +130,31 @@ function by(...keys: string[]): (a: Json, b: Json) => number {
 	};
 }
 
-/** Reduce a TokenInfo to its comparable shape: drop scopeId, fold resolvedTableRef to name+line. */
+/**
+ * A jinja-tag placeholder identifier, in either engine's spelling: legacy blankJinja
+ * mints `__jN__` unique IDs; sqllens's templated pre-lexer fills the tag's exact width
+ * with `jjj…`. Both stand for "an unexpanded jinja tag in a value slot" — the NAME is
+ * meaningless filler in both, so the two spellings are the same semantic and are
+ * canonicalized to one marker (name + the tag-width-dependent endCol) before diffing.
+ * A REAL identifier never matches (`__j0__` is reserved-shaped; nobody names a column
+ * 4+ bare j's).
+ */
+const PLACEHOLDER_RE = /^(?:__j\d+__|j{4,})$/;
+
+/** Reduce a TokenInfo to its comparable shape: drop scopeId, fold resolvedTableRef to
+ *  name+line, and normalize jinja-placeholder names (legacy `__jN__` vs native `jjj…`). */
 function canonToken(t: Json): Json {
 	const { scopeId: _scopeId, resolvedTableRef, ...rest } = t as Record<string, unknown>;
 	const rtr = resolvedTableRef as Json | undefined;
-	return {
+	const out: Json = {
 		...rest,
 		resolvedTableRef: rtr ? { name: rtr.name, line: rtr.line } : undefined,
 	};
+	if (typeof out.name === 'string' && PLACEHOLDER_RE.test(out.name)) {
+		out.name = '⟨jinja⟩';
+		out.endCol = out.col; // width is placeholder-scheme-dependent, not semantic
+	}
+	return out;
 }
 
 /**
@@ -173,7 +190,14 @@ function canonicalize(m: DocumentModel, pureSyntaxError: boolean): Json {
 }
 
 function canonFinalSelect(fs: Json): Json {
-	const cols = (fs.columns as Json[] | undefined) ?? [];
+	const cols = ((fs.columns as Json[] | undefined) ?? []).map(c => {
+		// A computed column whose source is a jinja tag carries the tag PLACEHOLDER as its
+		// expression text (`__jN__` legacy / `jjj…` native) — same semantic, normalize.
+		if (typeof c.expression === 'string' && PLACEHOLDER_RE.test(c.expression)) {
+			return { ...c, expression: '⟨jinja⟩' };
+		}
+		return c;
+	});
 	return { ...fs, columns: cols.slice().sort(by('line', 'col', 'name')) };
 }
 

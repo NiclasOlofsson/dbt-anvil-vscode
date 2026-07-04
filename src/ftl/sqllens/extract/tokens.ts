@@ -19,7 +19,7 @@ import type {
 	TableRefToken,
 	TokenInfo,
 } from '../../../services/parse-service';
-import type { ColumnRef, Dialect, PartSpan, Projection, Qualification, QueryBody, ResolvedSource, Token } from '../api';
+import type { ColumnRef, Dialect, PartSpan, Projection, Qualification, QueryBody, ResolvedSource, TableSource, Token } from '../api';
 import type { StarExpander } from './star-expand';
 import { allScopes, asCst, normName, quotedRaw, type CstNode, type SqllensParse } from './spans';
 
@@ -86,14 +86,22 @@ function tableRefForSource(src: ResolvedSource, scopeId: number, tokens: Token[]
 		const canonical = src.kind === 'cte' ? src.ref.def.name : src.name[src.name.length - 1];
 		const nameTok = lastNameToken(tokens, cst, aliasCst);
 
+		// R3: a templated relation (`{{ ref('x') }}` in a FROM/JOIN slot) parses over a
+		// length-preserving placeholder, so its physical name token is filler (`jjj…`). The
+		// tag-applied ast sets the SOURCE name to the real model — prefer `canonical` over
+		// the placeholder token text there. No-op on the blank-cascade path (no `template`
+		// marker; the token text already IS the real name).
+		const templated = src.kind === 'table' && (src.source as TableSource).template !== undefined;
+
 		let tok: TableRefToken;
 		if (nameTok) {
+			const display = templated ? canonical : nameTok.text;
 			tok = {
 				type: 'table_ref',
-				name: normName(nameTok.text, dialect),
+				name: normName(display, dialect),
 				line: nameTok.line - 1,
 				col: nameTok.column,
-				endCol: nameTok.column + nameTok.text.length,
+				endCol: nameTok.column + display.length,
 				scopeId,
 			};
 		} else {
