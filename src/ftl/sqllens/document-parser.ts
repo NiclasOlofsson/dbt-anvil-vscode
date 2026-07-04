@@ -15,13 +15,14 @@ import type { DocumentParser, ParseOptions } from '../../services/document-parse
 import type { DialectSymbols } from '../sql-parser';
 import { performance } from 'node:perf_hooks';
 import { dialectSymbols, parse, parseTemplated, qualify, resolveScopes, Schema, toSqllensDialect, type Dialect, type Qualification, type SchemaMapping, type TagNode } from './api';
-import { tokenizeJinja } from '../jinja-tokenizer';
+import { tokenizeJinja, type JinjaToken } from '../jinja-tokenizer';
 import { parseWithJinjaFallback, type ParsePass } from '../parse-with-jinja-fallback';
 import { keywordTokenTypesFor, mapTokens } from './token-mapper';
 import { mergeSqlAndJinjaTokens } from '../ninja-sql-tokens';
 import { renToRawLine, type LineMap } from '../nunjucks-renderer';
 import { extractMacroCalls, extractRefs, extractSources } from '../extractors/jinja-tag-extractors';
 import { tagInfos } from './extract/tag-infos';
+import { jinjaTokensFromStream } from './extract/jinja-stream';
 import { enrichTokensWithJinjaSpans } from '../extractors/jinja-token-enrichment';
 import { createSqllensAstIndex } from './ast-index';
 import { decompose } from './decompose';
@@ -173,7 +174,11 @@ export class SqllensDocumentParser implements DocumentParser {
 	private _parse(rawSql: string, schema?: Record<string, Record<string, string>>): DocumentModel {
 		const t0 = performance.now();
 		const dialect = toSqllensDialect(this._context.adapterType);
-		const jinjaTokens = tokenizeJinja(rawSql);
+		// Populated once the parse path is known: the NATIVE templated parse derives
+		// jinjaTokens from sqllens's unified token stream (jinjaTokensFromStream); the
+		// fallback path keeps the extension's own tokenizeJinja. Both feed the same
+		// downstream consumers (sources/macroCalls extractors, the merge, model.jinjaTokens).
+		let jinjaTokens: JinjaToken[];
 
 		let parseMs = 0;
 		let pass1: SqllensParse | undefined;
@@ -229,8 +234,14 @@ export class SqllensDocumentParser implements DocumentParser {
 			pass = 'pass1'; // length-preserving raw coords — same contract as a pass1 blank
 			pass1 = result;
 			templatedTags = templated.tags;
+			// Native path: jinjaTokens come from the SAME unified stream the SQL parse
+			// used (channel-2 minijinja island tokens), not a second independent lex.
+			jinjaTokens = jinjaTokensFromStream(templated.tokens, templated.tags, rawSql);
 		} else {
 			({ result, pass, lineMap } = parseWithJinjaFallback(rawSql, runOnce, r => r.errors === 0));
+			// Fallback path: no unified stream to trust (the SQL parse ran on rendered/
+			// blanked text) — keep the extension's own jinja tokenizer.
+			jinjaTokens = tokenizeJinja(rawSql);
 		}
 
 		// On pass2 the parsed text is nunjucks-rendered (offsets shifted). Pass1's
