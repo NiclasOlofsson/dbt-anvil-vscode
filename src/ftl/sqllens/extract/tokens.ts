@@ -143,10 +143,12 @@ function columnDefToken(p: Projection, dialect: Dialect): ColumnDefToken | undef
 	const last = p.expr.kind === 'column' ? p.expr.parts[p.expr.parts.length - 1] : undefined;
 	if (last !== undefined && last.toLowerCase() === p.name.toLowerCase()) return undefined;
 
-	// TODO(sqllens-aliascst): no dedicated alias-identifier CST node exists; the
-	// projection's last token (cst.stop) IS the alias when written `expr AS name`.
-	const c = asCst(p.cst);
-	const s = c.stop ?? c.start;
+	// ITEM 5 (sqllens e6078d7): `Projection.aliasCst` is the alias identifier's own CST —
+	// present ⇔ an explicit alias (delimiters in, AS out). The old cst.stop heuristic
+	// misread trailing comments and parenthesized `(a+b) AS x`; it remains only as the
+	// fallback for a named non-echo projection without aliasCst (not seen in practice).
+	const a = p.aliasCst ? asCst(p.aliasCst) : asCst(p.cst);
+	const s = a.stop ?? a.start;
 	if (!s) return undefined;
 	return {
 		type: 'column_def',

@@ -86,12 +86,6 @@ function collectColumnCsts(expr: Expr, out: CstNode[]): void {
 }
 
 /** True when the projection declares an explicit alias (its name doesn't echo a bare column). */
-function isExplicitAlias(p: Projection): boolean {
-	if (p.isStar || p.name === undefined) return false;
-	const last = p.expr.kind === 'column' ? p.expr.parts[p.expr.parts.length - 1] : undefined;
-	return !(last !== undefined && last.toLowerCase() === p.name.toLowerCase());
-}
-
 export function extractFinalColumns(parse: SqllensParse, expander?: StarExpander): ColumnInfo[] {
 	const sel = leftSelect(parse.ast.body);
 	if (!sel) return [];
@@ -126,9 +120,10 @@ function finalSelectColumn(p: Projection, dialect: Dialect): FinalSelectColumnIn
 	if (name === undefined) return undefined;
 
 	const c = asCst(p.cst);
-	const explicitAlias = isExplicitAlias(p);
-	// The alias token is the projection's last token when written `expr AS name`.
-	const aliasTok = explicitAlias ? (c.stop ?? undefined) : undefined;
+	// ITEM 5 (sqllens e6078d7): `Projection.aliasCst` is the alias identifier's OWN span —
+	// present ⇔ an explicit alias (AS excluded, delimiters included). Replaces the cst.stop
+	// heuristic that misread trailing comments and parenthesized `(a+b) AS x`.
+	const aliasTok = p.aliasCst ? (asCst(p.aliasCst).stop ?? asCst(p.aliasCst).start ?? undefined) : undefined;
 
 	const entry: FinalSelectColumnInfo = { name, line: 0, col: 0, endLine: 0, endCol: 0 };
 

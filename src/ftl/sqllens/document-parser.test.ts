@@ -286,6 +286,31 @@ describe('SqllensDocumentParser — finalSelect span anchored at first identifie
 	});
 });
 
+describe('SqllensDocumentParser — alias spans via Projection.aliasCst (ITEM 5)', () => {
+	// The two shapes the old cst.stop heuristic misread, pinned upstream in sqllens
+	// tests/ir.alias-span.test.ts (e6078d7) and consumed here.
+	it('anchors the alias after a trailing line comment on the projection', async () => {
+		const sql = 'select a + b as x -- note\nfrom t';
+		const model = await parser().parse(sql);
+		const def = model.tokens.find(t => t.type === 'column_def' && t.name === 'x')!;
+		expect(def.line).toBe(0);
+		expect(def.col).toBe('select a + b as '.length); // `x`, not the comment token
+		expect(def.endCol).toBe('select a + b as x'.length);
+
+		const col = model.finalSelect!.columns.find(c => c.name === 'x')!;
+		expect(col.aliasCol).toBe('select a + b as '.length);
+		expect(col.aliasEndCol).toBe('select a + b as x'.length);
+	});
+
+	it('anchors the alias of a parenthesized expression projection', async () => {
+		const sql = 'select (a+b) as x from t';
+		const model = await parser().parse(sql);
+		const def = model.tokens.find(t => t.type === 'column_def' && t.name === 'x')!;
+		expect(def.col).toBe('select (a+b) as '.length);
+		expect(def.endCol).toBe('select (a+b) as x'.length);
+	});
+});
+
 describe('SqllensDocumentParser — parse-failure and cascade paths', () => {
 	it('reports syntax_error warnings with 0-based positions for broken SQL', async () => {
 		const model = await parser().parse('select a from t )))');
