@@ -81,15 +81,23 @@ def run_command(
         subcommand = args[0] if args else ""
         if subcommand != "deps":
             args = [*args, "--log-format", "json"]
-    # compile never needs warehouse introspection — skip the metastore scan.
-    # --no-populate-cache is a global flag (before subcommand).
-    # --no-introspect is a compile-specific flag (after subcommand).
+    # --no-populate-cache (global flag, before the subcommand) skips the bulk
+    # metastore scan — always safe on compile.
+    # --no-introspect (compile-specific, after the subcommand) skips introspective
+    # queries. Apply it ONLY to selective compiles (`compile -s <model>`), the
+    # fast per-model/on-demand path. A full-project compile (the background cache
+    # warm, bare `compile` with no selector) must keep introspection ON: some
+    # models call adapter.get_columns_in_relation() at compile time and error with
+    # "connection never acquired" without it, failing the entire compile.
     if "compile" in args:
         compile_idx = args.index("compile")
         if "--no-populate-cache" not in args:
             args = ["--no-populate-cache", *args]
             compile_idx += 1  # offset by the prepended flag
-        if "--no-introspect" not in args:
+        is_selective = any(
+            flag in args for flag in ("-s", "--select", "-m", "--models")
+        )
+        if is_selective and "--no-introspect" not in args:
             args = [
                 *args[: compile_idx + 1],
                 "--no-introspect",
