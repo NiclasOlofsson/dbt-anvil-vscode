@@ -9,6 +9,7 @@
       "id": "model-explorer",
       "frame": "model-explorer",
       "caption": "Model Explorer — models, sources, tags. Your whole project, right there.",
+      "focus": { "x": 0.03, "y": 0.08, "w": 0.19, "h": 0.85, "zoomMs": 450, "holdFullMs": 350 },
       "duration": {
         "from": {
           "event": "model-explorer.demo",
@@ -24,6 +25,7 @@
       "id": "codelens",
       "frame": "codelens",
       "caption": "Editor buttons — Lineage · Run · Test · Compile · Query · Profile. No terminal needed.",
+      "focus": { "x": 0.78, "y": 0.03, "w": 0.21, "h": 0.08, "zoom": 2.0, "zoomMs": 450, "holdFullMs": 350 },
       "duration": {
         "from": {
           "event": "codelens.demo",
@@ -119,6 +121,7 @@
       "id": "document-symbols",
       "frame": "document-symbols",
       "caption": "Document Outline — every CTE and its columns. Navigate without scrolling.",
+      "focus": { "x": 0.03, "y": 0.09, "w": 0.19, "h": 0.87, "zoomMs": 450, "holdFullMs": 350 },
       "duration": {
         "from": {
           "event": "document-symbols.demo",
@@ -198,6 +201,7 @@
       "frame": "lineage",
       "useVideo": true,
       "caption": "Lineage — interactive DAG that follows your editor. Drill into column-level traces.",
+      "focus": { "x": 0.42, "y": 0.70, "w": 0.55, "h": 0.28, "zoom": 1.5, "zoomMs": 600, "holdFullMs": 500 },
       "duration": {
         "from": {
           "event": "lineage.demo",
@@ -215,6 +219,7 @@
       "useVideo": true,
       "playbackSpeed": 2.5,
       "caption": "Profiler — row counts and timing per CTE. Find which one is scanning 40M rows.",
+      "focus": { "x": 0.03, "y": 0.12, "w": 0.19, "h": 0.84, "zoomMs": 500, "holdFullMs": 400 },
       "duration": {
         "from": {
           "event": "profiler.demo",

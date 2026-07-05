@@ -124,6 +124,9 @@ let videoStartOffsetMs = 0;
  * Inject a semi-transparent green border/fill over the given CSS selector so the
  * viewer's eye is drawn to the right part of the screen in the screenshot.
  * Call removeHighlight(win) immediately after the screenshot.
+ *
+ * NOTE: no longer used by the segments — attention is now directed with a render-side
+ * zoom (see `focus` in manuscript.json) instead of a green flash. Kept as a reusable cue.
  */
 async function injectHighlightStyle(win) {
 	await win.evaluate(() => {
@@ -951,11 +954,8 @@ async function main() {
 			await setAllTreeItemsExpanded(win, true, '.part.sidebar', 1);
 			// DEMO
 			await syncAndLogDemo(win, 'model-explorer.demo');
-			await flashPaneHighlight(win, 'MODEL EXPLORER');
 			await screenshot(win, 'model-explorer', 'Model Explorer — Models · Sources · By Tag', 3500);
 			logEvent('model-explorer.post-demo');
-			// POST-DEMO
-			await removeHighlight(win);
 		} catch (e) {
 			console.warn(`  ⚠ model-explorer: ${e.message}`);
 		}
@@ -973,11 +973,8 @@ async function main() {
 			await win.waitForSelector('.codelens-decoration a', { timeout: 20000 });
 			// DEMO
 			await syncAndLogDemo(win, 'codelens.demo');
-			await flashHighlight(win, '.editor-actions');
 			await screenshot(win, 'codelens', 'CodeLens — Run · Build · Test · Compile · Profile', 3000);
 			logEvent('codelens.post-demo');
-			// POST-DEMO
-			await removeHighlight(win);
 		} catch (e) {
 			console.warn(`  ⚠ codelens: ${e.message}`);
 		}
@@ -1184,11 +1181,8 @@ async function main() {
 			await setAllTreeItemsExpanded(win, true, '.part.sidebar', 4);
 			// DEMO
 			await syncAndLogDemo(win, 'document-symbols.demo');
-			await flashPaneHighlight(win, 'OUTLINE');
 			await screenshot(win, 'document-symbols', 'Outline — CTE tree with columns in every scope', 3000);
 			logEvent('document-symbols.post-demo');
-			// POST-DEMO
-			await removeHighlight(win);
 		} catch (e) {
 			console.warn(`  ⚠ document-symbols: ${e.message}`);
 		}
@@ -1374,11 +1368,9 @@ async function main() {
 			await win.mouse.click(colPos.x, colPos.y);
 			await waitForReady(win, 30000).catch(() => { });
 			await win.waitForTimeout(2000);
-			await flashHighlight(win, '.part.panel');
 			await screenshot(win, 'lineage', 'Lineage Graph & Column Lineage — interactive DAG', 5000);
 			logEvent('lineage.post-demo');
 			// POST-DEMO
-			await removeHighlight(win);
 			await removeCursor(win);
 		} catch (e) {
 			console.warn(`  ⚠ lineage: ${e.message}`);
@@ -1413,7 +1405,6 @@ async function main() {
 			await moveMouse(win, profilePos.x, profilePos.y, 30);
 			await profileBtn.click();
 
-			await flashPaneHighlight(win, 'PROFILE RESULTS');
 			// Profiling runs against DuckDB on a direct connection (no "dbt: db query"
 			// status) and re-renders the tree as rows land — which invalidates element
 			// handles. So poll the row count via page.evaluate (handle-safe) until it
@@ -1431,12 +1422,8 @@ async function main() {
 			logEvent('profiler.ready');
 			try { await expandAllTreeItems(win, '.part.sidebar'); } catch { /* */ }
 			await win.waitForTimeout(400);
-			await removeHighlight(win);
-
-			await flashPaneHighlight(win, 'PROFILE RESULTS');
 			await screenshot(win, 'profiler', 'Profiler — per-CTE row counts & timing', 4000);
 			logEvent('profiler.post-demo');
-			await removeHighlight(win);
 			await removeCursor(win);
 		} catch (e) {
 			console.warn(`  ⚠ profiler: ${e.message}`);

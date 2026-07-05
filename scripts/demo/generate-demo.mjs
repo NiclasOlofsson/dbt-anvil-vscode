@@ -113,6 +113,7 @@ function buildResolvedClips(manuscript, recording) {
 			caption: clip.caption,
 			durationMs,
 			window: { startMs, endMs },
+			focus: clip.focus ?? null,
 		};
 	});
 }
@@ -198,12 +199,13 @@ function detectFlashes(videoFile, cropFilter = '') {
  *
  * Output label is always [out].
  */
-function buildContentFilter(sizing, hasWatermark, watermark, cropToHeight = null) {
-	const { outputWidth, contentHeight, outputHeight } = sizing;
+function buildContentFilter(sizing, hasWatermark, watermark, cropToHeight = null, focus = null) {
+	const { outputWidth, contentHeight, outputHeight, fps } = sizing;
 	const cropStep = cropToHeight ? `crop=in_w:${cropToHeight}:0:0,` : '';
+	const zoomStep = focus ? `,${buildZoompanStep(focus, outputWidth, contentHeight, fps)}` : '';
 
 	let fc = `[0:v]${cropStep}setpts=PTS-STARTPTS,scale=${outputWidth}:${contentHeight}:force_original_aspect_ratio=decrease,`;
-	fc += `pad=${outputWidth}:${contentHeight}:(ow-iw)/2:(oh-ih)/2:black[scaled];`;
+	fc += `pad=${outputWidth}:${contentHeight}:(ow-iw)/2:(oh-ih)/2:black${zoomStep}[scaled];`;
 	fc += `[scaled]pad=${outputWidth}:${outputHeight}:0:0:black[padded];`;
 	fc += `[padded][1:v]overlay=0:${contentHeight}[captioned]`;
 
@@ -219,6 +221,39 @@ function buildContentFilter(sizing, hasWatermark, watermark, cropToHeight = null
 	}
 
 	return fc;
+}
+
+/**
+ * Animated zoom into a focus RECTANGLE — replaces the old green highlight flash as the
+ * "look here" cue. `focus` is the region (fractions of the frame): { x, y, w, h }, plus
+ * an optional `zoom` cap and timing. Holds full-frame for holdFullMs, then eases from 1×
+ * to the zoom level over zoomMs.
+ *
+ * The zoom level defaults to filling the region's width (capped for crispness). The
+ * viewport (iw/zoom × ih/zoom) centers on the region horizontally; vertically, if the
+ * region is TALLER than the viewport (e.g. a full-height sidebar pane) it anchors to the
+ * TOP of the region so we show its head, not its middle — otherwise it centers.
+ * zoompan outputs a constant size, so it works on both screenshots and video and can't
+ * distort (aspect is preserved).
+ */
+function buildZoompanStep(focus, W, H, fps) {
+	const bx = focus.x ?? 0, by = focus.y ?? 0, bw = focus.w ?? 1, bh = focus.h ?? 1;
+	const MAX_ZOOM = 2.2; // beyond ~2.25× the 2881px source upscales and softens
+	const Z = +(focus.zoom ?? Math.min(Math.max(1 / bw, 1), MAX_ZOOM)).toFixed(4);
+	const vp = 1 / Z; // viewport size as a fraction of the frame (both axes)
+	const clamp = (v) => +Math.max(0, Math.min(1 - vp, v)).toFixed(4);
+	const x0 = clamp(bx + bw / 2 - vp / 2);               // center on the region
+	const y0 = bh > vp ? clamp(by) : clamp(by + bh / 2 - vp / 2); // top-anchor if too tall
+	const cx = +(x0 + vp / 2).toFixed(4);                 // resulting viewport centre
+	const cy = +(y0 + vp / 2).toFixed(4);
+	const HF = Math.round(((focus.holdFullMs ?? 0) / 1000) * fps);
+	const ZF = Math.max(1, Math.round(((focus.zoomMs ?? 400) / 1000) * fps));
+	// Linear ramp of zoom from 1× to Z over ZF frames after an HF-frame full-frame hold.
+	const z = `if(lt(on,${HF}),1,min(1+(${Z}-1)*(on-${HF})/${ZF},${Z}))`;
+	// Center the viewport on (cx,cy), clamped so it never leaves the frame.
+	const x = `max(0,min(${cx}*iw-iw/zoom/2,iw-iw/zoom))`;
+	const y = `max(0,min(${cy}*ih-ih/zoom/2,ih-ih/zoom))`;
+	return `zoompan=z='${z}':x='${x}':y='${y}':d=1:s=${W}x${H}:fps=${fps}`;
 }
 
 function ensureParentDir(filePath) {
@@ -476,9 +511,6 @@ async function main() {
 		}
 	}
 
-	const staticFilter = buildContentFilter(sizing, hasWatermark, profile.watermark);
-	const videoFilter = buildContentFilter(sizing, hasWatermark, profile.watermark, videoCropToHeight);
-
 	const runId = Date.now();
 	const workDir = path.join(tempDir, `demo-render-${runId}`);
 	fs.mkdirSync(workDir, { recursive: true });
@@ -502,6 +534,9 @@ async function main() {
 
 		const mp4Path = path.join(workDir, `${clip.id}.mp4`);
 
+		// Build the content filter per clip so its optional `focus` zoom is baked in.
+		const filter = buildContentFilter(sizing, hasWatermark, profile.watermark, clip.useVideo ? videoCropToHeight : null, clip.focus);
+
 		if (clip.useVideo) {
 			if (!videoFile) fail(`Clip '${clip.id}' is marked useVideo but recording has no videoFile`);
 			if (!fs.existsSync(videoFile)) fail(`Video file not found: ${rel(videoFile)}`);
@@ -511,10 +546,10 @@ async function main() {
 			const effectiveOffsetMs = segmentOffsetMs.get(clip.id) ?? videoStartOffsetMs;
 			const seekMs = Math.max(0, clip.window.startMs - effectiveOffsetMs);
 			console.log(`  Rendering video clip '${clip.id}' (${(clip.durationMs / 1000).toFixed(1)}s from ${(seekMs / 1000).toFixed(1)}s)…`);
-			renderVideoClipMp4({ ...clip, window: { ...clip.window, startMs: seekMs } }, videoFile, captionPng, hasWatermark ? watermarkPath : null, videoFilter, sizing, mp4Path);
+			renderVideoClipMp4({ ...clip, window: { ...clip.window, startMs: seekMs } }, videoFile, captionPng, hasWatermark ? watermarkPath : null, filter, sizing, mp4Path);
 		} else {
 			console.log(`  Rendering static clip '${clip.id}' (${(clip.durationMs / 1000).toFixed(1)}s)…`);
-			renderStaticClipMp4(clip, captionPng, hasWatermark ? watermarkPath : null, staticFilter, sizing, mp4Path);
+			renderStaticClipMp4(clip, captionPng, hasWatermark ? watermarkPath : null, filter, sizing, mp4Path);
 		}
 
 		clipMp4s.push(mp4Path);
