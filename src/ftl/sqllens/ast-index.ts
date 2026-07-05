@@ -311,3 +311,45 @@ export function createSqllensAstIndex(parse: SqllensParse, source: string): AstI
 		},
 	};
 }
+
+/**
+ * Compose per-statement-cell indexes into one document-wide {@link AstIndex}.
+ * Each cell is parsed from a masked view of the document (its own text in
+ * place, everything else blanked), so cell indexes carry doc-native offsets
+ * and their entry sets are DISJOINT — first-hit delegation is exact, and the
+ * `containsAny` union can never double-count across cells.
+ */
+export function compositeAstIndex(indexes: readonly AstIndex[]): AstIndex {
+	const live = indexes.filter(i => !i.empty);
+	if (live.length === 1) return live[0];
+	return {
+		empty: live.length === 0,
+		enclosingClasses(offset) {
+			for (const i of live) {
+				const r = i.enclosingClasses(offset);
+				if (r.length > 0) return r;
+			}
+			return [];
+		},
+		innermostClass(offset) {
+			for (const i of live) {
+				const r = i.innermostClass(offset);
+				if (r !== undefined) return r;
+			}
+			return undefined;
+		},
+		findEnclosing(offset, cls) {
+			for (const i of live) {
+				const r = i.findEnclosing(offset, cls);
+				if (r !== undefined) return r;
+			}
+			return undefined;
+		},
+		containsAny(start, end, classes) {
+			return live.some(i => i.containsAny(start, end, classes));
+		},
+		isCteOrSubqueryBodyOpen(offset) {
+			return live.some(i => i.isCteOrSubqueryBodyOpen(offset));
+		},
+	};
+}

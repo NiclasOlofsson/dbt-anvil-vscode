@@ -1,4 +1,5 @@
 import { parseTemplated, toSqllensDialect } from '../ftl/sqllens/api';
+import type { TemplatedParseResult } from '../ftl/sqllens/api';
 
 /**
  * A single SQL statement extracted from a multi-statement document.
@@ -32,7 +33,16 @@ export interface StatementRange {
  */
 export function splitStatements(sql: string): StatementRange[] {
 	// Jinja segmentation is dialect-independent — the default dialect suffices.
-	const templated = parseTemplated(sql, toSqllensDialect(undefined));
+	return splitStatementsFromTemplated(sql, parseTemplated(sql, toSqllensDialect(undefined)));
+}
+
+/**
+ * Same split, over an already-computed `parseTemplated` result for `sql` — the
+ * document parser holds one when it reaches its multi-statement path, and
+ * re-parsing just to split would double the work. The split only reads the
+ * placeholder and tag spans, both dialect-independent for this purpose.
+ */
+export function splitStatementsFromTemplated(sql: string, templated: TemplatedParseResult): StatementRange[] {
 	const blanked = templated.placeholder;
 	const len = blanked.length;
 	const splitPoints: number[] = [];

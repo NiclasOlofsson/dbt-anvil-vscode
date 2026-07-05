@@ -572,3 +572,89 @@ describe('SqllensDocumentParser — traceLineageV2 (LineageResult | { error } se
 		expect(result.error.length).toBeGreaterThan(0);
 	});
 });
+
+describe('SqllensDocumentParser — multi-statement documents (per-cell extraction)', () => {
+	// The one real bug the shadow-triage census surfaced: a `;`-separated document
+	// lowers to a flagged compound stub (empty body), and whole-doc extraction saw
+	// NOTHING — 0 tokens, 0 ctes, 0 warnings. `_parseCells` splits on the query
+	// editor's own splitter and runs the full pipeline per statement against a
+	// masked view of the document, so every span is doc-native. Legacy sqlglot
+	// only ever extracted statement 1 (`parse_one`); statements 2..n are new.
+
+	const TWO = [
+		'select a from t;', // 0
+		'select b, c from u', // 1
+	].join('\n');
+	const TWO_LINES = TWO.split('\n');
+
+	it('extracts tokens for EVERY statement at doc-native positions', async () => {
+		const model = await parser().parse(TWO);
+		const tok = (name: string) => model.tokens.find(t => t.name === name);
+
+		// statement 1
+		expect(tok('a')?.line).toBe(0);
+		expect(tok('t')?.line).toBe(0);
+		expect(tok('t')?.col).toBe(TWO_LINES[0].lastIndexOf('t'));
+		// statement 2 — the whole-doc compound stub used to drop all of this
+		expect(tok('b')?.line).toBe(1);
+		expect(tok('c')?.line).toBe(1);
+		expect(tok('u')?.line).toBe(1);
+		expect(tok('u')?.col).toBe(TWO_LINES[1].indexOf('u'));
+		expect(model.sqlglotWarnings ?? []).toEqual([]);
+	});
+
+	it('finalSelect/finalColumns describe the LAST statement — the script result set', async () => {
+		const model = await parser().parse(TWO);
+		expect(model.finalColumns.map(c => c.name)).toEqual(['b', 'c']);
+		expect(model.finalSelect).toBeDefined();
+		expect(model.finalSelect!.line).toBe(1);
+	});
+
+	it('extracts jinja refs in later statements with doc-native spans', async () => {
+		const sql = 'select a from t;\nselect x from {{ ref(\'dim_x\') }}';
+		const model = await parser().parse(sql);
+		expect(model.refs.map(r => r.model)).toEqual(['dim_x']);
+		expect(model.refs[0].line).toBe(1);
+		expect(model.refs[0].jinjaCol).toBe(sql.split('\n')[1].indexOf('{{'));
+		expect(model.tokens.some(t => t.type === 'table_ref' && t.name === 'dim_x' && t.line === 1)).toBe(true);
+	});
+
+	it('a syntax error in one statement does not suppress the others', async () => {
+		// `)))` is this file's canonical broken input (see the parse-failure block);
+		// bare `select a from ;` is NOT an error — `from` parses as `a`'s alias.
+		const model = await parser().parse('select a from t )));\nselect b from u');
+		const errs = (model.sqlglotWarnings ?? []).filter(w => w.type === 'syntax_error');
+		expect(errs.length).toBeGreaterThan(0);
+		expect(errs.every(w => w.line === 0)).toBe(true); // all in statement 1
+		expect(model.tokens.some(t => t.type === 'table_ref' && t.name === 'u' && t.line === 1)).toBe(true);
+	});
+
+	it('extracts CTEs in later statements with doc-native lines', async () => {
+		const model = await parser().parse('select 1;\nwith x as (select 2 as n) select n from x');
+		expect(model.ctes.map(c => c.name)).toEqual(['x']);
+		expect(model.ctes[0].line).toBe(1);
+		expect(model.finalColumns.map(c => c.name)).toEqual(['n']);
+	});
+
+	it('handles a config-topped multi-statement scratch (jinja before statement 1)', async () => {
+		const sql = '{{ config(materialized=\'table\') }}\nselect a from t;\nselect b from u';
+		const model = await parser().parse(sql);
+		expect(model.tokens.some(t => t.name === 't' && t.line === 1)).toBe(true);
+		expect(model.tokens.some(t => t.name === 'u' && t.line === 2)).toBe(true);
+	});
+
+	it('composes the reflow astIndex across statements — AST precision beyond statement 1', async () => {
+		const model = await parser().parse(TWO);
+		const inStmt1 = TWO.indexOf('a from');
+		const inStmt2 = TWO.indexOf('b, c');
+		expect(model.astIndex!.enclosingClasses(inStmt1)).toContain('Select');
+		expect(model.astIndex!.enclosingClasses(inStmt2)).toContain('Select');
+	});
+
+	it('leaves a single statement with trailing `;` on the whole-doc path', async () => {
+		// One element -> never flagged compound -> no split, byte-identical to today.
+		const model = await parser().parse('select a from t;\n');
+		expect(model.tokens.some(t => t.name === 't' && t.line === 0)).toBe(true);
+		expect(model.finalColumns.map(c => c.name)).toEqual(['a']);
+	});
+});
