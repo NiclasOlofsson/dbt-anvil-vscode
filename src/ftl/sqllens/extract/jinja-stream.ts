@@ -1,7 +1,8 @@
 /**
  * Derive the extension's `JinjaToken[]` from sqllens's unified templated token
- * stream — the NATIVE templated-parse replacement for the extension's own
- * `tokenizeJinja` (which stays on the fallback path).
+ * stream — THE producer of the fine jinja stream (the extension's own scanner
+ * is retired; a frozen copy survives as the parity-test oracle in
+ * src/test/ftl/reference-jinja-tokenizers.ts).
  *
  * `parseTemplated(rawSql, dialect)` returns ONE source-ordered `Token[]`: SQL
  * tokens on channel 0, and minijinja-island tokens on channel 2 carrying
@@ -12,9 +13,9 @@
  * `*_open` from its owning `TagNode.tagSpan.end` (found by binary search — the
  * DESIGNATED mechanism; we never re-scan for `{{`).
  *
- * The output reproduces `tokenizeJinja(rawSql)` field-for-field on well-formed
+ * The output reproduces the retired scanner field-for-field on well-formed
  * dbt SQL (see jinja-stream.test.ts). The two lexers agree because the extension
- * tokenizer already mirrors minijinja's own lexical rules (identifier runs,
+ * tokenizer already mirrored minijinja's own lexical rules (identifier runs,
  * single/double-quoted strings, `(`/`)`/`,`/`.` punctuation, operator runs), so
  * the type SEQUENCE inside every tag matches — which is what the pattern-matching
  * extractors read. Two deliberate normalisations keep exact parity where the raw

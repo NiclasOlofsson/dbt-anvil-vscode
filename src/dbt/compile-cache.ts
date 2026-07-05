@@ -132,7 +132,7 @@ export class CompileCache {
 			});
 
 			if (!result.success) {
-				this.logger.warn(`CompileCache: compile failed for ${modelName}\n${result.stderr}`);
+				this.logger.warn(`CompileCache: compile failed for ${modelName}\n${result.stdout || result.stderr}`);
 				return undefined;
 			}
 		} catch (err) {
@@ -173,7 +173,9 @@ export class CompileCache {
 				label: 'compile (warm cache)',
 			});
 			if (!result.success) {
-				this.logger.warn(`CompileCache: background full compile failed — cache not warmed\n${result.stderr}`);
+				// dbt runs with --log-format json, so errors arrive as log events on
+				// stdout; stderr only holds the bridge echo. Prefer stdout for the reason.
+				this.logger.warn(`CompileCache: background full compile failed — cache not warmed\n${result.stdout || result.stderr}`);
 				return;
 			}
 			this._populateCacheFromManifest(projectDir);

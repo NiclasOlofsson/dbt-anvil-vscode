@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { AstPayload, ParseResult } from '../../ftl/parse-result';
 import type { SqlParser } from '../../ftl/sql-parser';
 import { extractRefs, extractSources, extractMacroCalls, mapWarnings, extractCtes, extractSubqueries, extractFinalColumns, extractFinalSelect, extractTokens, resolveTableRefs, FtlDocumentParser } from '../../ftl/ftl-document-parser';
-import { tokenizeJinja } from '../../ftl/jinja-tokenizer';
+import { referenceTokenizeJinja as tokenizeJinja } from './reference-jinja-tokenizers';
 import type { TableRefToken, ColumnRefToken } from '../../services/parse-service';
 
 describe('extractRefs', () => {

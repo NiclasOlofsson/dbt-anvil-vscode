@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
 import { parseTemplated } from './api';
 import { tagInfos } from './extract/tag-infos';
 import { extractMacroCalls, extractRefs, extractSources } from '../extractors/jinja-tag-extractors';
-import { tokenizeJinja } from '../jinja-tokenizer';
+import { referenceTokenizeJinja as tokenizeJinja } from '../../test/ftl/reference-jinja-tokenizers';
 
 function fromTags(sql: string): ReturnType<typeof tagInfos> {
 	return tagInfos(parseTemplated(sql, 'databricks').tags, sql);

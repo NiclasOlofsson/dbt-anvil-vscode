@@ -23,7 +23,7 @@ const { CUSTOMERS_SQL } = vi.hoisted(() => ({
 		'select',
 		'\to.order_id as gold_orderkey,',
 		'\to.amount as amount',
-		"from {{ ref('stg_orders') }} o",
+		'from {{ ref(\'stg_orders\') }} o',
 	].join('\n'),
 }));
 

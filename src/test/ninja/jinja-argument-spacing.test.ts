@@ -2,9 +2,16 @@ import { describe, it, expect } from 'vitest';
 import { mockDocument, cfg, model, applyEditsToText } from './helpers';
 import { jinjaArgumentSpacingRule } from '../../ninja/rules/jinja-argument-spacing';
 import { normaliseTagSpacing } from '../../ninja/jinja/tag-formatter';
-import { tokenizeJinja } from '../../ftl/jinja-tokenizer';
+import { parseTemplated } from '../../ftl/sqllens/api';
+import { jinjaTokensFromStream } from '../../ftl/sqllens/extract/jinja-stream';
 import type { NinjaViolation } from '../../ninja/violation';
 import { FixAction } from '../../ninja/violation';
+
+/** Fine jinja stream from the live producer (sqllens templated front end). */
+function tokenizeJinja(sql: string): ReturnType<typeof jinjaTokensFromStream> {
+	const t = parseTemplated(sql, 'databricks');
+	return jinjaTokensFromStream(t.tokens, t.tags, sql);
+}
 
 const RULE = 'ninja.jinja.argument-spacing';
 

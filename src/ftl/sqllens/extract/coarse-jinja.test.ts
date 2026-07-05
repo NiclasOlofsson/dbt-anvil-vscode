@@ -19,8 +19,8 @@ import { describe, expect, it } from 'vitest';
 import { parseTemplated } from '../api';
 import { jinjaTokensFromStream } from './jinja-stream';
 import { coarseJinjaTokens, coarseJinjaTokensFromText } from './coarse-jinja';
-import { tokenizeJinja } from '../../jinja-tokenizer';
-import { tokenize as oracleTokenize } from '../../../dbt/jinja-tokenizer';
+import { referenceTokenizeJinja as tokenizeJinja } from '../../../test/ftl/reference-jinja-tokenizers';
+import { referenceCoarseTokenize as oracleTokenize } from '../../../test/ftl/reference-jinja-tokenizers';
 
 function viaFineStream(sql: string): ReturnType<typeof coarseJinjaTokens> {
 	return coarseJinjaTokens(tokenizeJinja(sql), sql);

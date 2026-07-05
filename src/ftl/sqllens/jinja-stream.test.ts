@@ -21,7 +21,8 @@
 import { describe, expect, it } from 'vitest';
 import { parseTemplated } from './api';
 import { jinjaTokensFromStream } from './extract/jinja-stream';
-import { tokenizeJinja, type JinjaToken } from '../jinja-tokenizer';
+import type { JinjaToken } from '../jinja-tokenizer';
+import { referenceTokenizeJinja as tokenizeJinja } from '../../test/ftl/reference-jinja-tokenizers';
 import { extractMacroCalls, extractSources } from '../extractors/jinja-tag-extractors';
 
 function fromStream(sql: string): JinjaToken[] {

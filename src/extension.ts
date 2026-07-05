@@ -461,7 +461,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	// Kick off a full compile to warm the cache. Skipped if enough valid entries
 	// were restored from disk (mtime validation happens on first access per entry).
-	void compileCache.warmAll(projectDir, restoredCompileEntries);
+	// Persist as soon as the warm completes so a populated cache survives a hard
+	// shutdown — deactivate/dispose is not guaranteed to run (window reload, crash).
+	// Mirrors the checkpoint-save the ColumnStore already does on manifest refresh.
+	void compileCache.warmAll(projectDir, restoredCompileEntries).then(() => {
+		compileCachePersistence.save(compileCache);
+	});
 
 	// -------- Parse service — engine routed by dbt-anvil.parser.engine (window-reload to switch) --------
 	// 'sqllens' (default): native TS parser, no Pyodide boot / no WASM worker pool.

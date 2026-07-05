@@ -3,7 +3,6 @@ import { describe, expect, it, beforeAll } from 'vitest';
 import { initPyodide } from '../../ftl/pyodide-loader.js';
 import type { PyodideRuntime } from '../../ftl/pyodide-loader.js';
 import { PyodideSqlParser } from '../../ftl/pyodide-sql-parser.js';
-import { renToRawLine } from '../../ftl/nunjucks-renderer.js';
 import { walkLineageTree, extractFinalSelect } from '../../ftl/ftl-document-parser.js';
 import type { LineageTreeNode, LineageResult } from '../../ftl/ftl-document-parser.js';
 
@@ -498,48 +497,6 @@ SELECT mkey, sourcename FROM warehouse`;
 		expect(varTok!.comments).toHaveLength(1);
 		expect(varTok!.comments![0]).toMatchObject({ start: 10, end: 24 });
 		expect(varTok!.comments![0].text).toContain('count');
-	});
-});
-
-// ── renToRawLine — pure unit tests (no pyodide needed) ───────────────────────
-
-describe('renToRawLine', () => {
-	it('returns ren_line unchanged when line map is empty', () => {
-		expect(renToRawLine(5, [])).toBe(5);
-	});
-
-	it('returns ren_line unchanged when there is only (0,0) breakpoint (no divergence)', () => {
-		expect(renToRawLine(3, [[0, 0]])).toBe(3);
-		expect(renToRawLine(0, [[0, 0]])).toBe(0);
-	});
-
-	it('offsets correctly after one diverging tag', () => {
-		// A 3-line tag at raw lines 1-3 compresses to nothing in rendered.
-		// Before the tag: ren=0 raw=0. After tag: ren still 0, raw=3.
-		// Breakpoint: [0, 3] — meaning ren line 0 aligns to raw line 3.
-		// But we also need the initial [0,0] breakpoint.
-		// Actually: before tag (literal up to line 1): ren=1, raw=1.
-		// Tag spans lines 1-3 (3 newlines): raw advances to 4, ren stays at 1.
-		// Breakpoint emitted: [1, 4].
-		// So line map: [[0,0], [1,4]].
-		const map: Array<[number, number]> = [[0, 0], [1, 4]];
-		// Before the tag (ren line 0 = raw line 0):
-		expect(renToRawLine(0, map)).toBe(0);
-		// At and after the tag (ren line 1 = raw line 4):
-		expect(renToRawLine(1, map)).toBe(4);
-		// Two lines after the tag (ren line 3 = raw line 6):
-		expect(renToRawLine(3, map)).toBe(6);
-	});
-
-	it('handles multiple breakpoints — second tag', () => {
-		// Line map: [[0,0], [2,5], [4,9]]
-		const map: Array<[number, number]> = [[0, 0], [2, 5], [4, 9]];
-		expect(renToRawLine(0, map)).toBe(0);  // before any tag
-		expect(renToRawLine(1, map)).toBe(1);  // still in first region
-		expect(renToRawLine(2, map)).toBe(5);  // at second breakpoint
-		expect(renToRawLine(3, map)).toBe(6);  // between breakpoints
-		expect(renToRawLine(4, map)).toBe(9);  // at third breakpoint
-		expect(renToRawLine(5, map)).toBe(10); // after last breakpoint
 	});
 });
 
