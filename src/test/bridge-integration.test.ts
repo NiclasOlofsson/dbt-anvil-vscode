@@ -245,7 +245,15 @@ select * from orders`);
 		expect(model.ctes[0].name).toBe('orders');
 	}, 30_000);
 
-	it('parses SQL where a dbt macro appears in a statement-level position', async () => {
+	it('degrades to an error result for a trailing-conjunct macro (cascade rescue retired)', async () => {
+		// {{ generic_is_deleted(...) }} emits an `and …` conjunct after a complete
+		// ON clause — its fill is invalid SQL there, and the comment-blank rescue
+		// is gone with the cascade. Extraction still works: both macro tags and
+		// the syntax_error warnings surface. Restoring a real parse for this
+		// input class is the upstream trailing-conjunct ExpansionShape (an
+		// `AND 1=1`-shaped fill) + the classifyMacroShape extension on the
+		// shapeOf seam — the assertions this test carried before the cascade
+		// retirement come back with it.
 		const model = await parseSql(`with warehouse as (
     select
         wh.mkey,
@@ -264,17 +272,15 @@ select * from orders`);
     {{ generic_is_deleted(wh2.is_deleted) }}
 )
 select mkey, sourcename from warehouse`);
-		expect(model.ctes).toHaveLength(1);
-		expect(model.ctes[0].name).toBe('warehouse');
-		// 'warehouse' CTE name is on line 0 (0-based).
-		expect(model.ctes[0].line).toBe(0);
-		const cols = model.ctes[0].columns;
-		// SELECT list: wh.mkey on line 2, ss.sourcename on line 3.
-		expect(cols.find(c => c.name === 'mkey')?.line).toBe(2);
-		expect(cols.find(c => c.name === 'sourcename')?.line).toBe(3);
+		expect(model.sqlglotWarnings?.some(w => w.type === 'syntax_error')).toBe(true);
+		expect((model.macroCalls ?? []).filter(m => m.name === 'generic_is_deleted')).toHaveLength(2);
 	}, 30_000);
 
-	it('alias column positions are exact when a statement-level macro co-exists with {{ ref() }} aliases', async () => {
+	it('extraction survives a trailing-conjunct macro co-existing with {{ ref() }} aliases', async () => {
+		// Same retired-rescue class as above: the conjunct macro leaves syntax
+		// errors, but ref extraction (tag-based) is unaffected by the failed SQL
+		// parse. The exact alias-position assertions return with the upstream
+		// trailing-conjunct shape.
 		const sql = [
 			'select',
 			'    co.companykey,',
@@ -285,14 +291,9 @@ select mkey, sourcename from warehouse`);
 			'{{generic_is_deleted(\'co.is_deleted\',\'where\')}}',
 		].join('\n');
 		const model = await parseSql(sql);
-		type TableRefTok = { type: string; name: string; alias?: string; aliasLine?: number; aliasCol?: number; aliasEndCol?: number };
-		const tokens = model.tokens as TableRefTok[];
-		const coTok = tokens.find(t => t.type === 'table_ref' && t.alias === 'co');
-		// 'co' alias appears after '{{ ref(\'silver__company\') }} ' on line 3 (0-based).
-		// raw col = len('from ') + len('{{ ref(\'silver__company\') }}') + len(' ') = 5 + 28 + 1 = 34
-		expect(coTok?.aliasLine).toBe(3);
-		expect(coTok?.aliasCol).toBe(34);
-		expect(coTok?.aliasEndCol).toBe(36);
+		expect(model.sqlglotWarnings?.some(w => w.type === 'syntax_error')).toBe(true);
+		expect(model.refs.map(r => r.model).sort()).toEqual(['gold__sourcesystem', 'silver__company']);
+		expect(model.refs.find(r => r.model === 'silver__company')?.line).toBe(3);
 	}, 30_000);
 
 	it('finalSelect is emitted with column names', async () => {
