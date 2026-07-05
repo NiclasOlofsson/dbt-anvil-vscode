@@ -5,9 +5,17 @@
  * query body (`with c as ({{ playoff_sim(...) }}) {{ playoff_sim_end(...) }}`) parse
  * natively instead of falling back to the blank cascade.
  *
- * v1 is deliberately conservative: a macro whose body is a full query (first significant
- * SQL keyword is WITH or SELECT) classifies as `statement`; everything else returns
- * `undefined` (the identifier fill — today's behavior, correct for expression macros).
+ * Deliberately conservative: a macro whose body is a full query (first significant
+ * SQL keyword is WITH or SELECT) classifies as `statement`; a trailing-conjunct macro
+ * (body leads with AND/OR — the `generic_is_deleted` family appended after a complete
+ * ON/WHERE expression) classifies as `conjunct` (sqllens 012caf8, fills `AND 1=1`);
+ * everything else returns `undefined` (the identifier fill).
+ *
+ * Why a WHERE-leading body is NOT `conjunct`: the where-mode variant of the same macro
+ * family sits after a bare `FROM t`, where the identifier fill parses (as an alias)
+ * and `AND 1=1` breaks — and sqllens's lexical slot guard cannot separate that slot
+ * from the ON-trailing one (both end in an operand word), so answering `conjunct`
+ * there would be a 0->1 regression. Where-mode macros keep the identifier fill.
  *
  * Why `statement` and never `relation`: both fill `SELECT 1`, but `relation` is the shape
  * sqllens flags as a 0->1 regression risk in a bare `from {{ m() }}` slot (fills to the
@@ -26,7 +34,8 @@ import type { ExpansionShape, ShapeOf } from './api';
 
 /**
  * Classify a macro's expansion shape from its `macro_sql` source. Returns `statement`
- * for a query-bodied macro (WITH/SELECT-first), `undefined` otherwise (identifier fill).
+ * for a query-bodied macro (WITH/SELECT-first), `conjunct` for a trailing-conjunct
+ * macro (AND/OR-first), `undefined` otherwise (identifier fill).
  */
 export function classifyMacroShape(macroSql: string | undefined): ExpansionShape | undefined {
 	if (!macroSql) return undefined;
@@ -40,7 +49,9 @@ export function classifyMacroShape(macroSql: string | undefined): ExpansionShape
 		.replace(/\{#[\s\S]*?#\}/g, ' ')
 		.replace(/--[^\n]*/g, ' ')
 		.trim();
-	return /^(with|select)\b/i.test(body) ? 'statement' : undefined;
+	if (/^(with|select)\b/i.test(body)) return 'statement';
+	if (/^(and|or)\b/i.test(body)) return 'conjunct';
+	return undefined;
 }
 
 /**
