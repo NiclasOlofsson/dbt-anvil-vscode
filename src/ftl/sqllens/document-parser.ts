@@ -312,40 +312,34 @@ export class SqllensDocumentParser implements DocumentParser {
 		// minijinja island tokens), not a second independent lex.
 		const jinjaTokens = jinjaTokensFromStream(templated.tokens, templated.tags, text);
 
-		// Schema-fed `SELECT *` expansion. For the COLUMN-list extractors (ctes /
-		// finalColumns / finalSelect) it is wired ONLY when the caller supplies a schema.
-		// The expander runs qualify() (read-only; it never disturbs the other extractors) over
-		// the winning parse's scopes and, given a catalog, expands stars sourced from those
-		// tables AND from CTEs/subqueries inferable from the same query. Gating on a non-empty
-		// schema is deliberate: without a catalog the legacy path's synthesised columns carry
-		// no real source token, so sqlglot anchors them via internal fall-backs (`line:0`, or
-		// the FROM-table identifier) we cannot reproduce structurally — expanding then would
-		// trade a name diff for a position diff, not close it. Star diagnostics are NOT mapped
-		// into warnings: the legacy path emits no comparable per-column warning
-		// (validate_qualify_columns=False), and scope_warnings are stripped before shadow
-		// comparison, so surfacing them would be pure noise (EXTRACTOR-MAP §7). The expander is
-		// also undefined if qualify throws — then every extractor falls back to unexpanded output.
+		// `SELECT *` expansion, UNGATED for every extractor (the cold-star middle
+		// path): the expander runs qualify() (read-only; it never disturbs the
+		// other extractors) over the parse's scopes. With a catalog it expands
+		// table-sourced stars; with an EMPTY schema it still expands stars sourced
+		// from CTEs / subqueries whose columns are structurally inferable — the
+		// exact scope legacy's `infer_schema=True` covered without a catalog. What
+		// changes vs legacy is the ANCHORING: expanded columns anchor star-exact
+		// `[starCol, starEnd)` (star-expand.ts) instead of legacy's invented
+		// `endCol - name.length` positions — a highlight covers the star
+		// character, never text synthesized around it. A bare-table star with no
+		// catalog entry stays unexpanded on both paths. Star diagnostics are NOT
+		// mapped into warnings: the legacy path emits no comparable per-column
+		// warning (validate_qualify_columns=False), and scope_warnings are
+		// stripped before shadow comparison, so surfacing them would be pure noise
+		// (EXTRACTOR-MAP §7). The expander is undefined if qualify throws — then
+		// every extractor falls back to unexpanded output.
 		const schemaObj = new Schema((schema ?? {}) as SchemaMapping);
 		// sqllens qualify is read-only — it never rewrites a bare column to add the qualifier
 		// sqlglot's mutating qualify did. extractTokens consumes this column→source binding to
 		// resolve bare columns to their table. Fail-soft (undefined) to match the expander.
 		let qualification: Qualification | undefined;
 		try { qualification = qualify(result.scopes, schemaObj); } catch { /* alias-only resolution */ }
-		// TOKEN star expansion is UNGATED (empty schema still expands CTE/subquery-sourced
-		// stars): legacy qualify ran with infer_schema=True unconditionally, so the token
-		// stream carried synthetic column_refs for star-consumed CTE columns with or without
-		// a catalog — the unused-columns rule depends on them. Token spans are zero-width
-		// (extractTokens Pass 3), so the position-anchoring concern gating `expander` below
-		// does not apply here. Reuses `qualification` rather than running qualify() again.
-		const tokenStarExpander = qualification
+		const expander = qualification
 			? buildStarExpander(result.scopes, schemaObj, qualification)
-			: undefined;
-		const expander = (schema && Object.keys(schema).length > 0)
-			? tokenStarExpander
 			: undefined;
 
 		const ctes = extractCtes(result, expander);
-		const tokens = extractTokens(result, qualification, tokenStarExpander);
+		const tokens = extractTokens(result, qualification, expander);
 		const finalColumns = extractFinalColumns(result, expander);
 		const finalSelect = extractFinalSelect(result, expander);
 		// refs + sources + macroCalls come from the R2 tag-AST (span-accurate; covers

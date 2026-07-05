@@ -406,21 +406,32 @@ describe('SqllensDocumentParser — schema-fed SELECT * expansion', () => {
 	// from the manifest indexer + describe cache, assignable directly to sqllens Schema.
 	const T_SCHEMA = { t: { aa: 'int', bb: 'string' } };
 
-	it('expands a top-level `select * from t` into the schema columns, anchored at the star', async () => {
+	it('expands a top-level `select * from t` into the schema columns, anchored star-exact', async () => {
 		const sql = 'select * from t';
 		const model = await parser('databricks').parse(sql, { schema: T_SCHEMA });
 
 		expect(model.finalColumns.map(c => c.name)).toEqual(['aa', 'bb']);
-		// Every expanded column anchors at the `*` token: col = starEndCol - name.length.
-		const starEnd = sql.indexOf('*') + 1;
-		expect(model.finalColumns.find(c => c.name === 'aa')!.col).toBe(starEnd - 'aa'.length);
-		expect(model.finalColumns.find(c => c.name === 'bb')!.col).toBe(starEnd - 'bb'.length);
+		// Every expanded column anchors on the `*` CHARACTER: [starCol, starCol+1).
+		// (The anchoring decision — a highlight covers the star, never positions
+		// synthesized via legacy's `endCol - name.length`.)
+		const starCol = sql.indexOf('*');
+		expect(model.finalColumns.find(c => c.name === 'aa')!.col).toBe(starCol);
+		expect(model.finalColumns.find(c => c.name === 'bb')!.col).toBe(starCol);
 
 		// finalSelect columns carry the qualified source (`t.aa`) as table + expression.
 		const fs = model.finalSelect!.columns;
 		expect(fs.map(c => c.name)).toEqual(['aa', 'bb']);
 		expect(fs.every(c => c.table === 't')).toBe(true);
+		expect(fs.every(c => c.col === starCol && c.endCol === starCol + 1)).toBe(true);
 		expect(fs.find(c => c.name === 'aa')!.expression).toBe('aa');
+	});
+
+	it('anchors a qualified `t.*` expansion on the `*` character, not the qualifier', async () => {
+		const sql = 'select t.* from t';
+		const model = await parser('databricks').parse(sql, { schema: T_SCHEMA });
+		const starCol = sql.indexOf('*');
+		expect(model.finalColumns.map(c => c.name)).toEqual(['aa', 'bb']);
+		expect(model.finalColumns.every(c => c.col === starCol)).toBe(true);
 	});
 
 	it('expands a CTE-chain wildcard by inference once a schema is supplied for the base table', async () => {
@@ -455,6 +466,20 @@ describe('SqllensDocumentParser — schema-fed SELECT * expansion', () => {
 		const model = await parser('databricks').parse('select * from t');
 		expect(model.finalColumns).toEqual([]);
 		expect(model.finalSelect!.columns).toEqual([]);
+	});
+
+	it('expands a CTE-sourced star COLD — no schema at all (the cold-star middle path)', async () => {
+		// Legacy ran qualify with `infer_schema=True` unconditionally, so a star over
+		// a CTE expanded with or without a catalog. The column-list extractors used to
+		// gate this on a non-empty schema; ungated, an empty schema still expands the
+		// structurally-inferable CTE columns — anchored star-exact.
+		const sql = 'with a as (select x, y from t)\nselect * from a';
+		const model = await parser('databricks').parse(sql);
+		expect(model.finalColumns.map(c => c.name)).toEqual(['x', 'y']);
+		const line1 = sql.split('\n')[1];
+		expect(model.finalColumns.every(c => c.line === 1 && c.col === line1.indexOf('*'))).toBe(true);
+		expect(model.finalSelect!.columns.map(c => c.name)).toEqual(['x', 'y']);
+		expect(model.finalSelect!.columns.every(c => c.table === 'a')).toBe(true);
 	});
 
 	it('falls back cleanly when qualify() throws (expander is undefined)', async () => {

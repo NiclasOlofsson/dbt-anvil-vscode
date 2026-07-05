@@ -159,15 +159,26 @@ function likePatternToRegExp(pattern: string): RegExp {
 }
 
 /**
- * The source anchor for expanded star columns: the star token's line (0-based) and its
- * exclusive END column. Legacy anchors every synthesized column at the `*`'s position
- * (`_annotate_synthesized_columns`), reading sqlglot's `_meta.col` as the chars-consumed
- * END; the per-column `col` is then `endCol - name.length`. `asCst(p.cst).start` is the
- * `*` (bare) / leading `t` (qualified) token — its end is `column + text.length`.
+ * The anchor span for expanded star columns: the `*` CHARACTER itself,
+ * `[starCol, starEnd)` — the anchoring decision: a highlight over a column that
+ * exists only by expansion must cover the star, never a position synthesized
+ * from it (legacy's `endCol - name.length` invented starts inside preceding
+ * text). The `*` is the star node's stop token for a qualified `t.*` and its
+ * start token for a bare `*` (with or without EXCEPT/EXCLUDE modifiers); a
+ * modified qualified star (`t.* except (…)`) has the `*` mid-node, so the whole
+ * node span anchors — wider, but it still covers the star.
  */
-function starAnchor(p: Projection): { line: number; endCol: number } | undefined {
-	const t = asCst(p.cst).start;
-	return t ? { line: t.line - 1, endCol: t.column + (t.text?.length ?? 1) } : undefined;
+function starAnchor(p: Projection): { line: number; col: number; endLine: number; endCol: number } | undefined {
+	const n = asCst(p.expr.cst);
+	const start = n.start;
+	if (!start) return undefined;
+	const stop = n.stop;
+	const starTok = stop?.text === '*' ? stop : start.text === '*' ? start : undefined;
+	if (starTok) {
+		return { line: starTok.line - 1, col: starTok.column, endLine: starTok.line - 1, endCol: starTok.column + 1 };
+	}
+	const end = stop ?? start;
+	return { line: start.line - 1, col: start.column, endLine: end.line - 1, endCol: end.column + (end.text?.length ?? 1) };
 }
 
 /** Expanded-star entries as `ColumnInfo[]` (finalColumns / CteInfo.columns). Names are
@@ -177,7 +188,7 @@ export function expandedColumnInfos(p: Projection, cols: ExpandedColumn[], diale
 	return cols.map(ec => {
 		const name = normName(ec.name, dialect);
 		const info: ColumnInfo = { name, line: a ? a.line : 0 };
-		if (a) info.col = a.endCol - name.length;
+		if (a) info.col = a.col;
 		return info;
 	});
 }
@@ -192,8 +203,8 @@ export function expandedFinalSelectColumns(p: Projection, cols: ExpandedColumn[]
 		const entry: FinalSelectColumnInfo = {
 			name,
 			line: a ? a.line : 0,
-			col: a ? a.endCol - name.length : 0,
-			endLine: a ? a.line : 0,
+			col: a ? a.col : 0,
+			endLine: a ? a.endLine : 0,
 			endCol: a ? a.endCol : 0,
 			expression: name,
 		};
