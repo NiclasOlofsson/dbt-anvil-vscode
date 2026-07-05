@@ -1,6 +1,7 @@
 import { buildLineStarts, lineAtOffset } from '../ftl/jinja-spans';
 import { deriveSymbols, parseTemplated, tokenize, toSqllensDialect, MAIN_FRAME } from '../ftl/sqllens/api';
 import type { Sym, Dialect, TagNode } from '../ftl/sqllens/api';
+import { jinjaTokensFromStream } from '../ftl/sqllens/extract/jinja-stream';
 import type { SqlToken } from '../ftl/parse-result';
 import type { JinjaToken } from '../ftl/jinja-tokenizer';
 
@@ -762,26 +763,28 @@ function resolveFrame(line: number, ranges: FrameRange[]): string {
 function analyzeTemplated(
 	source: string,
 	dialect: Dialect,
-): { symbols: Sym[]; blanked: string; tags: TagNode[] } | undefined {
+): { symbols: Sym[]; blanked: string; tags: TagNode[]; jinjaTokens: JinjaToken[] } | undefined {
 	const templated = parseTemplated(source, dialect);
 	try {
 		return {
 			symbols: deriveSymbols(templated.sql.ast, undefined, { dialect }),
 			blanked: templated.placeholder,
 			tags: templated.tags,
+			jinjaTokens: jinjaTokensFromStream(templated.tokens, templated.tags, source),
 		};
 	} catch {
 		// Preserve the old failure contract: the caller's undefined arm falls
-		// back to the token-based emit path.
+		// back to a plain (marker-less) compile.
 		return undefined;
 	}
 }
 
 /**
- * sqllens-powered replacement for emitDebugSymbolsFromTokens. Blanks Jinja
- * (length-preserving), parses the blanked SQL with sqllens, then emits the same
- * SymbolEntry[] / EmitResult the token path produces — reusing injectMarkers and
- * the shared Jinja-classification extraction unchanged.
+ * The PRODUCTION emit path (debug-adapter.ts) — fully sqllens-fed, no legacy
+ * parse anywhere: symbols, jinja stream, and tag classifications all come from
+ * ONE parseTemplated run. Emits the same SymbolEntry[] / EmitResult the token
+ * path produced — injectMarkers, parseSourceMap, and the @dbg wire format are
+ * shared and unchanged, so compile-survival is identical.
  *
  * Roles: idents (column reference / table / alias / cte) and functions come from
  * the semantic Sym model; clause keywords, `*`, and literals come from the
@@ -790,16 +793,17 @@ function analyzeTemplated(
  */
 export function emitDebugSymbols(
 	source: string,
-	dialect: string,
-	jinjaTokens: JinjaToken[],
+	dialect: string | undefined,
 ): EmitResult | undefined {
 	const sqllensDialect = toSqllensDialect(dialect);
 	const analyzed = analyzeTemplated(source, sqllensDialect);
 	if (!analyzed) return undefined;
-	const { symbols: syms, blanked, tags } = analyzed;
+	const { symbols: syms, blanked, tags, jinjaTokens } = analyzed;
 
 	const lineStarts = buildLineStarts(source);
-	const jinjaSpans = findJinjaSpans(source);
+	// Marker-exclusion regions straight off the tag-AST (the old private
+	// findJinjaSpans re-scan is token-path-only now).
+	const jinjaSpans: JinjaSpan[] = tags.map(t => ({ start: t.tagSpan.start, end: t.tagSpan.end }));
 	const inJinja = (offset: number): boolean => jinjaSpans.some(s => offset >= s.start && offset < s.end);
 	const frameRanges = buildFrameRanges(syms);
 

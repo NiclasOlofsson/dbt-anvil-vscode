@@ -5,9 +5,9 @@ import { parseTemplated, templateVariants, toSqllensDialect } from '../ftl/sqlle
 import { resolveTagRelations } from '../providers/common/jinja-utils';
 import type { ILogger } from '../types/logger';
 import type { DocumentParser } from './document-parser';
-import type { AstPayload, JinjaToken, SqlToken } from '../ftl/parse-result';
+import type { AstPayload, JinjaToken } from '../ftl/parse-result';
 import type { AstIndex } from '../ninja/reflow/ast-index';
-import { sqlOnly, type NinjaSqlToken } from '../ftl/ninja-sql-tokens';
+import type { NinjaSqlToken } from '../ftl/ninja-sql-tokens';
 
 export interface ColumnInfo {
 	name: string;
@@ -989,21 +989,6 @@ export class ParseService {
 			return model.ctes;
 		} catch {
 			return [];
-		}
-	}
-
-	/**
-	 * Parse a raw SQL string and return its sqlglot tokens and jinja token stream.
-	 * Returns `undefined` when the parser backend does not supply tokens.
-	 * No caching, no enrichment, no variant expansion.
-	 */
-	async parseRawForTokens(sql: string): Promise<{ sqlTokens: SqlToken[]; jinjaTokens: JinjaToken[] } | undefined> {
-		try {
-			const model = await this._parser.parse(sql);
-			if (!model.ninjaSqlTokens) return undefined;
-			return { sqlTokens: sqlOnly(model.ninjaSqlTokens), jinjaTokens: model.jinjaTokens ?? [] };
-		} catch {
-			return undefined;
 		}
 	}
 

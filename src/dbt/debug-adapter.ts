@@ -9,7 +9,7 @@ import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ParseService } from '../services/parse-service';
 import { Priority } from './execution-service';
 import { splitStatements, findStatementAtOffset } from './statement-splitter';
-import { emitDebugSymbolsFromTokens, parseSourceMap } from './debug-symbols';
+import { emitDebugSymbols, parseSourceMap } from './debug-symbols';
 import type { SourceMap } from './debug-symbols';
 import type { SymbolSqlProvider } from '../providers/symbol-sql-provider';
 
@@ -2406,10 +2406,10 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		sourceText: string,
 	): Promise<{ compiledSql: string; sourceMap: SourceMap | undefined } | undefined> {
 		try {
-			const tokenResult = await this._parseService.parseRawForTokens(sourceText);
-			const emitResult = tokenResult
-				? emitDebugSymbolsFromTokens(sourceText, tokenResult.sqlTokens, tokenResult.jinjaTokens)
-				: undefined;
+			// sqllens emit path: symbols, jinja stream, and classifications from one
+			// in-process templated parse — the debug path no longer needs the legacy
+			// token parse at all.
+			const emitResult = emitDebugSymbols(sourceText, this._manifestIndexer.adapterType);
 
 			if (!emitResult) {
 				this._logger.info('Debug adapter: no debug symbols emitted — falling back to plain compile');

@@ -21,7 +21,6 @@ import type { BridgeRunner } from '../dbt/bridge-runner';
 import type { CompileCache } from '../dbt/compile-cache';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ParseService } from '../services/parse-service';
-import type { SqlToken } from '../ftl/parse-result';
 
 // ── Helpers ──
 
@@ -196,13 +195,9 @@ function mockManifestIndexer(): ManifestIndexer {
 	} as unknown as ManifestIndexer;
 }
 
-function mockParseService(
-	decomposeResult?: object,
-	tokenResult?: { sqlTokens: SqlToken[]; jinjaTokens: [] },
-): ParseService {
+function mockParseService(decomposeResult?: object): ParseService {
 	return {
 		getDocumentModel: vi.fn().mockResolvedValue(null),
-		parseRawForTokens: vi.fn().mockResolvedValue(tokenResult ?? undefined),
 		decomposeQuery: vi.fn().mockResolvedValue(JSON.stringify(decomposeResult ?? DECOMPOSE_SIMPLE)),
 		onAliasesReady: { dispose: vi.fn() },
 		onSqlglotWarnings: { dispose: vi.fn() },
@@ -2027,14 +2022,18 @@ describe('SqlDebugAdapter', () => {
 				expect(threadOrTerm.length).toBeGreaterThan(0);
 			});
 
-			// FTL path: parseRawForTokens should have been called (not bridge invokeRaw with emit_debug_symbols)
-			expect(ps.parseRawForTokens).toHaveBeenCalled();
-			// And compileInlineSql should have been called for compilation
+			// sqllens emit path: the compile received marker-annotated SQL (the debug
+			// path no longer involves the legacy token parse at all).
 			expect(bridge.compileInlineSql).toHaveBeenCalled();
+			const compiledArg = (bridge.compileInlineSql as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+			expect(compiledArg).toContain('@dbg');
 		});
 
 		it('verifies breakpoint using remapped frame range when frame boundary has no exact mapping', async () => {
-			setActiveEditor('-- model text that will be compiled', '/models/reg_season_actuals_enriched.sql');
+			// Real (trivial) SQL so the sqllens emit produces symbols and the adapter
+			// takes the annotated path; the source map under test comes from the
+			// mocked compiledSql below, not from this text.
+			setActiveEditor('select 1 as x from t', '/models/reg_season_actuals_enriched.sql');
 
 			const compiledSql = [
 				'with',
@@ -2074,13 +2073,10 @@ describe('SqlDebugAdapter', () => {
 				compileInlineSql: vi.fn().mockResolvedValue(compiledSql),
 			} as unknown as BridgeRunner;
 
-			// Provide a minimal SELECT token so emitDebugSymbolsFromTokens returns non-undefined,
-			// causing _compileWithSymbols to use the annotated path and build a source map.
-			const tokenResult = { sqlTokens: [{ type: 'SELECT', start: 0, end: 5, line: 0, col: 6 }], jinjaTokens: [] as [] };
 
 			harness = new DapHarness({
 				bridgeRunner: bridge,
-				parseService: mockParseService(decomposeData, tokenResult),
+				parseService: mockParseService(decomposeData),
 				pathResolver: mockPathResolver('model'),
 			});
 			harness.send('initialize');
@@ -2108,7 +2104,8 @@ describe('SqlDebugAdapter', () => {
 		});
 
 		it('verifies breakpoint from frame-range overlap mappings even when frame has no clauses', async () => {
-			setActiveEditor('-- model text that will be compiled', '/models/overlap_mapping.sql');
+			// Real (trivial) SQL — see the remapped-frame-range test above.
+			setActiveEditor('select 1 as x from t', '/models/overlap_mapping.sql');
 
 			const compiledSql = [
 				'with',
@@ -2141,12 +2138,10 @@ describe('SqlDebugAdapter', () => {
 				compileInlineSql: vi.fn().mockResolvedValue(compiledSql),
 			} as unknown as BridgeRunner;
 
-			// Provide a minimal SELECT token so _compileWithSymbols builds a source map.
-			const tokenResult = { sqlTokens: [{ type: 'SELECT', start: 0, end: 5, line: 0, col: 6 }], jinjaTokens: [] as [] };
 
 			harness = new DapHarness({
 				bridgeRunner: bridge,
-				parseService: mockParseService(decomposeData, tokenResult),
+				parseService: mockParseService(decomposeData),
 				pathResolver: mockPathResolver('model'),
 			});
 			harness.send('initialize');

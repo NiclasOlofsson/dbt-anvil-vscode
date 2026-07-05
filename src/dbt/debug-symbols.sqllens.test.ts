@@ -47,11 +47,11 @@ function at(symbols: SymbolEntry[], line: number, col: number): SymbolEntry | un
 
 describe('emitDebugSymbols (sqllens path)', () => {
 	it('returns undefined for empty SQL', () => {
-		expect(emitDebugSymbols('', 'databricks', [])).toBeUndefined();
+		expect(emitDebugSymbols('', 'databricks')).toBeUndefined();
 	});
 
 	it('emits clause-keyword roles at correct 0-based positions', () => {
-		const res = emitDebugSymbols(MODEL_SQL, 'databricks', []);
+		const res = emitDebugSymbols(MODEL_SQL, 'databricks');
 		expect(res).toBeDefined();
 		const s = res!.symbols;
 
@@ -68,7 +68,7 @@ describe('emitDebugSymbols (sqllens path)', () => {
 	});
 
 	it('emits ident / fn / lit / star roles from the right layers', () => {
-		const res = emitDebugSymbols(MODEL_SQL, 'databricks', []);
+		const res = emitDebugSymbols(MODEL_SQL, 'databricks');
 		const s = res!.symbols;
 
 		// Function name only (not the whole call): count on line 5.
@@ -93,7 +93,7 @@ describe('emitDebugSymbols (sqllens path)', () => {
 	});
 
 	it('groups symbols into the a / b / _main_ frames', () => {
-		const res = emitDebugSymbols(MODEL_SQL, 'databricks', []);
+		const res = emitDebugSymbols(MODEL_SQL, 'databricks');
 		const frames = new Set(res!.symbols.map(s => s.frameName));
 		expect(frames).toEqual(new Set(['_main_', 'a', 'b']));
 
@@ -106,7 +106,7 @@ describe('emitDebugSymbols (sqllens path)', () => {
 	});
 
 	it('emits no @dbg markers inside Jinja regions', () => {
-		const res = emitDebugSymbols(MODEL_SQL, 'databricks', []);
+		const res = emitDebugSymbols(MODEL_SQL, 'databricks');
 		const spans = findJinjaSpans(MODEL_SQL);
 		const lineStarts = [0];
 		for (let i = 0; i < MODEL_SQL.length; i++) if (MODEL_SQL[i] === '\n') lineStarts.push(i + 1);
@@ -123,7 +123,7 @@ describe('emitDebugSymbols (sqllens path)', () => {
 	});
 
 	it('round-trips through injectMarkers → parseSourceMap with correct frames', () => {
-		const res = emitDebugSymbols(MODEL_SQL, 'databricks', []);
+		const res = emitDebugSymbols(MODEL_SQL, 'databricks');
 		const annotated = injectMarkers(MODEL_SQL, res!.symbols, findJinjaSpans(MODEL_SQL));
 
 		// Simulate dbt compile: swap the refs for table names (same line count).
@@ -155,7 +155,7 @@ describe('emitDebugSymbols (sqllens path)', () => {
 			'  group by order_id', // 5
 			') s on s.order_id = o.id', // 6
 		].join('\n');
-		const res = emitDebugSymbols(sql, 'databricks', []);
+		const res = emitDebugSymbols(sql, 'databricks');
 		expect(res).toBeDefined();
 
 		// The subquery body (lines 3–5) lives in frame 's'; the outer query in _main_.
@@ -175,7 +175,7 @@ describe('emitDebugSymbols (sqllens path)', () => {
 			')', // 3
 			'select id from `my cte`', // 4
 		].join('\n');
-		const res = emitDebugSymbols(sql, 'databricks', []);
+		const res = emitDebugSymbols(sql, 'databricks');
 		expect(res).toBeDefined();
 
 		// The CTE body's clause keywords carry the (unquoted) frame name.
@@ -213,7 +213,7 @@ describe('emitDebugSymbols vs emitDebugSymbolsFromTokens (frame parity)', () => 
 
 		const parsed = await parser.parse(source, 'duckdb');
 		const legacy = emitDebugSymbolsFromTokens(source, parsed.sqlTokens ?? [], parsed.jinjaTokens ?? []);
-		const next = emitDebugSymbols(source, 'duckdb', parsed.jinjaTokens ?? []);
+		const next = emitDebugSymbols(source, 'duckdb');
 		expect(legacy).toBeDefined();
 		expect(next).toBeDefined();
 
