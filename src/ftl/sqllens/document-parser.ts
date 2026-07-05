@@ -14,7 +14,7 @@ import type { DocumentModel, MacroCallInfo, RefInfo, SourceInfo } from '../../se
 import type { DocumentParser, ParseOptions } from '../../services/document-parser';
 import type { DialectSymbols } from '../sql-parser';
 import { performance } from 'node:perf_hooks';
-import { dialectSymbols, parse, parseTemplated, qualify, resolveScopes, Schema, toSqllensDialect, type Dialect, type Qualification, type SchemaMapping, type TagNode } from './api';
+import { dialectSymbols, parse, parseTemplated, qualify, resolveScopes, Schema, toSqllensDialect, type Dialect, type Qualification, type SchemaMapping, type ShapeOf, type TagNode } from './api';
 import { tokenizeJinja, type JinjaToken } from '../jinja-tokenizer';
 import { parseWithJinjaFallback, type ParsePass } from '../parse-with-jinja-fallback';
 import { keywordTokenTypesFor, mapTokens } from './token-mapper';
@@ -35,11 +35,18 @@ import { mapDiagnostics } from './extract/warnings';
 import type { SqllensParse } from './extract/spans';
 
 /**
- * The subset of ManifestIndexer the parser needs — the active dbt adapter type,
- * which selects the sqllens dialect. ManifestIndexer satisfies it structurally.
+ * The subset of ManifestIndexer the parser needs. `adapterType` selects the
+ * sqllens dialect. `shapeOf` is the optional C4 template-catalog seam: a
+ * synchronous macro-name -> expansion-shape lookup (sourced from the dbt manifest)
+ * that lets `parseTemplated` fill a statement/CTE-body macro placeholder with a
+ * shape-valid fragment instead of the identifier fill — so a macro-generated
+ * query body parses natively instead of falling back to the blank cascade. Absent
+ * = zero-catalog = byte-identical to the 2-arg parse. ManifestIndexer satisfies
+ * this structurally.
  */
 export interface AdapterContext {
 	readonly adapterType: string | undefined;
+	readonly shapeOf?: ShapeOf;
 }
 
 /**
@@ -219,7 +226,9 @@ export class SqllensDocumentParser implements DocumentParser {
 		let templatedTags: TagNode[] | undefined;
 
 		const tp0 = performance.now();
-		const templated = parseTemplated(rawSql, dialect);
+		// shapeOf (C4): statement/CTE-body macro placeholders fill shape-valid so
+		// macro-generated bodies parse natively. Undefined -> zero-catalog, byte-identical.
+		const templated = parseTemplated(rawSql, dialect, { shapeOf: this._context.shapeOf });
 		if (templated.sql.errors === 0) {
 			const scopes = resolveScopes(templated.sql.ast, dialect);
 			parseMs += performance.now() - tp0;

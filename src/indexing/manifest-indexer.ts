@@ -3,6 +3,8 @@ import type { DbtManifest, DbtMacroArgument, DbtNode, DbtSource, ResourceType } 
 import { ManifestLoader } from '../dbt/manifest-loader';
 import type { ILogger } from '../types/logger';
 import { classifyLayer, type LayerConfig, type LayerInfo } from './layer-classifier';
+import { makeShapeOf } from '../ftl/sqllens/template-shape';
+import type { ShapeOf } from '../ftl/sqllens/api';
 
 /**
  * Map a dbt adapter type to the canonical sqlglot dialect name.
@@ -63,6 +65,8 @@ export interface IndexedMacro {
 	filePath?: string;
 	description?: string;
 	arguments: DbtMacroArgument[];
+	/** Raw macro source (`macro_sql`), used to classify its template expansion shape (C4). */
+	macroSql?: string;
 }
 
 export interface ManifestIndex {
@@ -135,6 +139,18 @@ export class ManifestIndexer {
 	 */
 	get adapterType(): string | undefined {
 		return this.loader.resolveDialect();
+	}
+
+	/**
+	 * C4 template-catalog seam consumed by `SqllensDocumentParser` (via `AdapterContext`):
+	 * a `parseTemplated` `shapeOf` that classifies a macro-call's expansion shape by name,
+	 * lazily, from the indexed macros' `macroSql`. Only macros that actually appear as
+	 * `{{ }}` tags are classified, and the classifier answers `statement` (or nothing), so a
+	 * macro-generated query body parses natively instead of hitting the blank cascade. Reads
+	 * the current index each call, so it stays fresh across re-indexes.
+	 */
+	get shapeOf(): ShapeOf {
+		return makeShapeOf(name => this.findMacroByName(name)?.macroSql);
 	}
 
 	/**
@@ -244,6 +260,7 @@ export class ManifestIndexer {
 					: undefined,
 				description: macro.description,
 				arguments: macro.arguments ?? [],
+				macroSql: macro.macro_sql,
 			});
 		}
 

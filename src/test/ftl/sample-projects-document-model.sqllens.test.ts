@@ -18,6 +18,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { SqllensDocumentParser } from '../../ftl/sqllens/document-parser';
+import { makeShapeOf } from '../../ftl/sqllens/template-shape';
 import type { ColumnRefToken } from '../../services/parse-service';
 
 const SAMPLES_ROOT = path.join(__dirname, '..', '..', '..', 'samples');
@@ -42,17 +43,28 @@ const MODEL_DIRS = [
 
 const SQL_FILES = MODEL_DIRS.flatMap(d => (fs.existsSync(d) ? collectSqlFiles(d) : []));
 
-// Fully macro-generated models — `with cte as ({{ macro() }}) {{ macro_end() }}` with no
-// literal SQL body. Neither engine can parse them without rendering the (undefined) macros;
-// both fall through to nunjucks render and extract nothing. Enumerated so the token-stream
-// assertion still catches a NEW model regressing to empty. Shared limitation, targeted by the
-// jinja workstream (variant expansion / catalog rendering), not a sqllens defect.
-const KNOWN_MACRO_ONLY = new Set([
-	'nba-monte-carlo/models/nba/simulator/playoffs/playoff_sim_r1.sql',
-	'nba-monte-carlo/models/nba/simulator/playoffs/playoff_sim_r2.sql',
-	'nba-monte-carlo/models/nba/simulator/playoffs/playoff_sim_r3.sql',
-	'nba-monte-carlo/models/nba/simulator/playoffs/playoff_sim_r4.sql',
-]);
+// C4 closed the last macro-only hole. The fully macro-generated models
+// (`with cte as ({{ macro() }}) {{ macro_end() }}`) used to have no literal SQL body, so
+// both engines fell through to nunjucks render and extracted nothing (tokens === 0). Now the
+// manifest-sourced `shapeOf` (below) fills the statement-position macro placeholders with a
+// shape-valid `SELECT 1`, so they parse natively and produce a token stream like every other
+// model. The summary assertion therefore requires EVERY model to be non-empty — no exceptions.
+
+/** Macro-name -> macro_sql lookup from sample manifests (mirrors ManifestIndexer.shapeOf). */
+function macroSqlLookup(manifestPaths: string[]): (name: string) => string | undefined {
+	const bySql = new Map<string, string>();
+	for (const mp of manifestPaths) {
+		if (!fs.existsSync(mp)) continue;
+		const manifest = JSON.parse(fs.readFileSync(mp, 'utf8')) as {
+			macros?: Record<string, { name: string; package_name: string; macro_sql: string }>;
+		};
+		for (const m of Object.values(manifest.macros ?? {})) {
+			if (m.package_name === 'dbt') continue;
+			bySql.set(m.name, m.macro_sql);
+		}
+	}
+	return name => bySql.get(name);
+}
 
 interface FileResult {
 	label: string;
@@ -62,8 +74,14 @@ interface FileResult {
 const RESULTS: FileResult[] = [];
 
 // nba-monte-carlo is duckdb; jaffle_shop is duckdb in this samples set. One parser,
-// duckdb dialect, matching the legacy test's DUCKDB_CONTEXT.
-const parser = new SqllensDocumentParser({ adapterType: 'duckdb' });
+// duckdb dialect, matching the legacy test's DUCKDB_CONTEXT. shapeOf is sourced from the
+// sample manifests exactly as production sources it from ManifestIndexer.shapeOf — so the
+// statement-position macros (playoff_sim/…) parse natively (C4) instead of falling back.
+const shapeOf = makeShapeOf(macroSqlLookup([
+	path.join(SAMPLES_ROOT, 'nba-monte-carlo', 'target', 'manifest.json'),
+	path.join(SAMPLES_ROOT, 'jaffle_shop', 'target', 'manifest.json'),
+]));
+const parser = new SqllensDocumentParser({ adapterType: 'duckdb', shapeOf });
 
 describe('sample project DocumentModel (sqllens — live engine)', () => {
 	it('found SQL files to test', () => {
@@ -107,17 +125,15 @@ describe('sample project DocumentModel (sqllens — live engine)', () => {
 		console.log(`\nsqllens DocumentModel summary: ${total} real models parsed, ${withWarn} with warnings`);
 		expect(total).toBeGreaterThan(0);
 
-		// Every model with a literal SQL body must produce SOME token stream — a totally
-		// empty token list means the SQL body never reached the parser (blank cascade or
-		// dialect routing broken). The KNOWN_MACRO_ONLY models are the exception: they are
-		// fully macro-generated (`with cte as ({{ macro() }}) {{ macro_end() }}`) with NO
-		// literal SQL, so BOTH engines fall through to nunjucks render and extract nothing.
-		// That is the jinja-rendering limitation the jinja workstream targets, not a
-		// regression — but it stays enumerated here so any NEW model going empty fails loudly.
-		const unexpectedEmpty = RESULTS
-			.filter(r => r.extraction.tokens === 0 && !KNOWN_MACRO_ONLY.has(r.label))
+		// Every model must produce SOME token stream — a totally empty token list means the
+		// SQL body never reached the parser (dialect routing broken, or a macro-only model
+		// that failed to parse). With C4's manifest-sourced shapeOf, even the fully
+		// macro-generated models (`with cte as ({{ macro() }}) {{ macro_end() }}`) parse
+		// natively, so there are NO exceptions left — any model going empty fails loudly.
+		const emptyModels = RESULTS
+			.filter(r => r.extraction.tokens === 0)
 			.map(r => r.label);
-		expect(unexpectedEmpty).toEqual([]);
+		expect(emptyModels).toEqual([]);
 	});
 });
 
