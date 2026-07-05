@@ -157,9 +157,13 @@ function tableRefForSource(src: ResolvedSource, scopeId: number, tokens: Token[]
 function columnDefToken(p: Projection, dialect: Dialect): ColumnDefToken | undefined {
 	if (p.isStar || p.name === undefined) return undefined;
 	// A bare column projection whose output name echoes the column is a reference,
-	// not a declaration — matches sqllens's own symbol emitter (symbols.ts).
+	// not a declaration — matches sqllens's own symbol emitter (symbols.ts). But a
+	// SELF-NAMED alias (`team as team`, `b."Date" as "date"`) is a real declaration
+	// site the user wrote: the IR normalizes its `alias` away, yet `aliasCst` still
+	// carries the alias token — emit the def there (legacy did; hover/rename on the
+	// alias identifier depends on it).
 	const last = p.expr.kind === 'column' ? p.expr.parts[p.expr.parts.length - 1] : undefined;
-	if (last !== undefined && last.toLowerCase() === p.name.toLowerCase()) return undefined;
+	if (last !== undefined && last.toLowerCase() === p.name.toLowerCase() && p.aliasCst === undefined) return undefined;
 
 	// ITEM 5 (sqllens e6078d7): `Projection.aliasCst` is the alias identifier's own CST —
 	// present ⇔ an explicit alias (delimiters in, AS out). The old cst.stop heuristic
