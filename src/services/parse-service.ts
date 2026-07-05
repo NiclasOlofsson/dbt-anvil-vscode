@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import type { DescribeCache } from '../dbt/describe-cache';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import { generateVariants } from '../dbt/sql-variant-generator';
-import { stripJinja } from '../providers/common/jinja-utils';
+import { parseTemplated, templateVariants, toSqllensDialect } from '../ftl/sqllens/api';
+import { resolveTagRelations } from '../providers/common/jinja-utils';
 import type { ILogger } from '../types/logger';
 import type { DocumentParser } from './document-parser';
 import type { AstPayload, JinjaToken, SqlToken } from '../ftl/parse-result';
@@ -363,7 +363,7 @@ interface CacheEntry {
 /**
  * Merge N DocumentModels produced by separate bridge parse calls (one per SQL
  * variant) into a single model. All positions in each model are expressed in
- * original-source coordinates (generateVariants is length-preserving), so
+ * original-source coordinates (variant realization is length-preserving), so
  * tokens from different variants can be combined without any remapping.
  */
 export function mergeModels(models: DocumentModel[]): DocumentModel {
@@ -482,7 +482,7 @@ export function mergeModels(models: DocumentModel[]): DocumentModel {
 	}
 
 	// jinjaTokens / ninjaSqlTokens: all variants are parsed from the same raw source
-	// (generateVariants is length-preserving), so every variant's token streams carry
+	// (variant realization is length-preserving), so every variant's token streams carry
 	// the same positions. Take the first model that has them. Dropping them here
 	// causes comment-span masking in layout rules to silently stop working for any
 	// file that contains Jinja conditionals.
@@ -888,7 +888,11 @@ export class ParseService {
 
 		if (this._enrichment && !skipEnrichment) {
 			const { indexer, describeCache } = this._enrichment;
-			const { refs } = stripJinja(rawText, indexer);
+			const refs = resolveTagRelations(
+				rawText,
+				parseTemplated(rawText, toSqllensDialect(indexer.adapterType)).tags,
+				indexer,
+			);
 
 			const mapping = indexer.buildSchemaMapping();
 			await Promise.all([...refs].map(async ([tableName, uniqueId]) => {
@@ -909,10 +913,12 @@ export class ParseService {
 			schemaMapping: Object.keys(schemaMapping).length > 0 ? schemaMapping : undefined,
 		};
 
-		// Generate one SQL string per branch-combination so every conditional code
-		// path gets parsed. generateVariants is length-preserving — all positions
-		// in the returned models are in original-source coordinates.
-		const variants = generateVariants(rawText);
+		// One realized text per branch arm (sqllens templateVariants: variant 0 is
+		// all-defaults plus one variant per non-default arm — linear in arm count,
+		// and coverage-complete for mergeModels' byte-range union: every arm's
+		// bytes are active in at least one variant). realize() is length-preserving,
+		// so all positions in the returned models are in original-source coordinates.
+		const variants = templateVariants(rawText, toSqllensDialect(this._enrichment?.indexer.adapterType));
 		let model: DocumentModel;
 
 		if (variants.length <= 1) {
@@ -923,7 +929,7 @@ export class ParseService {
 			const variantModels: DocumentModel[] = [];
 			for (const variant of variants) {
 				try {
-					variantModels.push(await this._parser.parse(variant.sql, options));
+					variantModels.push(await this._parser.parse(variant.text(), options));
 				} catch {
 					// silently skip failed variants — individual branch failures are expected
 				}

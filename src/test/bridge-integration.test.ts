@@ -9,7 +9,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import * as path from 'node:path';
-import { generateVariants } from '../dbt/sql-variant-generator';
+import { templateVariants } from '../ftl/sqllens/api';
 import { BridgeRunner } from '../dbt/bridge-runner';
 import { detectPythonEnvironment, type PythonEnvironment } from '../dbt/env-detector';
 import { FtlDocumentParser } from '../ftl/ftl-document-parser';
@@ -392,11 +392,11 @@ describe('ftl parse_document – conditional branches', () => {
 	});
 
 	async function parseWithBranches(source: string): Promise<DocumentModel> {
-		const variants = generateVariants(source);
+		const variants = templateVariants(source, 'duckdb');
 		const models: DocumentModel[] = [];
 		for (const variant of variants) {
 			try {
-				models.push(await parser.parse(variant.sql));
+				models.push(await parser.parse(variant.text()));
 			} catch {
 				// skip failed variants
 			}
@@ -406,7 +406,7 @@ describe('ftl parse_document – conditional branches', () => {
 	}
 
 	it('mergeModels preserves ninjaSqlTokens (regression: comment masking broken for Jinja conditional files)', async () => {
-		// When a file has {% if %} blocks, generateVariants produces multiple variants and
+		// When a file has {% if %} blocks, templateVariants produces multiple variants and
 		// mergeModels is called. The original mergeModels dropped its token stream, so
 		// layout rules had no comment spans to mask — causing false-positive violations
 		// inside -- comments.

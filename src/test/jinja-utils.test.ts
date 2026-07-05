@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { stripJinja } from '../providers/common/jinja-utils';
+import { resolveTagRelations } from '../providers/common/jinja-utils';
+import { parseTemplated } from '../ftl/sqllens/api';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { ManifestIndex } from '../indexing/manifest-indexer';
 
@@ -63,146 +64,74 @@ function createMockIndexer(overrides?: Partial<ManifestIndexer>): ManifestIndexe
 	} as unknown as ManifestIndexer;
 }
 
-describe('stripJinja', () => {
+describe('resolveTagRelations', () => {
 	let indexer: ManifestIndexer;
 
 	beforeEach(() => {
 		indexer = createMockIndexer();
 	});
 
-	it('should replace ref() with schema.table', () => {
-		const input = 'SELECT * FROM {{ ref(\'stg_customers\') }}';
-		const result = stripJinja(input, indexer);
+	function relations(input: string): Map<string, string> {
+		return resolveTagRelations(input, parseTemplated(input, 'duckdb').tags, indexer);
+	}
 
-		expect(result.sql).toBe('SELECT * FROM main.stg_customers');
-		expect(result.refs.get('stg_customers')).toBe('model.project.stg_customers');
+	it('resolves ref() to alias → unique_id', () => {
+		const refs = relations('SELECT * FROM {{ ref(\'stg_customers\') }}');
+		expect(refs.get('stg_customers')).toBe('model.project.stg_customers');
 	});
 
-	it('should replace ref() with double-quoted argument', () => {
-		const input = 'SELECT * FROM {{ ref("stg_customers") }}';
-		const result = stripJinja(input, indexer);
-
-		expect(result.sql).toBe('SELECT * FROM main.stg_customers');
-		expect(result.refs.get('stg_customers')).toBe('model.project.stg_customers');
+	it('resolves ref() with double-quoted argument', () => {
+		const refs = relations('SELECT * FROM {{ ref("stg_customers") }}');
+		expect(refs.get('stg_customers')).toBe('model.project.stg_customers');
 	});
 
-	it('should replace multiple ref() calls', () => {
-		const input = [
+	it('resolves multiple ref() calls', () => {
+		const refs = relations([
 			'SELECT c.*, o.order_count',
 			'FROM {{ ref(\'stg_customers\') }} AS c',
 			'JOIN {{ ref(\'stg_orders\') }} AS o ON c.id = o.user_id',
-		].join('\n');
-
-		const result = stripJinja(input, indexer);
-
-		expect(result.sql).toContain('FROM main.stg_customers AS c');
-		expect(result.sql).toContain('JOIN main.stg_orders AS o');
-		expect(result.refs.size).toBe(2);
+		].join('\n'));
+		expect(refs.size).toBe(2);
+		expect(refs.get('stg_orders')).toBe('model.project.stg_orders');
 	});
 
-	it('should replace source() with schema.identifier', () => {
-		const input = 'SELECT * FROM {{ source(\'jaffle\', \'customers\') }}';
-		const result = stripJinja(input, indexer);
-
-		expect(result.sql).toBe('SELECT * FROM raw.customers');
-		expect(result.refs.get('customers')).toBe('source.project.jaffle.customers');
+	it('resolves source() to identifier → unique_id', () => {
+		const refs = relations('SELECT * FROM {{ source(\'jaffle\', \'customers\') }}');
+		expect(refs.get('customers')).toBe('source.project.jaffle.customers');
 	});
 
-	it('should remove config() blocks', () => {
-		const input = [
-			'{{ config(materialized=\'table\', tags=[\'daily\']) }}',
-			'SELECT * FROM main.customers',
-		].join('\n');
-
-		const result = stripJinja(input, indexer);
-
-		expect(result.sql).toBe('SELECT * FROM main.customers');
+	it('resolves the package-qualified 2-arg ref form (model = last arg)', () => {
+		const refs = relations('SELECT * FROM {{ ref(\'other_pkg\', \'stg_customers\') }}');
+		expect(refs.get('stg_customers')).toBe('model.project.stg_customers');
 	});
 
-	it('should remove Jinja block tags', () => {
-		const input = [
-			'SELECT',
-			'  {% if target.name == \'prod\' %}',
-			'  col_a,',
-			'  {% else %}',
-			'  col_b,',
-			'  {% endif %}',
-			'  col_c',
-			'FROM my_table',
-		].join('\n');
-
-		const result = stripJinja(input, indexer);
-
-		expect(result.sql).toContain('col_a');
-		expect(result.sql).toContain('col_b');
-		expect(result.sql).toContain('col_c');
-		expect(result.sql).not.toContain('{%');
+	it('skips refs the manifest does not know', () => {
+		const refs = relations('SELECT * FROM {{ ref(\'unknown_model\') }}');
+		expect(refs.size).toBe(0);
 	});
 
-	it('should remove remaining {{ expressions }}', () => {
-		const input = 'SELECT {{ var(\'my_column\') }} FROM my_table';
-		const result = stripJinja(input, indexer);
-
-		expect(result.sql).toBe('SELECT  FROM my_table');
-		expect(result.sql).not.toContain('{{');
+	it('skips sources the manifest does not know', () => {
+		const refs = relations('SELECT * FROM {{ source(\'unknown_src\', \'unknown_table\') }}');
+		expect(refs.size).toBe(0);
 	});
 
-	it('should handle package-qualified ref()', () => {
-		const input = 'SELECT * FROM {{ ref(\'other_pkg\', \'stg_customers\') }}';
-		const result = stripJinja(input, indexer);
-
-		expect(result.sql).toBe('SELECT * FROM main.stg_customers');
+	it('skips a ref inside a SQL line comment (no schema lookup for dead code)', () => {
+		const refs = relations([
+			'-- FROM {{ ref(\'stg_customers\') }}',
+			'SELECT * FROM {{ ref(\'stg_orders\') }}',
+		].join('\n'));
+		expect(refs.size).toBe(1);
+		expect(refs.get('stg_orders')).toBe('model.project.stg_orders');
 	});
 
-	it('should fall back to model name for unknown refs', () => {
-		const input = 'SELECT * FROM {{ ref(\'unknown_model\') }}';
-		const result = stripJinja(input, indexer);
-
-		expect(result.sql).toBe('SELECT * FROM unknown_model');
-		expect(result.refs.size).toBe(0);
-	});
-
-	it('should fall back to table name for unknown sources', () => {
-		const input = 'SELECT * FROM {{ source(\'unknown_src\', \'unknown_table\') }}';
-		const result = stripJinja(input, indexer);
-
-		expect(result.sql).toBe('SELECT * FROM unknown_table');
-	});
-
-	it('should handle multiline config blocks', () => {
-		const input = [
-			'{{ config(',
-			'    materialized=\'table\',',
-			'    tags=[\'daily\']',
-			') }}',
-			'SELECT 1',
-		].join('\n');
-
-		const result = stripJinja(input, indexer);
-
-		expect(result.sql).toBe('SELECT 1');
-	});
-
-	it('should handle mixed ref/source/config in one file', () => {
-		const input = [
-			'{{ config(materialized=\'view\') }}',
-			'',
-			'WITH customers AS (',
-			'    SELECT * FROM {{ source(\'jaffle\', \'customers\') }}',
-			'),',
-			'orders AS (',
-			'    SELECT * FROM {{ ref(\'stg_orders\') }}',
-			')',
-			'SELECT c.*, o.status',
-			'FROM customers AS c',
-			'JOIN orders AS o ON c.id = o.user_id',
-		].join('\n');
-
-		const result = stripJinja(input, indexer);
-
-		expect(result.sql).toContain('FROM raw.customers');
-		expect(result.sql).toContain('FROM main.stg_orders');
-		expect(result.sql).not.toContain('{{');
-		expect(result.refs.size).toBe(2);
+	it('ignores config / var / control tags entirely', () => {
+		const refs = relations([
+			'{{ config(materialized=\'table\') }}',
+			'{% if target.name == \'prod\' %}',
+			'SELECT {{ var(\'my_column\') }} FROM {{ ref(\'stg_customers\') }}',
+			'{% endif %}',
+		].join('\n'));
+		expect(refs.size).toBe(1);
+		expect(refs.get('stg_customers')).toBe('model.project.stg_customers');
 	});
 });

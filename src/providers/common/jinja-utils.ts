@@ -1,74 +1,47 @@
 import type { ManifestIndexer } from '../../indexing/manifest-indexer';
+import type { TagNode } from '../../ftl/sqllens/api';
 import { computeCommentRanges, isOffsetInComment } from './comment-utils';
 
-export interface StrippedSql {
-	/** SQL with Jinja expressions replaced by table names. */
-	sql: string;
-	/** Map of resolved table name → manifest unique_id (for models/sources found in ref/source calls). */
-	refs: Map<string, string>;
-}
-
 /**
- * Strip Jinja from a dbt SQL document, replacing `ref()` / `source()` calls
- * with the resolved relation name from the manifest.
+ * Resolve every `ref()` / `source()` tag to its manifest relation: resolved
+ * table name → manifest unique_id (models by alias-or-name, sources by
+ * identifier). The schema enrichment path feeds these into the describe cache.
  *
- * This produces SQL that sqlglot can parse while preserving the table names
- * the bridge needs for schema_mapping lookups.
+ * Tags come from sqllens's tag-AST (which handles both quote styles and the
+ * 2-arg `ref('pkg','model')` form structurally — the regex layer this replaces
+ * matched them textually). A tag opening inside a SQL comment is skipped, so a
+ * commented-out ref never triggers a schema lookup.
  */
-export function stripJinja(text: string, indexer: ManifestIndexer): StrippedSql {
+export function resolveTagRelations(text: string, tags: TagNode[], indexer: ManifestIndexer): Map<string, string> {
 	const refs = new Map<string, string>();
 	const commentRanges = computeCommentRanges(text);
 
-	// Replace {{ ref('model') }}, {{ ref("model") }} and two-arg variants (single or double quotes)
-	let sql = text.replace(
-		/\{\{\s*ref\(\s*(?:['"]([^'"]+)['"]\s*,\s*)?['"]([^'"]+)['"]\s*\)\s*\}\}/g,
-		(fullMatch, _pkg: string | undefined, modelName: string, offset: number) => {
-			if (isOffsetInComment(offset, commentRanges)) return fullMatch;
-			const models = indexer.findModelsByName(modelName);
-			if (models.length > 0) {
-				const raw = indexer.getRawNode(models[0].uniqueId);
-				if (raw && 'alias' in raw) {
-					const tableName = raw.alias || raw.name;
-					const schema = raw.schema ?? 'public';
-					refs.set(tableName, models[0].uniqueId);
-					return `${schema}.${tableName}`;
-				}
-				refs.set(modelName, models[0].uniqueId);
-				return modelName;
-			}
-			return modelName;
-		},
-	);
+	for (const tag of tags) {
+		if (tag.kind !== 'ref' && tag.kind !== 'source') continue;
+		if (isOffsetInComment(tag.tagSpan.start, commentRanges)) continue;
 
-	// Replace {{ source('source_name', 'table_name') }} and double-quote variants
-	sql = sql.replace(
-		/\{\{\s*source\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*\)\s*\}\}/g,
-		(fullMatch, sourceName: string, tableName: string, offset: number) => {
-			if (isOffsetInComment(offset, commentRanges)) return fullMatch;
+		if (tag.kind === 'ref') {
+			const models = indexer.findModelsByName(tag.model);
+			if (models.length === 0) continue;
+			const raw = indexer.getRawNode(models[0].uniqueId);
+			if (raw && 'alias' in raw) {
+				refs.set(raw.alias || raw.name, models[0].uniqueId);
+			} else {
+				refs.set(tag.model, models[0].uniqueId);
+			}
+		} else {
 			const index = indexer.index;
-			if (index) {
-				for (const source of index.sources.values()) {
-					if (source.sourceName === sourceName && source.name === tableName) {
-						const raw = indexer.getRawNode(source.uniqueId);
-						const identifier = raw && 'identifier' in raw ? raw.identifier : tableName;
-						const schema = raw?.schema ?? source.schema;
-						refs.set(identifier, source.uniqueId);
-						return `${schema}.${identifier}`;
-					}
+			if (!index) continue;
+			for (const source of index.sources.values()) {
+				if (source.sourceName === tag.sourceName && source.name === tag.tableName) {
+					const raw = indexer.getRawNode(source.uniqueId);
+					const identifier = raw && 'identifier' in raw ? (raw.identifier as string) : tag.tableName;
+					refs.set(identifier, source.uniqueId);
+					break;
 				}
 			}
-			return tableName;
-		},
-	);
+		}
+	}
 
-	// Remove {{ config(...) }} — may span multiple lines
-	sql = sql.replace(/\{\{\s*config\s*\([\s\S]*?\)\s*\}\}/g, '');
-
-	// Remove remaining {% ... %} block tags (if/endif, for/endfor, etc.)
-	sql = sql.replace(/\{%[-\s][\s\S]*?[-\s]%\}/g, '');
-
-	// Remove any remaining {{ ... }} expressions (variables, etc.)
-	sql = sql.replace(/\{\{[\s\S]*?\}\}/g, '');
-
-	return { sql: sql.trim(), refs };
+	return refs;
 }
