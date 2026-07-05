@@ -106,9 +106,13 @@ export function extractCtes(parse: SqllensParse, expander?: StarExpander): CteIn
 			const startLine = bodyC.start ? bodyC.start.line - 1 : 0;
 			const aliasTok = aliasC?.start;
 
+			// Anchor the WHOLE entry at the alias name (legacy convention): a
+			// `(SELECT …) AS x` derived table is navigated by `x`, and mixing the
+			// body's start line with the alias's column yields a (line, col) pair
+			// that describes no real text (col can land past the body line's end).
 			const entry: CteInfo = {
 				name: alias,
-				line: startLine,
+				line: aliasTok ? aliasTok.line - 1 : startLine,
 				endLine: aliasTok ? aliasTok.line - 1 : startLine,
 				columns: columnsOf(src.scope, expander, false, parse.dialect),
 				isSubquery: true,
