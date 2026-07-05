@@ -1,7 +1,6 @@
-import { iterJinjaTags, blankJinja } from './jinja-blanker';
 import { buildLineStarts, lineAtOffset } from '../ftl/jinja-spans';
-import { analyze, tokenize, toSqllensDialect, MAIN_FRAME } from '../ftl/sqllens/api';
-import type { Sym, Dialect } from '../ftl/sqllens/api';
+import { deriveSymbols, parseTemplated, tokenize, toSqllensDialect, MAIN_FRAME } from '../ftl/sqllens/api';
+import type { Sym, Dialect, TagNode } from '../ftl/sqllens/api';
 import type { SqlToken } from '../ftl/parse-result';
 import type { JinjaToken } from '../ftl/jinja-tokenizer';
 
@@ -440,9 +439,6 @@ export function parseSourceMap(compiledSql: string): SourceMap {
 // emitDebugSymbolsFromTokens — pure-TS port of bridge emit_debug_symbols
 // ---------------------------------------------------------------------------
 
-const STATEMENT_MACROS = new Set(['config', 'docs', 'print', 'log', 'return', 'exceptions']);
-const VALUE_MACROS = new Set(['var', 'env_var']);
-
 const TOKEN_ROLE_MAP: Record<string, string> = {
 	SELECT: 'select',
 	FROM: 'from',
@@ -464,10 +460,6 @@ const TOKEN_ROLE_MAP: Record<string, string> = {
 	WITH: 'cte',
 	STAR: 'star',
 };
-
-const MACRO_NAME_RE = /^\{\{\s*(?:[a-zA-Z_]\w*\.)*([a-zA-Z_]\w*)\s*\(/;
-const REF_TAG_RE = /\{\{[^}]*ref\(\s*['"]([^'"]+)['"]\s*\)[^}]*\}\}/;
-const SOURCE_TAG_RE = /\{\{[^}]*source\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*\)[^}]*\}\}/;
 
 function buildCteRanges(
 	tokens: SqlToken[],
@@ -565,7 +557,12 @@ export function emitDebugSymbolsFromTokens(
 
 	if (symbols.length === 0) return undefined;
 
-	const { refMarkers, sourceMarkers, macroSpans } = buildJinjaClassifications(source, jinjaTokens, lineStarts);
+	// Tag classification is dialect-independent — the default dialect suffices
+	// (this path runs once per debug session, so the extra templated parse is
+	// negligible; the sqllens emit path reuses its own).
+	const { refMarkers, sourceMarkers, macroSpans } = buildJinjaClassifications(
+		jinjaTokens, lineStarts, parseTemplated(source, toSqllensDialect(undefined)).tags,
+	);
 
 	const annotatedSource = injectMarkers(source, symbols, jinjaSpans, { macroSpans, refMarkers, sourceMarkers });
 	return { annotatedSource, symbols, macroSpans, refMarkers, sourceMarkers };
@@ -577,9 +574,9 @@ export function emitDebugSymbolsFromTokens(
  * wire format is identical regardless of which SQL parser produced the symbols.
  */
 function buildJinjaClassifications(
-	source: string,
 	jinjaTokens: JinjaToken[],
 	lineStarts: number[],
+	tags: TagNode[],
 ): { refMarkers: BridgeRefMarker[]; sourceMarkers: BridgeSourceMarker[]; macroSpans: BridgeMacroSpan[] } {
 	const refMarkers: BridgeRefMarker[] = [];
 	const sourceMarkers: BridgeSourceMarker[] = [];
@@ -632,20 +629,16 @@ function buildJinjaClassifications(
 		}
 	}
 
-	for (const tag of iterJinjaTags(source)) {
-		const tagText = tag[0];
-		if (!tagText.startsWith('{{')) continue;
-		if (REF_TAG_RE.test(tagText) || SOURCE_TAG_RE.test(tagText)) continue;
-		const m = MACRO_NAME_RE.exec(tagText);
-		if (!m) continue;
-		const name = m[1];
-		if (STATEMENT_MACROS.has(name) || VALUE_MACROS.has(name)) continue;
-		const tagStart = tag.index;
+	// Macro spans come from the tag-AST: kind 'macro' is exactly the old regex
+	// filter chain (expr tag, not ref/source, not a no-output builtin, not
+	// var/env_var), and `name` is the last callee path component.
+	for (const tag of tags) {
+		if (tag.kind !== 'macro') continue;
 		macroSpans.push({
-			name,
-			sourceLine: lineAtOffset(tagStart, lineStarts),
-			startOffset: tagStart,
-			endOffset: tagStart + tagText.length,
+			name: tag.name,
+			sourceLine: lineAtOffset(tag.tagSpan.start, lineStarts),
+			startOffset: tag.tagSpan.start,
+			endOffset: tag.tagSpan.end,
 		});
 	}
 
@@ -760,32 +753,28 @@ function resolveFrame(line: number, ranges: FrameRange[]): string {
 	return best ? best.name : MAIN_FRAME;
 }
 
-/** Blank Jinja and run sqllens. Tries identifier mode first, then comment mode as a
- *  fallback for statement-level macros; returns whichever parses cleanest. The
- *  returned `blanked` is the exact string sqllens saw, so tokenize() re-lexes it
- *  1:1 (positions in blanked == positions in the source — length-preserving). */
-function analyzeBlanked(source: string, dialect: Dialect): { symbols: Sym[]; blanked: string } | undefined {
-	let best: { symbols: Sym[]; blanked: string; errors: number } | undefined;
-	for (const mode of ['identifier', 'comment'] as const) {
-		let blanked: string;
-		try {
-			blanked = blankJinja(source, mode).blanked;
-		} catch {
-			continue;
-		}
-		let errors: number;
-		let symbols: Sym[];
-		try {
-			const analysis = analyze(blanked, dialect);
-			errors = analysis.errors;
-			symbols = analysis.symbols;
-		} catch {
-			continue;
-		}
-		if (errors === 0) return { symbols, blanked };
-		if (!best || errors < best.errors) best = { symbols, blanked, errors };
+/** Run sqllens's templated front end: ONE length-/newline-preserving fill (the
+ *  old two-mode blank retry is gone with the cascade), symbols derived from the
+ *  tag-applied ast (real ref/source relation names — not the `jjj…` fill), and
+ *  the placeholder returned for the 1:1 token re-lex (positions in placeholder
+ *  == positions in the source). Error-tolerant: a partial parse still yields
+ *  symbols for everything that parsed. */
+function analyzeTemplated(
+	source: string,
+	dialect: Dialect,
+): { symbols: Sym[]; blanked: string; tags: TagNode[] } | undefined {
+	const templated = parseTemplated(source, dialect);
+	try {
+		return {
+			symbols: deriveSymbols(templated.sql.ast, undefined, { dialect }),
+			blanked: templated.placeholder,
+			tags: templated.tags,
+		};
+	} catch {
+		// Preserve the old failure contract: the caller's undefined arm falls
+		// back to the token-based emit path.
+		return undefined;
 	}
-	return best ? { symbols: best.symbols, blanked: best.blanked } : undefined;
 }
 
 /**
@@ -805,9 +794,9 @@ export function emitDebugSymbols(
 	jinjaTokens: JinjaToken[],
 ): EmitResult | undefined {
 	const sqllensDialect = toSqllensDialect(dialect);
-	const analyzed = analyzeBlanked(source, sqllensDialect);
+	const analyzed = analyzeTemplated(source, sqllensDialect);
 	if (!analyzed) return undefined;
-	const { symbols: syms, blanked } = analyzed;
+	const { symbols: syms, blanked, tags } = analyzed;
 
 	const lineStarts = buildLineStarts(source);
 	const jinjaSpans = findJinjaSpans(source);
@@ -902,7 +891,7 @@ export function emitDebugSymbols(
 
 	if (symbols.length === 0) return undefined;
 
-	const { refMarkers, sourceMarkers, macroSpans } = buildJinjaClassifications(source, jinjaTokens, lineStarts);
+	const { refMarkers, sourceMarkers, macroSpans } = buildJinjaClassifications(jinjaTokens, lineStarts, tags);
 	const annotatedSource = injectMarkers(source, symbols, jinjaSpans, { macroSpans, refMarkers, sourceMarkers });
 	return { annotatedSource, symbols, macroSpans, refMarkers, sourceMarkers };
 }

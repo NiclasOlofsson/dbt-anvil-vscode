@@ -1,10 +1,8 @@
 import type { PyodideInterface } from 'pyodide';
-import { renToRawLine } from './nunjucks-renderer';
-import type { LineMap } from './nunjucks-renderer';
-import type { AstPayload, ParseResult } from './parse-result';
-import { tokenizeJinja } from './jinja-tokenizer';
-import { parseWithJinjaFallback } from './parse-with-jinja-fallback';
+import type { ParseResult } from './parse-result';
 import type { DialectSymbols, SqlParser } from './sql-parser';
+import { parseTemplated, toSqllensDialect, type TagNode } from './sqllens/api';
+import { jinjaTokensFromStream } from './sqllens/extract/jinja-stream';
 
 /**
  * Wraps an error that escaped the Python/Pyodide boundary without being caught.
@@ -30,15 +28,27 @@ function callPython<T>(fn: string, callable: () => T): T {
 }
 
 /**
- * Remap AST node line numbers from rendered-space to raw-source space.
- * m.line is 1-based; line map breakpoints are 0-based — convert accordingly.
+ * Write each ref/source tag's real relation name over the sqllens placeholder,
+ * left-aligned and space-padded within the tag span (newlines untouched) — the
+ * same write `blankJinja` used to do. sqlglot binds relations from the TEXT it
+ * parses (unlike sqllens, whose tag-applied ast rebinds real names after the
+ * parse), so schema-based qualify + lineage need the real names in the fill.
+ * Transitional: dies with this engine at cutover.
  */
-function remapAstLines(result: ParseResult, lineMap: LineMap): void {
-	for (const node of result.ast as AstPayload[]) {
-		if (node.m?.line !== undefined) {
-			node.m.line = renToRawLine(node.m.line - 1, lineMap) + 1;
+function overlayRelationNames(placeholder: string, tags: TagNode[]): string {
+	let buf: string[] | undefined;
+	for (const tag of tags) {
+		const name = tag.kind === 'ref' ? tag.model : tag.kind === 'source' ? tag.tableName : undefined;
+		if (name === undefined) continue;
+		buf ??= placeholder.split('');
+		let j = 0;
+		for (let i = tag.tagSpan.start; i < tag.tagSpan.end; i++) {
+			if (buf[i] === '\n') continue;
+			buf[i] = j < name.length ? name[j] : ' ';
+			j++;
 		}
 	}
+	return buf === undefined ? placeholder : buf.join('');
 }
 
 export class PyodideSqlParser implements SqlParser {
@@ -69,12 +79,9 @@ export class PyodideSqlParser implements SqlParser {
 	}
 
 	traceLineageV2(sql: string, columnName: string, dialect: string, schemaJson: string): string {
-		const { result } = parseWithJinjaFallback(
-			sql,
-			passSql => callPython('_trace_lineage_v2', () => this.#lineageFnV2(passSql, columnName, schemaJson, dialect)),
-			r => (JSON.parse(r) as { success: boolean }).success,
-		);
-		return result;
+		const templated = parseTemplated(sql, toSqllensDialect(dialect));
+		const passSql = overlayRelationNames(templated.placeholder, templated.tags);
+		return callPython('_trace_lineage_v2', () => this.#lineageFnV2(passSql, columnName, schemaJson, dialect));
 	}
 
 	decomposeQuery(compiledSql: string, dialect: string): string {
@@ -93,39 +100,21 @@ export class PyodideSqlParser implements SqlParser {
 
 	async parse(rawSql: string, dialect: string, schema?: Record<string, Record<string, string>>): Promise<ParseResult> {
 		const schemaJson = schema ? JSON.stringify(schema) : '';
-		const jinjaTokens = tokenizeJinja(rawSql);
 
-		// Three-pass cascade:
-		//   pass1   — length-preserving blank, identifier mode (preserves source offsets)
-		//   pass1b  — length-preserving blank, comment mode (handles statement-level macros)
-		//   pass2   — nunjucks stub render (valid SQL everywhere; offsets shift, lineMap used to remap)
-		let pass1Result: ParseResult | undefined;
-		const { result, pass, lineMap } = parseWithJinjaFallback(
-			rawSql,
-			(passSql, p) => {
-				const raw = callPython('_parse', () => this.#fn(passSql, dialect, schemaJson));
-				const parsed = JSON.parse(raw) as ParseResult;
-				if (p === 'pass1') pass1Result = parsed;
-				return parsed;
-			},
-			r => !r.warnings.some(w => w.type === 'syntax_error'),
-		);
+		// sqllens's templated front end handles the jinja: ONE length-/newline-
+		// preserving fill (all positions stay in raw-source coordinates), with real
+		// ref/source names overlaid for sqlglot's text-bound relation binding. The
+		// old three-pass blank/render cascade is gone — when the filled text still
+		// fails to parse, the result's syntax_error warnings ARE the answer, the
+		// same as a pass1 failure was.
+		const templated = parseTemplated(rawSql, toSqllensDialect(dialect));
+		const passSql = overlayRelationNames(templated.placeholder, templated.tags);
 
-		result.jinjaTokens = jinjaTokens;
-		if (pass !== 'pass2') return result;
-
-		remapAstLines(result, lineMap!);
-		for (const w of result.warnings) {
-			if (w.line !== undefined) w.line = renToRawLine(w.line, lineMap!);
-		}
-		// Pass 2 sqlTokens are in rendered-space (nunjucks-compiled), not raw-source
-		// space. Pass 1 always uses length-preserving blanking, so its sqlTokens are
-		// always in raw-source space — even when the parser failed. Use them instead.
-		if (pass1Result) result.sqlTokens = pass1Result.sqlTokens;
-		// Column numbers from the pass 2 AST are in rendered-space and are NOT
-		// remapped — only line numbers are. Rules that build vscode.Range from AST
-		// column positions must skip this result to avoid negative-character errors.
-		result.isPass2 = true;
+		const raw = callPython('_parse', () => this.#fn(passSql, dialect, schemaJson));
+		const result = JSON.parse(raw) as ParseResult;
+		// jinjaTokens come from the SAME unified stream the fill came from, not a
+		// second independent lex.
+		result.jinjaTokens = jinjaTokensFromStream(templated.tokens, templated.tags, rawSql);
 		return result;
 	}
 }

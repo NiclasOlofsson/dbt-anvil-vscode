@@ -1,4 +1,4 @@
-import { blankJinja } from './jinja-blanker';
+import { parseTemplated, toSqllensDialect } from '../ftl/sqllens/api';
 
 /**
  * A single SQL statement extracted from a multi-statement document.
@@ -21,31 +21,27 @@ export interface StatementRange {
  * Split a Jinja-SQL document into individual statements separated by `;`.
  *
  * Strategy:
- * 1. Use `blankJinja()` to neutralise all Jinja tags (preserving offsets).
- * 2. Walk the blanked text, tracking string literals (`'...'`) and comments
+ * 1. Use sqllens's placeholder fill to neutralise all Jinja tags — length- and
+ *    newline-preserving, so every offset maps 1:1 to the original source.
+ * 2. Walk the filled text, tracking string literals (`'...'`) and comments
  *    (`--` line, `/ * … * /` block) so we only split on `;` that is actually
  *    statement-terminating.
  * 3. Map split points back to the original source via the preserved offsets.
  *
  * Empty statements (e.g. `;;` or trailing `;`) are discarded.
  */
-// Matches all Jinja tag types — same pattern as jinja-blanker.ts.
-// Duplicated here to avoid exporting an internal regex.
-const JINJA_RE = /\{%-?[\s\S]*?-?%\}|\{\{[\s\S]*?\}\}|\{#-?[\s\S]*?-?#\}/g;
-
 export function splitStatements(sql: string): StatementRange[] {
-	const { blanked } = blankJinja(sql);
+	// Jinja segmentation is dialect-independent — the default dialect suffices.
+	const templated = parseTemplated(sql, toSqllensDialect(undefined));
+	const blanked = templated.placeholder;
 	const len = blanked.length;
 	const splitPoints: number[] = [];
 
-	// Build a set of positions that fall inside Jinja tags in the original text.
-	// blankJinja() may leave special chars (like `;` in an identifier) that we
-	// must NOT treat as statement terminators.
+	// Positions inside Jinja tags (exact spans from the tag-AST): a fill char
+	// must never be treated as a statement terminator.
 	const insideJinja = new Uint8Array(len);
-	for (const m of sql.matchAll(JINJA_RE)) {
-		const start = m.index!;
-		const end = start + m[0].length;
-		for (let j = start; j < end; j++) insideJinja[j] = 1;
+	for (const tag of templated.tags) {
+		for (let j = tag.tagSpan.start; j < tag.tagSpan.end; j++) insideJinja[j] = 1;
 	}
 
 	let i = 0;

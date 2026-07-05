@@ -71,27 +71,23 @@ describe('PyodideSqlParser', () => {
 		expect(Object.keys(root.sources).length).toBeGreaterThan(0);
 	});
 
-	it('preserves correct line numbers when a multi-line Jinja tag precedes the SELECT', async () => {
-		// Pass 1 (identifier mode): macro → bare identifier before SELECT → syntax error.
-		// Pass 1b (comment mode): macro → /* ... */ block comment → valid SQL.
-		// Line numbers are still exact in pass 1b (same byte length).
-		// The SELECT is on line 6 — 'id' must report line 6 in the AST.
+	it('preserves correct line numbers across a multi-line Jinja tag', async () => {
+		// The sqllens fill is length- AND newline-preserving (identifier on the
+		// tag's first line, spaces on the rest), so everything AFTER a multi-line
+		// tag keeps its exact source line. FROM users is on line 5.
 		const sql = [
-			'{{',                     // line 1
-			'  some_macro(',          // line 2
-			'    "arg"',              // line 3
-			'  )',                    // line 4
-			'}}',                     // line 5
-			'SELECT id FROM users',   // line 6
+			'SELECT',                 // line 1
+			'  {{',                   // line 2
+			'    some_macro("arg")',  // line 3
+			'  }} AS c',              // line 4
+			'FROM users',             // line 5
 		].join('\n');
 		const result = await parser.parse(sql, 'duckdb');
+		expect(result.warnings.some(w => w.type === 'syntax_error')).toBe(false);
 		expect(result.ast.length).toBeGreaterThan(0);
-		// Every node with a line number must report line >= 6 (the SELECT line).
-		const linesReported = result.ast
-			.map(n => n.m?.line)
-			.filter((l): l is number => l !== undefined);
-		expect(linesReported.length).toBeGreaterThan(0);
-		expect(Math.min(...linesReported)).toBeGreaterThanOrEqual(6);
+		// Some node (the users table identifier) must sit on line 5.
+		const lines = result.ast.map(n => n.m?.line).filter((l): l is number => l !== undefined);
+		expect(lines).toContain(5);
 	});
 
 	it('handles Jinja block comment tags {# #}', async () => {
@@ -134,10 +130,13 @@ SELECT * FROM orders`;
 		expect(result.scopes.some(s => s.type === 'cte')).toBe(true);
 	});
 
-	it('handles a statement-level macro between JOIN and UNION ALL (pass 1b)', async () => {
-		// {{ generic_is_deleted() }} in identifier mode becomes a bare identifier
-		// between a JOIN clause and UNION ALL — invalid SQL.
-		// Pass 1b (comment mode) produces /* ... */ which is valid everywhere.
+	it('degrades to an error result for a predicate-position macro (cascade rescue retired)', async () => {
+		// {{ generic_is_deleted(...) }} fills to a bare identifier between a JOIN
+		// clause and UNION ALL — invalid SQL. The comment-blank rescue (pass 1b)
+		// is gone with the cascade: the result carries syntax_error warnings and
+		// the jinja stream still delivers both macro tags for extraction.
+		// (Closing this input class properly is the classifyMacroShape
+		// 'predicate' extension on the shapeOf seam, not a text-rewrite rescue.)
 		const sql = `WITH warehouse AS (
     SELECT wh.mkey, ss.sourcename
     FROM gold__warehouse wh
@@ -153,8 +152,12 @@ SELECT * FROM orders`;
 )
 SELECT mkey, sourcename FROM warehouse`;
 		const result = await parser.parse(sql, 'duckdb');
-		expect(result.ast.length).toBeGreaterThan(0);
-		expect(result.scopes.some(s => s.type === 'cte')).toBe(true);
+		expect(result.warnings.some(w => w.type === 'syntax_error')).toBe(true);
+		// Extraction is unaffected: the stream still carries both macro tags.
+		const macroIds = (result.jinjaTokens ?? []).filter(
+			t => t.type === 'jinja_identifier' && t.value === 'generic_is_deleted',
+		);
+		expect(macroIds).toHaveLength(2);
 	});
 
 	it('reports correct line numbers for table references in a CTE query', async () => {
