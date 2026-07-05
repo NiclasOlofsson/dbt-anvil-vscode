@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SqllensDocumentParser } from './document-parser';
-import { makeShapeOf } from './template-shape';
+import { makeTemplateProvider } from './template-shape';
 import { decompose } from './decompose';
 import { traceColumnLineage } from './lineage';
 import { buildStarExpander } from './extract/star-expand';
@@ -326,13 +326,13 @@ describe('SqllensDocumentParser — parse-failure paths', () => {
 		expect(errs[0].endCol).toBeGreaterThan(errs[0].col!);
 	});
 
-	it('parses a trailing-conjunct macro cleanly when shapeOf classifies it (conjunct shape)', async () => {
+	it('parses a trailing-conjunct macro cleanly when the provider classifies it (conjunct shape)', async () => {
 		// The Oatly `generic_is_deleted` family: an `and …` conjunct appended after
 		// a complete ON expression, before UNION ALL. With the macro's source bound
-		// via shapeOf, classifyMacroShape answers 'conjunct' and sqllens fills
+		// via the provider, classifyMacroShape answers 'conjunct' and sqllens fills
 		// `AND 1=1` — restoring the full-parse assertions the cascade's comment-
 		// blank rescue used to provide (and better: the query structure survives).
-		const shapeOf = makeShapeOf(name =>
+		const templateProvider = makeTemplateProvider(name =>
 			name === 'generic_is_deleted'
 				? '{% macro generic_is_deleted(column) %}and {{ column }} = false{% endmacro %}'
 				: undefined,
@@ -357,7 +357,7 @@ describe('SqllensDocumentParser — parse-failure paths', () => {
 			')',                                                     // 16
 			'select mkey, sourcename from warehouse',                // 17
 		].join('\n');
-		const model = await new SqllensDocumentParser({ adapterType: 'databricks', shapeOf }).parse(sql);
+		const model = await new SqllensDocumentParser({ adapterType: 'databricks', templateProvider }).parse(sql);
 		expect(model.sqlglotWarnings ?? []).toEqual([]);
 		expect(model.ctes).toHaveLength(1);
 		expect(model.ctes[0].name).toBe('warehouse');
@@ -368,7 +368,7 @@ describe('SqllensDocumentParser — parse-failure paths', () => {
 	});
 
 	it('yields an error-tolerant partial model for an unshaped statement-level macro', async () => {
-		// The macro sits between two full statements and no shapeOf is bound, so the
+		// The macro sits between two full statements and no provider macro knowledge is bound, so the
 		// identifier fill leaves invalid SQL. There is no render pass anymore: the
 		// partial parse IS the result — raw coordinates (isPass2 never set), syntax
 		// errors surfaced as warnings, and the tag-AST still delivers the macro call.

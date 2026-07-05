@@ -15,7 +15,7 @@ import type { DocumentModel } from '../../services/parse-service';
 import type { DocumentParser, ParseOptions } from '../../services/document-parser';
 import type { DialectSymbols } from '../sql-parser';
 import { performance } from 'node:perf_hooks';
-import { dialectSymbols, parseTemplated, qualify, resolveScopes, Schema, toSqllensDialect, type Dialect, type Qualification, type SchemaMapping, type ShapeOf } from './api';
+import { dialectSymbols, parseTemplated, qualify, resolveScopes, Schema, toSqllensDialect, type Dialect, type Qualification, type SchemaMapping, type TemplateProvider } from './api';
 import { keywordTokenTypesFor, mapTokens } from './token-mapper';
 import { mergeSqlAndJinjaTokens } from '../ninja-sql-tokens';
 import { tagInfos } from './extract/tag-infos';
@@ -32,17 +32,16 @@ import type { SqllensParse } from './extract/spans';
 
 /**
  * The subset of ManifestIndexer the parser needs. `adapterType` selects the
- * sqllens dialect. `shapeOf` is the optional C4 template-catalog seam: a
- * synchronous macro-name -> expansion-shape lookup (sourced from the dbt manifest)
- * that lets `parseTemplated` fill a statement/CTE-body macro placeholder with a
- * shape-valid fragment instead of the identifier fill — so a macro-generated
- * query body parses natively instead of falling back to the blank cascade. Absent
- * = zero-catalog = byte-identical to the 2-arg parse. ManifestIndexer satisfies
- * this structurally.
+ * sqllens dialect. `templateProvider` is the catalog seam (sqllens 4e1b18b): a
+ * per-document `DefaultTemplateProvider` subclass answering what template calls
+ * produce (manifest-sourced shape classification today; relations/values as we
+ * climb). Reading the property constructs a fresh instance, so each parse gets
+ * its own warm cache. Absent = the engine's shipped default behavior.
+ * ManifestIndexer satisfies this structurally.
  */
 export interface AdapterContext {
 	readonly adapterType: string | undefined;
-	readonly shapeOf?: ShapeOf;
+	readonly templateProvider?: TemplateProvider;
 }
 
 /**
@@ -187,9 +186,11 @@ export class SqllensDocumentParser implements DocumentParser {
 		// partial ast + diagnostics (mapped to syntax_error warnings below) — sqllens
 		// is error-tolerant by design; the legacy blank/render cascade is gone.
 		const tp0 = performance.now();
-		// shapeOf (C4): statement/CTE-body macro placeholders fill shape-valid so
-		// macro-generated bodies parse natively. Undefined -> zero-catalog, byte-identical.
-		const templated = parseTemplated(rawSql, dialect, { shapeOf: this._context.shapeOf });
+		// provider (4e1b18b): statement/conjunct/CTE-body macro placeholders fill
+		// shape-valid so macro-generated bodies parse natively; builtins keep the
+		// default provider's answers. Undefined -> the engine's shipped default.
+		const provider = this._context.templateProvider;
+		const templated = parseTemplated(rawSql, dialect, provider ? { provider } : undefined);
 		const scopes = resolveScopes(templated.sql.ast, dialect);
 		const parseMs = performance.now() - tp0;
 		const result: SqllensParse = {

@@ -30,7 +30,8 @@
  * fit-guard Open Gap sqllens owns; `statement` is safe in every real position (a select-item
  * `SELECT 1` is fit-rejected back to the identifier fill; a `(...)`/statement slot accepts it).
  */
-import type { ExpansionShape, ShapeOf } from './api';
+import { DefaultTemplateProvider } from './api';
+import type { ExpansionShape, TemplateCall } from './api';
 
 /**
  * Classify a macro's expansion shape from its `macro_sql` source. Returns `statement`
@@ -55,11 +56,26 @@ export function classifyMacroShape(macroSql: string | undefined): ExpansionShape
 }
 
 /**
- * Build a `ShapeOf` callback from a macro-name -> macro_sql lookup. Lazy: a macro's shape
- * is classified only when `parseTemplated` asks about it (i.e. it appears as a tag), so
- * macros that never appear in a model body are never classified. `parts` (package-qualified
- * calls) is ignored in v1 — dbt macro names are unique enough by bare name for the lookup.
+ * The extension's template provider (sqllens 4e1b18b catalog unification): the
+ * shipped `DefaultTemplateProvider` carries the dbt-builtin knowledge (config →
+ * "nothing", ref/source relations, env_var strings); this subclass overrides
+ * `shapeOf` with the manifest-sourced classifier. `super.shapeOf` runs FIRST so
+ * builtins keep their default answers (ship-note contract). Lazy: a macro is
+ * classified only when the engine asks about it (i.e. it appears as a tag);
+ * package qualifiers are ignored — dbt macro names are unique enough by bare
+ * name for the lookup.
  */
-export function makeShapeOf(lookup: (name: string) => string | undefined): ShapeOf {
-	return (call) => classifyMacroShape(lookup(call.name));
+class AnvilTemplateProvider extends DefaultTemplateProvider {
+	constructor(private readonly lookupMacroSql: (name: string) => string | undefined) {
+		super();
+	}
+
+	override shapeOf(call: TemplateCall): ExpansionShape | undefined {
+		return super.shapeOf(call) ?? classifyMacroShape(this.lookupMacroSql(call.name));
+	}
+}
+
+/** Build a per-document provider from a macro-name -> macro_sql lookup. */
+export function makeTemplateProvider(lookup: (name: string) => string | undefined): DefaultTemplateProvider {
+	return new AnvilTemplateProvider(lookup);
 }

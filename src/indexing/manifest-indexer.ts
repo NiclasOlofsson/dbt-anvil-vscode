@@ -3,8 +3,8 @@ import type { DbtManifest, DbtMacroArgument, DbtNode, DbtSource, ResourceType } 
 import { ManifestLoader } from '../dbt/manifest-loader';
 import type { ILogger } from '../types/logger';
 import { classifyLayer, type LayerConfig, type LayerInfo } from './layer-classifier';
-import { makeShapeOf } from '../ftl/sqllens/template-shape';
-import type { ShapeOf } from '../ftl/sqllens/api';
+import { makeTemplateProvider } from '../ftl/sqllens/template-shape';
+import type { TemplateProvider } from '../ftl/sqllens/api';
 
 /**
  * Map a dbt adapter type to the canonical sqlglot dialect name.
@@ -149,8 +149,8 @@ export class ManifestIndexer {
 	 * macro-generated query body parses natively instead of hitting the blank cascade. Reads
 	 * the current index each call, so it stays fresh across re-indexes.
 	 */
-	get shapeOf(): ShapeOf {
-		return makeShapeOf(name => this.findMacroByName(name)?.macroSql);
+	get templateProvider(): TemplateProvider {
+		return makeTemplateProvider(name => this.findMacroByName(name)?.macroSql);
 	}
 
 	/**
