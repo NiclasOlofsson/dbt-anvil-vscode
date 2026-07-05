@@ -55,7 +55,6 @@
  * (see tag-infos.test.ts for the parity cases).
  */
 import type { MacroCall, PartSpan, TagNode } from '../api';
-import { buildLineStarts, colAtOffset, lineAtOffset } from '../../jinja-spans';
 import { NOT_MACRO_CALLS } from '../../extractors/jinja-tag-extractors';
 import type { MacroCallArgInfo, MacroCallInfo, RefInfo, SourceInfo } from '../../../services/parse-service';
 
@@ -65,18 +64,13 @@ export interface TagInfos {
 	macroCalls: MacroCallInfo[];
 }
 
-/** offset -> line, and offset -> column, over the raw document. */
-type Conv = (off: number) => number;
-
 /**
  * Project sqllens R2 tag nodes onto the extension's ref / source / macro consumer
- * shapes. `rawSql` is the ORIGINAL document the spans index into (offset -> line/col).
+ * shapes. Every position is a direct PartSpan field read (line 1-based -> 0-based;
+ * column/endColumn already 0-based) — the offset->line/col conversion pass died
+ * with sqllens beb5adb, which carries end positions on every span.
  */
-export function tagInfos(tags: TagNode[], rawSql: string): TagInfos {
-	const lineStarts = buildLineStarts(rawSql);
-	const ln: Conv = (off) => lineAtOffset(off, lineStarts);
-	const cl: Conv = (off) => colAtOffset(off, lineStarts);
-
+export function tagInfos(tags: TagNode[]): TagInfos {
 	const refs: RefInfo[] = [];
 	const sources: SourceInfo[] = [];
 	const macroCalls: MacroCallInfo[] = [];
@@ -87,14 +81,14 @@ export function tagInfos(tags: TagNode[], rawSql: string): TagInfos {
 				model: tag.model,
 				// line/col anchor on the `ref` identifier (callSpan starts at the callee),
 				// NOT the `{{` — matches the old extractor's `id.line`/`id.col`.
-				line: ln(tag.callSpan.start),
-				col: cl(tag.callSpan.start),
+				line: tag.callSpan.line - 1,
+				col: tag.callSpan.column,
 				// model name string CONTENT (quotes excluded — modelSpan is content-only).
-				modelCol: cl(tag.modelSpan.start),
-				modelEndCol: cl(tag.modelSpan.end),
+				modelCol: tag.modelSpan.column,
+				modelEndCol: tag.modelSpan.endColumn,
 				// full `{{ … }}` tag span.
-				jinjaCol: cl(tag.tagSpan.start),
-				jinjaEndCol: cl(tag.tagSpan.end),
+				jinjaCol: tag.tagSpan.column,
+				jinjaEndCol: tag.tagSpan.endColumn,
 			});
 		} else if (tag.kind === 'source') {
 			sources.push({
@@ -102,16 +96,16 @@ export function tagInfos(tags: TagNode[], rawSql: string): TagInfos {
 				tableName: tag.tableName,
 				// line/col anchor on the bare `source` identifier (callSpan starts at the
 				// callee, exactly like ref) — matches the old extractor's `id.line`/`id.col`.
-				line: ln(tag.callSpan.start),
-				col: cl(tag.callSpan.start),
+				line: tag.callSpan.line - 1,
+				col: tag.callSpan.column,
 				// source/table string CONTENT (quotes excluded — the spans are content-only).
-				sourceNameCol: cl(tag.sourceNameSpan.start),
-				sourceNameEndCol: cl(tag.sourceNameSpan.end),
-				tableNameCol: cl(tag.tableNameSpan.start),
-				tableNameEndCol: cl(tag.tableNameSpan.end),
+				sourceNameCol: tag.sourceNameSpan.column,
+				sourceNameEndCol: tag.sourceNameSpan.endColumn,
+				tableNameCol: tag.tableNameSpan.column,
+				tableNameEndCol: tag.tableNameSpan.endColumn,
 				// full `{{ … }}` tag span.
-				jinjaCol: cl(tag.tagSpan.start),
-				jinjaEndCol: cl(tag.tagSpan.end),
+				jinjaCol: tag.tagSpan.column,
+				jinjaEndCol: tag.tagSpan.endColumn,
 			});
 		} else if (tag.kind === 'macro') {
 			// `{{ … }}` expression macro node. `calls` (af1170c) is the top-level call
@@ -121,7 +115,7 @@ export function tagInfos(tags: TagNode[], rawSql: string): TagInfos {
 			// NOT_MACRO_CALLS set (`ref`/`source`/`var`/`env_var`/`config` never surface).
 			for (const call of tag.calls) {
 				if (NOT_MACRO_CALLS.has(call.name)) continue;
-				macroCalls.push(macroInfo(call, tag.tagSpan, ln, cl));
+				macroCalls.push(macroInfo(call, tag.tagSpan));
 			}
 		} else if (tag.kind === 'control') {
 			// `{% … %}` block tag — each embedded call, filtered like the old extractor.
@@ -138,7 +132,7 @@ export function tagInfos(tags: TagNode[], rawSql: string): TagInfos {
 				// `ref`/`source`/jinja keywords/dbt globals (`config`/`var`/`env_var`) that
 				// appear as callees INSIDE a control tag are not user macro calls.
 				if (NOT_MACRO_CALLS.has(call.name)) continue;
-				macroCalls.push(macroInfo(call, tag.tagSpan, ln, cl));
+				macroCalls.push(macroInfo(call, tag.tagSpan));
 			}
 		}
 		// var / env_var / config / other: not ref/source/macro-call sites.
@@ -154,30 +148,30 @@ export function tagInfos(tags: TagNode[], rawSql: string): TagInfos {
  * span of its own) — mirroring the old extractor's `jinjaLine`/`jinjaCol`/`jinjaEndCol`
  * = the enclosing tag opener for both regions.
  */
-function macroInfo(mc: MacroCall, tagSpan: PartSpan, ln: Conv, cl: Conv): MacroCallInfo {
+function macroInfo(mc: MacroCall, tagSpan: PartSpan): MacroCallInfo {
 	const args: MacroCallArgInfo[] = mc.args.map(a => ({
-		line: ln(a.span.start),
-		col: cl(a.span.start),
-		endCol: cl(a.span.end),
+		line: a.span.line - 1,
+		col: a.span.column,
+		endCol: a.span.endColumn,
 	}));
 
 	return {
 		name: mc.name,
 		...(mc.packageName !== undefined ? { packageName: mc.packageName } : {}),
 		// bare macro-name identifier.
-		line: ln(mc.nameSpan.start),
-		col: cl(mc.nameSpan.start),
-		endCol: cl(mc.nameSpan.end),
+		line: mc.nameSpan.line - 1,
+		col: mc.nameSpan.column,
+		endCol: mc.nameSpan.endColumn,
 		...(mc.packageSpan !== undefined
-			? { packageCol: cl(mc.packageSpan.start), packageEndCol: cl(mc.packageSpan.end) }
+			? { packageCol: mc.packageSpan.column, packageEndCol: mc.packageSpan.endColumn }
 			: {}),
 		// full enclosing tag.
-		jinjaCol: cl(tagSpan.start),
-		jinjaEndCol: cl(tagSpan.end),
-		jinjaLine: ln(tagSpan.start),
+		jinjaCol: tagSpan.column,
+		jinjaEndCol: tagSpan.endColumn,
+		jinjaLine: tagSpan.line - 1,
 		// argument list `( … )`.
 		...(mc.argsSpan !== undefined
-			? { argsCol: cl(mc.argsSpan.start), argsEndCol: cl(mc.argsSpan.end) }
+			? { argsCol: mc.argsSpan.column, argsEndCol: mc.argsSpan.endColumn }
 			: {}),
 		args,
 	};

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildLineStarts, lineAtOffset, colAtOffset } from '../../ftl/jinja-spans';
+import { buildLineStarts, lineAtOffset, colAtOffset } from '../../ftl/line-index';
 
 // ── helper offset utilities ───────────────────────────────────────────────
 

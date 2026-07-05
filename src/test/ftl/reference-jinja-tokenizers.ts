@@ -16,7 +16,7 @@
  */
 import type { JinjaToken as FineJinjaToken, JinjaTokenType as FineJinjaTokenType } from '../../ftl/jinja-tokenizer';
 import type { JinjaToken as CoarseJinjaToken } from '../../ftl/sqllens/extract/coarse-jinja';
-import { buildLineStarts, colAtOffset, lineAtOffset } from '../../ftl/jinja-spans';
+import { buildLineStarts, colAtOffset, lineAtOffset } from '../../ftl/line-index';
 
 // ---------------------------------------------------------------------------
 // iterJinjaTags — the depth-counting tag scanner (ex src/dbt/jinja-blanker.ts).

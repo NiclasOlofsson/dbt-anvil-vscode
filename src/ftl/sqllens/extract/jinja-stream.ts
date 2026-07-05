@@ -27,7 +27,7 @@
  */
 import type { JinjaToken, JinjaTokenType } from '../../jinja-tokenizer';
 import type { PartSpan, TagNode, Token } from '../api';
-import { buildLineStarts, colAtOffset, lineAtOffset } from '../../jinja-spans';
+import { buildLineStarts, colAtOffset, lineAtOffset } from '../../line-index';
 
 /** minijinja opening-delimiter token names → the `*_open` JinjaToken type. */
 const OPEN_TYPES: Record<string, JinjaTokenType> = {

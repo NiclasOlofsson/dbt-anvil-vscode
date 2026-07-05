@@ -14,6 +14,8 @@
  * scope). See EXTRACTOR-MAP §2.
  */
 import type {
+	RefInfo,
+	SourceInfo,
 	ColumnDefToken,
 	ColumnRefToken,
 	TableRefToken,
@@ -89,19 +91,26 @@ function tableRefForSource(src: ResolvedSource, scopeId: number, tokens: Token[]
 		// R3: a templated relation (`{{ ref('x') }}` in a FROM/JOIN slot) parses over a
 		// length-preserving placeholder, so its physical name token is filler (`jjj…`). The
 		// tag-applied ast sets the SOURCE name to the real model — prefer `canonical` over
-		// the placeholder token text there. No-op on the blank-cascade path (no `template`
-		// marker; the token text already IS the real name).
-		const templated = src.kind === 'table' && (src.source as TableSource).template !== undefined;
+		// the placeholder token text there. No-op on plain SQL (no `template` marker; the
+		// token text IS the real name).
+		const template = src.kind === 'table' ? (src.source as TableSource).template : undefined;
+		// endCol widens to the whole `{{ … }}` from `template.span` (hover/diagnostic
+		// ranges cover the tag incl. closing braces) — for ref/source tags ONLY, the
+		// exact set the old jinja-token-enrichment stitch widened. Opaque macro/expr
+		// sources keep the name-width span the rules always saw for them.
+		const tagWide = template && (template.kind === 'ref' || template.kind === 'source')
+			? template.span.endColumn
+			: undefined;
 
 		let tok: TableRefToken;
 		if (nameTok) {
-			const display = templated ? canonical : nameTok.text;
+			const display = template ? canonical : nameTok.text;
 			tok = {
 				type: 'table_ref',
 				name: normName(display, dialect),
 				line: nameTok.line - 1,
 				col: nameTok.column,
-				endCol: nameTok.column + display.length,
+				endCol: tagWide ?? nameTok.column + display.length,
 				scopeId,
 			};
 		} else {
@@ -111,7 +120,7 @@ function tableRefForSource(src: ResolvedSource, scopeId: number, tokens: Token[]
 				name: normName(canonical, dialect),
 				line: s ? s.line - 1 : 0,
 				col: s ? s.column : 0,
-				endCol: (s ? s.column : 0) + canonical.length,
+				endCol: tagWide ?? (s ? s.column : 0) + canonical.length,
 				scopeId,
 			};
 		}
@@ -419,4 +428,26 @@ export function extractTokens(parse: SqllensParse, qualification?: Qualification
 
 	resolveTableRefs(tokens, sourceRefs);
 	return tokens;
+}
+
+/**
+ * Back-fill `alias` on ref/source infos from the matching template-marked
+ * `table_ref` token — the tag-AST knows the tag but never sees SQL aliases
+ * (`{{ ref('x') }} co`), the token side does. The span half of the old
+ * jinja-token-enrichment stitch is gone (tokens are born tag-wide from
+ * `template.span` above); this is the surviving alias half, same match keys.
+ */
+export function backfillTagAliases(tokens: TokenInfo[], refs: RefInfo[], sources: SourceInfo[]): void {
+	for (const ref of refs) {
+		const tok = tokens.find((t): t is TableRefToken =>
+			t.type === 'table_ref' && t.name === ref.model && t.line === ref.line && t.col === ref.jinjaCol,
+		);
+		if (tok?.alias && tok.alias !== ref.model) ref.alias = tok.alias;
+	}
+	for (const src of sources) {
+		const tok = tokens.find((t): t is TableRefToken =>
+			t.type === 'table_ref' && t.name === src.tableName && t.line === src.line && t.col === src.jinjaCol,
+		);
+		if (tok?.alias && tok.alias !== src.tableName) src.alias = tok.alias;
+	}
 }

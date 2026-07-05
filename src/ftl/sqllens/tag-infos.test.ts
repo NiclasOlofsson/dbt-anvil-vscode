@@ -16,7 +16,7 @@ import { extractMacroCalls, extractRefs, extractSources } from '../extractors/ji
 import { referenceTokenizeJinja as tokenizeJinja } from '../../test/ftl/reference-jinja-tokenizers';
 
 function fromTags(sql: string): ReturnType<typeof tagInfos> {
-	return tagInfos(parseTemplated(sql, 'databricks').tags, sql);
+	return tagInfos(parseTemplated(sql, 'databricks').tags);
 }
 
 // ---------------------------------------------------------------------------

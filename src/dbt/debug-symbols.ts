@@ -1,4 +1,4 @@
-import { buildLineStarts, lineAtOffset } from '../ftl/jinja-spans';
+import { buildLineStarts } from '../ftl/line-index';
 import { deriveSymbols, parseTemplated, tokenize, toSqllensDialect, MAIN_FRAME } from '../ftl/sqllens/api';
 import type { Sym, Dialect, TagNode } from '../ftl/sqllens/api';
 import { jinjaTokensFromStream } from '../ftl/sqllens/extract/jinja-stream';
@@ -562,7 +562,7 @@ export function emitDebugSymbolsFromTokens(
 	// (this path runs once per debug session, so the extra templated parse is
 	// negligible; the sqllens emit path reuses its own).
 	const { refMarkers, sourceMarkers, macroSpans } = buildJinjaClassifications(
-		jinjaTokens, lineStarts, parseTemplated(source, toSqllensDialect(undefined)).tags,
+		jinjaTokens, parseTemplated(source, toSqllensDialect(undefined)).tags,
 	);
 
 	const annotatedSource = injectMarkers(source, symbols, jinjaSpans, { macroSpans, refMarkers, sourceMarkers });
@@ -576,7 +576,6 @@ export function emitDebugSymbolsFromTokens(
  */
 function buildJinjaClassifications(
 	jinjaTokens: JinjaToken[],
-	lineStarts: number[],
 	tags: TagNode[],
 ): { refMarkers: BridgeRefMarker[]; sourceMarkers: BridgeSourceMarker[]; macroSpans: BridgeMacroSpan[] } {
 	const refMarkers: BridgeRefMarker[] = [];
@@ -637,7 +636,7 @@ function buildJinjaClassifications(
 		if (tag.kind !== 'macro') continue;
 		macroSpans.push({
 			name: tag.name,
-			sourceLine: lineAtOffset(tag.tagSpan.start, lineStarts),
+			sourceLine: tag.tagSpan.line - 1,
 			startOffset: tag.tagSpan.start,
 			endOffset: tag.tagSpan.end,
 		});
@@ -895,7 +894,7 @@ export function emitDebugSymbols(
 
 	if (symbols.length === 0) return undefined;
 
-	const { refMarkers, sourceMarkers, macroSpans } = buildJinjaClassifications(jinjaTokens, lineStarts, tags);
+	const { refMarkers, sourceMarkers, macroSpans } = buildJinjaClassifications(jinjaTokens, tags);
 	const annotatedSource = injectMarkers(source, symbols, jinjaSpans, { macroSpans, refMarkers, sourceMarkers });
 	return { annotatedSource, symbols, macroSpans, refMarkers, sourceMarkers };
 }

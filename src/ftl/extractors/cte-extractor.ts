@@ -1,7 +1,7 @@
 import type { AstPayload } from '../parse-result';
 import type { ColumnInfo, CteInfo } from '../../services/parse-service';
 import { childOf, expressionsOf, findAll, identifierName, identifierPosition, unwrapToSelect } from '../ast-utils';
-import { buildLineStarts, lineAtOffset } from '../jinja-spans';
+import { buildLineStarts, lineAtOffset } from '../line-index';
 import { getColumnExprMetadata } from './column-expr-helpers';
 import { findMatchingParen } from './sql-paren-utils';
 

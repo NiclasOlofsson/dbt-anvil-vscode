@@ -20,12 +20,11 @@ import { keywordTokenTypesFor, mapTokens } from './token-mapper';
 import { mergeSqlAndJinjaTokens } from '../ninja-sql-tokens';
 import { tagInfos } from './extract/tag-infos';
 import { jinjaTokensFromStream } from './extract/jinja-stream';
-import { enrichTokensWithJinjaSpans } from '../extractors/jinja-token-enrichment';
 import { createSqllensAstIndex } from './ast-index';
 import { decompose } from './decompose';
 import { traceColumnLineage, type LineageResult } from './lineage';
 import { extractCtes } from './extract/ctes';
-import { extractTokens } from './extract/tokens';
+import { backfillTagAliases, extractTokens } from './extract/tokens';
 import { extractFinalColumns, extractFinalSelect } from './extract/final-select';
 import { buildStarExpander } from './extract/star-expand';
 import { mapDiagnostics } from './extract/warnings';
@@ -245,8 +244,10 @@ export class SqllensDocumentParser implements DocumentParser {
 		// the 2-arg `ref('pkg','model')` form; macroCalls carry nested calls since
 		// sqllens `af1170c` — the expression `macro` node's `calls: MacroCall[]` is
 		// symmetric to `control.calls`).
-		const { refs, sources, macroCalls } = tagInfos(templated.tags, rawSql);
-		enrichTokensWithJinjaSpans(tokens, refs, sources);
+		const { refs, sources, macroCalls } = tagInfos(templated.tags);
+		// Templated table_ref tokens are born tag-wide (extract/tokens reads
+		// `template.span`); only the alias back-fill onto refs/sources remains.
+		backfillTagAliases(tokens, refs, sources);
 
 		// parseTemplated's placeholder is length-preserving, so token offsets line up
 		// with rawSql — mapTokens derives line starts from rawSql.
