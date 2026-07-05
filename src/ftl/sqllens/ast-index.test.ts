@@ -153,17 +153,21 @@ describe('createSqllensAstIndex — degenerate parse', () => {
 		expect(ix.isCteOrSubqueryBodyOpen(9999)).toBe(false);
 	});
 
-	it('leaves the model index undefined on a pass2 (rendered-space) parse', async () => {
-		// A statement-level macro breaks every length-preserving blank, forcing the
-		// nunjucks-render pass (pass2). Its offsets are rendered-space, so the parser
-		// must NOT attach an index — the reflow path falls back to an empty index.
+	it('attaches a raw-coordinate index even when the parse carries syntax errors', async () => {
+		// A statement-level macro the parser cannot shape (no shapeOf bound) leaves
+		// residual syntax errors — but the placeholder is length-preserving, so the
+		// partial ast's offsets are STILL raw-source coordinates and the index stays
+		// valid for the parts that did parse. (The retired cascade re-parsed
+		// nunjucks-rendered text here, whose shifted offsets forbade attaching one.)
 		const sql = 'select a from t\n{{ some_statement_macro() }}\nselect b from u';
 		const model = await new SqllensDocumentParser({ adapterType: 'databricks' }).parse(sql);
-		expect(model.isPass2).toBe(true);
-		expect(model.astIndex).toBeUndefined();
+		expect(model.isPass2).toBeFalsy();
+		expect(model.astIndex).toBeDefined();
+		// Statement 1 parsed — its enclosure answers at raw offsets.
+		expect(model.astIndex!.enclosingClasses(sql.indexOf('a from t'))).toContain('Select');
 	});
 
-	it('attaches an index on a clean (pass1) parse', async () => {
+	it('attaches an index on a clean parse', async () => {
 		const model = await new SqllensDocumentParser({ adapterType: 'databricks' }).parse('select a from t');
 		expect(model.isPass2).toBeFalsy();
 		expect(model.astIndex).toBeDefined();

@@ -315,7 +315,7 @@ describe('SqllensDocumentParser — alias spans via Projection.aliasCst (ITEM 5)
 	});
 });
 
-describe('SqllensDocumentParser — parse-failure and cascade paths', () => {
+describe('SqllensDocumentParser — parse-failure paths', () => {
 	it('reports syntax_error warnings with 0-based positions for broken SQL', async () => {
 		const model = await parser().parse('select a from t )))');
 		const errs = (model.sqlglotWarnings ?? []).filter(w => w.type === 'syntax_error');
@@ -325,13 +325,18 @@ describe('SqllensDocumentParser — parse-failure and cascade paths', () => {
 		expect(errs[0].endCol).toBeGreaterThan(errs[0].col!);
 	});
 
-	it('falls through to pass2 when a statement-level macro breaks every blank', async () => {
-		// The macro sits between two full statements: identifier-mode (pass1) and
-		// comment-mode (pass1b) blanking both leave invalid SQL, so only the
-		// nunjucks render (pass2) yields a parse — which sets isPass2.
+	it('yields an error-tolerant partial model for an unshaped statement-level macro', async () => {
+		// The macro sits between two full statements and no shapeOf is bound, so the
+		// identifier fill leaves invalid SQL. There is no render pass anymore: the
+		// partial parse IS the result — raw coordinates (isPass2 never set), syntax
+		// errors surfaced as warnings, and the tag-AST still delivers the macro call.
 		const sql = 'select a from t\n{{ some_statement_macro() }}\nselect b from u';
 		const model = await parser().parse(sql);
-		expect(model.isPass2).toBe(true);
+		expect(model.isPass2).toBeFalsy();
+		expect((model.sqlglotWarnings ?? []).some(w => w.type === 'syntax_error')).toBe(true);
+		expect((model.macroCalls ?? []).map(m => m.name)).toContain('some_statement_macro');
+		// Statement 1 parsed — its table ref survives in the token stream.
+		expect(model.tokens.some(t => t.type === 'table_ref' && t.name === 't')).toBe(true);
 	});
 });
 

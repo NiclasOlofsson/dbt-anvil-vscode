@@ -2,25 +2,22 @@
  * sqllens-native `DocumentParser` — builds the extension's `DocumentModel` from
  * the sibling `sqllens` parser (native TypeScript, no Pyodide/sqlglot).
  *
- * It reuses the sqlglot path's jinja machinery unchanged: the raw source is
- * tokenised for `{{ ref }}` / `{{ source }}` / macro extraction, then the
- * three-pass blanking cascade (`parseWithJinjaFallback`) feeds SQL-safe text to
- * sqllens. The success predicate is "no syntax errors" (`errors === 0`), the
- * sqllens analog of the sqlglot path's `no syntax_error warnings`.
+ * The jinja front end is sqllens's own: `parseTemplated` segments the tags, runs
+ * the SQL grammar over a length/newline-preserving placeholder (all spans stay in
+ * raw-source coordinates), and returns the unified token stream + tag-AST this
+ * parser consumes directly. sqllens is error-tolerant — a residual syntax error
+ * yields a partial ast + diagnostics (surfaced as syntax_error warnings), never a
+ * throw and never a fallback.
  *
  * Runs alongside `FtlDocumentParser` until cutover — neither touches the other.
  */
-import type { DocumentModel, MacroCallInfo, RefInfo, SourceInfo } from '../../services/parse-service';
+import type { DocumentModel } from '../../services/parse-service';
 import type { DocumentParser, ParseOptions } from '../../services/document-parser';
 import type { DialectSymbols } from '../sql-parser';
 import { performance } from 'node:perf_hooks';
-import { dialectSymbols, parse, parseTemplated, qualify, resolveScopes, Schema, toSqllensDialect, type Dialect, type Qualification, type SchemaMapping, type ShapeOf, type TagNode } from './api';
-import { tokenizeJinja, type JinjaToken } from '../jinja-tokenizer';
-import { parseWithJinjaFallback, type ParsePass } from '../parse-with-jinja-fallback';
+import { dialectSymbols, parseTemplated, qualify, resolveScopes, Schema, toSqllensDialect, type Dialect, type Qualification, type SchemaMapping, type ShapeOf } from './api';
 import { keywordTokenTypesFor, mapTokens } from './token-mapper';
 import { mergeSqlAndJinjaTokens } from '../ninja-sql-tokens';
-import { renToRawLine, type LineMap } from '../nunjucks-renderer';
-import { extractMacroCalls, extractRefs, extractSources } from '../extractors/jinja-tag-extractors';
 import { tagInfos } from './extract/tag-infos';
 import { jinjaTokensFromStream } from './extract/jinja-stream';
 import { enrichTokensWithJinjaSpans } from '../extractors/jinja-token-enrichment';
@@ -181,83 +178,32 @@ export class SqllensDocumentParser implements DocumentParser {
 	private _parse(rawSql: string, schema?: Record<string, Record<string, string>>): DocumentModel {
 		const t0 = performance.now();
 		const dialect = toSqllensDialect(this._context.adapterType);
-		// Populated once the parse path is known: the NATIVE templated parse derives
-		// jinjaTokens from sqllens's unified token stream (jinjaTokensFromStream); the
-		// fallback path keeps the extension's own tokenizeJinja. Both feed the same
-		// downstream consumers (sources/macroCalls extractors, the merge, model.jinjaTokens).
-		let jinjaTokens: JinjaToken[];
-
-		let parseMs = 0;
-		let pass1: SqllensParse | undefined;
-
-		const runOnce = (passSql: string, p: ParsePass): SqllensParse => {
-			const p0 = performance.now();
-			const pr = parse(passSql, dialect);
-			const scopes = resolveScopes(pr.ast, dialect);
-			parseMs += performance.now() - p0;
-			const res: SqllensParse = {
-				ast: pr.ast,
-				dialect,
-				errors: pr.errors,
-				diagnostics: pr.diagnostics,
-				scopes,
-				tokens: pr.tokens,
-			};
-			if (p === 'pass1') pass1 = res;
-			return res;
-		};
-
-		// Native templated parse FIRST (the jinja front end sqllens built to be consumed —
-		// inc1 unified stream + inc2 R3 tag-applied ast): parseTemplated segments the jinja,
-		// runs the SQL grammar over a length/newline-preserving placeholder (all spans stay
-		// in raw-source coordinates), and its ast carries templated ref/source relations as
-		// first-class sources named after the REAL model (`template` marker set), so the
-		// extractors + scope/qualify/lineage bind under real names. No-output builtins
-		// (config/docs/...) placeholder to whitespace, so config-topped models parse. Only
-		// when the native parse still carries syntax errors (the residual
-		// unknown-callable-at-statement class, until inc3's expansionShape) does the legacy
-		// three-pass blank cascade run — behavior there is byte-identical to before.
-		let result: SqllensParse;
-		let pass: ParsePass;
-		let lineMap: LineMap | undefined;
-		// The R2 tag-AST from the native templated parse, when it wins. `undefined`
-		// on the fallback path (`pass` alone can't tell native pass1 from a fallback
-		// pass1 blank). Drives tag-sourced refs; absent -> the jinja-tokenizer extractors.
-		let templatedTags: TagNode[] | undefined;
-
+		// The one parse: parseTemplated segments the jinja (inc1 unified stream + inc2
+		// R3 tag-applied ast), runs the SQL grammar over a length/newline-preserving
+		// placeholder (all spans stay in raw-source coordinates), and its ast carries
+		// templated ref/source relations as first-class sources named after the REAL
+		// model (`template` marker set), so the extractors + scope/qualify/lineage bind
+		// under real names. No-output builtins (config/docs/...) placeholder to
+		// whitespace, so config-topped models parse. A residual syntax error yields a
+		// partial ast + diagnostics (mapped to syntax_error warnings below) — sqllens
+		// is error-tolerant by design; the legacy blank/render cascade is gone.
 		const tp0 = performance.now();
 		// shapeOf (C4): statement/CTE-body macro placeholders fill shape-valid so
 		// macro-generated bodies parse natively. Undefined -> zero-catalog, byte-identical.
 		const templated = parseTemplated(rawSql, dialect, { shapeOf: this._context.shapeOf });
-		if (templated.sql.errors === 0) {
-			const scopes = resolveScopes(templated.sql.ast, dialect);
-			parseMs += performance.now() - tp0;
-			result = {
-				ast: templated.sql.ast,
-				dialect,
-				errors: templated.sql.errors,
-				diagnostics: templated.sql.diagnostics,
-				scopes,
-				tokens: templated.sql.tokens,
-			};
-			pass = 'pass1'; // length-preserving raw coords — same contract as a pass1 blank
-			pass1 = result;
-			templatedTags = templated.tags;
-			// Native path: jinjaTokens come from the SAME unified stream the SQL parse
-			// used (channel-2 minijinja island tokens), not a second independent lex.
-			jinjaTokens = jinjaTokensFromStream(templated.tokens, templated.tags, rawSql);
-		} else {
-			({ result, pass, lineMap } = parseWithJinjaFallback(rawSql, runOnce, r => r.errors === 0));
-			// Fallback path: no unified stream to trust (the SQL parse ran on rendered/
-			// blanked text) — keep the extension's own jinja tokenizer.
-			jinjaTokens = tokenizeJinja(rawSql);
-		}
-
-		// On pass2 the parsed text is nunjucks-rendered (offsets shifted). Pass1's
-		// blanking is length-preserving, so its token stream stays in raw-source
-		// coordinates even when its parse failed — use it for the token streams,
-		// exactly as the sqlglot path does.
-		const tokenSource = (pass === 'pass2' && pass1) ? pass1 : result;
+		const scopes = resolveScopes(templated.sql.ast, dialect);
+		const parseMs = performance.now() - tp0;
+		const result: SqllensParse = {
+			ast: templated.sql.ast,
+			dialect,
+			errors: templated.sql.errors,
+			diagnostics: templated.sql.diagnostics,
+			scopes,
+			tokens: templated.sql.tokens,
+		};
+		// jinjaTokens come from the SAME unified stream the SQL parse used (channel-2
+		// minijinja island tokens), not a second independent lex.
+		const jinjaTokens = jinjaTokensFromStream(templated.tokens, templated.tags, rawSql);
 
 		// Schema-fed `SELECT *` expansion. For the COLUMN-list extractors (ctes /
 		// finalColumns / finalSelect) it is wired ONLY when the caller supplies a schema.
@@ -295,32 +241,16 @@ export class SqllensDocumentParser implements DocumentParser {
 		const tokens = extractTokens(result, qualification, tokenStarExpander);
 		const finalColumns = extractFinalColumns(result, expander);
 		const finalSelect = extractFinalSelect(result, expander);
-		// On the NATIVE templated path, refs + sources come from the R2 tag-AST (span-accurate;
-		// covers the 2-arg `ref('pkg','model')` form the tokenizer extractor drops; sources
-		// anchor on the shipped `source` callSpan). On the fallback path there is no tag-AST ->
-		// the jinja-tokenizer extractors.
-		//
-		// macroCalls flipped to tags as of sqllens `af1170c`: the expression `macro` node now
-		// carries `calls: MacroCall[]` (nested included, symmetric to `control.calls`), so the
-		// last never-worse hold — a nested inner macro in `{{ outer(inner()) }}` being dropped
-		// vs the tokenizer's paren-scan — is gone (tag-infos.ts + tag-infos.test.ts parity).
-		// On the FALLBACK path (no tag-AST) the jinja-tokenizer extractors still stand in; they
-		// read the C2-derived jinjaTokens, so block-tag calls stay covered there too.
-		let refs: RefInfo[];
-		let sources: SourceInfo[];
-		let macroCalls: MacroCallInfo[];
-		if (templatedTags !== undefined) {
-			({ refs, sources, macroCalls } = tagInfos(templatedTags, rawSql));
-		} else {
-			refs = extractRefs(jinjaTokens);
-			sources = extractSources(jinjaTokens);
-			macroCalls = extractMacroCalls(jinjaTokens);
-		}
+		// refs + sources + macroCalls come from the R2 tag-AST (span-accurate; covers
+		// the 2-arg `ref('pkg','model')` form; macroCalls carry nested calls since
+		// sqllens `af1170c` — the expression `macro` node's `calls: MacroCall[]` is
+		// symmetric to `control.calls`).
+		const { refs, sources, macroCalls } = tagInfos(templated.tags, rawSql);
 		enrichTokensWithJinjaSpans(tokens, refs, sources);
 
-		// blankJinja is length-preserving for pass1/pass1b, so tokenSource token
-		// offsets line up with rawSql — mapTokens derives line starts from rawSql.
-		const sqlTokens = mapTokens(tokenSource.tokens, rawSql, dialect);
+		// parseTemplated's placeholder is length-preserving, so token offsets line up
+		// with rawSql — mapTokens derives line starts from rawSql.
+		const sqlTokens = mapTokens(result.tokens, rawSql, dialect);
 		const ninjaSqlTokens = mergeSqlAndJinjaTokens(sqlTokens, jinjaTokens);
 		const sqlglotWarnings = mapDiagnostics(result.diagnostics);
 
@@ -340,13 +270,9 @@ export class SqllensDocumentParser implements DocumentParser {
 			// printer instead reads `astIndex`, built directly from the sqllens IR.
 		};
 
-		// Build the reflow index straight off the winning parse's IR. Only pass1/
-		// pass1b are attached: their blanking is length-preserving so the IR char
-		// offsets align with rawSql and the printer's token stream. A pass2 parse is
-		// nunjucks-rendered (offsets shifted into rendered space), so its index would
-		// mis-address the raw-space tokens — leave it undefined and let the reflow
-		// path fall back to an empty index, matching the isPass2 gating used for the
-		// model's other rendered-space positions.
+		// Build the reflow index straight off the parse's IR — the placeholder is
+		// length-preserving, so IR char offsets align with rawSql and the printer's
+		// token stream.
 		//
 		// Multi-statement sources: sqllens parses statement 1 only, and since upstream
 		// 2428f56 its CST span is BOUNDED to statement 1 on ALL 8 dialects (independently
@@ -354,50 +280,8 @@ export class SqllensDocumentParser implements DocumentParser {
 		// therefore safe: statement 1 gets AST-index precision, later statements have no
 		// enclosure and fall back to the printer's token-stream passes. (The former
 		// sqllens-multistmt-span workaround is retired.)
-		if (pass !== 'pass2') {
-			model.astIndex = createSqllensAstIndex(result, rawSql);
-		}
-
-		if (pass === 'pass2') {
-			// Pass2 positions are in rendered space; remap LINE numbers to raw source.
-			// Columns are NOT remapped (rendered-space) — isPass2 tells consumers to
-			// skip column-based ranges, matching the sqlglot path.
-			remapModelLines(model, lineMap!);
-			model.isPass2 = true;
-		}
+		model.astIndex = createSqllensAstIndex(result, rawSql);
 
 		return model;
-	}
-}
-
-/** Remap every SQL-derived LINE number in the model from rendered to raw space. */
-function remapModelLines(model: DocumentModel, lineMap: LineMap): void {
-	const rl = (n: number): number => renToRawLine(n, lineMap);
-
-	for (const cte of model.ctes) {
-		cte.line = rl(cte.line);
-		cte.endLine = rl(cte.endLine);
-		for (const col of cte.columns) col.line = rl(col.line);
-	}
-	for (const tok of model.tokens) {
-		tok.line = rl(tok.line);
-		if (tok.type === 'column_ref') {
-			if (tok.tableLine !== undefined) tok.tableLine = rl(tok.tableLine);
-		} else if (tok.type === 'table_ref') {
-			if (tok.aliasLine !== undefined) tok.aliasLine = rl(tok.aliasLine);
-		}
-	}
-	for (const col of model.finalColumns) col.line = rl(col.line);
-	if (model.finalSelect) {
-		model.finalSelect.line = rl(model.finalSelect.line);
-		model.finalSelect.endLine = rl(model.finalSelect.endLine);
-		for (const c of model.finalSelect.columns) {
-			c.line = rl(c.line);
-			c.endLine = rl(c.endLine);
-			if (c.aliasLine !== undefined) c.aliasLine = rl(c.aliasLine);
-		}
-	}
-	for (const w of model.sqlglotWarnings ?? []) {
-		if (w.line !== undefined) w.line = rl(w.line);
 	}
 }
