@@ -82,6 +82,19 @@ fs.mkdirSync(framesDir, { recursive: true });
 fs.mkdirSync(videoDir, { recursive: true });
 fs.mkdirSync(userDataDir, { recursive: true });
 
+// Clear any persisted profiler results so the PROFILE RESULTS panel starts EMPTY.
+// The extension loads profile-results.json on activation and shows it; leaving stale
+// results from a previous capture means the profiler segment swaps old→new instead of
+// building from nothing. Delete it before launch so the viewer watches it fill in.
+(function clearPersistedProfilerResults() {
+	const wsStorage = path.join(userDataDir, 'User', 'workspaceStorage');
+	if (!fs.existsSync(wsStorage)) return;
+	for (const hash of fs.readdirSync(wsStorage)) {
+		const f = path.join(wsStorage, hash, 'nickeolofsson.dbt-anvil', 'profile-results.json');
+		if (fs.existsSync(f)) { fs.unlinkSync(f); console.log(`[profiler] cleared persisted results: ${path.relative(repoRoot, f)}`); }
+	}
+})();
+
 // Pre-populate VS Code settings to prevent auto-update dialogs and installers
 const vscSettingsDir = path.join(userDataDir, 'User');
 fs.mkdirSync(vscSettingsDir, { recursive: true });
