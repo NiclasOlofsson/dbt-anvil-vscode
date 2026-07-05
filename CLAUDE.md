@@ -43,7 +43,7 @@ dbt Anvil is a VS Code extension (TypeScript + persistent Python subprocess) pro
 ### Entry Points
 
 - `src/extension.ts` — `activate()` function; wires up all services and providers (the authoritative wiring blueprint — read this first when tracing how a feature is hooked up)
-- `src/ftl/pyodide-worker.ts` — Worker pool entry point for WASM-based SQL parsing
+- `src/ftl/pyodide-worker.ts` — Worker pool entry point for WASM-based SQL parsing (legacy engine only; deleted at cutover)
 - `src/mcp/proxy/index.ts` — Stdio ↔ HTTP proxy Claude Code spawns as its MCP server
 
 All three are bundled by esbuild (`.esbuild.ts`) into `dist/`.
@@ -55,7 +55,7 @@ All three are bundled by esbuild (`.esbuild.ts`) into `dist/`.
 3. Detect Python env (venv/uv/poetry/pipenv/conda) and validate dbt installation — **runs off the critical path (async)**
 4. Load `manifest.json` and build in-memory DAG + symbol tables (`ManifestIndexer`)
 5. Spawn `bridge.py` as a persistent Python subprocess (JSON RPC over stdin/stdout)
-6. Initialize Pyodide WASM worker pool for SQL parsing
+6. Select the SQL engine (`dbt-anvil.parser.engine`): `sqllens` (default — native TS, in-process, nothing to boot) or `legacy` (boots the Pyodide WASM worker pool)
 7. Start MCP subsystem: HTTP server on an ephemeral 127.0.0.1 port, write discovery file at `~/.dbt-anvil/mcp/<workspace-hash>.json`, upsert `~/.claude.json` per-project entry pointing at `dist/mcp-proxy.js`
 8. Register all language providers, tree views, debug adapter, and language-model tools (Copilot + MCP)
 
@@ -65,7 +65,7 @@ All three are bundled by esbuild (`.esbuild.ts`) into `dist/`.
 |---|---|---|
 | **Python bridge** | `src/dbt/bridge-runner.ts`, `src/dbt/execution-service.ts` | Single persistent Python process. `DbtExecutionService` wraps it in a 4-level priority queue (background < provider < tool < user) with deduplication for idempotent jobs |
 | **Manifest & indexing** | `src/indexing/` | Loads `manifest.json`, builds DAG, tracks file hashes to avoid redundant re-indexes |
-| **SQL parsing (FTL)** | `src/ftl/` | Pyodide worker pool running sqlglot (WASM Python). Two-pass: fast structural AST, then async enrichment with column metadata |
+| **SQL parsing (FTL)** | `src/ftl/sqllens/`, `src/ftl/` | Default engine: sqllens, the native TypeScript parser from the sibling `../sql-dialect-grammars` repo (consumed as source via the `sqllens` alias; `npm run gen` there is a build precondition). One `parseTemplated` pass handles jinja + SQL with raw-source spans; error-tolerant, never a fallback cascade. The legacy Pyodide/sqlglot worker pool (`src/ftl/pyodide-*`) remains behind `dbt-anvil.parser.engine: "legacy"` until cutover |
 | **Language providers** | `src/providers/sql/`, `src/providers/yaml/` | All VS Code language features (completion, hover, definition, rename, diagnostics, code lens). Providers are re-registered dynamically when project paths change |
 | **Ninja linter** | `src/ninja/` | ~40 built-in SQL style/quality rules; full-workspace scanner; separate editor panel |
 | **Views & UI** | `src/views/` | Model Explorer, interactive lineage graph (D3/dagre), test explorer, profiler results, query result panel |
@@ -78,7 +78,7 @@ All three are bundled by esbuild (`.esbuild.ts`) into `dist/`.
 
 - **ServiceContainer** — Single singleton that holds all long-lived services; never construct services outside it
 - **Priority queue** — All dbt execution goes through `DbtExecutionService`; do not spawn subprocesses directly
-- **Two-layer parsing** — Fast Pyodide AST pass first, then async DB enrichment; providers must tolerate partially-enriched data
+- **Two-layer parsing** — Fast structural parse first (sqllens is synchronous and in-process), then async DB enrichment; providers must tolerate partially-enriched data
 - **Persistent caches** — Compile, column, and diagnostics caches survive restarts; always validate with mtime or content hash before trusting
 - **Dynamic provider registration** — Language providers are disposable; they are torn down and re-created when the active dbt project changes
 - **Single tool registry** — `src/mcp/host/registry.ts` is the source of truth; Copilot (`vscode.lm.registerTool`) and MCP are thin adapters over the same `vscode.LanguageModelTool` instances. Adding a tool means adding a registry entry, not two parallel handlers

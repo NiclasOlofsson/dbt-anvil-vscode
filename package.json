@@ -1755,7 +1755,7 @@
 				"name": "get_column_lineage",
 				"displayName": "Get Column Lineage",
 				"userDescription": "Trace column-level lineage through SQL transformations showing upstream/downstream dependencies",
-				"modelDescription": "Trace column-level lineage through SQL transformations. Uses sqlglot to parse compiled SQL and track how columns flow through CTEs, JOINs, aggregations, and transformations. Requires a specific column name.",
+				"modelDescription": "Trace column-level lineage through SQL transformations. Parses compiled SQL and tracks how columns flow through CTEs, JOINs, aggregations, and transformations. Requires a specific column name.",
 				"canBeReferencedInPrompt": false,
 				"toolReferenceName": "get_column_lineage",
 				"icon": "$(references)",

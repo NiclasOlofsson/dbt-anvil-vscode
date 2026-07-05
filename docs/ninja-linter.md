@@ -8,7 +8,7 @@ dbt Anvil takes a different approach: it embeds linting directly into the editor
 
 ## What Made This Possible
 
-Ninja is built on top of the **DocumentModel** — a rich AST-like representation that dbt Anvil already maintains for every open SQL file. The DocumentModel is parsed incrementally by a Python bridge backed by **sqlglot**, and it provides:
+Ninja is built on top of the **DocumentModel** — a rich AST-like representation that dbt Anvil already maintains for every open SQL file. The DocumentModel is produced by the extension's native TypeScript SQL parser (jinja-aware, error-tolerant, all spans in raw-source coordinates), and it provides:
 
 - **Token-level information** — every column reference, table reference, and column definition, with resolved source tracking (`resolvedTableRef`) that links column usages back to their defining CTE or table.
 - **CTE awareness** — each CTE's name, line span, and column list, enabling cross-CTE dependency analysis.

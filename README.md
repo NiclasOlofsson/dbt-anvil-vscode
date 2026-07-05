@@ -115,7 +115,7 @@ You've read the prose. You skipped to here anyway. Fine.
 
 ## Under the Hood
 
-dbt Anvil runs a Python bridge process that talks to your project over JSON stdin/stdout. It auto-detects your Python environment — venv, uv, poetry, pipenv, conda, or system Python — and bundles sqlglot for column-level lineage parsing.
+dbt Anvil runs a Python bridge process that talks to your project over JSON stdin/stdout, auto-detecting your Python environment — venv, uv, poetry, pipenv, conda, or system Python. SQL intelligence (hover, rename, diagnostics, formatting, column-level lineage) comes from a native TypeScript SQL parser running in-process — no extra runtime to boot.
 
 Parsing is two-layered: a fast structural pass on save, plus async database enrichment for column metadata. Everything is cached to disk and survives restarts. When the cache is valid, startup is near-instant.
 
