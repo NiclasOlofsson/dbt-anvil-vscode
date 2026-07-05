@@ -2,7 +2,7 @@ import type * as vscode from 'vscode';
 import type { NinjaCategory } from './categories';
 import type { NinjaViolation } from './violation';
 import type { DocumentModel } from '../services/parse-service';
-import type { JinjaToken } from '../dbt/jinja-tokenizer';
+import type { JinjaToken } from '../ftl/sqllens/extract/coarse-jinja';
 import type { NinjaConfig } from './config';
 import type { DialectSymbols } from '../ftl/sql-parser';
 

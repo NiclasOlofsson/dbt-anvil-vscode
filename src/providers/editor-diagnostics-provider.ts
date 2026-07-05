@@ -16,7 +16,7 @@ import type { CommentRange } from './common/comment-utils';
 import { runNinja } from '../ninja/engine';
 import type { NinjaResult } from '../ninja/engine';
 import { loadConfig } from '../ninja/config-loader';
-import { tokenize } from '../dbt/jinja-tokenizer';
+import { coarseJinjaTokens, coarseJinjaTokensFromText } from '../ftl/sqllens/extract/coarse-jinja';
 
 interface DbtErrorLocation {
 	filePath: string;
@@ -459,8 +459,12 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		]);
 
 
-		// If we can't get a parse result, run layout rules only (no token rules)
-		const jinjaTokens = tokenize(document.getText());
+		// If we can't get a parse result, run layout rules only (no token rules).
+		// Coarse tokens group the model's sqllens-fed fine stream; only the
+		// no-model path pays for its own templated front-end run.
+		const jinjaTokens = model?.jinjaTokens
+			? coarseJinjaTokens(model.jinjaTokens, document.getText())
+			: coarseJinjaTokensFromText(document.getText());
 		const emptyModel: DocumentModel = { ctes: [], refs: [], sources: [], tokens: [], finalColumns: [], timing: { parseMs: 0, totalMs: 0 } };
 		const result = runNinja(document, model ?? emptyModel, jinjaTokens, config, dialectSymbols ?? undefined);
 

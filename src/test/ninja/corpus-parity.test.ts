@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 
 import { SqllensDocumentParser } from '../../ftl/sqllens/document-parser';
 import { runNinja, getRuleFixScopeById } from '../../ninja/engine';
-import { tokenize as tokenizeJinja } from '../../dbt/jinja-tokenizer';
+import { coarseJinjaTokensFromText as tokenizeJinja } from '../../ftl/sqllens/extract/coarse-jinja';
 import { reflowDocument } from '../../ninja/reflow/engine';
 import { DEFAULT_CONFIG, type NinjaConfig } from '../../ninja/config';
 import { mockDocument } from './helpers';

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { emptyModel, mockDocument, cfg, violationsFor } from './helpers';
 import { runNinja } from '../../ninja/engine';
-import { tokenize } from '../../dbt/jinja-tokenizer';
+import { coarseJinjaTokensFromText as tokenize } from '../../ftl/sqllens/extract/coarse-jinja';
 
 const RULE = 'ninja.jinja.padding';
 

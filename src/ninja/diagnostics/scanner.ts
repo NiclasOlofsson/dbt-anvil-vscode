@@ -7,7 +7,7 @@ import type { DbtPathResolver } from '../../dbt/dbt-path-resolver';
 import type { DocumentModel, ParseService } from '../../services/parse-service';
 import { runNinja } from '../engine';
 import { loadConfig } from '../config-loader';
-import { tokenize } from '../../dbt/jinja-tokenizer';
+import { coarseJinjaTokens, coarseJinjaTokensFromText } from '../../ftl/sqllens/extract/coarse-jinja';
 import { TextDocumentShim } from '../text-document-shim';
 
 /** Summary emitted after a full workspace scan completes. */
@@ -373,7 +373,11 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 		if (stat) this._fileStats.set(key, { mtimeMs: stat.mtimeMs, size: stat.size });
 
 		const shim = new TextDocumentShim(uri, normalizedContent);
-		const jinjaTokens = tokenize(normalizedContent);
+		// Coarse tokens group the model's sqllens-fed fine stream; only a failed
+		// parse (no model) pays for its own templated front-end run.
+		const jinjaTokens = model?.jinjaTokens
+			? coarseJinjaTokens(model.jinjaTokens, normalizedContent)
+			: coarseJinjaTokensFromText(normalizedContent);
 		const ninjaStart = Date.now();
 		const result = runNinja(shim, parsedModel, jinjaTokens, config, dialectSymbols ?? undefined);
 		const ninjaMs = Date.now() - ninjaStart;

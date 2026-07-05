@@ -3,7 +3,7 @@ import type { FixScope, NinjaRule, NinjaSeverity } from './rule';
 import type { NinjaViolation } from './violation';
 import type { NinjaConfig } from './config';
 import type { DocumentModel } from '../services/parse-service';
-import type { JinjaToken } from '../dbt/jinja-tokenizer';
+import type { JinjaToken } from '../ftl/sqllens/extract/coarse-jinja';
 import type { DialectSymbols } from '../ftl/sql-parser';
 import { parseInlineSuppressions } from './config-loader';
 import { parseFmtOffRegions, isInFmtOffRegion } from './jinja/directive-parser';

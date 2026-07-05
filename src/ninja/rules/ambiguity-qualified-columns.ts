@@ -3,7 +3,7 @@ import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import type { NinjaViolation } from '../violation';
 import type { ColumnRefToken } from '../../services/parse-service';
-import type { JinjaToken } from '../../dbt/jinja-tokenizer';
+import type { JinjaToken } from '../../ftl/sqllens/extract/coarse-jinja';
 
 /**
  * Flags column references that lack a table qualifier in multi-source contexts.
