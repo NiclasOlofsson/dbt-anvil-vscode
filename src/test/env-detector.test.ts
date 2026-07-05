@@ -158,4 +158,36 @@ describe('validateDbtInstalled', () => {
 		const env: PythonEnvironment = { command: ['pipenv', 'run', 'python'], description: 'pipenv (Pipfile.lock)', wrapperPrefix: ['pipenv', 'run'], envVars: { PIPENV_IGNORE_VIRTUALENVS: '1' } };
 		expect(await validateDbtInstalled(env, '/project')).toBe(true);
 	});
+
+	it('retries on timeout and succeeds when a later attempt exits zero', async () => {
+		// A slow `dbt --version` (busy machine) must NOT be read as "dbt missing":
+		// the first attempt times out, the (warm) second exits zero → installed.
+		let calls = 0;
+		mockSpawn.mockImplementation(() => {
+			const firstAttempt = ++calls === 1;
+			return {
+				on: (event: string, cb: (...args: unknown[]) => void) => {
+					if (!firstAttempt && event === 'close') cb(0); // 1st: never fires → times out
+				},
+				kill: () => { /* killed on timeout */ },
+			};
+		});
+		const env: PythonEnvironment = { command: ['uv', 'run', 'python'], description: 'uv (uv.lock)', wrapperPrefix: ['uv', 'run'] };
+		expect(await validateDbtInstalled(env, '/p', { timeoutMs: 10, maxAttempts: 3 })).toBe(true);
+		expect(calls).toBe(2); // retried exactly once
+	});
+
+	it('gives up (returns false) after maxAttempts timeouts so activation cannot hang', async () => {
+		let calls = 0;
+		mockSpawn.mockImplementation(() => {
+			calls++;
+			return {
+				on: () => { /* never fires → every attempt times out */ },
+				kill: () => { /* killed on timeout */ },
+			};
+		});
+		const env: PythonEnvironment = { command: ['uv', 'run', 'python'], description: 'uv (uv.lock)', wrapperPrefix: ['uv', 'run'] };
+		expect(await validateDbtInstalled(env, '/p', { timeoutMs: 10, maxAttempts: 2 })).toBe(false);
+		expect(calls).toBe(2); // capped at maxAttempts, not looping forever
+	});
 });

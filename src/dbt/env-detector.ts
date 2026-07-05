@@ -193,8 +193,18 @@ export function getBootstrapCommand(env: PythonEnvironment, projectDir: string):
 /**
  * Validate that `dbt` is installed inside the detected Python environment by
  * running `dbt --version` through the environment's wrapper prefix.
+ *
+ * `dbt --version` has a slow cold start (Python import overhead) and can exceed a
+ * single timeout on a busy machine. A timeout is inconclusive — "slow/busy", NOT
+ * proof that dbt is missing — so we retry (the next run is usually warm and fast).
+ * A spawn error or non-zero exit IS conclusive, so we fail fast without retrying.
+ * After `maxAttempts` timeouts we give up (the threshold) so activation can't stall.
  */
-export function validateDbtInstalled(env: PythonEnvironment, projectDir: string): Promise<boolean> {
+export async function validateDbtInstalled(
+	env: PythonEnvironment,
+	projectDir: string,
+	opts: { timeoutMs?: number; maxAttempts?: number } = {},
+): Promise<boolean> {
 	let cmd: string[];
 	if (env.venvBinDir) {
 		const dbtExe = process.platform === 'win32'
@@ -207,17 +217,35 @@ export function validateDbtInstalled(env: PythonEnvironment, projectDir: string)
 		cmd = ['dbt', '--version'];
 	}
 
-	return new Promise((resolve) => {
+	const timeoutMs = opts.timeoutMs ?? 15_000;
+	const maxAttempts = opts.maxAttempts ?? 3;
+
+	const runOnce = (): Promise<'ok' | 'failed' | 'timeout'> => new Promise((resolve) => {
 		const [executable, ...args] = cmd;
 		const child = spawn(executable, args, {
 			cwd: projectDir,
 			env: { ...process.env, ...env.envVars },
-			timeout: 15_000,
 			windowsHide: true,
 		});
-		child.on('error', () => resolve(false));
-		child.on('close', (code) => resolve(code === 0));
+		let settled = false;
+		const finish = (result: 'ok' | 'failed' | 'timeout') => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			resolve(result);
+		};
+		const timer = setTimeout(() => { child.kill(); finish('timeout'); }, timeoutMs);
+		child.on('error', () => finish('failed'));
+		child.on('close', (code) => finish(code === 0 ? 'ok' : 'failed'));
 	});
+
+	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+		const result = await runOnce();
+		if (result === 'ok') return true;
+		if (result === 'failed') return false; // spawn error / non-zero exit — retrying won't help
+		// timeout: inconclusive; retry unless we've exhausted attempts
+	}
+	return false; // all attempts timed out — give up so activation can't hang forever
 }
 
 /** Returns the manager executable name, or null if the env needs no manager. */
