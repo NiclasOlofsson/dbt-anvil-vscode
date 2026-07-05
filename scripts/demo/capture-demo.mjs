@@ -300,16 +300,25 @@ async function openFile(win, filename) {
 	await input.click();   // focus the quick-open input (not the editor) before typing
 	await input.fill('');  // clear leftover text reliably — Ctrl+A can race the focus
 	await win.keyboard.type(filename, TYPE_DELAY);
-	// Only open once the intended file is actually the top hit, so a stray fuzzy match
-	// (e.g. .gitignore) can never get opened by a premature Enter.
-	const topRow = win.locator('.quick-input-list .monaco-list-row').first();
-	await topRow.waitFor({ state: 'visible', timeout: 5000 }).catch(() => { });
+	// Select the EXACT file, not a fuzzy superset. 'season_summary.sql' is a substring of
+	// 'reg_season_summary.sql', and recency can rank the superset first — so a naive
+	// "top row includes the stem" check opens the wrong file. Find the row whose basename
+	// equals the requested filename and arrow to it before pressing Enter.
+	await win.waitForSelector('.quick-input-list .monaco-list-row', { timeout: 5000 }).catch(() => { });
 	const stem = filename.replace(/\.[^.]+$/, '');
-	for (let i = 0; i < 20; i++) {
-		const label = (await topRow.textContent().catch(() => '')) || '';
-		if (label.toLowerCase().includes(stem.toLowerCase())) { break; }
-		await win.waitForTimeout(150);
+	let rowIdx = -1;
+	for (let i = 0; i < 20 && rowIdx < 0; i++) {
+		rowIdx = await win.evaluate((fname) => {
+			const rows = [...document.querySelectorAll('.quick-input-list .monaco-list-row')];
+			for (let r = 0; r < rows.length; r++) {
+				const name = (rows[r].querySelector('.label-name')?.textContent || '').trim();
+				if (name.toLowerCase() === fname.toLowerCase()) return r;
+			}
+			return -1;
+		}, filename);
+		if (rowIdx < 0) await win.waitForTimeout(150);
 	}
+	for (let k = 0; k < Math.max(0, rowIdx); k++) await win.keyboard.press('ArrowDown');
 	await win.keyboard.press('Enter');
 	// Wait for editor to be visible and stabilise
 	await win.waitForSelector('.monaco-editor .view-lines', { timeout: 10000 });
