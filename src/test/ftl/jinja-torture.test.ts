@@ -43,6 +43,7 @@ const PARSE: Record<string, ParseExpectation> = {
 	'forloop_union.sql': 'clean',
 	'left_outer_ninja.sql': 'clean',
 	'bare_join_violation.sql': 'clean',
+	'quoted_identifiers.sql': 'clean',
 };
 
 /**

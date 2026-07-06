@@ -168,14 +168,11 @@ describe('SqllensDocumentParser — column-ref per-part spans (1/2/3-part)', () 
 describe('SqllensDocumentParser — quoted per-part spans (partSpans adoption)', () => {
 	// A quoted mixed-case column on an unquoted qualifier. sqllens adopts the IR
 	// `partSpans` (one span per dotted part) to place the column-name and qualifier
-	// sub-spans. The span logic (anchored at `endCol - unquotedName.length`) produces
-	// a quirk with quoted identifiers: the span
-	// drops the opening delimiter (and its first char) and keeps the trailing one.
-	// Verified byte-for-byte against FtlDocumentParser: `a.`My Col`` yields the same
-	// col=11/endCol=17 there. The NAME is dialect-normalized (databricks is
+	// sub-spans. Each sub-span covers the WHOLE raw source token including its
+	// delimiters: a quoted part starts at its opening delimiter and ends just past
+	// its closing one. The NAME is dialect-normalized (databricks is
 	// case-insensitive, so a backtick-quoted name is lowercased too) — that's
-	// `normName`'s domain, not the span logic, and the span is unchanged (the
-	// normalized name has the same length as the raw stripped text here).
+	// `normName`'s domain, not the span logic, and normalization never moves the span.
 	it('places a backtick-quoted column + unquoted qualifier (databricks)', async () => {
 		const sql = 'select a.`My Col` from t as a';
 		const model = await parser('databricks').parse(sql);
@@ -186,8 +183,8 @@ describe('SqllensDocumentParser — quoted per-part spans (partSpans adoption)',
 		expect(col).toMatchObject({
 			name: 'my col', // databricks lowercases even a quoted identifier
 			line: 0,
-			endCol: q + '`My Col`'.length,          // after the closing backtick
-			col: q + '`My Col`'.length - 'my col'.length, // legacy quirk: not the opening backtick
+			col: q,                          // the opening backtick
+			endCol: q + '`My Col`'.length,   // just past the closing backtick
 			table: 'a',
 			tableCol: sql.indexOf('a.'),
 			tableEndCol: sql.indexOf('a.') + 1,
@@ -203,8 +200,8 @@ describe('SqllensDocumentParser — quoted per-part spans (partSpans adoption)',
 		const q = sql.indexOf('[My Col]');
 		expect(col).toMatchObject({
 			name: 'my col', // tsql is case-insensitive: a bracket-quoted name is lowercased
+			col: q,
 			endCol: q + '[My Col]'.length,
-			col: q + '[My Col]'.length - 'my col'.length,
 			table: 'a',
 		});
 	});
@@ -225,8 +222,8 @@ describe('SqllensDocumentParser — quoted per-part spans (partSpans adoption)',
 			col: sql.indexOf('.col') + 1,
 			endCol: sql.indexOf('.col') + 1 + 'col'.length,
 			table: 'my table', // databricks lowercases the quoted qualifier too
+			tableCol: tq,
 			tableEndCol: tq + '`My Table`'.length,
-			tableCol: tq + '`My Table`'.length - 'my table'.length,
 		});
 	});
 });

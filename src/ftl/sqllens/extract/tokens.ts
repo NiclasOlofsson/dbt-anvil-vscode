@@ -181,20 +181,18 @@ function columnDefToken(p: Projection, dialect: Dialect): ColumnDefToken | undef
 	};
 }
 
-/** 0-based span of a single dotted name-part, computed to match the legacy
- *  identifier span behavior: the span is anchored at `endCol - unquotedName.length`,
- *  NOT at the raw token start. For an UNQUOTED part this is identity (name width ==
- *  token width). For a QUOTED part legacy's `Column.this` is the quote-stripped name
- *  while its `_col` sits AFTER the closing quote, so the reported span drops the
- *  opening quote (and its first char) and keeps the trailing quote — a legacy quirk
- *  reproduced here so the two paths agree in shadow-diff. `rawText` is the source
- *  token incl. quotes; `column` its 0-based start col; `line1` its 1-based line. */
+/** 0-based span of a single dotted name-part. The span covers the WHOLE raw
+ *  source token, delimiters included: a quoted part (`` `My Col` ``, `"My Col"`,
+ *  `[My Col]`) spans from its opening delimiter through its closing one. For an
+ *  unquoted part this is identity (name width == token width). The NAME is
+ *  dialect-normalized by `normName`; normalization never affects the span.
+ *  `rawText` is the source token incl. quotes; `column` its 0-based start col;
+ *  `line1` its 1-based line. */
 function namePartPos(rawText: string, column: number, line1: number, dialect: Dialect): {
 	name: string; line: number; col: number; endCol: number;
 } {
 	const name = normName(rawText, dialect);
-	const endCol = column + rawText.length;
-	return { name, line: line1 - 1, col: endCol - name.length, endCol };
+	return { name, line: line1 - 1, col: column, endCol: column + rawText.length };
 }
 
 function columnRefToken(
