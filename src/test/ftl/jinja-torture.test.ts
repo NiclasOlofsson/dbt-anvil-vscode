@@ -40,16 +40,16 @@ const PARSE: Record<string, ParseExpectation> = {
 	'whole_model_multiline.sql': 'clean',
 	'whole_model_oneline.sql': 'clean',
 	'twin_tags.sql': 'clean',
-	'forloop_union.sql': { open: 'for-loop union separator: dangling `union all` after control-tag blanking (channel: sqllens-anvil)' },
+	'forloop_union.sql': 'clean',
 	'left_outer_ninja.sql': 'clean',
 	'bare_join_violation.sql': 'clean',
 };
 
 /**
- * glued_from.sql is a special case: it "parses" with zero errors today by
- * fusing `from{{ … }}` into a single identifier — a SILENT misparse (no FROM
- * clause at all), worse than an error. Its gate therefore demands a real
- * table_ref token, not just error-freedom (channel: sqllens-anvil).
+ * glued_from.sql keeps a stronger gate than error-freedom: before sqllens
+ * caaf882 the fill FUSED with the glued FROM keyword into one identifier — a
+ * silent misparse (no FROM clause at all). The gate demands a real table_ref
+ * so that failure mode can never come back unnoticed.
  */
 const GLUED = 'glued_from.sql';
 
@@ -118,9 +118,7 @@ describe('jinja-torture corpus — parse gate', () => {
 		}
 	}
 
-	// TRIPWIRE: today the glued tag fuses into one identifier and "succeeds".
-	// The gate demands an actual relation; flips when upstream un-fuses it.
-	it.fails(`${GLUED} still open: fill fuses with a glued FROM keyword — silent misparse (channel: sqllens-anvil)`, async () => {
+	it(`${GLUED} parses with a real relation (no fill fusing into the keyword)`, async () => {
 		const model = await parser.parse(readModel(GLUED));
 		expect(syntaxErrors(model)).toEqual([]);
 		expect(model.tokens.some(t => t.type === 'table_ref')).toBe(true);
