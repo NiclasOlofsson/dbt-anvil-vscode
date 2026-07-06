@@ -9,6 +9,8 @@ import type { JinjaToken } from '../ftl/sql-tokens';
 import type { AstIndex } from '../ninja/reflow/ast-index';
 import { compositeAstIndex } from '../ftl/sqllens/ast-index';
 import type { NinjaSqlToken } from '../ftl/ninja-sql-tokens';
+import type { Span, Sym } from '../ftl/sqllens/api';
+import type { SymbolBindings } from '../ftl/sqllens/extract/symbols';
 
 export interface ColumnInfo {
 	name: string;
@@ -266,6 +268,17 @@ export interface DocumentModel {
 	/** Rich positional data for the final SELECT (replaces finalColumns over time). */
 	finalSelect?: FinalSelectInfo;
 	tokens: TokenInfo[];
+	/**
+	 * sqllens's native symbol model (Sym wave 2's successor to `tokens`). Absent only
+	 * on synthetic / test fixture models that hand-build a DocumentModel directly;
+	 * real parser output always sets it alongside `symbolBindings`.
+	 */
+	symbols?: Sym[];
+	/**
+	 * The relation-alias and column-source correlations `Sym` itself doesn't carry
+	 * (see extract/symbols.ts) — computed once per parse, alongside `symbols`.
+	 */
+	symbolBindings?: SymbolBindings;
 	timing: { parseMs: number; totalMs: number };
 	/**
 	 * Parse status. 'syntax_error' means the model's structural data (ctes, tokens, etc.) is
@@ -319,6 +332,22 @@ export interface EnrichmentConfig {
 interface CacheEntry {
 	version: number;
 	model: DocumentModel;
+}
+
+/**
+ * Whether (line, col) — 0-based, the extension's convention — falls inside a
+ * sqllens `Span` (1-based line, 0-based column, end-exclusive). Returns a
+ * comparable "width" when it does (smaller = a more specific match — used by
+ * `ParseService.symAtPosition` to prefer the innermost covering symbol),
+ * `undefined` when it doesn't.
+ */
+function symSpanContains(span: Span, line: number, col: number): number | undefined {
+	const startLine = span.line - 1;
+	const endLine = span.endLine - 1;
+	if (line < startLine || line > endLine) return undefined;
+	if (line === startLine && col < span.column) return undefined;
+	if (line === endLine && col >= span.endColumn) return undefined;
+	return (endLine - startLine) * 1_000_000 + (span.endColumn - span.column);
 }
 
 /**
@@ -390,6 +419,21 @@ export function mergeModels(models: DocumentModel[]): DocumentModel {
 		}
 	}
 
+	// symbols: dedup by kind:frame:span, same shape as the tokens dedup above.
+	// symbolBindings: union — each variant's Sym objects are distinct instances, so
+	// there is no key collision merging their Map entries directly.
+	const symKeys = new Set<string>();
+	const symbols: Sym[] = [];
+	const symbolBindings: SymbolBindings = { aliasOf: new Map(), sourceOf: new Map() };
+	for (const m of models) {
+		for (const sym of m.symbols ?? []) {
+			const k = `${sym.kind}:${sym.frame}:${sym.span.line}:${sym.span.column}`;
+			if (!symKeys.has(k)) { symKeys.add(k); symbols.push(sym); }
+		}
+		for (const [k, v] of m.symbolBindings?.aliasOf ?? []) symbolBindings.aliasOf.set(k, v);
+		for (const [k, v] of m.symbolBindings?.sourceOf ?? []) symbolBindings.sourceOf.set(k, v);
+	}
+
 	// finalColumns: dedup by name
 	const finalNames = new Set<string>();
 	const finalColumns: ColumnInfo[] = [];
@@ -447,6 +491,8 @@ export function mergeModels(models: DocumentModel[]): DocumentModel {
 	const astIndex = indexes.length > 0 ? compositeAstIndex(indexes) : undefined;
 
 	return { ctes: [...cteMap.values()], refs, sources, macroCalls, finalColumns, finalSelect, tokens, timing, parseWarnings, aliases,
+		symbols,
+		symbolBindings,
 		jinjaTokens,
 		ninjaSqlTokens,
 		astIndex,
@@ -798,6 +844,42 @@ export class ParseService {
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * Resolve a cursor position against sqllens's native symbols (the Sym wave 2
+	 * successor to `resolveAtPosition`). Returns the smallest-span `Sym` covering
+	 * the position — a column/table/cte/alias/function symbol, whichever is most
+	 * specific — or `undefined` when nothing covers it.
+	 *
+	 * Unlike `resolveAtPosition`, no alias-priority pass is needed: sqllens's Sym
+	 * spans always come from real CST nodes (frozen IR, never synthesized), so a
+	 * real alias span and a real column span never legitimately overlap the way
+	 * the legacy qualify()'s synthetic star-expansion tokens once could.
+	 */
+	static symAtPosition(model: DocumentModel, line: number, col: number): Sym | undefined {
+		let best: Sym | undefined;
+		let bestWidth = Infinity;
+		for (const sym of model.symbols ?? []) {
+			const width = symSpanContains(sym.span, line, col);
+			if (width !== undefined && width < bestWidth) { best = sym; bestWidth = width; }
+		}
+		return best;
+	}
+
+	/**
+	 * For a column-reference `Sym` (whose span covers the WHOLE dotted reference,
+	 * e.g. all of `o.order_id`), which dotted part the cursor sits on — 0 for the
+	 * first part, `parts.length - 1` for the column name itself. `undefined` when
+	 * the symbol carries no `partSpans` (a single-part reference, or a synthesized
+	 * part sqllens couldn't give its own span) or the cursor isn't on any part.
+	 */
+	static partIndexAtPosition(sym: Sym, line: number, col: number): number | undefined {
+		if (!sym.partSpans) return undefined;
+		for (let i = 0; i < sym.partSpans.length; i++) {
+			if (symSpanContains(sym.partSpans[i], line, col) !== undefined) return i;
+		}
+		return undefined;
 	}
 
 	private async _parse(

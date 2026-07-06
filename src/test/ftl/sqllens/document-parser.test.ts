@@ -122,6 +122,29 @@ describe('SqllensDocumentParser — realistic dbt model (databricks)', () => {
 	});
 });
 
+describe('SqllensDocumentParser — Sym wave 2: symbols/symbolBindings wired end-to-end', () => {
+	it('populates model.symbols and model.symbolBindings alongside the legacy tokens', async () => {
+		const model = await parser().parse(MODEL);
+		expect(model.symbols).toBeDefined();
+		expect(model.symbols!.length).toBeGreaterThan(0);
+		expect(model.symbolBindings).toBeDefined();
+
+		// The `orders` CTE reference in the `joined` CTE's FROM clause resolves its
+		// alias `o` the same way the legacy resolvedTableRef assertion above does.
+		const ordersRef = model.symbols!.find(s => s.kind === 'cte' && s.modifiers.includes('reference') && s.name === 'orders')!;
+		expect(ordersRef).toBeDefined();
+		expect(model.symbolBindings!.aliasOf.get(ordersRef)?.name).toBe('o');
+
+		// `o.order_id` appears twice (once inside the `orders` CTE's own body, aliasing
+		// the ref() source; once inside `joined`, aliasing the `orders` CTE reference
+		// this test is about) — disambiguate by frame, same as the legacy assertion
+		// above disambiguates by line.
+		const oOrderId = model.symbols!.find(s => s.kind === 'column' && s.modifiers.includes('reference') && s.name === 'o.order_id' && s.frame === 'joined');
+		expect(oOrderId).toBeDefined();
+		expect(model.symbolBindings!.sourceOf.get(oOrderId!)).toBe(ordersRef);
+	});
+});
+
 describe('SqllensDocumentParser — column-ref per-part spans (1/2/3-part)', () => {
 	// One column per line so line index is stable; `name` is a keyword-role token
 	// in sqllens, which the naive identifier-only scan used to mis-pick.

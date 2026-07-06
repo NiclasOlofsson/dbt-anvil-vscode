@@ -26,6 +26,7 @@ import { decompose } from './decompose';
 import { traceColumnLineage, type LineageResult } from './lineage';
 import { extractCtes } from './extract/ctes';
 import { backfillTagAliases, extractTokens } from './extract/tokens';
+import { extractSymbols, type SymbolBindings } from './extract/symbols';
 import { extractFinalColumns, extractFinalSelect } from './extract/final-select';
 import { buildStarExpander } from './extract/star-expand';
 import { mapDiagnostics } from './extract/warnings';
@@ -260,6 +261,13 @@ export class SqllensDocumentParser implements DocumentParser {
 			cells.push(this._extract(masked, templated, dialect, schema, t0, cellMs));
 		}
 		const final = [...cells].reverse().find(c => c.finalSelect !== undefined);
+		// symbolBindings: union — each cell's Sym objects are distinct instances, so
+		// there is no key collision merging their Map entries directly (same as mergeModels).
+		const symbolBindings: SymbolBindings = { aliasOf: new Map(), sourceOf: new Map() };
+		for (const c of cells) {
+			for (const [k, v] of c.symbolBindings?.aliasOf ?? []) symbolBindings.aliasOf.set(k, v);
+			for (const [k, v] of c.symbolBindings?.sourceOf ?? []) symbolBindings.sourceOf.set(k, v);
+		}
 		const model: DocumentModel = {
 			refs: cells.flatMap(c => c.refs),
 			sources: cells.flatMap(c => c.sources),
@@ -268,6 +276,8 @@ export class SqllensDocumentParser implements DocumentParser {
 			finalColumns: final?.finalColumns ?? [],
 			finalSelect: final?.finalSelect,
 			tokens: cells.flatMap(c => c.tokens),
+			symbols: cells.flatMap(c => c.symbols ?? []),
+			symbolBindings,
 			parseWarnings: cells.flatMap(c => c.parseWarnings ?? []),
 			timing: { parseMs: Math.round(parseMs), totalMs: Math.round(performance.now() - t0) },
 			jinjaTokens: cells.flatMap(c => c.jinjaTokens ?? []),
@@ -329,6 +339,8 @@ export class SqllensDocumentParser implements DocumentParser {
 
 		const ctes = extractCtes(result, expander);
 		const tokens = extractTokens(result, qualification, expander);
+		// Sym wave 2: additive alongside `tokens` for now — see extract/symbols.ts.
+		const { symbols, bindings: symbolBindings } = extractSymbols(result.scopes, dialect, schemaObj, qualification);
 		const finalColumns = extractFinalColumns(result, expander);
 		const finalSelect = extractFinalSelect(result, expander);
 		// refs + sources + macroCalls come from the R2 tag-AST (span-accurate; covers
@@ -354,6 +366,8 @@ export class SqllensDocumentParser implements DocumentParser {
 			finalColumns,
 			finalSelect,
 			tokens,
+			symbols,
+			symbolBindings,
 			parseWarnings,
 			timing: { parseMs: Math.round(parseMs), totalMs: Math.round(performance.now() - t0) },
 			jinjaTokens,
