@@ -5,7 +5,7 @@
  * The root output select is the leftmost `SelectExpr` (unwrapping a top-level set
  * operation). Positions come off projection CST spans directly — no descendant
  * bounding-box scan, no backward SELECT-keyword search (`SelectExpr.cst.start` is
- * the SELECT keyword). See EXTRACTOR-MAP §3.
+ * the SELECT keyword).
  */
 import type {
 	ColumnInfo,

@@ -7,7 +7,7 @@
  * from `parseTemplated`'s unified token stream — the extension's own scanner
  * that used to live here is retired (a frozen copy remains as the parity-test
  * oracle in `src/test/ftl/reference-jinja-tokenizers.ts`). This module carries
- * only the type contract; it dies with the legacy engine at cutover.
+ * only the type contract.
  */
 export type JinjaTokenType =
 	| 'jinja_expression_open'  // {{

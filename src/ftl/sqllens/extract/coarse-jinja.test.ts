@@ -65,7 +65,7 @@ describe('coarseJinjaTokens — deep-equal with dbt/jinja-tokenizer over the bat
 });
 
 // ---------------------------------------------------------------------------
-// Corpus sweep — every model the shadow-diff corpus covers, both feeders.
+// Corpus sweep — every sample model, both feeders.
 // ---------------------------------------------------------------------------
 
 const ROOT = path.join(__dirname, '..', '..', '..', '..');

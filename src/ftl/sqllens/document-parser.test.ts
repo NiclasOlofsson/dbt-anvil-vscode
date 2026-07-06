@@ -236,7 +236,7 @@ describe('SqllensDocumentParser — dialect-aware identifier case normalization'
 	//     lowercased, quoted included.
 	//   - UPPERCASE (snowflake): unquoted uppercased, quoted preserved.
 	//   - LOWERCASE (postgres): unquoted lowercased, quoted preserved.
-	// Each case verified against FtlDocumentParser through the shadow-diff harness.
+	// Position cases pinned when the native parser replaced the legacy engine.
 
 	const colRefNames = (model: { tokens: readonly TokenInfo[] }): string[] =>
 		model.tokens

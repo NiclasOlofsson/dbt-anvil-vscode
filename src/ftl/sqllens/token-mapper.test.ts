@@ -91,7 +91,7 @@ describe('mapTokens — comment folding', () => {
 describe('mapTokens — whitespace never leaks (token stream emits no whitespace tokens)', () => {
 	it('drops every whitespace/newline run across blank lines yet keeps comment attachment', () => {
 		// Multi-line SQL with CRLF newlines and blank lines around a comment. The token
-		// stream emits NO whitespace tokens; a `\r\n`-typed leak was the top shadow-diff bucket.
+		// stream emits NO whitespace tokens; a `\r\n`-typed leak was historically the most frequent mismatch.
 		const sql = 'select a\r\n\r\n-- gap comment\r\n\r\nfrom t';
 		const toks = map(sql);
 

@@ -130,7 +130,7 @@ export class ManifestIndexer {
 	/**
 	 * The raw dbt adapter type from the manifest or profiles.yml.
 	 * Returns the raw dbt value (e.g. 'postgresql', 'synapse') — dialect mapping
-	 * is deferred to the SQL parsing layer (FtlDocumentParser).
+	 * is deferred to the SQL parsing layer (SqllensDocumentParser).
 	 */
 	get adapterType(): string | undefined {
 		return this.loader.resolveDialect();

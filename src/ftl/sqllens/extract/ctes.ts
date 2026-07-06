@@ -6,7 +6,6 @@
  * aliased FROM subquery (`scope.sources` of kind `subquery`). Positions come
  * straight off the IR nodes' CST spans: the CTE name token is `CteDef.cst.start`
  * and the closing paren is `CteDef.cst.stop` (precise span information from the AST).
- * See EXTRACTOR-MAP §1.
  */
 import type { ColumnInfo, CteInfo } from '../../../services/parse-service';
 import type { Dialect, Projection, Scope } from '../api';

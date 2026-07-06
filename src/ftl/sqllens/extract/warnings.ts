@@ -5,7 +5,7 @@
  * but a CTE scope can't be analysed") doesn't apply to sqllens — `resolveScopes()`
  * is total and always builds a scope for a valid IR; schema-fed problems surface
  * later as qualify diagnostics (unknown-table/column), a materially different
- * concept the structural DocumentModel does not carry. See EXTRACTOR-MAP §7.
+ * concept the structural DocumentModel does not carry.
  */
 import type { ParseWarning } from '../../../services/parse-service';
 import type { SyntaxDiagnostic } from '../api';

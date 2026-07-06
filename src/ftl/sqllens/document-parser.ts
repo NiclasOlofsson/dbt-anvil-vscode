@@ -9,7 +9,6 @@
  * yields a partial ast + diagnostics (surfaced as syntax_error warnings), never a
  * throw and never a fallback.
  *
- * Runs alongside `FtlDocumentParser` until cutover — neither touches the other.
  */
 import type { DocumentModel } from '../../services/parse-service';
 import type { DocumentParser, ParseOptions } from '../../services/document-parser';
@@ -74,10 +73,9 @@ const DATA_TYPE_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 export class SqllensDocumentParser implements DocumentParser {
-	/** Resolved symbol lists per sqllens dialect. Mirrors FtlDocumentParser's
-	 *  `_symbolsCache`, but keyed by the sqllens `Dialect` and holding the resolved
-	 *  value (sqllens is synchronous — no Promise to memoise). Repeat calls return
-	 *  the identical `DialectSymbols` instance. */
+	/** Resolved symbol lists per sqllens dialect. Keyed by the sqllens `Dialect` and
+	 *  holding the resolved value (sqllens is synchronous — no Promise to memoise).
+	 *  Repeat calls return the identical `DialectSymbols` instance. */
 	private readonly _symbolsCache = new Map<Dialect, DialectSymbols>();
 
 	constructor(private readonly _context: AdapterContext) {}
@@ -125,8 +123,8 @@ export class SqllensDocumentParser implements DocumentParser {
 	/**
 	 * Decompose compiled SQL into debug frames (CTEs + `_main_`) + per-frame stage
 	 * clauses, JSON-stringified — the seam contract the debug adapter `JSON.parse`s
-	 * (`debug-adapter.ts`). Mirrors `FtlDocumentParser.decomposeQuery`; the free
-	 * `decompose()` already documents this `JSON.stringify(decompose(...))` shape.
+	 * (`debug-adapter.ts`). The free `decompose()` already documents this
+	 * `JSON.stringify(decompose(...))` shape.
 	 *
 	 * Dialect resolves via `toSqllensDialect` (total — defaults to `databricks`), so
 	 * unlike the legacy path there is no empty-string no-adapter branch: a real
@@ -141,15 +139,13 @@ export class SqllensDocumentParser implements DocumentParser {
 	/**
 	 * Trace column lineage for one output column, returning the same
 	 * `LineageResult | { error }` union the seam (get-column-lineage tool) consumes.
-	 * Mirrors `FtlDocumentParser.traceLineageV2`'s signature. `schemaJson` is the JSON
-	 * catalog the caller stringifies (`JSON.stringify(schemaMapping)`), parsed back
-	 * into the sqllens `SchemaMapping`; dialect resolves via `toSqllensDialect`, the
-	 * same as `decomposeQuery`.
+	 * `schemaJson` is the JSON catalog the caller stringifies
+	 * (`JSON.stringify(schemaMapping)`), parsed back into the sqllens `SchemaMapping`;
+	 * dialect resolves via `toSqllensDialect`, the same as `decomposeQuery`.
 	 *
 	 * sqllens's `traceColumnLineage` is total and never signals a structured failure
-	 * itself (the legacy path's `{ error }` came from the pool's `success: false`
-	 * result and a no-adapter guard). To populate the same union member here, a thrown
-	 * schema-parse / trace failure is caught and mapped to `{ error }`.
+	 * itself. To populate the same union member, a thrown schema-parse / trace failure
+	 * is caught and mapped to `{ error }`.
 	 */
 	traceLineageV2(sql: string, columnName: string, schemaJson: string): Promise<LineageResult | { error: string }> {
 		const dialect = toSqllensDialect(this._context.adapterType);
@@ -318,11 +314,9 @@ export class SqllensDocumentParser implements DocumentParser {
 		// `endCol - name.length` positions — a highlight covers the star
 		// character, never text synthesized around it. A bare-table star with no
 		// catalog entry stays unexpanded on both paths. Star diagnostics are NOT
-		// mapped into warnings: the legacy path emits no comparable per-column
-		// warning (validate_qualify_columns=False), and scope_warnings are
-		// stripped before shadow comparison, so surfacing them would be pure noise
-		// (EXTRACTOR-MAP §7). The expander is undefined if qualify throws — then
-		// every extractor falls back to unexpanded output.
+		// mapped into warnings: nothing consumes a per-column star warning, so
+		// surfacing them would be pure noise. The expander is undefined if qualify
+		// throws — then every extractor falls back to unexpanded output.
 		const schemaObj = new Schema((schema ?? {}) as SchemaMapping);
 		// sqllens qualify is read-only — it never rewrites a bare column to add the qualifier
 		// the legacy qualify did. extractTokens consumes this column→source binding to

@@ -585,8 +585,8 @@ function isQuotedIdentifier(text: string): boolean {
  * stream emits NO whitespace tokens, so the mapper drops these. We test BOTH the role and the
  * text: some sqllens builds tag a bare `\r\n` / `\n` with a non-`whitespace` role,
  * and a whitespace-TEXT token must be dropped whatever its role (else it leaks
- * through as a bogus `\r\n`-typed SqlToken, the top shadow-diff bucket). Dropped
- * tokens still separate a pending comment from the token it attaches to — the
+ * through as a bogus `\r\n`-typed SqlToken, historically the most frequent mismatch).
+ * Dropped tokens still separate a pending comment from the token it attaches to — the
  * comment-gap fold `continue`s past them without resetting `pending`.
  */
 function isWhitespaceToken(tok: Token): boolean {

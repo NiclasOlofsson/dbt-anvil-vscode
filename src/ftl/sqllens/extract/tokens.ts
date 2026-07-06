@@ -11,7 +11,7 @@
  * `scopeId` is a stable numeric id assigned per `Scope` in the walk. Nothing but
  * `resolveTableRefs` reads it; it exists to reproduce the legacy alias→definition
  * matching (a column's qualifier binds to a table_ref alias declared in the SAME
- * scope). See EXTRACTOR-MAP §2.
+ * scope).
  */
 import type {
 	RefInfo,
@@ -57,7 +57,7 @@ function namePartTokensInRange(tokens: Token[], lo: number, hi: number): Token[]
  * a `table_ref` at. Restricting the scan to the range before the alias keeps a
  * multipart `catalog.schema.tbl u` reporting `tbl` (not the alias `u`). This is
  * the token-stream interim for the unconfirmed per-part table-name span
- * (EXTRACTOR-MAP open question 3): TODO(sqllens-partspans).
+ * (upstream channel item identifier-boundary-contract): TODO(sqllens-partspans).
  */
 function lastNameToken(tokens: Token[], cst: CstNode, aliasCst?: CstNode): Token | undefined {
 	const start = cst.start;
@@ -77,7 +77,7 @@ function addAlias(tok: TableRefToken, alias: string | undefined, aliasCst?: CstN
 		tok.aliasEndCol = s.column + alias.length;
 	}
 	// Note: sqllens IR is frozen, so an alias is never qualify()-synthesised —
-	// the legacy `synthesized` flag has no analog here (EXTRACTOR-MAP §2).
+	// the legacy `synthesized` flag has no analog here.
 }
 
 function tableRefForSource(src: ResolvedSource, scopeId: number, tokens: Token[], dialect: Dialect): TableRefToken | undefined {

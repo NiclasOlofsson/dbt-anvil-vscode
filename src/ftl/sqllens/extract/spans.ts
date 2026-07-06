@@ -65,19 +65,14 @@ interface NormPolicy {
 /**
  * Per-dialect identifier-normalization policy. Each dialect has a NORMALIZATION_STRATEGY
  * that determines how identifiers are cased (uppercase, lowercase, or preserved).
- * These policies match the behavior of the legacy parser, verified through the
- * shadow-diff harness (snowflake `Foo_Bar`→`FOO_BAR`, `"Out_Col"`→`Out_Col`; tsql
- * `[Mixed]`→`mixed`; postgres unquoted lowered / quoted preserved).
+ * These policies are the extension's identifier-casing behavior (snowflake `Foo_Bar`→`FOO_BAR`,
+ * `"Out_Col"`→`Out_Col`; tsql `[Mixed]`→`mixed`; postgres unquoted lowered / quoted preserved).
  *
- * Strategy → policy (dialect.py:112 NormalizationStrategy):
- *   - CASE_INSENSITIVE → both lowercased (quoted included). Spark/Hive/Databricks
- *     (hive.py:219, via databricks→spark→spark2→hive), tsql (tsql.py:412),
- *     bigquery (bigquery.py:402), redshift (redshift.py:43), duckdb (duckdb.py:979),
- *     trino/presto (presto.py:277, trino.py:15 inherits).
- *   - UPPERCASE → unquoted uppercased, quoted preserved. snowflake (snowflake.py:653).
- *   - LOWERCASE (base Dialect default, dialect.py:401) → unquoted lowercased, quoted
- *     preserved. postgres (postgres.py:295, no override).
- * No sqllens dialect uses CASE_SENSITIVE or CASE_INSENSITIVE_UPPERCASE.
+ * Strategy → policy:
+ *   - CASE_INSENSITIVE → both lowercased (quoted included): databricks, tsql,
+ *     bigquery, redshift, duckdb, trino.
+ *   - UPPERCASE → unquoted uppercased, quoted preserved: snowflake.
+ *   - LOWERCASE → unquoted lowercased, quoted preserved: postgres.
  */
 const NORM_POLICY: Record<Dialect, NormPolicy> = {
 	databricks: { unquoted: 'lower', quoted: 'lower' },
