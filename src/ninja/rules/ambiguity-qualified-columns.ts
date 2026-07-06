@@ -2,15 +2,14 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import type { NinjaViolation } from '../violation';
-import type { ColumnRefToken } from '../../services/parse-service';
 import type { JinjaToken } from '../../ftl/sqllens/extract/coarse-jinja';
 
 /**
  * Flags column references that lack a table qualifier in multi-source contexts.
  *
  * When a query has multiple table sources (JOINs, subqueries), unqualified
- * column references are ambiguous. This rule checks column_ref tokens
- * that have no `table` qualifier and exist in scopes with 2+ table_refs.
+ * column references are ambiguous. This rule checks column symbols that
+ * carry no dotted qualifier and exist in scopes with 2+ table/CTE sources.
  */
 export const qualifiedColumnsRule: TokenRule = {
 	id: 'ninja.ambiguity.qualified-columns',
@@ -22,35 +21,36 @@ export const qualifiedColumnsRule: TokenRule = {
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document, jinjaTokens = [] } = ctx;
 
-		// Count only real FROM/JOIN refs — exclude cteDefinition tokens
+		// A FROM/JOIN source is kind 'table' (base table) or 'cte' (CTE reference),
+		// always modifiers:['reference'] — this excludes the CTE's own declaration site,
 		// so a single-source CTE query is not treated as multi-source.
-		const tableRefs = model.tokens.filter(
-			t => t.type === 'table_ref' && !t.cteDefinition,
+		const tableRefs = (model.symbols ?? []).filter(
+			s => (s.kind === 'table' || s.kind === 'cte') && s.modifiers.includes('reference'),
 		);
 		if (tableRefs.length < 2) return [];
 
 		const violations: NinjaViolation[] = [];
 
-		for (const tok of model.tokens) {
-			if (tok.type !== 'column_ref') continue;
-			const colRef = tok as ColumnRefToken;
-
-			if (colRef.line < 0 || colRef.line >= document.lineCount) continue;
-
-			// Skip if already qualified
-			if (colRef.table) continue;
+		for (const sym of model.symbols ?? []) {
+			if (sym.kind !== 'column' || !sym.modifiers.includes('reference')) continue;
 
 			// Skip wildcard columns (*)
-			if (colRef.name === '*') continue;
+			if (sym.modifiers.includes('star')) continue;
+
+			const line = sym.span.line - 1;
+			if (line < 0 || line >= document.lineCount) continue;
+
+			// Skip if already qualified — a dot in sym.name means the user wrote a qualifier.
+			if (sym.name.includes('.')) continue;
 
 			// Skip column refs that originate inside a Jinja expression (blanker placeholder)
-			const colOffset = document.offsetAt(new vscode.Position(colRef.line, colRef.col));
+			const colOffset = document.offsetAt(new vscode.Position(line, sym.span.column));
 			if (isInsideJinja(colOffset, jinjaTokens)) continue;
 
-			const range = new vscode.Range(colRef.line, colRef.col, colRef.line, colRef.endCol);
+			const range = new vscode.Range(sym.span.line - 1, sym.span.column, sym.span.endLine - 1, sym.span.endColumn);
 			violations.push({
 				rule: 'ninja.ambiguity.qualified-columns',
-				message: `Column '${colRef.name}' is unqualified — add a table qualifier for clarity.`,
+				message: `Column '${sym.name}' is unqualified — add a table qualifier for clarity.`,
 				range,
 			});
 		}

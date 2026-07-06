@@ -17,24 +17,28 @@ export const selfAliasRule: TokenRule = {
 		const { model } = ctx;
 		const violations: NinjaViolation[] = [];
 
-		for (const tok of model.tokens) {
-			if (tok.type !== 'table_ref') continue;
-			if (!tok.alias) continue;
-			if (tok.isSubquery) continue;
-			if (tok.name.toLowerCase() !== tok.alias.toLowerCase()) continue;
+		for (const relSym of model.symbols ?? []) {
+			if (relSym.kind !== 'table' && relSym.kind !== 'cte') continue;
+			if (!relSym.modifiers.includes('reference')) continue;
 
-			const aliasLine = tok.aliasLine ?? tok.line;
-			const aliasCol = tok.aliasCol ?? tok.endCol;
-			const aliasEndCol = tok.aliasEndCol ?? aliasCol + tok.alias.length;
+			const aliasSym = model.symbolBindings?.aliasOf.get(relSym);
+			if (!aliasSym) continue;
+			if (relSym.name.toLowerCase() !== aliasSym.name.toLowerCase()) continue;
 
-			// Range covering ` AS alias` or ` alias` — from end of table name to end of alias
-			const range = new vscode.Range(aliasLine, aliasCol, aliasLine, aliasEndCol);
+			// Range covering the alias identifier itself
+			const range = new vscode.Range(
+				aliasSym.span.line - 1, aliasSym.span.column,
+				aliasSym.span.endLine - 1, aliasSym.span.endColumn,
+			);
 
 			// Fix: remove the alias span (from after table name to end of alias)
-			const fixRange = new vscode.Range(tok.line, tok.endCol, aliasLine, aliasEndCol);
+			const fixRange = new vscode.Range(
+				relSym.span.endLine - 1, relSym.span.endColumn,
+				aliasSym.span.endLine - 1, aliasSym.span.endColumn,
+			);
 			violations.push({
 				rule: 'ninja.aliasing.self-alias',
-				message: `Table '${tok.name}' is aliased to itself — remove the alias.`,
+				message: `Table '${relSym.name}' is aliased to itself — remove the alias.`,
 				range,
 				action: { type: FixAction.TYPE, ops: [deleteOp(fixRange)], autoFix: true },
 			});

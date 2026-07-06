@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mockDocument, cfg, model, tableRef } from './helpers';
+import { mockDocument, cfg, model, sym, symbolBindings } from './helpers';
 import { requireTableAliasRule } from '../../ninja/rules/alias-require-table-alias';
 
 const RULE = 'ninja.aliasing.require-table-alias';
@@ -12,28 +12,31 @@ function check(sql: string, m: ReturnType<typeof model>) {
 describe(RULE, () => {
 	it('no violation with single table (no alias needed)', () => {
 		const sql = 'select * from orders';
-		const m = model({ tokens: [tableRef('orders', 0, 14)] });
+		const m = model({ symbols: [sym('table', 'orders', 0, 14)] });
 		expect(check(sql, m)).toHaveLength(0);
 	});
 
 	it('no violation when all tables have aliases', () => {
 		const sql = 'select * from orders o join items i on o.id = i.order_id';
+		const orders = sym('table', 'orders', 0, 14);
+		const ordersAlias = sym('alias', 'o', 0, 21, { modifiers: ['declaration'] });
+		const items = sym('table', 'items', 0, 30);
+		const itemsAlias = sym('alias', 'i', 0, 36, { modifiers: ['declaration'] });
 		const m = model({
-			tokens: [
-				tableRef('orders', 0, 14, 'o'),
-				tableRef('items', 0, 30, 'i'),
-			],
+			symbols: [orders, ordersAlias, items, itemsAlias],
+			symbolBindings: symbolBindings({ aliasOf: [[orders, ordersAlias], [items, itemsAlias]] }),
 		});
 		expect(check(sql, m)).toHaveLength(0);
 	});
 
 	it('flags unaliased table when multiple sources', () => {
 		const sql = 'select * from orders join items i on orders.id = i.order_id';
+		const orders = sym('table', 'orders', 0, 14);
+		const items = sym('table', 'items', 0, 28);
+		const itemsAlias = sym('alias', 'i', 0, 34, { modifiers: ['declaration'] });
 		const m = model({
-			tokens: [
-				tableRef('orders', 0, 14),
-				tableRef('items', 0, 28, 'i'),
-			],
+			symbols: [orders, items, itemsAlias],
+			symbolBindings: symbolBindings({ aliasOf: [[items, itemsAlias]] }),
 		});
 		const v = check(sql, m);
 		expect(v).toHaveLength(1);
@@ -44,9 +47,9 @@ describe(RULE, () => {
 	it('flags multiple unaliased tables', () => {
 		const sql = 'select * from orders join items on orders.id = items.order_id';
 		const m = model({
-			tokens: [
-				tableRef('orders', 0, 14),
-				tableRef('items', 0, 28),
+			symbols: [
+				sym('table', 'orders', 0, 14),
+				sym('table', 'items', 0, 28),
 			],
 		});
 		expect(check(sql, m)).toHaveLength(2);
@@ -59,11 +62,12 @@ describe(RULE, () => {
 
 	it('range points to table ref position', () => {
 		const sql = 'select * from orders join items i on 1=1';
+		const orders = sym('table', 'orders', 0, 14);
+		const items = sym('table', 'items', 0, 28);
+		const itemsAlias = sym('alias', 'i', 0, 34, { modifiers: ['declaration'] });
 		const m = model({
-			tokens: [
-				tableRef('orders', 0, 14),
-				tableRef('items', 0, 28, 'i'),
-			],
+			symbols: [orders, items, itemsAlias],
+			symbolBindings: symbolBindings({ aliasOf: [[items, itemsAlias]] }),
 		});
 		const v = check(sql, m);
 		expect(v[0].range.start.line).toBe(0);
@@ -73,11 +77,12 @@ describe(RULE, () => {
 
 	it('no fix is provided', () => {
 		const sql = 'select * from orders join items i on 1=1';
+		const orders = sym('table', 'orders', 0, 14);
+		const items = sym('table', 'items', 0, 28);
+		const itemsAlias = sym('alias', 'i', 0, 34, { modifiers: ['declaration'] });
 		const m = model({
-			tokens: [
-				tableRef('orders', 0, 14),
-				tableRef('items', 0, 28, 'i'),
-			],
+			symbols: [orders, items, itemsAlias],
+			symbolBindings: symbolBindings({ aliasOf: [[items, itemsAlias]] }),
 		});
 		const v = check(sql, m);
 		expect(v[0].action).toBeUndefined();

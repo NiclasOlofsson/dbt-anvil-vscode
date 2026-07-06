@@ -14,37 +14,32 @@ export const unusedAliasRule: TokenRule = {
 		const { model } = ctx;
 		const violations: NinjaViolation[] = [];
 
-		// Collect user-authored table aliases only.
-		// qualify() can synthesize aliases for ref/source tables that have no alias in source SQL.
-		// Those must never be linted as "unused alias".
-		const aliased: { name: string; alias: string; line: number; col: number; endCol: number }[] = [];
-		for (const tok of model.tokens) {
-			if (tok.type !== 'table_ref' || !tok.alias) continue;
-			aliased.push({
-				name: tok.name,
-				alias: tok.alias,
-				line: tok.aliasLine ?? tok.line,
-				col: tok.aliasCol ?? tok.col,
-				endCol: tok.aliasEndCol ?? tok.endCol,
-			});
-		}
-		if (aliased.length === 0) return [];
+		// aliasOf only ever pairs a relation-kind reference Sym (table/cte/subquery/lateral)
+		// with a real alias Sym written in source — nothing here to synthesize, unlike the
+		// old qualify()-based bridge which could invent aliases for ref/source tables.
+		const aliasOf = model.symbolBindings?.aliasOf ?? new Map();
+		if (aliasOf.size === 0) return [];
 
-		// Collect all table qualifiers from column refs
+		// Collect the qualifiers actually referenced by column reads, resolved via
+		// sourceOf (works uniformly for qualified AND bare columns — the same
+		// qualification.bindingOf-based resolution the old bridge's `.table` used).
 		const usedQualifiers = new Set<string>();
-		for (const tok of model.tokens) {
-			if (tok.type === 'column_ref' && tok.table) {
-				usedQualifiers.add(tok.table.toLowerCase());
-			}
+		for (const s of model.symbols ?? []) {
+			if (s.kind !== 'column' || !s.modifiers.includes('reference')) continue;
+			const relation = model.symbolBindings?.sourceOf.get(s);
+			if (!relation) continue;
+			const qualifier = aliasOf.get(relation)?.name ?? relation.name;
+			usedQualifiers.add(qualifier.toLowerCase());
 		}
 
 		// Flag aliases not referenced in any column qualifier
-		for (const a of aliased) {
-			if (usedQualifiers.has(a.alias.toLowerCase())) continue;
+		for (const [relation, alias] of aliasOf) {
+			if (usedQualifiers.has(alias.name.toLowerCase())) continue;
+			const range = new vscode.Range(alias.span.line - 1, alias.span.column, alias.span.endLine - 1, alias.span.endColumn);
 			violations.push({
 				rule: 'ninja.aliasing.unused-alias',
-				message: `Alias '${a.alias}' for table '${a.name}' is never referenced.`,
-				range: new vscode.Range(a.line, a.col, a.line, a.endCol),
+				message: `Alias '${alias.name}' for table '${relation.name}' is never referenced.`,
+				range,
 			});
 		}
 

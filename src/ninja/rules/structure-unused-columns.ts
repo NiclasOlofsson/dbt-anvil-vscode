@@ -2,15 +2,17 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import type { NinjaViolation } from '../violation';
-import type { CteInfo, ColumnRefToken } from '../../services/parse-service';
+import type { CteInfo } from '../../services/parse-service';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 import type { SqlToken } from '../../ftl/sql-tokens';
+import type { Sym } from '../../ftl/sqllens/api';
+import type { SymbolBindings } from '../../ftl/sqllens/extract/symbols';
 
 /**
  * Flags columns defined in a CTE that are never referenced downstream.
  *
  * For each CTE, collects its defined columns and checks whether any
- * column_ref token with a matching resolvedTableRef references them.
+ * column Sym bound (via symbolBindings.sourceOf) to that CTE references them.
  *
  * Skips CTEs whose SELECT list contains a wildcard — either bare
  * (`select *`) or qualified (`select cp.*`). The Python `qualify()` pass
@@ -34,7 +36,7 @@ export const unusedColumnsRule: TokenRule = {
 		if (model.ctes.length === 0) return [];
 
 		// Build a map of CTE name (lower) → set of referenced column names (lower)
-		const referencedColumns = buildReferencedColumnsMap(model.ctes, model.tokens);
+		const referencedColumns = buildReferencedColumnsMap(model.ctes, model.symbols ?? [], model.symbolBindings);
 
 		const sqlTokens = sqlOnly(model.ninjaSqlTokens);
 
@@ -100,46 +102,37 @@ function cteHasWildcardSelect(cte: CteInfo, sqlTokens: SqlToken[]): boolean {
 /**
  * Build a map: CTE name (lowercase) → Set of column names (lowercase) referenced on it.
  *
- * A column_ref references a CTE when:
- * - Its resolvedTableRef.name matches a CTE name, OR
- * - Its table qualifier matches a CTE name/alias and it falls outside that CTE's body
+ * A column Sym references a CTE when its bound source (symbolBindings.sourceOf)
+ * resolves to a `kind: 'cte'` relation Sym matching a known CTE, and the
+ * reference falls outside that CTE's own body (a genuine downstream use, not
+ * a self-reference). sqllens's real `Qualification.bindingOf` (Phase 0, commit
+ * 5b8640b) resolves both qualified and bare columns uniformly, so there is no
+ * separate qualifier-string fallback tier here — a column with no resolvable
+ * source (sourceOf has no entry) simply doesn't count as a reference.
  */
 function buildReferencedColumnsMap(
 	ctes: CteInfo[],
-	tokens: import('../../services/parse-service').TokenInfo[],
+	symbols: Sym[],
+	symbolBindings: SymbolBindings | undefined,
 ): Map<string, Set<string>> {
 	const result = new Map<string, Set<string>>();
 
-	// Index CTE names and aliases for lookup
+	// Index CTE names for lookup
 	const cteByName = new Map<string, CteInfo>();
-	const cteByAlias = new Map<string, CteInfo>();
-	for (const c of ctes) {
-		cteByName.set(c.name.toLowerCase(), c);
-		if (c.alias) cteByAlias.set(c.alias.toLowerCase(), c);
-	}
+	for (const c of ctes) cteByName.set(c.name.toLowerCase(), c);
 
-	for (const tok of tokens) {
-		if (tok.type !== 'column_ref') continue;
-		const colRef = tok as ColumnRefToken;
+	for (const colSym of symbols) {
+		if (colSym.kind !== 'column' || !colSym.modifiers.includes('reference')) continue;
 
-		let targetCte: CteInfo | undefined;
+		const source = symbolBindings?.sourceOf.get(colSym);
+		if (!source || source.kind !== 'cte') continue;
 
-		// First: use resolvedTableRef if available
-		if (colRef.resolvedTableRef) {
-			targetCte = cteByName.get(colRef.resolvedTableRef.name.toLowerCase())
-				?? cteByAlias.get(colRef.resolvedTableRef.name.toLowerCase());
-		}
-
-		// Fallback: use the table qualifier directly
-		if (!targetCte && colRef.table) {
-			targetCte = cteByName.get(colRef.table.toLowerCase())
-				?? cteByAlias.get(colRef.table.toLowerCase());
-		}
-
+		const targetCte = cteByName.get(source.name.toLowerCase());
 		if (!targetCte) continue;
 
 		// Column must be outside the CTE body (downstream reference)
-		if (colRef.line >= targetCte.line && colRef.line <= targetCte.endLine) continue;
+		const line = colSym.span.line - 1;
+		if (line >= targetCte.line && line <= targetCte.endLine) continue;
 
 		const key = targetCte.name.toLowerCase();
 		let set = result.get(key);
@@ -147,7 +140,7 @@ function buildReferencedColumnsMap(
 			set = new Set();
 			result.set(key, set);
 		}
-		set.add(colRef.name.toLowerCase());
+		set.add(colSym.name.split('.').pop()!.toLowerCase());
 	}
 
 	return result;

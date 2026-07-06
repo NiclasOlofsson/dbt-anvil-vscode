@@ -484,15 +484,29 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 				const knownCols = new Set(finalCols.map(c => c.name.toLowerCase()));
 				const aliasLc = ref.alias.toLowerCase();
 
-				for (const token of entry.tokens) {
-					if (token.type !== 'column_ref') continue;
-					if (token.table?.toLowerCase() !== aliasLc) continue;
-					if (knownCols.has(token.name.toLowerCase())) continue;
+				for (const sym of entry.symbols ?? []) {
+					if (sym.kind !== 'column' || !sym.modifiers.includes('reference')) continue;
+
+					// Resolved source (bare and qualified columns alike — mirrors the retired
+					// bridge's `.table` field, which was itself upgraded via bindingOf rather
+					// than read verbatim off the written qualifier; see extract/tokens.ts).
+					const resolved = entry.symbolBindings?.sourceOf.get(sym);
+					if (!resolved) continue;
+					const qualifier = entry.symbolBindings?.aliasOf.get(resolved)?.name ?? resolved.name;
+					if (qualifier.toLowerCase() !== aliasLc) continue;
+
+					const bareName = sym.name.split('.').pop()!;
+					if (knownCols.has(bareName.toLowerCase())) continue;
+
 					const colListSample = [...knownCols].slice(0, 5).join(', ');
 					const suffix = knownCols.size > 5 ? ', …' : '';
+					// Prefer the column-name part span (matches the old bridge's name-only
+					// range, excluding the qualifier) — falls back to the whole reference's
+					// span only when partSpans is unavailable (a synthesized part).
+					const nameSpan = sym.partSpans?.length ? sym.partSpans[sym.partSpans.length - 1] : sym.span;
 					const diag = new vscode.Diagnostic(
-						new vscode.Range(token.line, token.col, token.line, token.endCol),
-						`Column '${token.name}' not found in '${ref.model}' (known: ${colListSample}${suffix})`,
+						new vscode.Range(nameSpan.line - 1, nameSpan.column, nameSpan.endLine - 1, nameSpan.endColumn),
+						`Column '${bareName}' not found in '${ref.model}' (known: ${colListSample}${suffix})`,
 						vscode.DiagnosticSeverity.Error,
 					);
 					diag.source = 'dbt-anvil';

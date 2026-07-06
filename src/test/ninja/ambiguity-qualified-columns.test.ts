@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mockDocument, cfg, model, tableRef, colRef } from './helpers';
+import { mockDocument, cfg, model, sym } from './helpers';
 import { qualifiedColumnsRule } from '../../ninja/rules/ambiguity-qualified-columns';
 
 const RULE = 'ninja.ambiguity.qualified-columns';
@@ -13,9 +13,9 @@ describe(RULE, () => {
 	it('no violation with single table source', () => {
 		const sql = 'select id from t';
 		const m = model({
-			tokens: [
-				tableRef('t', 0, 15),
-				colRef('id', 0, 7),
+			symbols: [
+				sym('table', 't', 0, 15),
+				sym('column', 'id', 0, 7),
 			],
 		});
 		expect(check(sql, m)).toHaveLength(0);
@@ -23,13 +23,11 @@ describe(RULE, () => {
 
 	it('flags unqualified column with multiple sources', () => {
 		const sql = 'select id from t1 join t2 on t1.id = t2.id';
-		const ref1 = tableRef('t1', 0, 15);
-		const ref2 = tableRef('t2', 0, 23);
 		const m = model({
-			tokens: [
-				ref1,
-				ref2,
-				colRef('id', 0, 7), // unqualified
+			symbols: [
+				sym('table', 't1', 0, 15),
+				sym('table', 't2', 0, 23),
+				sym('column', 'id', 0, 7), // unqualified
 			],
 		});
 		const v = check(sql, m);
@@ -40,14 +38,12 @@ describe(RULE, () => {
 
 	it('no violation when all columns are qualified', () => {
 		const sql = 'select t1.id, t2.name from t1 join t2 on t1.id = t2.id';
-		const ref1 = tableRef('t1', 0, 27);
-		const ref2 = tableRef('t2', 0, 35);
 		const m = model({
-			tokens: [
-				ref1,
-				ref2,
-				colRef('id', 0, 10, 't1', ref1),
-				colRef('name', 0, 17, 't2', ref2),
+			symbols: [
+				sym('table', 't1', 0, 27),
+				sym('table', 't2', 0, 35),
+				sym('column', 't1.id', 0, 7),
+				sym('column', 't2.name', 0, 14),
 			],
 		});
 		expect(check(sql, m)).toHaveLength(0);
@@ -56,11 +52,11 @@ describe(RULE, () => {
 	it('flags multiple unqualified columns', () => {
 		const sql = 'select id, name from t1 join t2 on t1.id = t2.id';
 		const m = model({
-			tokens: [
-				tableRef('t1', 0, 21),
-				tableRef('t2', 0, 29),
-				colRef('id', 0, 7),
-				colRef('name', 0, 11),
+			symbols: [
+				sym('table', 't1', 0, 21),
+				sym('table', 't2', 0, 29),
+				sym('column', 'id', 0, 7),
+				sym('column', 'name', 0, 11),
 			],
 		});
 		expect(check(sql, m)).toHaveLength(2);
@@ -69,10 +65,10 @@ describe(RULE, () => {
 	it('skips wildcard column refs', () => {
 		const sql = 'select * from t1 join t2 on t1.id = t2.id';
 		const m = model({
-			tokens: [
-				tableRef('t1', 0, 14),
-				tableRef('t2', 0, 22),
-				colRef('*', 0, 7),
+			symbols: [
+				sym('table', 't1', 0, 14),
+				sym('table', 't2', 0, 22),
+				sym('column', '*', 0, 7, { modifiers: ['reference', 'star'] }),
 			],
 		});
 		expect(check(sql, m)).toHaveLength(0);
@@ -81,10 +77,10 @@ describe(RULE, () => {
 	it('range points to column ref position', () => {
 		const sql = 'select amount from orders join items on orders.id = items.id';
 		const m = model({
-			tokens: [
-				tableRef('orders', 0, 19),
-				tableRef('items', 0, 31),
-				colRef('amount', 0, 7),
+			symbols: [
+				sym('table', 'orders', 0, 19),
+				sym('table', 'items', 0, 31),
+				sym('column', 'amount', 0, 7),
 			],
 		});
 		const v = check(sql, m);
@@ -99,17 +95,18 @@ describe(RULE, () => {
 	});
 
 	it('no violation when single real FROM ref exists but cteDefinition tokens inflate the count', () => {
-		// Regression: cteDefinition tokens were counted in tableRefs, making a single-source
-		// query look like it had 2+ sources, triggering false positives on unqualified columns.
+		// Regression: the CTE's own declaration-site symbol was counted toward the
+		// table/CTE reference count, making a single-source query look like it had
+		// 2+ sources, triggering false positives on unqualified columns.
 		const sql = 'with cte_a as (\n  select id\n)\nselect id from cte_a';
 		const m = model({
-			tokens: [
-				// CTE definition site token — must NOT count toward the 2+ threshold
-				{ type: 'table_ref' as const, name: 'cte_a', line: 0, col: 5, endCol: 10, cteDefinition: true },
+			symbols: [
+				// CTE declaration site — modifiers:['declaration'], must NOT count toward the 2+ threshold
+				sym('cte', 'cte_a', 0, 5, { modifiers: ['declaration'] }),
 				// The real single FROM reference
-				tableRef('cte_a', 3, 15),
+				sym('cte', 'cte_a', 3, 15),
 				// Unqualified column — should NOT be flagged since there is only 1 real source
-				colRef('id', 3, 7),
+				sym('column', 'id', 3, 7),
 			],
 		});
 		expect(check(sql, m)).toHaveLength(0);

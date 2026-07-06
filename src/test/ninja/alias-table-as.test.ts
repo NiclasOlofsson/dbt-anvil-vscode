@@ -1,43 +1,18 @@
 import { describe, it, expect } from 'vitest';
-import { mockDocument, cfg, model, applyEditsToText } from './helpers';
+import { mockDocument, cfg, model, sym, symbolBindings, applyEditsToText } from './helpers';
 import { tableAsRule } from '../../ninja/rules/alias-table-as';
-import type { TableRefToken } from '../../services/parse-service';
 import { FixAction } from '../../ninja/violation';
 
 const RULE = 'ninja.aliasing.table-as';
-
-function tableRefTok(
-	name: string,
-	line: number,
-	col: number,
-	alias?: string,
-	aliasCol?: number,
-	aliasEndCol?: number,
-	extra: Partial<TableRefToken> = {},
-): TableRefToken {
-	return {
-		type: 'table_ref',
-		name,
-		line,
-		col,
-		endCol: col + name.length,
-		alias,
-		...(alias !== undefined ? {
-			aliasLine: line,
-			aliasCol: aliasCol ?? col + name.length + 1,
-			aliasEndCol: aliasEndCol ?? (aliasCol ?? col + name.length + 1) + alias.length,
-		} : {}),
-		...extra,
-	} as TableRefToken;
-}
 
 describe(RULE, () => {
 	it('flags alias without AS keyword', () => {
 		// "select * from orders o" — orders at col 14, alias 'o' at col 21
 		const sql = 'select * from orders o';
-		const tok = tableRefTok('orders', 0, 14, 'o', 21, 22);
+		const ref = sym('table', 'orders', 0, 14);
+		const alias = sym('alias', 'o', 0, 21, { modifiers: ['declaration'] });
 		const doc = mockDocument(sql);
-		const m = model({ tokens: [tok] });
+		const m = model({ symbols: [ref, alias], symbolBindings: symbolBindings({ aliasOf: [[ref, alias]] }) });
 		const v = tableAsRule.check({ model: m, document: doc, config: cfg() });
 		expect(v).toHaveLength(1);
 		expect(v[0].rule).toBe(RULE);
@@ -47,27 +22,30 @@ describe(RULE, () => {
 	it('no violation when alias uses AS keyword', () => {
 		// "select * from orders AS o" — orders at col 14, alias 'o' at col 24
 		const sql = 'select * from orders AS o';
-		const tok = tableRefTok('orders', 0, 14, 'o', 24, 25);
+		const ref = sym('table', 'orders', 0, 14);
+		const alias = sym('alias', 'o', 0, 24, { modifiers: ['declaration'] });
 		const doc = mockDocument(sql);
-		const m = model({ tokens: [tok] });
+		const m = model({ symbols: [ref, alias], symbolBindings: symbolBindings({ aliasOf: [[ref, alias]] }) });
 		const v = tableAsRule.check({ model: m, document: doc, config: cfg() });
 		expect(v).toHaveLength(0);
 	});
 
 	it('no violation when alias uses lowercase as keyword', () => {
 		const sql = 'select * from orders as o';
-		const tok = tableRefTok('orders', 0, 14, 'o', 24, 25);
+		const ref = sym('table', 'orders', 0, 14);
+		const alias = sym('alias', 'o', 0, 24, { modifiers: ['declaration'] });
 		const doc = mockDocument(sql);
-		const m = model({ tokens: [tok] });
+		const m = model({ symbols: [ref, alias], symbolBindings: symbolBindings({ aliasOf: [[ref, alias]] }) });
 		const v = tableAsRule.check({ model: m, document: doc, config: cfg() });
 		expect(v).toHaveLength(0);
 	});
 
 	it('autofix inserts AS before alias', () => {
 		const sql = 'select * from orders o';
-		const tok = tableRefTok('orders', 0, 14, 'o', 21, 22);
+		const ref = sym('table', 'orders', 0, 14);
+		const alias = sym('alias', 'o', 0, 21, { modifiers: ['declaration'] });
 		const doc = mockDocument(sql);
-		const m = model({ tokens: [tok] });
+		const m = model({ symbols: [ref, alias], symbolBindings: symbolBindings({ aliasOf: [[ref, alias]] }) });
 		const v = tableAsRule.check({ model: m, document: doc, config: cfg() });
 		expect(v[0].action?.type).toBe(FixAction.TYPE);
 		const fixed = applyEditsToText(sql, (v[0].action as FixAction).ops);
@@ -76,53 +54,60 @@ describe(RULE, () => {
 
 	it('no violation for table ref without alias', () => {
 		const sql = 'select * from orders';
-		const tok = tableRefTok('orders', 0, 14);
+		const ref = sym('table', 'orders', 0, 14);
 		const doc = mockDocument(sql);
-		const m = model({ tokens: [tok] });
+		const m = model({ symbols: [ref] });
 		expect(tableAsRule.check({ model: m, document: doc, config: cfg() })).toHaveLength(0);
 	});
 
 	it('skips CTE definition tokens', () => {
+		// A CTE's own declaration site is a separate Sym (kind 'cte', modifiers
+		// ['declaration']) — it never carries the 'reference' modifier, so the
+		// rule's relation-ref filter excludes it without a separate check.
 		const sql = 'with orders as (select 1)';
-		const tok = tableRefTok('orders', 0, 5, 'orders', 5, 11, { cteDefinition: true });
+		const cteDecl = sym('cte', 'orders', 0, 5, { modifiers: ['declaration'] });
 		const doc = mockDocument(sql);
-		const m = model({ tokens: [tok] });
+		const m = model({ symbols: [cteDecl] });
 		expect(tableAsRule.check({ model: m, document: doc, config: cfg() })).toHaveLength(0);
 	});
 
 	it('disabled when explicitAs is false', () => {
 		const sql = 'select * from orders o';
-		const tok = tableRefTok('orders', 0, 14, 'o', 21, 22);
+		const ref = sym('table', 'orders', 0, 14);
+		const alias = sym('alias', 'o', 0, 21, { modifiers: ['declaration'] });
 		const doc = mockDocument(sql);
-		const m = model({ tokens: [tok] });
+		const m = model({ symbols: [ref, alias], symbolBindings: symbolBindings({ aliasOf: [[ref, alias]] }) });
 		const c = cfg({ convention: { ...cfg().convention, explicitAs: false } });
 		expect(tableAsRule.check({ model: m, document: doc, config: c })).toHaveLength(0);
 	});
 
-	it('no violations without tokens', () => {
+	it('no violations without symbols', () => {
 		const doc = mockDocument('select * from orders o');
 		const m = model({});
 		expect(tableAsRule.check({ model: m, document: doc, config: cfg() })).toHaveLength(0);
 	});
 
 	it('no violation for subquery alias with AS keyword: ") as po"', () => {
-		// `from (select 1) as po`. For subquery aliases the table_ref's `name`
-		// equals the alias (`po`); `endCol` / `aliasCol` both point at the
-		// alias, so the legacy "between name and alias" slice was empty.
-		// The rule must look at the text right BEFORE the alias instead.
+		// `from (select 1) as po`. A subquery source's relation Sym has kind
+		// 'subquery' and its own span points at the alias identifier itself (no
+		// underlying table name is being renamed) — same position as the alias
+		// Sym. The rule must look at the text right BEFORE the alias instead of
+		// between the (empty) name-to-alias gap.
 		const sql = 'select * from (select 1) as po';
-		// 'po' starts at col 28 (0-based). isSubquery: true.
-		const tok = tableRefTok('po', 0, 28, 'po', 28, 30, { isSubquery: true });
+		// 'po' starts at col 28 (0-based).
+		const ref = sym('subquery', 'po', 0, 28);
+		const alias = sym('alias', 'po', 0, 28, { modifiers: ['declaration'] });
 		const doc = mockDocument(sql);
-		const m = model({ tokens: [tok] });
+		const m = model({ symbols: [ref, alias], symbolBindings: symbolBindings({ aliasOf: [[ref, alias]] }) });
 		expect(tableAsRule.check({ model: m, document: doc, config: cfg() })).toHaveLength(0);
 	});
 
 	it('flags subquery alias missing AS: ") po"', () => {
 		const sql = 'select * from (select 1) po';
-		const tok = tableRefTok('po', 0, 25, 'po', 25, 27, { isSubquery: true });
+		const ref = sym('subquery', 'po', 0, 25);
+		const alias = sym('alias', 'po', 0, 25, { modifiers: ['declaration'] });
 		const doc = mockDocument(sql);
-		const m = model({ tokens: [tok] });
+		const m = model({ symbols: [ref, alias], symbolBindings: symbolBindings({ aliasOf: [[ref, alias]] }) });
 		expect(tableAsRule.check({ model: m, document: doc, config: cfg() })).toHaveLength(1);
 	});
 
@@ -131,9 +116,10 @@ describe(RULE, () => {
 		// regex anchors must reject that. Source: `views_as o`.
 		const sql = 'select * from views_as o';
 		// views_as at col 14, alias 'o' at col 23.
-		const tok = tableRefTok('views_as', 0, 14, 'o', 23, 24);
+		const ref = sym('table', 'views_as', 0, 14);
+		const alias = sym('alias', 'o', 0, 23, { modifiers: ['declaration'] });
 		const doc = mockDocument(sql);
-		const m = model({ tokens: [tok] });
+		const m = model({ symbols: [ref, alias], symbolBindings: symbolBindings({ aliasOf: [[ref, alias]] }) });
 		const v = tableAsRule.check({ model: m, document: doc, config: cfg() });
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('\'o\'');

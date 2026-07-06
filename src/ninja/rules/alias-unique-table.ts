@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import type { NinjaViolation } from '../violation';
+import type { Sym } from '../../ftl/sqllens/api';
 
 export const uniqueTableRule: TokenRule = {
 	id: 'ninja.aliasing.unique-table',
@@ -14,40 +15,37 @@ export const uniqueTableRule: TokenRule = {
 		const { model } = ctx;
 		const violations: NinjaViolation[] = [];
 
-		// Build per-scope seen maps: one per CTE body, one for the final SELECT.
-		// A token belongs to the scope whose line range contains it; if no CTE
-		// contains it, it belongs to the final-SELECT scope.
-		const scopeFor = (line: number): string => {
-			for (const cte of model.ctes) {
-				if (line >= cte.line && line <= cte.endLine) return cte.name;
-			}
-			return '__final__';
-		};
+		// Per-scope seen maps, keyed by `sym.frame` directly — sqllens's own symbol
+		// walk already assigns each FROM/JOIN reference the CTE/subquery/main-query
+		// scope it lives in, handling nesting (subqueries, set-op branches, pipe
+		// stages) correctly, so there is no need to re-derive scope from CTE line ranges.
+		const seenByFrame = new Map<string, Map<string, Sym>>();
 
-		const seenByScope = new Map<string, Map<string, { line: number; col: number }>>();
+		for (const relSym of model.symbols ?? []) {
+			if (relSym.kind !== 'table' && relSym.kind !== 'cte') continue;
+			if (!relSym.modifiers.includes('reference')) continue;
 
-		for (const tok of model.tokens) {
-			if (tok.type !== 'table_ref') continue;
-			const label = tok.alias ?? tok.name;
+			const aliasSym = model.symbolBindings?.aliasOf.get(relSym);
+			const label = aliasSym?.name ?? relSym.name;
 			const key = label.toLowerCase();
-			const scope = scopeFor(tok.line);
 
-			let seen = seenByScope.get(scope);
-			if (!seen) { seen = new Map(); seenByScope.set(scope, seen); }
-
-			const line = tok.aliasLine ?? tok.line;
-			const col = tok.aliasCol ?? tok.col;
-			const endCol = tok.aliasEndCol ?? tok.endCol;
+			let seen = seenByFrame.get(relSym.frame);
+			if (!seen) { seen = new Map(); seenByFrame.set(relSym.frame, seen); }
 
 			const prev = seen.get(key);
 			if (prev) {
+				const target = aliasSym ?? relSym;
+				const range = new vscode.Range(
+					target.span.line - 1, target.span.column,
+					target.span.endLine - 1, target.span.endColumn,
+				);
 				violations.push({
 					rule: 'ninja.aliasing.unique-table',
 					message: `Duplicate table alias '${label}'.`,
-					range: new vscode.Range(line, col, line, endCol),
+					range,
 				});
 			} else {
-				seen.set(key, { line, col });
+				seen.set(key, aliasSym ?? relSym);
 			}
 		}
 

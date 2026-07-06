@@ -2,7 +2,6 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import type { NinjaViolation } from '../violation';
-import type { TableRefToken } from '../../services/parse-service';
 
 /**
  * Flags table references in FROM/JOIN that lack an alias.
@@ -20,17 +19,21 @@ export const requireTableAliasRule: TokenRule = {
 
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model } = ctx;
+		if (!model.symbols) return [];
 
-		const tableRefs = model.tokens.filter(t => t.type === 'table_ref') as TableRefToken[];
-		const fromRefs = tableRefs.filter(t => !t.cteDefinition);
+		// A FROM/JOIN source is kind 'table' (base table) or 'cte' (CTE reference),
+		// always modifiers:['reference'] — this excludes the CTE's own declaration site.
+		const fromRefs = model.symbols.filter(
+			s => (s.kind === 'table' || s.kind === 'cte') && s.modifiers.includes('reference'),
+		);
 		if (fromRefs.length < 2) return [];
 
 		const violations: NinjaViolation[] = [];
 
 		for (const ref of fromRefs) {
-			if (ref.alias) continue;
+			if (model.symbolBindings!.aliasOf.get(ref)) continue;
 
-			const range = new vscode.Range(ref.line, ref.col, ref.line, ref.endCol);
+			const range = new vscode.Range(ref.span.line - 1, ref.span.column, ref.span.endLine - 1, ref.span.endColumn);
 			violations.push({
 				rule: 'ninja.aliasing.require-table-alias',
 				message: `Table '${ref.name}' should have an alias.`,

@@ -8,8 +8,8 @@ import { deleteOp, type FixOp } from '../fix-op';
 /**
  * Flags CTEs that are defined but never referenced in any FROM/JOIN.
  *
- * Uses model.tokens to find table_ref usages, and model.ninjaSqlTokens to build
- * precise deletion fixes (handles only-CTE, first-of-many, and last-of-many).
+ * Uses model.symbols to find table/CTE reference usages, and model.ninjaSqlTokens
+ * to build precise deletion fixes (handles only-CTE, first-of-many, and last-of-many).
  */
 export const unusedCteRule: TokenRule = {
 	id: 'ninja.structure.unused-cte',
@@ -23,12 +23,13 @@ export const unusedCteRule: TokenRule = {
 		const { model, document } = ctx;
 		if (model.ctes.length === 0) return [];
 
-		// Collect table_ref names from real FROM/JOIN references only.
-		// Exclude cteDefinition tokens (the CTE name at its definition site).
+		// Collect table/CTE names from real FROM/JOIN references only.
+		// A CTE's declaration site (`WITH name AS (...)`) is a separate Sym with
+		// modifiers:['declaration'] — filtering to 'reference' excludes it.
 		const usedNames = new Set<string>();
-		for (const tok of model.tokens) {
-			if (tok.type === 'table_ref' && !tok.cteDefinition) {
-				usedNames.add(tok.name.toLowerCase());
+		for (const s of model.symbols ?? []) {
+			if ((s.kind === 'table' || s.kind === 'cte') && s.modifiers.includes('reference')) {
+				usedNames.add(s.name.toLowerCase());
 			}
 		}
 
