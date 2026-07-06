@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Diagnostic, SyntaxDiagnostic } from 'sqllens';
-import { collectWarnings, mapQualifyDiagnostics, mapSyntaxDiagnostics } from './warnings';
+import { collectWarnings, mapQualifyDiagnostics, mapSyntaxDiagnostics } from '../../../ftl/sqllens/warnings';
 
 describe('mapSyntaxDiagnostics', () => {
 	it('converts sqllens (1-based line / 0-based col) to the ParseWarning 0-based convention', () => {

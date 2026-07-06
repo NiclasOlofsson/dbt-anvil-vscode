@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { SqllensDocumentParser } from './document-parser';
-import type { ColumnRefToken, TableRefToken } from '../../services/parse-service';
+import { SqllensDocumentParser } from '../../../ftl/sqllens/document-parser';
+import type { ColumnRefToken, TableRefToken } from '../../../services/parse-service';
 
 function parser(adapterType: string) {
 	return new SqllensDocumentParser({ adapterType });

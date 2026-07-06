@@ -5,8 +5,8 @@
  * silently mis-shaped parse) on a real model.
  */
 import { describe, expect, it } from 'vitest';
-import { classifyMacroShape } from './template-shape';
-import type { TemplateCall } from './api';
+import { classifyMacroShape } from '../../../ftl/sqllens/template-shape';
+import type { TemplateCall } from '../../../ftl/sqllens/api';
 
 const call = (name: string, args: (string | null)[]): TemplateCall => ({ name, args });
 

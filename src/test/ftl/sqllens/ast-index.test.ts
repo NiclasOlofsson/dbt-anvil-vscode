@@ -1,14 +1,14 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
-import { parse, resolveScopes, type Dialect } from './api';
-import { createSqllensAstIndex } from './ast-index';
-import type { SqllensParse } from './extract/spans';
-import { SqllensDocumentParser } from './document-parser';
-import { reflowDocument } from '../../ninja/reflow/engine';
-import { DEFAULT_CONFIG, type NinjaConfig } from '../../ninja/config';
-import { PRESETS, type FormatPreset } from '../../ninja/presets';
-import { mockDocument } from '../../test/ninja/helpers';
+import { parse, resolveScopes, type Dialect } from '../../../ftl/sqllens/api';
+import { createSqllensAstIndex } from '../../../ftl/sqllens/ast-index';
+import type { SqllensParse } from '../../../ftl/sqllens/extract/spans';
+import { SqllensDocumentParser } from '../../../ftl/sqllens/document-parser';
+import { reflowDocument } from '../../../ninja/reflow/engine';
+import { DEFAULT_CONFIG, type NinjaConfig } from '../../../ninja/config';
+import { PRESETS, type FormatPreset } from '../../../ninja/presets';
+import { mockDocument } from '../../ninja/helpers';
 
 /** Run the tiers of sqllens the DocumentModel is built from, as the parser does. */
 function sqllensParse(sql: string, dialect: Dialect = 'databricks'): SqllensParse {
@@ -179,7 +179,7 @@ describe('createSqllensAstIndex — degenerate parse', () => {
 // model carries the IR-built astIndex) must reach the same output — proving the
 // index drives the printer's AST-aware decisions equivalently.
 
-const FIXTURES_DIR = path.join(__dirname, '..', '..', 'test', 'ninja', 'fixtures', 'format');
+const FIXTURES_DIR = path.join(__dirname, '..', '..', 'ninja', 'fixtures', 'format');
 
 function buildConfig(preset: FormatPreset = 'sqlfmt'): NinjaConfig {
 	const p = PRESETS[preset];

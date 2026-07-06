@@ -21,10 +21,10 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parseTemplated } from '../api';
-import { jinjaTokensFromStream } from './jinja-stream';
-import { coarseJinjaTokens, coarseJinjaTokensFromText } from './coarse-jinja';
-import type { JinjaToken, JinjaTokenType } from './coarse-jinja';
+import { parseTemplated } from '../../../../ftl/sqllens/api';
+import { jinjaTokensFromStream } from '../../../../ftl/sqllens/extract/jinja-stream';
+import { coarseJinjaTokens, coarseJinjaTokensFromText } from '../../../../ftl/sqllens/extract/coarse-jinja';
+import type { JinjaToken, JinjaTokenType } from '../../../../ftl/sqllens/extract/coarse-jinja';
 
 function viaSqllensStream(sql: string): JinjaToken[] {
 	const t = parseTemplated(sql, 'databricks');
@@ -237,7 +237,7 @@ describe('coarseJinjaTokens — direct token-shape expectations', () => {
 // Corpus sweep — every sample model, checked against oracle-free invariants.
 // ---------------------------------------------------------------------------
 
-const ROOT = path.join(__dirname, '..', '..', '..', '..');
+const ROOT = path.join(__dirname, '..', '..', '..', '..', '..');
 const CORPUS_ROOTS = [
 	{ dir: path.join(ROOT, 'src', 'test', 'ninja', 'fixtures', 'format'), suffix: '.in.sql' },
 	{ dir: path.join(ROOT, 'samples', 'nba-monte-carlo', 'models'), suffix: '.sql' },

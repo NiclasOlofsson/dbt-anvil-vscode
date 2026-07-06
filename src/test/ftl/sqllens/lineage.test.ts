@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Dialect, SchemaMapping } from 'sqllens';
-import { traceColumnLineage, type Transformation } from './lineage';
+import { traceColumnLineage, type Transformation } from '../../../ftl/sqllens/lineage';
 
 function trace(sql: string, column: string, dialect: Dialect = 'databricks', schema?: SchemaMapping) {
 	return traceColumnLineage(sql, column, dialect, schema);

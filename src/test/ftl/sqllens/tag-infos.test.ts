@@ -14,8 +14,8 @@
  *     (dbt's actual semantics).
  */
 import { describe, expect, it } from 'vitest';
-import { parseTemplated } from './api';
-import { tagInfos } from './extract/tag-infos';
+import { parseTemplated } from '../../../ftl/sqllens/api';
+import { tagInfos } from '../../../ftl/sqllens/extract/tag-infos';
 
 function fromTags(sql: string): ReturnType<typeof tagInfos> {
 	return tagInfos(parseTemplated(sql, 'databricks').tags);

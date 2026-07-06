@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decompose, type DecomposeClause } from './decompose';
+import { decompose, type DecomposeClause } from '../../../ftl/sqllens/decompose';
 
 /** Pull a frame's clause list, asserting the frame exists. */
 function clausesOf(res: ReturnType<typeof decompose>, frame: string): DecomposeClause[] {

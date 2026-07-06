@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { tokenize } from 'sqllens';
-import type { Dialect } from './api';
-import { keywordTokenTypesFor, mapTokens } from './token-mapper';
+import type { Dialect } from '../../../ftl/sqllens/api';
+import { keywordTokenTypesFor, mapTokens } from '../../../ftl/sqllens/token-mapper';
 
 function map(sql: string, dialect: Dialect = 'databricks') {
 	return mapTokens(tokenize(sql, dialect), sql, dialect);

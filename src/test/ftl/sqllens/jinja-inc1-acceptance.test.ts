@@ -8,8 +8,8 @@
  * ITEM 10 flag). Test-only: imports sqllens, touches nothing in the live parse path.
  */
 import { describe, expect, it } from 'vitest';
-import { parseTemplated } from './api';
-import type { TagNode, PartSpan } from './api';
+import { parseTemplated } from '../../../ftl/sqllens/api';
+import type { TagNode, PartSpan } from '../../../ftl/sqllens/api';
 
 /** Slice the original document at a PartSpan (absolute 0-based offsets, end exclusive). */
 function slice(sql: string, span: PartSpan): string {

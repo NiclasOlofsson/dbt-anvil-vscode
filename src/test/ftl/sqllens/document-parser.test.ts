@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { SqllensDocumentParser } from './document-parser';
-import { makeTemplateProvider } from './template-shape';
-import { decompose } from './decompose';
-import { traceColumnLineage } from './lineage';
-import { buildStarExpander } from './extract/star-expand';
-import { Schema, type ScopeTree } from './api';
-import type { ColumnRefToken, TableRefToken, TokenInfo } from '../../services/parse-service';
+import { SqllensDocumentParser } from '../../../ftl/sqllens/document-parser';
+import { makeTemplateProvider } from '../../../ftl/sqllens/template-shape';
+import { decompose } from '../../../ftl/sqllens/decompose';
+import { traceColumnLineage } from '../../../ftl/sqllens/lineage';
+import { buildStarExpander } from '../../../ftl/sqllens/extract/star-expand';
+import { Schema, type ScopeTree } from '../../../ftl/sqllens/api';
+import type { ColumnRefToken, TableRefToken, TokenInfo } from '../../../services/parse-service';
 
 function parser(adapterType = 'databricks') {
 	return new SqllensDocumentParser({ adapterType });

@@ -22,9 +22,9 @@
  * carries `tagEnd` (the exclusive end of the whole tag).
  */
 import { describe, expect, it } from 'vitest';
-import { parseTemplated } from './api';
-import { jinjaTokensFromStream } from './extract/jinja-stream';
-import type { JinjaToken, JinjaTokenType } from '../jinja-tokenizer';
+import { parseTemplated } from '../../../ftl/sqllens/api';
+import { jinjaTokensFromStream } from '../../../ftl/sqllens/extract/jinja-stream';
+import type { JinjaToken, JinjaTokenType } from '../../../ftl/jinja-tokenizer';
 
 function fromStream(sql: string): JinjaToken[] {
 	const t = parseTemplated(sql, 'databricks');

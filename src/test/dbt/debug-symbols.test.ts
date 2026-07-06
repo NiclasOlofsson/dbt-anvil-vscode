@@ -8,8 +8,8 @@ import {
 	findJinjaSpans,
 	injectMarkers,
 	parseSourceMap,
-} from './debug-symbols';
-import type { SymbolEntry } from './debug-symbols';
+} from '../../dbt/debug-symbols';
+import type { SymbolEntry } from '../../dbt/debug-symbols';
 
 // A realistic dbt-model-shaped source: two CTEs (the second with a JOIN and an
 // aggregate), a final SELECT *, and {{ ref() }} tags on the FROM/JOIN relations.
