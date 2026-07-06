@@ -21,9 +21,9 @@ import type {
 	TableRefToken,
 	TokenInfo,
 } from '../../../services/parse-service';
-import type { ColumnRef, Dialect, PartSpan, Projection, Qualification, QueryBody, ResolvedSource, TableSource, Token } from '../api';
+import type { Dialect, PartSpan, Projection, Qualification, ResolvedSource, TableSource, Token } from '../api';
 import type { StarExpander } from './star-expand';
-import { allScopes, asCst, normName, quotedRaw, type CstNode, type SqllensParse } from './spans';
+import { allScopes, asCst, columnRefsOf, normName, quotedRaw, type CstNode, type SqllensParse } from './spans';
 
 /** Identifier-role tokens fully inside a `[lo, hi]` char range, in source order. */
 function identTokensInRange(tokens: Token[], lo: number, hi: number): Token[] {
@@ -268,12 +268,6 @@ function columnRefToken(
 	return tok;
 }
 
-function columnRefsOf(body: QueryBody): ReadonlyArray<{ parts: string[]; partSpans?: PartSpan[]; cst: unknown }> {
-	if (body.kind === 'select') return body.columns;
-	if (body.kind === 'setop') return body.columns;
-	return []; // pipe: references live in per-stage child scopes
-}
-
 export function extractTokens(parse: SqllensParse, qualification?: Qualification, starExpander?: StarExpander): TokenInfo[] {
 	const neutral = parse.tokens;
 	const scopes = allScopes(parse.scopes);
@@ -334,7 +328,7 @@ export function extractTokens(parse: SqllensParse, qualification?: Qualification
 			// columnRefToken already carries stays as the fallback when it doesn't (e.g. a typo,
 			// or a reference bindingOf can't resolve from here).
 			if (qualification) {
-				const bound = qualification.bindingOf(scope, ref as unknown as ColumnRef)?.source;
+				const bound = qualification.bindingOf(scope, ref)?.source;
 				const rt = bound && srcToRef.get(bound);
 				if (rt) {
 					tok.resolvedTableRef = rt;

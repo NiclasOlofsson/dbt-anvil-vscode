@@ -14,7 +14,7 @@
  * are stable and this keeps the boundary narrow.
  */
 import { foldIdentifier } from '../api';
-import type { Dialect, IdentKind, QueryBody, QueryExpr, Scope, ScopeTree, SelectExpr, SyntaxDiagnostic, Token } from '../api';
+import type { ColumnRef, Dialect, IdentKind, QueryBody, QueryExpr, Scope, ScopeTree, SelectExpr, SyntaxDiagnostic, Token } from '../api';
 
 /** One antlr lexer token, as much of it as the extractors read. */
 export interface AntlrToken {
@@ -126,6 +126,17 @@ export function allScopes(tree: ScopeTree): Scope[] {
 	};
 	visit(tree.root);
 	return out;
+}
+
+/** The column references directly in this query body's own clauses (WHERE/ON/GROUP BY/
+ *  etc., plus the projection list) — `select` and `setop` bodies carry them; a `pipe`
+ *  body's refs live in its per-stage child scopes instead. Shared by both extract/tokens.ts
+ *  (the retiring bridge) and extract/symbols.ts (its Sym-native successor) so there is one
+ *  place that knows which QueryBody kinds carry a `columns` list. */
+export function columnRefsOf(body: QueryBody): readonly ColumnRef[] {
+	if (body.kind === 'select') return body.columns;
+	if (body.kind === 'setop') return body.columns;
+	return []; // pipe: references live in per-stage child scopes
 }
 
 /**
