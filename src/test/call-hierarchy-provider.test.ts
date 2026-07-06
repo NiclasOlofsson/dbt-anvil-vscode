@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as vscode from 'vscode';
 import { DbtCallHierarchyProvider } from '../providers/sql/call-hierarchy-provider';
 import { createMockLogger } from './helpers';
+import { sym } from './ninja/helpers';
 import type { ManifestIndexer, ManifestIndex, IndexedModel } from '../indexing/manifest-indexer';
 import type { ParseService, DocumentModel, CteInfo } from '../services/parse-service';
 
@@ -275,14 +276,14 @@ describe('DbtCallHierarchyProvider', () => {
 	// ── CTE scope ──
 
 	describe('CTE hierarchy', () => {
-		it('outgoing: finds which CTEs a CTE reads from via table_ref tokens', async () => {
+		it('outgoing: finds which CTEs a CTE reads from via reference syms', async () => {
 			const baseCte: CteInfo = { name: 'base', line: 1, col: 5, endLine: 3, endCol: 1, columns: [] };
 			const finalCte: CteInfo = { name: 'final', line: 5, col: 5, endLine: 7, endCol: 1, columns: [] };
 			const docModel = makeDocumentModel({
 				ctes: [baseCte, finalCte],
-				tokens: [
-					// table_ref to 'base' inside 'final' CTE body
-					{ type: 'table_ref', name: 'base', line: 6, col: 14, endCol: 18 },
+				symbols: [
+					// reference to 'base' inside 'final' CTE body
+					sym('cte', 'base', 6, 14),
 				],
 				refs: [],
 			});
@@ -316,10 +317,10 @@ describe('DbtCallHierarchyProvider', () => {
 			const finalCte: CteInfo = { name: 'final', line: 5, col: 5, endLine: 7, endCol: 1, columns: [] };
 			const docModel = makeDocumentModel({
 				ctes: [baseCte, finalCte],
-				tokens: [
-					{ type: 'table_ref', name: 'base', line: 6, col: 14, endCol: 18 },
+				symbols: [
+					sym('cte', 'base', 6, 14),
 					// final SELECT also uses base
-					{ type: 'table_ref', name: 'base', line: 8, col: 14, endCol: 18 },
+					sym('cte', 'base', 8, 14),
 				],
 				refs: [],
 			});

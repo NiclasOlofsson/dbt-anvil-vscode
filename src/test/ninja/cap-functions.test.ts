@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { run, violationsFor, capCfg, emptyModel, model } from './helpers';
+import { run, violationsFor, capCfg, emptyModel, model, sym } from './helpers';
 import { FixAction } from '../../ninja/violation';
 
 const RULE = 'ninja.cap.functions';
@@ -126,10 +126,10 @@ describe(RULE, () => {
 
 	// ── Identifier skipping ────────────────────────────────────────────────
 
-	it('skips words at identifier token positions', () => {
+	it('skips words at identifier symbol positions', () => {
 		const model = {
 			...emptyModel,
-			tokens: [{ type: 'column_ref' as const, name: 'count', line: 0, col: 7, endCol: 12 }],
+			symbols: [sym('column', 'count', 0, 7)],
 		};
 		const v = violationsFor(run('select count(*) from t', capCfg('functions', 'upper'), model), RULE);
 		expect(v.length).toBe(0);

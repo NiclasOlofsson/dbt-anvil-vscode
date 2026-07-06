@@ -5,6 +5,7 @@ import type { TokenRule, TokenRuleContext } from '../rule';
 import type { CapitalisationPolicy } from '../config';
 import { replaceOp } from '../fix-op';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
+import { identifierPositionKeys } from '../../providers/sql/sym-spans';
 
 // Common SQL aggregate/scalar/window functions.
 const SQL_FUNCTIONS = new Set([
@@ -92,10 +93,7 @@ export const functionCapRule: TokenRule = {
 		let absOffset = 0; // running byte offset into text (matches sqlTokens coordinate space)
 
 		// Build identifier positions to skip
-		const identifierPositions = new Set<string>();
-		for (const token of ctx.model.tokens) {
-			identifierPositions.add(`${token.line}:${token.col}`);
-		}
+		const identifierPositions = identifierPositionKeys(ctx.model.symbols ?? []);
 
 		for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
 			const line = lines[lineIdx];

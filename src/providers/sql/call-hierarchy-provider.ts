@@ -4,6 +4,7 @@ import type { ILogger } from '../../types/logger';
 import { ParseService } from '../../services/parse-service';
 import type { CteInfo, DocumentModel, RefInfo, SourceInfo } from '../../services/parse-service';
 import { computeCommentRanges, isOffsetInComment } from '../common/comment-utils';
+import { isRelationSym, rangeOfSpan } from './sym-spans';
 
 // ── Tagged subclass so we can recover kind/metadata from the item VS Code echoes back ──
 
@@ -275,26 +276,26 @@ export class DbtCallHierarchyProvider implements vscode.CallHierarchyProvider {
 		// Group table_ref tokens by the CTE they belong to (or "final SELECT")
 		const calls: vscode.CallHierarchyIncomingCall[] = [];
 
-		// Scan each other CTE's body for table_refs pointing at cteName
+		// Scan each other CTE's body for reference syms pointing at cteName
 		for (const cte of model.ctes) {
 			if (cte.name === cteName) continue;
-			const refs = model.tokens.filter(t =>
-				t.type === 'table_ref' &&
-				t.name === cteName &&
-				t.line >= cte.line && t.line <= cte.endLine,
+			const refs = (model.symbols ?? []).filter(s =>
+				isRelationSym(s) && s.modifiers.includes('reference') &&
+				s.name === cteName &&
+				(s.span.line - 1) >= cte.line && (s.span.line - 1) <= cte.endLine,
 			);
 			if (refs.length === 0) continue;
 
 			const callerItem = this._prepareCteItem(document, cte);
-			const fromRanges = refs.map(t => new vscode.Range(t.line, t.col, t.line, t.endCol));
+			const fromRanges = refs.map(s => rangeOfSpan(s.span));
 			calls.push(new vscode.CallHierarchyIncomingCall(callerItem, fromRanges));
 		}
 
 		// Also scan the final SELECT (lines after all CTEs)
-		const finalRefs = model.tokens.filter(t =>
-			t.type === 'table_ref' &&
-			t.name === cteName &&
-			t.line > lastCteEnd,
+		const finalRefs = (model.symbols ?? []).filter(s =>
+			isRelationSym(s) && s.modifiers.includes('reference') &&
+			s.name === cteName &&
+			(s.span.line - 1) > lastCteEnd,
 		);
 		if (finalRefs.length > 0) {
 			const finalStart = lastCteEnd + 1;
@@ -314,7 +315,7 @@ export class DbtCallHierarchyProvider implements vscode.CallHierarchyProvider {
 			);
 			calls.push(new vscode.CallHierarchyIncomingCall(
 				finalItem,
-				finalRefs.map(t => new vscode.Range(t.line, t.col, t.line, t.endCol)),
+				finalRefs.map(s => rangeOfSpan(s.span)),
 			));
 		}
 
@@ -348,19 +349,19 @@ export class DbtCallHierarchyProvider implements vscode.CallHierarchyProvider {
 		const cteNames = new Set(model.ctes.map(c => c.name));
 		const calls: vscode.CallHierarchyOutgoingCall[] = [];
 
-		// table_refs inside this CTE's body that refer to another CTE
-		const tableRefs = model.tokens.filter(t =>
-			t.type === 'table_ref' &&
-			t.line >= cteDef.line && t.line <= cteDef.endLine &&
-			cteNames.has(t.name),
+		// reference syms inside this CTE's body that refer to another CTE
+		const tableRefs = (model.symbols ?? []).filter(s =>
+			isRelationSym(s) && s.modifiers.includes('reference') &&
+			(s.span.line - 1) >= cteDef.line && (s.span.line - 1) <= cteDef.endLine &&
+			cteNames.has(s.name),
 		);
 
 		// Deduplicate by name — one outgoing item per target CTE, multiple fromRanges
 		const byName = new Map<string, vscode.Range[]>();
-		for (const t of tableRefs) {
-			const ranges = byName.get(t.name) ?? [];
-			ranges.push(new vscode.Range(t.line, t.col, t.line, t.endCol));
-			byName.set(t.name, ranges);
+		for (const s of tableRefs) {
+			const ranges = byName.get(s.name) ?? [];
+			ranges.push(rangeOfSpan(s.span));
+			byName.set(s.name, ranges);
 		}
 
 		for (const [name, fromRanges] of byName) {
@@ -395,13 +396,13 @@ export class DbtCallHierarchyProvider implements vscode.CallHierarchyProvider {
 		const calls: vscode.CallHierarchyOutgoingCall[] = [];
 
 		const byName = new Map<string, vscode.Range[]>();
-		for (const t of model.tokens) {
-			if (t.type !== 'table_ref') continue;
-			if (t.line <= lastCteEnd) continue;
-			if (!cteNames.has(t.name)) continue;
-			const ranges = byName.get(t.name) ?? [];
-			ranges.push(new vscode.Range(t.line, t.col, t.line, t.endCol));
-			byName.set(t.name, ranges);
+		for (const s of model.symbols ?? []) {
+			if (!isRelationSym(s) || !s.modifiers.includes('reference')) continue;
+			if ((s.span.line - 1) <= lastCteEnd) continue;
+			if (!cteNames.has(s.name)) continue;
+			const ranges = byName.get(s.name) ?? [];
+			ranges.push(rangeOfSpan(s.span));
+			byName.set(s.name, ranges);
 		}
 
 		for (const [name, fromRanges] of byName) {

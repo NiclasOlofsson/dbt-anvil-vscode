@@ -44,3 +44,24 @@ export function qualifierRangeOf(sym: Sym): vscode.Range | undefined {
 export function isRelationSym(sym: Sym): sym is Sym & { kind: 'table' | 'cte' | 'subquery' | 'lateral' } {
 	return sym.kind === 'table' || sym.kind === 'cte' || sym.kind === 'subquery' || sym.kind === 'lateral';
 }
+
+/**
+ * "line:column" position keys for every column and relation Sym's own name —
+ * matches exactly what the retired TokenInfo bridge's `tokens` array (column_ref
+ * / table_ref / column_def) contributed. Used by the free-text capitalisation
+ * rules (cap-functions.ts, cap-types.ts) to avoid recasing a column, table, or
+ * CTE that happens to share text with a SQL function or type keyword (e.g. a
+ * column literally named `date` or `sum`).
+ */
+export function identifierPositionKeys(symbols: readonly Sym[]): Set<string> {
+	const keys = new Set<string>();
+	for (const s of symbols) {
+		if (s.kind === 'column') {
+			const r = nameRangeOf(s);
+			keys.add(`${r.start.line}:${r.start.character}`);
+		} else if (isRelationSym(s)) {
+			keys.add(`${s.span.line - 1}:${s.span.column}`);
+		}
+	}
+	return keys;
+}

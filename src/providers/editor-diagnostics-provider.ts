@@ -17,6 +17,7 @@ import { runNinja } from '../ninja/engine';
 import type { NinjaResult } from '../ninja/engine';
 import { loadConfig } from '../ninja/config-loader';
 import { coarseJinjaTokens, coarseJinjaTokensFromText } from '../ftl/sqllens/extract/coarse-jinja';
+import { nameRangeOf, qualifierRangeOf } from './sql/sym-spans';
 
 interface DbtErrorLocation {
 	filePath: string;
@@ -505,66 +506,67 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		this._columnDebounceTimers.set(key, timer);
 	}
 
-	private async _validateColumnsAsync(_document: vscode.TextDocument): Promise<void> {
+	private async _validateColumnsAsync(document: vscode.TextDocument): Promise<void> {
 		if (!this._startupReady) return;
 		if (!this.parseService) return;
 
-		// const key = document.uri.toString();
-		// this._columnCtsSources.get(key)?.cancel();
-		// const cts = new vscode.CancellationTokenSource();
-		// this._columnCtsSources.set(key, cts);
-		// const token = cts.token;
+		const key = document.uri.toString();
+		this._columnCtsSources.get(key)?.cancel();
+		const cts = new vscode.CancellationTokenSource();
+		this._columnCtsSources.set(key, cts);
+		const token = cts.token;
 
-		// const model = await this.parseService.getDocumentModel(document);
-		// const tokens = model?.tokens ?? [];
-		// if (token.isCancellationRequested) return;
+		const model = await this.parseService.getDocumentModel(document);
+		if (token.isCancellationRequested) return;
 
-		// if (!model) {
-		// 	this._columnCollection.delete(document.uri);
-		// 	this._updateStatusBar();
-		// 	return;
-		// }
+		if (!model) {
+			this._columnCollection.delete(document.uri);
+			this._updateStatusBar();
+			return;
+		}
 
-		// const diagnostics: vscode.Diagnostic[] = [];
-		// let firstMiss: string | undefined;
-		// const docLines = document.getText().split('\n');
+		const diagnostics: vscode.Diagnostic[] = [];
+		const docLines = document.getText().split('\n');
 
-		// for (const t of tokens) {
-		// 	if (t.type !== 'column_ref' || !t.table) continue;
+		for (const s of model.symbols ?? []) {
+			if (s.kind !== 'column' || !s.modifiers.includes('reference')) continue;
+			if (!qualifierRangeOf(s)) continue; // unqualified — nothing to resolve a source against
 
-		// 	// Skip column_ref tokens that originated inside a Jinja {{ }} expression.
-		// 	// The blanker is length-preserving, so t.col maps to the same offset in
-		// 	// the original source. If the original character at that position is '{'
-		// 	// the identifier came from a macro call (e.g. {{ my_macro(...) }}) and
-		// 	// is not a real column reference.
-		// 	const origChar = (docLines[t.line] ?? '')[t.col];
-		// 	if (origChar === '{') continue;
+			const relation = model.symbolBindings?.sourceOf.get(s);
+			if (!relation) continue;
 
-		// 	const cols = t.resolvedTableRef ? ParseService.columnsForRef(t.resolvedTableRef, model) : undefined;
-		// 	// Skip if: alias unknown, no columns resolved, or list contains '*'
-		// 	// (unresolved SELECT * — can't validate without knowing what * expands to)
-		// 	if (!cols || cols.length === 0 || cols.includes('*')) continue;
+			const nameRange = nameRangeOf(s);
 
-		// 	if (!cols.some(c => c.toLowerCase() === t.name.toLowerCase())) {
-		// 		if (!firstMiss) firstMiss = `${t.table}.${t.name} (known: ${cols.slice(0, 3).join(', ')})`;
-		// 		const range = new vscode.Range(
-		// 			new vscode.Position(t.line, t.col),
-		// 			new vscode.Position(t.line, t.endCol),
-		// 		);
-		// 		const diag = new vscode.Diagnostic(
-		// 			range,
-		// 			`Column '${t.name}' not found in '${t.table}' (known columns: ${cols.slice(0, 5).join(', ')}${cols.length > 5 ? ', ...' : ''})`,
-		// 			vscode.DiagnosticSeverity.Error,
-		// 		);
-		// 		diag.source = 'dbt';
-		// 		diag.code = 'unknown-column';
-		// 		diagnostics.push(diag);
-		// 	}
-		// }
+			// Skip column refs that originated inside a Jinja {{ }} expression. The
+			// blanker is length-preserving, so this position maps to the same offset
+			// in the original source. If the original character there is '{' the
+			// identifier came from a macro call (e.g. {{ my_macro(...) }}) and is not
+			// a real column reference.
+			const origChar = (docLines[nameRange.start.line] ?? '')[nameRange.start.character];
+			if (origChar === '{') continue;
 
-		// this._columnCollection.set(document.uri, diagnostics);
-		// this.logger.trace(`[diagnostics] column validation: ${diagnostics.length} issues in ${path.basename(document.fileName)}`);
-		// this._updateStatusBar();
+			const cols = ParseService.columnsForRef(relation, model);
+			// Skip if: no columns resolved, or list contains '*' (unresolved SELECT *
+			// — can't validate without knowing what * expands to)
+			if (!cols || cols.length === 0 || cols.includes('*')) continue;
+
+			const bareName = s.name.split('.').pop()!;
+			if (cols.some(c => c.toLowerCase() === bareName.toLowerCase())) continue;
+
+			const qualifierName = model.symbolBindings?.aliasOf.get(relation)?.name ?? relation.name;
+			const diag = new vscode.Diagnostic(
+				nameRange,
+				`Column '${bareName}' not found in '${qualifierName}' (known columns: ${cols.slice(0, 5).join(', ')}${cols.length > 5 ? ', ...' : ''})`,
+				vscode.DiagnosticSeverity.Error,
+			);
+			diag.source = 'dbt';
+			diag.code = 'unknown-column';
+			diagnostics.push(diag);
+		}
+
+		this._columnCollection.set(document.uri, diagnostics);
+		this.logger.trace(`[diagnostics] column validation: ${diagnostics.length} issues in ${path.basename(document.fileName)}`);
+		this._updateStatusBar();
 	}
 
 	private _handleParseOutput(output: string, success: boolean): void {

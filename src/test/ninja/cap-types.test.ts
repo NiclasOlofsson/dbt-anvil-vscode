@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { run, violationsFor, capCfg, emptyModel, model } from './helpers';
+import { run, violationsFor, capCfg, emptyModel, model, sym } from './helpers';
 import { FixAction } from '../../ninja/violation';
 
 const RULE = 'ninja.cap.types';
@@ -141,10 +141,10 @@ describe(RULE, () => {
 
 	// ── Identifier skipping ────────────────────────────────────────────────
 
-	it('skips words at identifier token positions', () => {
+	it('skips words at identifier symbol positions', () => {
 		const model = {
 			...emptyModel,
-			tokens: [{ type: 'column_ref' as const, name: 'int', line: 0, col: 17, endCol: 20 }],
+			symbols: [sym('column', 'int', 0, 17)],
 		};
 		const v = violationsFor(run('select cast(x as int)', capCfg('types', 'upper'), model), RULE);
 		expect(v.length).toBe(0);
