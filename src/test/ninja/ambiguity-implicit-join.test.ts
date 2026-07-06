@@ -82,6 +82,48 @@ describe(RULE, () => {
 		expect(check(sql, tokens)).toHaveLength(0);
 	});
 
+	it('no violation for LEFT OUTER JOIN (long form — the token before JOIN is OUTER)', () => {
+		//             0         1         2         3
+		//             0123456789012345678901234567890123456789
+		const sql = 'select * from a left outer join b on a.id = b.id';
+		const tokens: SqlToken[] = [
+			sqlTok('LEFT', 16, 19, 0, 20),
+			sqlTok('OUTER', 21, 25, 0, 26),
+			sqlTok('JOIN', 27, 30, 0, 31),
+		];
+		expect(check(sql, tokens)).toHaveLength(0);
+	});
+
+	it('no violation for FULL OUTER JOIN', () => {
+		const sql = 'select * from a full outer join b on a.id = b.id';
+		const tokens: SqlToken[] = [
+			sqlTok('FULL', 16, 19, 0, 20),
+			sqlTok('OUTER', 21, 25, 0, 26),
+			sqlTok('JOIN', 27, 30, 0, 31),
+		];
+		expect(check(sql, tokens)).toHaveLength(0);
+	});
+
+	it('no violation for LEFT SEMI JOIN (databricks)', () => {
+		const sql = 'select * from a left semi join b on a.id = b.id';
+		const tokens: SqlToken[] = [
+			sqlTok('LEFT', 16, 19, 0, 20),
+			sqlTok('SEMI', 21, 24, 0, 25),
+			sqlTok('JOIN', 26, 29, 0, 30),
+		];
+		expect(check(sql, tokens)).toHaveLength(0);
+	});
+
+	it('no violation for LEFT ANTI JOIN (databricks)', () => {
+		const sql = 'select * from a left anti join b on a.id = b.id';
+		const tokens: SqlToken[] = [
+			sqlTok('LEFT', 16, 19, 0, 20),
+			sqlTok('ANTI', 21, 24, 0, 25),
+			sqlTok('JOIN', 26, 29, 0, 30),
+		];
+		expect(check(sql, tokens)).toHaveLength(0);
+	});
+
 	it('flags multiple bare JOINs', () => {
 		//             0         1         2         3         4
 		//             01234567890123456789012345678901234567890123456789
@@ -98,5 +140,29 @@ describe(RULE, () => {
 		const doc = mockDocument('select 1');
 		const m = model({});
 		expect(implicitJoinRule.check({ model: m, document: doc, config: cfg() })).toHaveLength(0);
+	});
+});
+
+// Live-parser regression for the gold__vendor F5 finding: the rule consumed a
+// real token stream where LEFT OUTER JOIN precedes a templated relation, and
+// fired on the OUTER long form. The engine's Join IR was correct throughout —
+// the gap was this rule's qualifier set.
+import { SqllensDocumentParser } from '../../ftl/sqllens/document-parser';
+
+describe(`${RULE} — live parse, templated left outer join`, () => {
+	it('does not fire on left outer join {{ ref() }} even with a broken trailing tag', async () => {
+		const sql = [
+			'select ve.vendorkey',
+			'from {{ ref(\'gold__vendor\') }} ve',
+			'left outer join {{ ref(\'gold__chain\') }} ca',
+			"    on (ve.chainkey = ca.chainkey and ca.gold_sourcesystemkey='d365')",
+			'left outer join {{ ref(\'gold__project\') }} pr',
+			'    on (ve.projectkey = pr.projectkey)',
+			"{{ generic_is_deleted('ve.is_deleted','where') }}",
+		].join('\n');
+		const parsed = await new SqllensDocumentParser({ adapterType: 'databricks' }).parse(sql);
+		const doc = mockDocument(sql);
+		const v = implicitJoinRule.check({ model: parsed, document: doc, config: cfg() });
+		expect(v).toHaveLength(0);
 	});
 });

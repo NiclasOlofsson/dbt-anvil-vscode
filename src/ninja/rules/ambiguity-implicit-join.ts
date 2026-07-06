@@ -5,7 +5,10 @@ import { replaceOp } from '../fix-op';
 import { tokenRange, tokenText } from '../token-utils';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
-const JOIN_QUALIFIERS = new Set(['INNER', 'LEFT', 'RIGHT', 'CROSS', 'FULL', 'NATURAL']);
+// Every token type that can sit directly before JOIN in a qualified join:
+// the short forms (LEFT JOIN), the OUTER long forms (LEFT/RIGHT/FULL OUTER
+// JOIN), and the databricks SEMI/ANTI variants (LEFT SEMI/ANTI JOIN).
+const JOIN_QUALIFIERS = new Set(['INNER', 'LEFT', 'RIGHT', 'CROSS', 'FULL', 'NATURAL', 'OUTER', 'SEMI', 'ANTI']);
 
 export const implicitJoinRule: TokenRule = {
 	id: 'ninja.ambiguity.implicit-join',
