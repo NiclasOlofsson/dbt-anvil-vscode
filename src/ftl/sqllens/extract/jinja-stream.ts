@@ -1,8 +1,7 @@
 /**
  * Derive the extension's `JinjaToken[]` from sqllens's unified templated token
  * stream — THE producer of the fine jinja stream (the extension's own scanner
- * is retired; a frozen copy survives as the parity-test oracle in
- * src/test/ftl/reference-jinja-tokenizers.ts).
+ * is retired).
  *
  * `parseTemplated(rawSql, dialect)` returns ONE source-ordered `Token[]`: SQL
  * tokens on channel 0, and minijinja-island tokens on channel 2 carrying

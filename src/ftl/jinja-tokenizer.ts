@@ -5,9 +5,8 @@
  *
  * PRODUCED by the sqllens stream adapter (`sqllens/extract/jinja-stream.ts`)
  * from `parseTemplated`'s unified token stream — the extension's own scanner
- * that used to live here is retired (a frozen copy remains as the parity-test
- * oracle in `src/test/ftl/reference-jinja-tokenizers.ts`). This module carries
- * only the type contract.
+ * that used to live here is retired. This module carries only the type
+ * contract.
  */
 export type JinjaTokenType =
 	| 'jinja_expression_open'  // {{
