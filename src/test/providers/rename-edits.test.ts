@@ -95,7 +95,11 @@ describe('buildInFileRenameEdits', () => {
 	});
 
 	it('includes a declaration site in the rename when matching by name', () => {
-		const colDecl = colSym(0, [{ name: 'customer_id', col: 12 }], { modifiers: ['declaration', 'output'] });
+		// A declaration Sym's own span covers the WHOLE projection ("some_expr as
+		// customer_id"), not just the alias — matching what deriveSymbols actually
+		// emits. The rename must narrow to just the alias (col 12..23), not replace
+		// the whole clause (which would delete "some_expr as ").
+		const colDecl = sym('column', 'customer_id', 0, 5, { modifiers: ['declaration', 'output'], endCol: 23 });
 		const colRef = colSym(1, [{ name: 'customer_id', col: 7 }]);
 		const m = model({ symbols: [colDecl, colRef], symbolBindings: symbolBindings() });
 
@@ -103,6 +107,7 @@ describe('buildInFileRenameEdits', () => {
 
 		const edits = flatEdits(edit);
 		expect(edits.length).toBe(2);
+		expect(edits.find(e => e.line === 0)).toEqual({ line: 0, col: 12, endCol: 23, newText: 'customer_pk' });
 	});
 
 	// ── Table alias rename ─────────────────────────────────────────────
@@ -133,7 +138,10 @@ describe('buildInFileRenameEdits', () => {
 
 	it('renames a CTE name and all reference syms for it', () => {
 		// WITH my_cte AS (...) SELECT * FROM my_cte JOIN my_cte AS x ON ...
-		const cteDecl = sym('cte', 'my_cte', 0, 5, { modifiers: ['declaration'] });
+		// The declaration Sym's own span covers the WHOLE "my_cte AS (...)" clause
+		// (the name comes first) — the rename must narrow to just the name (col
+		// 5..11), not replace the whole clause (which would delete the CTE body).
+		const cteDecl = sym('cte', 'my_cte', 0, 5, { modifiers: ['declaration'], endCol: 30 });
 		const cteUse1 = sym('cte', 'my_cte', 1, 15);
 		const cteUse2 = sym('cte', 'my_cte', 1, 27);
 		const m = model({ symbols: [cteDecl, cteUse1, cteUse2], symbolBindings: symbolBindings() });
@@ -143,6 +151,7 @@ describe('buildInFileRenameEdits', () => {
 		const edits = flatEdits(edit);
 		// 3 cte syms total — all rewritten by name.
 		expect(edits.length).toBe(3);
+		expect(edits[0]).toEqual({ line: 0, col: 5, endCol: 11, newText: 'renamed_cte' });
 	});
 
 	// ── No-op cases ────────────────────────────────────────────────────

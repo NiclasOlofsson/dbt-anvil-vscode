@@ -4,6 +4,7 @@ import { FixAction, type NinjaViolation } from '../violation';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { matchesStyle, convertToStyle, type IdentifierStyle } from '../identifier-style';
 import { buildInFileRenameOps } from '../../providers/sql/rename-edits';
+import { nameRangeOf, relationNameRangeOf } from '../../providers/sql/sym-spans';
 
 const RULE_ID = 'ninja.cap.identifiers';
 
@@ -59,10 +60,10 @@ export const capIdentifiersRule: TokenRule = {
 
 			if (sym.kind === 'column' && sym.modifiers.includes('declaration')) {
 				name = sym.name;
-				range = new vscode.Range(sym.span.line - 1, sym.span.column, sym.span.endLine - 1, sym.span.endColumn);
+				range = nameRangeOf(sym);
 			} else if (sym.kind === 'cte' && sym.modifiers.includes('declaration')) {
 				name = sym.name;
-				range = new vscode.Range(sym.span.line - 1, sym.span.column, sym.span.endLine - 1, sym.span.endColumn);
+				range = relationNameRangeOf(sym);
 			} else if (sym.kind === 'alias') {
 				name = sym.name;
 				range = new vscode.Range(sym.span.line - 1, sym.span.column, sym.span.endLine - 1, sym.span.endColumn);

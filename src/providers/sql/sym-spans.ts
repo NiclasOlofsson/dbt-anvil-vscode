@@ -20,12 +20,29 @@ export function rangeOfSpan(span: SpanLike): vscode.Range {
  * The `vscode.Range` for a column Sym's NAME part (the last dotted part) — matches
  * what the retired TokenInfo bridge's `ColumnRefToken.line/col/endCol` always
  * anchored at, regardless of whether the reference was written qualified
- * (`o.order_id`) or bare (`order_id`). Falls back to the symbol's own span when
- * `partSpans` is absent (a synthesized part, or a declaration site).
+ * (`o.order_id`) or bare (`order_id`).
+ *
+ * A DECLARATION Sym (`AS alias` in a SELECT list) never carries `partSpans` —
+ * sqllens's `deriveSymbols` builds it from the whole `Projection`, whose own
+ * `span` covers the entire `expr AS alias` clause, not just the alias
+ * identifier (the IR's `Projection.aliasCst` has the narrow span, but
+ * `deriveSymbols` doesn't surface it on the `Sym`). Since `AS alias` is always
+ * the last thing in a projection, the alias's own range is derived from the
+ * span's end plus the (already quote-normalized) name's length — exact for an
+ * unquoted alias; a quoted alias's source width includes delimiter chars
+ * `name` doesn't, the same class of gap already tracked for other quoted
+ * identifiers pending sqllens's delimiter-contract work. Filed on the
+ * sqllens-anvil channel for a proper `aliasCst`-based fix upstream.
  */
 export function nameRangeOf(sym: Sym): vscode.Range {
-	const span = sym.partSpans?.length ? sym.partSpans[sym.partSpans.length - 1] : sym.span;
-	return rangeOfSpan(span);
+	if (sym.partSpans?.length) {
+		return rangeOfSpan(sym.partSpans[sym.partSpans.length - 1]);
+	}
+	if (sym.kind === 'column' && sym.modifiers.includes('declaration')) {
+		const { endLine, endColumn } = sym.span;
+		return new vscode.Range(endLine - 1, endColumn - sym.name.length, endLine - 1, endColumn);
+	}
+	return rangeOfSpan(sym.span);
 }
 
 /**
@@ -43,6 +60,26 @@ export function qualifierRangeOf(sym: Sym): vscode.Range | undefined {
  *  FROM/JOIN source or CTE reference — every kind that can carry an alias. */
 export function isRelationSym(sym: Sym): sym is Sym & { kind: 'table' | 'cte' | 'subquery' | 'lateral' } {
 	return sym.kind === 'table' || sym.kind === 'cte' || sym.kind === 'subquery' || sym.kind === 'lateral';
+}
+
+/**
+ * The `vscode.Range` for a relation Sym's own name. A CTE DECLARATION
+ * (`WITH name AS (body)`) is the one relation-kind Sym that can carry
+ * `modifiers: ['declaration']`, and like a column declaration its own `span`
+ * covers the whole clause, not just the name (`CteDef.nameCst` has the narrow
+ * span in the IR; `deriveSymbols` doesn't surface it). Unlike a column alias,
+ * the CTE name comes FIRST in the clause, so its own range is derived from
+ * the span's start plus the name's length. Every other relation Sym (a plain
+ * reference, or a subquery/lateral/table, none of which get a declaration
+ * form) already has a name-only span and passes through `rangeOfSpan`
+ * unchanged.
+ */
+export function relationNameRangeOf(sym: Sym): vscode.Range {
+	if (sym.kind === 'cte' && sym.modifiers.includes('declaration')) {
+		const { line, column } = sym.span;
+		return new vscode.Range(line - 1, column, line - 1, column + sym.name.length);
+	}
+	return rangeOfSpan(sym.span);
 }
 
 /**

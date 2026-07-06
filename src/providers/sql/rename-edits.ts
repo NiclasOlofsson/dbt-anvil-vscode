@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import type { DocumentModel } from '../../services/parse-service';
 import type { Sym } from '../../ftl/sqllens/api';
 import { type FixOp, replaceOp } from '../../ninja/fix-op';
-import { isRelationSym, nameRangeOf, qualifierRangeOf, rangeOfSpan } from './sym-spans';
+import { isRelationSym, nameRangeOf, qualifierRangeOf, rangeOfSpan, relationNameRangeOf } from './sym-spans';
 
 /**
  * Rename every occurrence of the alias `sym` names (or that `sym`'s qualifier
@@ -74,7 +74,7 @@ export function buildInFileRenameOps(
 		const ops: FixOp[] = [];
 		for (const s of model.symbols ?? []) {
 			if (isRelationSym(s) && s.name === cteName) {
-				ops.push(replaceOp(rangeOfSpan(s.span), newName));
+				ops.push(replaceOp(relationNameRangeOf(s), newName));
 			}
 		}
 		return ops;

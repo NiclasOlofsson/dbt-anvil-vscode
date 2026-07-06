@@ -6,7 +6,7 @@ import { ParseService } from '../../services/parse-service';
 import type { DocumentModel } from '../../services/parse-service';
 import type { Sym } from '../../ftl/sqllens/api';
 import { buildInFileRenameEdits } from './rename-edits';
-import { isRelationSym, nameRangeOf, qualifierRangeOf, rangeOfSpan } from './sym-spans';
+import { isRelationSym, nameRangeOf, qualifierRangeOf, rangeOfSpan, relationNameRangeOf } from './sym-spans';
 
 /**
  * Rename ref('model') across the workspace using the manifest dependency graph.
@@ -244,7 +244,7 @@ export class DbtRenameProvider implements vscode.RenameProvider {
 			// Only allow in-file rename for CTEs (not for ref() model names — those go through the manifest path)
 			const isCte = model.ctes.some(c => c.name === sym.name);
 			if (!isCte) return null;
-			return { range: rangeOfSpan(sym.span), placeholder: sym.name };
+			return { range: relationNameRangeOf(sym), placeholder: sym.name };
 		}
 
 		return null;

@@ -24,7 +24,10 @@ describe('cap-identifiers code-action integration', () => {
 		//                     ^^^^^^^ position 12..19
 		const sql = 'select 1 as orderId from t';
 		const doc = mockDocument(sql);
-		const aliasSym = sym('column', 'orderId', 0, 12, { modifiers: ['declaration', 'output'] });
+		// Span covers the WHOLE "1 as orderId" projection (col 7..19), matching what
+		// deriveSymbols actually emits — narrowed to just "orderId" (col 12..19) by
+		// nameRangeOf.
+		const aliasSym = sym('column', 'orderId', 0, 7, { modifiers: ['declaration', 'output'], endCol: 19 });
 		const m = model({ symbols: [aliasSym] });
 
 		const violations = capIdentifiersRule.check({ model: m, document: doc, config: withStyle('snake_case') });
@@ -41,11 +44,14 @@ describe('cap-identifiers code-action integration', () => {
 	it('renames a CTE definition and every reference atomically', () => {
 		// Source: with MyCte as (select 1) select * from MyCte
 		// Sym positions (line 0):
-		//   MyCte def:  col 5..10
+		//   MyCte def:  span covers the WHOLE "MyCte as (select 1)" clause (col
+		//               5..24, matching what deriveSymbols actually emits — the
+		//               name comes first, not last), narrowed to col 5..10 by
+		//               relationNameRangeOf for both detection and the fix.
 		//   MyCte use:  col 39..44
 		const sql = 'with MyCte as (select 1) select * from MyCte';
 		const doc = mockDocument(sql);
-		const cteDef = sym('cte', 'MyCte', 0, 5, { modifiers: ['declaration'] });
+		const cteDef = sym('cte', 'MyCte', 0, 5, { modifiers: ['declaration'], endCol: 24 });
 		const cteUse = sym('cte', 'MyCte', 0, 39);
 		const m = model({ symbols: [cteDef, cteUse] });
 
@@ -91,7 +97,10 @@ describe('cap-identifiers code-action integration', () => {
 	});
 
 	it('autoFix filter excludes the violation from bulk auto-fix flows', () => {
-		const aliasSym = sym('column', 'orderId', 0, 12, { modifiers: ['declaration', 'output'] });
+		// Span covers the WHOLE "1 as orderId" projection (col 7..19), matching what
+		// deriveSymbols actually emits — narrowed to just "orderId" (col 12..19) by
+		// nameRangeOf.
+		const aliasSym = sym('column', 'orderId', 0, 7, { modifiers: ['declaration', 'output'], endCol: 19 });
 		const m = model({ symbols: [aliasSym] });
 		const doc = mockDocument('select 1 as orderId from t');
 		const ninjaConfig = withStyle('snake_case');
@@ -107,7 +116,10 @@ describe('cap-identifiers code-action integration', () => {
 	it('autoFix filter includes the violation when config overrides the rule to true', () => {
 		// Even though the rule defaults to autoFix: false, config.autoFix.rules[ruleId]
 		// = true should opt the user into bulk apply. This documents the override path.
-		const aliasSym = sym('column', 'orderId', 0, 12, { modifiers: ['declaration', 'output'] });
+		// Span covers the WHOLE "1 as orderId" projection (col 7..19), matching what
+		// deriveSymbols actually emits — narrowed to just "orderId" (col 12..19) by
+		// nameRangeOf.
+		const aliasSym = sym('column', 'orderId', 0, 7, { modifiers: ['declaration', 'output'], endCol: 19 });
 		const m = model({ symbols: [aliasSym] });
 		const doc = mockDocument('select 1 as orderId from t');
 		const ninjaConfig: NinjaConfig = {
