@@ -2,7 +2,8 @@ import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../../indexing/manifest-indexer';
 import type { ILogger } from '../../types/logger';
 import { ParseService } from '../../services/parse-service';
-import type { ColumnRefToken, DocumentModel, TableRefToken } from '../../services/parse-service';
+import type { DocumentModel } from '../../services/parse-service';
+import type { Sym } from '../../ftl/sqllens/api';
 import { isLinePositionInComment } from '../common/comment-utils';
 import { SQL_KEYWORDS } from './sql-keywords';
 import { resolvePositionContext } from './position-context';
@@ -48,9 +49,9 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		if (ctx?.kind === 'macro') {
 			return this._hoverMacro(ctx.name);
 		}
-		if (ctx?.kind === 'token') {
-			// null = AST recognised the token but has nothing to show; suppress fallback
-			const hover = this._hoverResolvedToken(model, ctx.resolved, token, document.uri);
+		if (ctx?.kind === 'sym') {
+			// null = AST recognised the symbol but has nothing to show; suppress fallback
+			const hover = this._hoverResolvedToken(model, ctx.sym, ctx.partIndex, token, document.uri);
 			if (hover !== undefined) return hover ?? undefined;
 			return undefined;
 		}
@@ -207,116 +208,141 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		return new vscode.Hover(md);
 	}
 
-	// ---- Token-based hover (AST resolution already done by resolvePositionContext) ----
+	// ---- Sym-based hover (AST resolution already done by resolvePositionContext) ----
+
+	/** The relation Sym that `aliasSym` is the alias of, via the reverse of `symbolBindings.aliasOf`. */
+	private _relationForAlias(model: DocumentModel, aliasSym: Sym): Sym | undefined {
+		for (const [relation, alias] of model.symbolBindings?.aliasOf ?? []) {
+			if (alias === aliasSym) return relation;
+		}
+		return undefined;
+	}
 
 	// Returns:
 	//   Hover  — show this tooltip
-	//   null   — AST recognised the token but has nothing to show; suppress fallback
+	//   null   — AST recognised the symbol but has nothing to show; suppress fallback
 	private _hoverResolvedToken(
 		model: DocumentModel,
-		resolved: NonNullable<ReturnType<typeof ParseService.resolveAtPosition>>,
+		sym: Sym,
+		partIndex: number | undefined,
 		token: vscode.CancellationToken,
 		docUri: vscode.Uri,
 	): vscode.Hover | null | undefined {
 		if (token.isCancellationRequested) return undefined;
-		this.logger.trace(`Hover: token kind='${resolved.kind}' name='${resolved.token.name}'`);
+		this.logger.trace(`Hover: sym kind='${sym.kind}' name='${sym.name}'`);
 
-		switch (resolved.kind) {
-			case 'table_ref': {
-				// Table name in FROM/JOIN — show CTE columns if it's a CTE
-				const cte = ParseService.cteForRef(resolved.token, model);
-				if (cte) return this._buildCteHover(cte, resolved.token, model, docUri);
-				return null;
+		// old 'table_ref' — table/CTE/subquery/lateral name in FROM/JOIN
+		if (sym.kind === 'table' || sym.kind === 'cte' || sym.kind === 'subquery' || sym.kind === 'lateral') {
+			const cte = ParseService.cteForRef(sym, model);
+			if (cte) return this._buildCteHover(cte, sym, model, docUri);
+			return null;
+		}
+
+		// old 'table_alias' — alias definition in FROM/JOIN (e.g. the `o` in `FROM orders o`).
+		// The old bridge resolved this against the SAME token as the table name itself; under
+		// Sym the alias is its own symbol, so look up the relation it belongs to first.
+		if (sym.kind === 'alias') {
+			const relation = this._relationForAlias(model, sym);
+			if (!relation) return null;
+			const cte = ParseService.cteForRef(relation, model);
+			if (cte) return this._buildCteHover(cte, relation, model, docUri);
+			return null;
+		}
+
+		if (sym.kind !== 'column') return null;
+
+		// old 'column_def' — declaration site (e.g. in a CTE select list) — nothing to hover
+		if (sym.modifiers.includes('declaration')) return null;
+
+		const resolved = model.symbolBindings?.sourceOf.get(sym);
+		const isQualifierPart = sym.partSpans !== undefined
+			&& partIndex !== undefined
+			&& partIndex < sym.partSpans.length - 1;
+
+		if (isQualifierPart) {
+			// old 'table_qualifier' — alias prefix of a column ref (e.g. the `o` in `o.order_id`).
+			// Use the resolved source directly — same as definition provider — to avoid
+			// scoping problems in resolveAlias.
+			const alias = sym.name.split('.').slice(0, -1).join('.');
+			if (!resolved) return null;
+
+			const cte = ParseService.cteForRef(resolved, model);
+			if (cte) {
+				const inner = this._buildCteHover(cte, resolved, model, docUri);
+				return this._wrapWithAliasHeader(alias, cte.name, inner);
 			}
-			case 'table_alias': {
-				// Alias definition in FROM/JOIN (e.g. the `o` in `FROM orders o`)
-				const cte = ParseService.cteForRef(resolved.token, model);
-				if (cte) return this._buildCteHover(cte, resolved.token, model, docUri);
-				return null;
+
+			const ref = model.refs.find(r => r.model.toLowerCase() === resolved.name.toLowerCase());
+			if (ref) {
+				const inner = this._hoverRef(ref.model);
+				if (!inner) {
+					const md = this._md();
+					md.appendMarkdown(`$(${SqlIcons.tableAlias}) **\`${alias}\`** — alias for \`${ref.model}\``);
+					return new vscode.Hover(md);
+				}
+				return this._wrapWithAliasHeader(alias, ref.model, inner);
 			}
-			case 'table_qualifier': {
-				// Alias prefix of a column ref (e.g. the `o` in `o.order_id`)
-				// Use resolvedTableRef directly — same as definition provider — to avoid
-				// scoping problems in resolveAlias.
-				const alias = resolved.token.table!;
-				const refTok = resolved.token.resolvedTableRef;
-				if (!refTok) return null;
 
-				const cte = ParseService.cteForRef(refTok, model);
-				if (cte) {
-					const inner = this._buildCteHover(cte, refTok, model, docUri);
-					return this._wrapWithAliasHeader(alias, cte.name, inner);
+			const src = model.sources.find(s => s.tableName.toLowerCase() === resolved.name.toLowerCase());
+			if (src) {
+				const inner = this._hoverSource(src.sourceName, src.tableName);
+				if (!inner) {
+					const md = this._md();
+					md.appendMarkdown(`$(${SqlIcons.tableAlias}) **\`${alias}\`** — alias for \`${src.sourceName}.${src.tableName}\``);
+					return new vscode.Hover(md);
 				}
-
-				const ref = model.refs.find(r => r.model.toLowerCase() === refTok.name.toLowerCase());
-				if (ref) {
-					const inner = this._hoverRef(ref.model);
-					if (!inner) {
-						const md = this._md();
-						md.appendMarkdown(`$(${SqlIcons.tableAlias}) **\`${alias}\`** \u2014 alias for \`${ref.model}\``);
-						return new vscode.Hover(md);
-					}
-					return this._wrapWithAliasHeader(alias, ref.model, inner);
-				}
-
-				const src = model.sources.find(s => s.tableName.toLowerCase() === refTok.name.toLowerCase());
-				if (src) {
-					const inner = this._hoverSource(src.sourceName, src.tableName);
-					if (!inner) {
-						const md = this._md();
-						md.appendMarkdown(`$(${SqlIcons.tableAlias}) **\`${alias}\`** \u2014 alias for \`${src.sourceName}.${src.tableName}\``);
-						return new vscode.Hover(md);
-					}
-					return this._wrapWithAliasHeader(alias, `${src.sourceName}.${src.tableName}`, inner);
-				}
-
-				return null;
+				return this._wrapWithAliasHeader(alias, `${src.sourceName}.${src.tableName}`, inner);
 			}
-			case 'column_def':
-				// Column definition (e.g. in a CTE select list) — nothing to hover
-				return null;
-			case 'column': {
-				// Column reference — show column info with source
-				const colToken = resolved.token;
-				const refTok = colToken.resolvedTableRef;
-				if (colToken.table) {
-					const cols = refTok ? ParseService.columnsForRef(refTok, model) : undefined;
-					this.logger.trace(`Hover: column '${colToken.table}.${colToken.name}' — resolvedTableRef: ${refTok?.name ?? 'none'}, cols: ${cols ? `[${cols.join(', ')}]` : 'none'}`);
-					if (cols && (cols.includes('*') || cols.some(c => c.toLowerCase() === colToken.name.toLowerCase()))) {
-						const chain = ParseService.traceCteLineage(refTok!, model);
-						return this._buildColumnHover(colToken.name, colToken.table, chain, model, docUri);
-					}
-					// Qualifier resolves to a known alias but its column list is unavailable.
-					if (!cols && refTok) {
-						const isCte = model.ctes.some(c => c.name.toLowerCase() === refTok.name.toLowerCase());
-						if (!isCte) {
-							// Direct external ref (ref() / source) in the same scope — show lineage
-							const chain = ParseService.traceCteLineage(refTok, model);
-							return this._buildColumnHover(colToken.name, colToken.table, chain, model, docUri);
-						}
-						// CTE defined in this file but column list not available (e.g. macro caller)
-						const unavail = this._md();
-						unavail.appendMarkdown(`**${colToken.table}** (alias for \`${refTok.name}\`)\n\n`);
-						unavail.appendMarkdown('_Column list unavailable — `' + refTok.name + '` is not defined in this file._');
-						return new vscode.Hover(unavail);
-					}
-					// Qualified column with no resolvedTableRef — qualifier not locally defined
-					return null;
+
+			return null;
+		}
+
+		// old 'column' — column reference — show column info with source
+		const bareName = sym.name.split('.').pop()!;
+		if (sym.name.includes('.')) {
+			// Qualified column. Post-Phase-0, the resolved source's canonical alias/name IS
+			// the display qualifier (matches the old bridge's `.table`, which was upgraded to
+			// this same value whenever resolution succeeded); fall back to the raw written
+			// qualifier text only when unresolved.
+			const displayQualifier = resolved
+				? (model.symbolBindings?.aliasOf.get(resolved)?.name ?? resolved.name)
+				: sym.name.split('.').slice(0, -1).join('.');
+			const cols = resolved ? ParseService.columnsForRef(resolved, model) : undefined;
+			this.logger.trace(`Hover: column '${displayQualifier}.${bareName}' — resolved: ${resolved?.name ?? 'none'}, cols: ${cols ? `[${cols.join(', ')}]` : 'none'}`);
+			if (cols && (cols.includes('*') || cols.some(c => c.toLowerCase() === bareName.toLowerCase()))) {
+				const chain = ParseService.traceCteLineage(resolved!, model);
+				return this._buildColumnHover(bareName, displayQualifier, chain, model, docUri);
+			}
+			// Qualifier resolves to a known alias but its column list is unavailable.
+			if (!cols && resolved) {
+				const isCte = model.ctes.some(c => c.name.toLowerCase() === resolved.name.toLowerCase());
+				if (!isCte) {
+					// Direct external ref (ref() / source) in the same scope — show lineage
+					const chain = ParseService.traceCteLineage(resolved, model);
+					return this._buildColumnHover(bareName, displayQualifier, chain, model, docUri);
 				}
-				// Bare column (qualify-resolved) — resolvedTableRef tells us the exact source
-				if (refTok) {
-					const cols = ParseService.columnsForRef(refTok, model);
-					if (cols && (cols.includes('*') || cols.some(c => c.toLowerCase() === colToken.name.toLowerCase()))) {
-						const chain = ParseService.traceCteLineage(refTok, model);
-						return this._buildColumnHover(colToken.name, refTok.alias ?? refTok.name, chain, model, docUri);
-					}
-				}
-				return null;
+				// CTE defined in this file but column list not available (e.g. macro caller)
+				const unavail = this._md();
+				unavail.appendMarkdown(`**${displayQualifier}** (alias for \`${resolved.name}\`)\n\n`);
+				unavail.appendMarkdown('_Column list unavailable — `' + resolved.name + '` is not defined in this file._');
+				return new vscode.Hover(unavail);
+			}
+			// Qualified column with no resolved source — qualifier not locally defined
+			return null;
+		}
+		// Bare column (qualify-resolved) — the resolved source tells us the exact source
+		if (resolved) {
+			const cols = ParseService.columnsForRef(resolved, model);
+			if (cols && (cols.includes('*') || cols.some(c => c.toLowerCase() === bareName.toLowerCase()))) {
+				const chain = ParseService.traceCteLineage(resolved, model);
+				const aliasSym = model.symbolBindings?.aliasOf.get(resolved);
+				return this._buildColumnHover(bareName, aliasSym?.name ?? resolved.name, chain, model, docUri);
 			}
 		}
+		return null;
 	}
 
-	// ---- Fallback column hover (no token match) ----
+	// ---- Fallback column hover (no sym match) ----
 
 	private _hoverColumnFallback(
 		document: vscode.TextDocument,
@@ -334,15 +360,19 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		const word = document.getText(wordRange);
 		if (SQL_KEYWORDS.has(word.toUpperCase())) return undefined;
 
-		// Find the column_ref token at this position, use resolvedTableRef if available
-		const colTok = model.tokens.find(
-			(t): t is ColumnRefToken => t.type === 'column_ref' && t.name.toLowerCase() === word.toLowerCase() && t.line === position.line,
+		// Find the column Sym at this position, use its bound source if available
+		const colSym = (model.symbols ?? []).find(s =>
+			s.kind === 'column' && s.modifiers.includes('reference')
+			&& s.name.split('.').pop()!.toLowerCase() === word.toLowerCase()
+			&& (s.span.line - 1) === position.line,
 		);
-		if (colTok?.resolvedTableRef) {
-			const cols = ParseService.columnsForRef(colTok.resolvedTableRef, model);
+		const resolved = colSym && model.symbolBindings?.sourceOf.get(colSym);
+		if (resolved) {
+			const cols = ParseService.columnsForRef(resolved, model);
 			if (cols && (cols.includes('*') || cols.some(c => c.toLowerCase() === word.toLowerCase()))) {
-				const chain = ParseService.traceCteLineage(colTok.resolvedTableRef, model);
-				return this._buildColumnHover(word, colTok.resolvedTableRef.alias ?? colTok.resolvedTableRef.name, chain, model, document.uri);
+				const chain = ParseService.traceCteLineage(resolved, model);
+				const aliasSym = model.symbolBindings?.aliasOf.get(resolved);
+				return this._buildColumnHover(word, aliasSym?.name ?? resolved.name, chain, model, document.uri);
 			}
 		}
 
@@ -351,7 +381,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 
 	private _wrapWithAliasHeader(alias: string, targetName: string, inner: vscode.Hover): vscode.Hover {
 		const md = this._md();
-		md.appendMarkdown(`$(${SqlIcons.tableAlias}) **\`${alias}\`** \u2014 alias for \`${targetName}\``);
+		md.appendMarkdown(`$(${SqlIcons.tableAlias}) **\`${alias}\`** — alias for \`${targetName}\``);
 		md.appendMarkdown('\n\n---\n\n');
 		const raw = inner.contents as unknown as vscode.MarkdownString | vscode.MarkdownString[];
 		const innerMd = Array.isArray(raw) ? raw[0] : raw;
@@ -361,7 +391,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 
 	private _buildCteHover(
 		cte: { name: string; line: number; endLine: number; columns: { name: string; line: number }[] },
-		refToken: TableRefToken,
+		refSym: Sym,
 		model: DocumentModel,
 		docUri: vscode.Uri,
 	): vscode.Hover {
@@ -370,7 +400,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		md.appendMarkdown(`$(${SqlIcons.cte}) **${cteLink}** — CTE (${cte.columns.length} columns, lines ${cte.line + 1}–${cte.endLine + 1})`);
 
 		const cteByName = new Map(model.ctes.map(c => [c.name.toLowerCase(), c]));
-		const chain = ParseService.traceCteLineage(refToken, model);
+		const chain = ParseService.traceCteLineage(refSym, model);
 		const upstream = chain.slice(1);
 		if (upstream.length > 0) {
 			md.appendMarkdown('\n\n---\n\n**Lineage**  \n');
@@ -444,5 +474,3 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		return new vscode.Hover(md);
 	}
 }
-
-

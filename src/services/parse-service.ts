@@ -350,6 +350,13 @@ function symSpanContains(span: Span, line: number, col: number): number | undefi
 	return (endLine - startLine) * 1_000_000 + (span.endColumn - span.column);
 }
 
+/** A `Sym` kind that `relationSymbol` (sqllens's own symbol emitter) can produce for a
+ *  FROM/JOIN source or CTE reference — every kind that can carry an alias via `aliasOf`. */
+function isRelationSym(sym: Sym): boolean {
+	return (sym.kind === 'table' || sym.kind === 'cte' || sym.kind === 'subquery' || sym.kind === 'lateral')
+		&& sym.modifiers.includes('reference');
+}
+
 /**
  * Merge N DocumentModels produced by separate bridge parse calls (one per SQL
  * variant) into a single model. All positions in each model are expressed in
@@ -582,18 +589,28 @@ export class ParseService {
 	}
 
 	/**
-	 * Find the CteInfo that a table_ref token refers to.
+	 * Find the CteInfo that a relation Sym refers to.
 	 * When multiple CTEs share the same name (e.g. nested subqueries that
-	 * reuse the same alias), the token's line position disambiguates:
-	 * pick the CteInfo whose body range [line, endLine] contains the token.
+	 * reuse the same alias), the symbol's line position disambiguates:
+	 * pick the CteInfo whose body range [line, endLine] contains it.
+	 *
+	 * A subquery-kind Sym's OWN span covers its whole source text (the entire
+	 * `(SELECT ...)`, often multi-line) — anchoring disambiguation there would
+	 * miss every CteInfo entry, whose `[line, endLine]` is just the alias's own
+	 * line. Anchor on the alias Sym's line instead when one exists (matching
+	 * the single-line anchor the retired TokenInfo bridge used for subqueries).
+	 * Table/CTE-kind refs are unaffected — their own span already IS the
+	 * name's line, same as before.
 	 */
-	static cteForRef(ref: TableRefToken, model: DocumentModel): CteInfo | undefined {
+	static cteForRef(ref: Sym, model: DocumentModel): CteInfo | undefined {
 		const nameLc = ref.name.toLowerCase();
+		const alias = ref.kind === 'subquery' ? model.symbolBindings?.aliasOf.get(ref) : undefined;
+		const line = (alias ?? ref).span.line - 1;
 		const candidates = model.ctes.filter(c =>
 			c.name.toLowerCase() === nameLc || c.alias?.toLowerCase() === nameLc,
 		);
 		if (candidates.length <= 1) return candidates[0];
-		return candidates.find(c => ref.line >= c.line && ref.line <= c.endLine)
+		return candidates.find(c => line >= c.line && line <= c.endLine)
 			?? candidates[candidates.length - 1];
 	}
 
@@ -603,7 +620,7 @@ export class ParseService {
 	 * Returns `undefined` when the table is not locally defined (e.g. an
 	 * externally-defined CTE passed in by the macro caller).
 	 */
-	static columnsForRef(ref: TableRefToken, model: DocumentModel): string[] | undefined {
+	static columnsForRef(ref: Sym, model: DocumentModel): string[] | undefined {
 		const nameLc = ref.name.toLowerCase();
 		const cte = ParseService.cteForRef(ref, model);
 		if (cte) return cte.columns.map(c => c.name);
@@ -611,22 +628,23 @@ export class ParseService {
 	}
 
 	/**
-	 * Trace intra-model CTE lineage for a given table_ref.
+	 * Trace intra-model CTE lineage for a given relation Sym.
 	 *
 	 * Starting from `ref`, if it resolves to a CTE, follow the chain of
-	 * table_ref tokens inside each CTE body to build an ordered list of names.
+	 * relation symbols inside each CTE body to build an ordered list of names.
 	 * Stops when a node is not a CTE (external ref, source, or plain table).
 	 *
 	 * Returns an empty array when `ref` is not a CTE.
 	 *
 	 * Example result: ['address_with_country', "ref('gold__address')"]
 	 */
-	static traceCteLineage(ref: TableRefToken, model: DocumentModel): string[] {
+	static traceCteLineage(ref: Sym, model: DocumentModel): string[] {
 		const cteByName = new Map(model.ctes.map(c => [c.name.toLowerCase(), c]));
+		const symbols = model.symbols ?? [];
 		const chain: string[] = [];
 		const visited = new Set<string>();
 
-		let current: TableRefToken | undefined = ref;
+		let current: Sym | undefined = ref;
 		while (current) {
 			const nameLc = current.name.toLowerCase();
 			if (visited.has(nameLc)) break; // cycle guard
@@ -641,11 +659,11 @@ export class ParseService {
 
 			chain.push(cte.name);
 
-			// Find the first table_ref token inside this CTE's body range
-			const next = (model.tokens as TableRefToken[]).find(
-				t => t.type === 'table_ref'
-					&& t.line >= cte.line
-					&& t.line <= cte.endLine,
+			// Find the first relation Sym inside this CTE's body range
+			const next = symbols.find(s =>
+				isRelationSym(s)
+					&& (s.span.line - 1) >= cte.line
+					&& (s.span.line - 1) <= cte.endLine,
 			);
 			if (!next) break;
 			current = next;
@@ -655,26 +673,24 @@ export class ParseService {
 		// check if there's an external table (ref/source) to append
 		if (chain.length === 1) {
 			const cte = cteByName.get(ref.name.toLowerCase())!;
-			// Find any table_ref in its body not already in chain
-			const inner = (model.tokens as TableRefToken[]).find(
-				t => t.type === 'table_ref'
-					&& t.line >= cte.line
-					&& t.line <= cte.endLine
-					&& !cteByName.has(t.name.toLowerCase()),
+			// Find any relation Sym in its body not already in chain
+			const inner = symbols.find(s =>
+				isRelationSym(s)
+					&& (s.span.line - 1) >= cte.line
+					&& (s.span.line - 1) <= cte.endLine
+					&& !cteByName.has(s.name.toLowerCase()),
 			);
 			if (inner) {
 				// Check if it's a ref()
-				const refInfo = model.refs.find(r => r.line === inner.line);
+				const refInfo = model.refs.find(r => r.line === inner.span.line - 1);
 				chain.push(refInfo ? `ref('${inner.name}')` : inner.name);
 			}
 		} else if (chain.length > 1) {
 			// For deeper chains: annotate the last entry if it's a ref()
 			const last = chain[chain.length - 1];
 			const isRef = model.refs.some(r => {
-				const tok = (model.tokens as TableRefToken[]).find(
-					t => t.type === 'table_ref' && t.name === last && r.line === t.line,
-				);
-				return !!tok;
+				const sym = symbols.find(s => isRelationSym(s) && s.name === last && r.line === s.span.line - 1);
+				return !!sym;
 			});
 			if (isRef && !last.startsWith('ref(')) {
 				chain[chain.length - 1] = `ref('${last}')`;

@@ -14,7 +14,7 @@ import { BridgeRunner } from '../dbt/bridge-runner';
 import { detectPythonEnvironment, type PythonEnvironment } from '../dbt/env-detector';
 import { SqllensDocumentParser, type AdapterContext } from '../ftl/sqllens/document-parser';
 import { mergeModels, ParseService } from '../services/parse-service';
-import type { DocumentModel, TableRefToken, ColumnRefToken } from '../services/parse-service';
+import type { DocumentModel, TableRefToken } from '../services/parse-service';
 import { createMockLogger } from './helpers';
 
 const ANSI_CONTEXT: AdapterContext = { adapterType: 'ansi' };
@@ -518,12 +518,13 @@ describe('ftl parse_document – subquery alias resolution', () => {
 
 	it('column resolution through subquery alias', async () => {
 		const model = await parseSql('SELECT x.col FROM (SELECT col FROM raw_orders) AS x');
-		const colRef = model.tokens.find((t): t is ColumnRefToken =>
-			t.type === 'column_ref' && t.name === 'col' && 'table' in t && t.table === 'x',
+		const colSym = (model.symbols ?? []).find(s =>
+			s.kind === 'column' && s.modifiers.includes('reference') && s.name === 'x.col',
 		);
-		expect(colRef).toBeDefined();
-		expect(colRef!.resolvedTableRef).toBeDefined();
-		const cols = ParseService.columnsForRef(colRef!.resolvedTableRef!, model);
+		expect(colSym).toBeDefined();
+		const resolved = model.symbolBindings?.sourceOf.get(colSym!);
+		expect(resolved).toBeDefined();
+		const cols = ParseService.columnsForRef(resolved!, model);
 		expect(cols).toContain('col');
 	}, 30_000);
 
@@ -537,13 +538,14 @@ describe('ftl parse_document – subquery alias resolution', () => {
     WHERE ctc.keepone = 1
 )
 SELECT * FROM cte`);
-		// The column_ref ctc.keepone should resolve to the middle subquery (which has keepone)
-		const colRef = model.tokens.find((t): t is ColumnRefToken =>
-			t.type === 'column_ref' && t.name === 'keepone' && 'table' in t && t.table === 'ctc',
+		// The column ctc.keepone should resolve to the middle subquery (which has keepone)
+		const colSym = (model.symbols ?? []).find(s =>
+			s.kind === 'column' && s.modifiers.includes('reference') && s.name === 'ctc.keepone',
 		);
-		expect(colRef).toBeDefined();
-		if (colRef?.resolvedTableRef) {
-			const cols = ParseService.columnsForRef(colRef.resolvedTableRef, model);
+		expect(colSym).toBeDefined();
+		const resolved = colSym && model.symbolBindings?.sourceOf.get(colSym);
+		if (resolved) {
+			const cols = ParseService.columnsForRef(resolved, model);
 			expect(cols).toContain('keepone');
 		}
 	});

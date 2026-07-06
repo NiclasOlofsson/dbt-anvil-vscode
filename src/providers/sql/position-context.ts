@@ -1,13 +1,21 @@
 import { ParseService } from '../../services/parse-service';
 import type { DocumentModel, MacroCallInfo, RefInfo, SourceInfo } from '../../services/parse-service';
-
-type ResolvedToken = NonNullable<ReturnType<typeof ParseService.resolveAtPosition>>;
+import type { Sym } from '../../ftl/sqllens/api';
 
 export type PositionContext =
 	| { kind: 'ref'; ref: RefInfo }
 	| { kind: 'source'; source: SourceInfo }
 	| { kind: 'macro'; name: string; packageName?: string; call: MacroCallInfo }
-	| { kind: 'token'; resolved: ResolvedToken }
+	/**
+	 * `sym` is the smallest-span symbol covering the cursor. `partIndex` is set
+	 * only for a `kind: 'column'` symbol with `partSpans` (a dotted reference,
+	 * e.g. `o.order_id`) — which part the cursor is actually on: any index
+	 * before the last means the cursor is on a QUALIFIER part (the old
+	 * PositionResolution's `table_qualifier` kind), the last index means it's
+	 * on the column name itself (the old `column` kind). Absent for a
+	 * single-part reference or a non-column symbol.
+	 */
+	| { kind: 'sym'; sym: Sym; partIndex?: number }
 	| null;
 
 /**
@@ -17,7 +25,7 @@ export type PositionContext =
  * Order of precedence:
  *  1. ref()  / source() — matched by the model's jinja span (most precise)
  *  2. macro call inside {{ }} or {% %} — matched by `model.macroCalls`
- *  3. AST token via ParseService.resolveAtPosition
+ *  3. Sym via ParseService.symAtPosition (sqllens's native symbol model)
  */
 export function resolvePositionContext(
 	model: DocumentModel,
@@ -60,9 +68,12 @@ export function resolvePositionContext(
 		};
 	}
 
-	// AST token
-	const resolved = ParseService.resolveAtPosition(model, position.line, position.character);
-	if (resolved) return { kind: 'token', resolved };
+	// Sym
+	const sym = ParseService.symAtPosition(model, position.line, position.character);
+	if (sym) {
+		const partIndex = ParseService.partIndexAtPosition(sym, position.line, position.character);
+		return { kind: 'sym', sym, ...(partIndex !== undefined ? { partIndex } : {}) };
+	}
 
 	return null;
 }

@@ -4,7 +4,8 @@ import type { ManifestIndexer } from '../../indexing/manifest-indexer';
 import type { ManifestLoader } from '../../dbt/manifest-loader';
 import type { ILogger } from '../../types/logger';
 import { ParseService } from '../../services/parse-service';
-import type { CteInfo, DocumentModel, SourceInfo, TableRefToken } from '../../services/parse-service';
+import type { CteInfo, DocumentModel, SourceInfo } from '../../services/parse-service';
+import type { Sym } from '../../ftl/sqllens/api';
 import { isLinePositionInComment } from '../common/comment-utils';
 import { resolvePositionContext } from './position-context';
 
@@ -51,8 +52,8 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 			this.logger.trace(`Definition: macro '${ctx.name}' → ${def ? 'resolved' : 'not found'}`);
 			return def;
 		}
-		if (ctx?.kind === 'token') {
-			return this._resolveToken(document, position, token, model);
+		if (ctx?.kind === 'sym') {
+			return this._resolveToken(document, position, token, model, ctx.sym, ctx.partIndex);
 		}
 
 		return undefined;
@@ -107,55 +108,60 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 		return undefined;
 	}
 
-	// ---- Token-based definition (AST position resolution) ----
+	// ---- Sym-based definition (AST position resolution) ----
 
 	private async _resolveToken(
 		document: vscode.TextDocument,
 		position: vscode.Position,
 		token: vscode.CancellationToken,
 		model: DocumentModel,
+		sym: Sym,
+		partIndex: number | undefined,
 	): Promise<vscode.Definition | undefined> {
 		if (token.isCancellationRequested) return undefined;
+		this.logger.trace(`Definition: sym at ${position.line}:${position.character} → kind='${sym.kind}' name='${sym.name}'`);
 
-		const resolved = ParseService.resolveAtPosition(model, position.line, position.character);
-		if (!resolved) {
-			this.logger.trace(`Definition: no token at ${position.line}:${position.character} (${model.tokens.length} tokens in model)`);
-			return undefined;
-		}
-		this.logger.trace(`Definition: token at ${position.line}:${position.character} → kind='${resolved.kind}' name='${resolved.token.name}'`);
+		// old 'table_alias' — a relation's own alias declaration has no separate definition.
+		if (sym.kind === 'alias') return undefined;
 
-		switch (resolved.kind) {
-			case 'table_ref': {
-				return this._jumpToCte(document, model, resolved.token)
-					?? this._resolveRef(resolved.token.name);
-			}
-			case 'table_alias':
-			case 'column_def': {
-				return undefined;
-			}
-			case 'table_qualifier': {
-				const colToken = resolved.token;
-				const refTok = colToken.resolvedTableRef;
-				if (refTok && refTok.aliasLine !== undefined && refTok.aliasCol !== undefined) {
-					return new vscode.Location(document.uri, new vscode.Position(refTok.aliasLine, refTok.aliasCol));
-				}
-				return this._jumpToCte(document, model, colToken.table!);
-			}
-			case 'column': {
-				const colToken = resolved.token;
-				const refTok = colToken.resolvedTableRef;
-				if (refTok) {
-					const ref = model.refs.find(r => r.model.toLowerCase() === refTok.name.toLowerCase());
-					if (ref) return this._jumpToModelColumn(ref.model, colToken.name);
-					const src = model.sources.find(s => s.tableName.toLowerCase() === refTok.name.toLowerCase());
-					if (src) return this._jumpToSourceColumn(src, colToken.name);
-					const cte = ParseService.cteForRef(refTok, model);
-					if (cte) return this._jumpToCteColumn(document, model, cte, colToken.name);
-				}
-				this.logger.trace(`Definition: column '${resolved.token.name}' has no resolvedTableRef → undefined`);
-				return undefined;
-			}
+		// old 'table_ref' — a FROM/JOIN table/CTE/subquery/lateral reference.
+		if (sym.kind === 'table' || sym.kind === 'cte' || sym.kind === 'subquery' || sym.kind === 'lateral') {
+			return this._jumpToCte(document, model, sym)
+				?? this._resolveRef(sym.name);
 		}
+
+		if (sym.kind !== 'column') return undefined;
+
+		// old 'column_def' — the alias/computed declaration site itself has no target.
+		if (sym.modifiers.includes('declaration')) return undefined;
+
+		const resolved = model.symbolBindings?.sourceOf.get(sym);
+		const isQualifierPart = sym.partSpans !== undefined
+			&& partIndex !== undefined
+			&& partIndex < sym.partSpans.length - 1;
+
+		if (isQualifierPart) {
+			// old 'table_qualifier'
+			const alias = resolved && model.symbolBindings?.aliasOf.get(resolved);
+			if (alias) {
+				return new vscode.Location(document.uri, new vscode.Position(alias.span.line - 1, alias.span.column));
+			}
+			const qualifierText = sym.name.split('.').slice(0, -1).join('.');
+			return this._jumpToCte(document, model, qualifierText);
+		}
+
+		// old 'column'
+		const bareName = sym.name.split('.').pop()!;
+		if (resolved) {
+			const ref = model.refs.find(r => r.model.toLowerCase() === resolved.name.toLowerCase());
+			if (ref) return this._jumpToModelColumn(ref.model, bareName);
+			const src = model.sources.find(s => s.tableName.toLowerCase() === resolved.name.toLowerCase());
+			if (src) return this._jumpToSourceColumn(src, bareName);
+			const cte = ParseService.cteForRef(resolved, model);
+			if (cte) return this._jumpToCteColumn(document, model, cte, bareName);
+		}
+		this.logger.trace(`Definition: column '${sym.name}' has no resolved source → undefined`);
+		return undefined;
 	}
 
 	private async _jumpToCteColumn(
@@ -215,7 +221,7 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 	private _jumpToCte(
 		document: vscode.TextDocument,
 		model: DocumentModel,
-		aliasOrToken: string | TableRefToken,
+		aliasOrToken: string | Sym,
 		column?: string,
 	): vscode.Definition | undefined {
 		const alias = typeof aliasOrToken === 'string' ? aliasOrToken : aliasOrToken.name;

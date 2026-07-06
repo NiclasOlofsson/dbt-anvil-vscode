@@ -1,9 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as vscode from 'vscode';
 import { DbtHoverProvider } from '../providers/sql/hover-provider';
 import { ParseService } from '../services/parse-service';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import type { DocumentModel, TokenInfo } from '../services/parse-service';
+import type { DocumentModel } from '../services/parse-service';
+import type { Sym } from '../ftl/sqllens/api';
+import { MAIN_FRAME } from '../ftl/sqllens/api';
 import { createMockLogger } from './helpers';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -78,6 +80,25 @@ const mockToken: vscode.CancellationToken = {
 	onCancellationRequested: vi.fn(),
 };
 
+/** Build a `Sym` stub. `line`/`endLine` are 0-based (VS Code convention, matching every
+ *  position elsewhere in this file) — converted internally to Sym.span's 1-based line. */
+function sym(
+	kind: Sym['kind'],
+	name: string,
+	line: number,
+	col: number,
+	endCol: number,
+	opts: { modifiers?: Sym['modifiers']; frame?: string; endLine?: number } = {},
+): Sym {
+	return {
+		kind,
+		modifiers: opts.modifiers ?? ['reference'],
+		name,
+		span: { line: line + 1, column: col, endLine: (opts.endLine ?? line) + 1, endColumn: endCol },
+		frame: opts.frame ?? MAIN_FRAME,
+	};
+}
+
 // ─── CTE hover (Phase 4) ────────────────────────────────────────────────────
 
 describe('DbtHoverProvider — CTE hover via ParseService', () => {
@@ -101,14 +122,16 @@ describe('DbtHoverProvider — CTE hover via ParseService', () => {
 		refs: [],
 		sources: [],
 		finalColumns: [{ name: 'id', line: 8 }, { name: 'name', line: 8 }],
-		tokens: [
-			// Line 2: "  FROM raw_customers"
-			{ type: 'table_ref', name: 'raw_customers', line: 2, col: 7, endCol: 21 },
-			// Line 6: "  FROM base"
-			{ type: 'table_ref', name: 'base', line: 6, col: 7, endCol: 11 },
-			// Line 8: "SELECT * FROM enriched"
-			{ type: 'table_ref', name: 'enriched', line: 8, col: 14, endCol: 22 },
-		] as TokenInfo[],
+		tokens: [],
+		symbols: [
+			// Line 2: "  FROM raw_customers" — inside `base`'s own body
+			sym('table', 'raw_customers', 2, 7, 21, { frame: 'base' }),
+			// Line 6: "  FROM base" — inside `enriched`'s own body
+			sym('cte', 'base', 6, 7, 11, { frame: 'enriched' }),
+			// Line 8: "SELECT * FROM enriched" — the outermost query
+			sym('cte', 'enriched', 8, 14, 22, { frame: MAIN_FRAME }),
+		],
+		symbolBindings: { aliasOf: new Map(), sourceOf: new Map() },
 		timing: { parseMs: 5, totalMs: 10 },
 	};
 
@@ -175,10 +198,10 @@ describe('DbtHoverProvider — CTE hover via ParseService', () => {
 	it('returns undefined when ParseService has no matching CTE', async () => {
 		const emptyModel: DocumentModel = {
 			ctes: [], refs: [], sources: [], finalColumns: [] as import('../services/parse-service').ColumnInfo[],
-			tokens: [
-				// Token exists but no matching CTE in the model
-				{ type: 'table_ref', name: 'base', line: 6, col: 7, endCol: 11 },
-			] as TokenInfo[],
+			tokens: [],
+			// Symbol exists but no matching CTE in the model
+			symbols: [sym('cte', 'base', 6, 7, 11)],
+			symbolBindings: { aliasOf: new Map(), sourceOf: new Map() },
 			timing: { parseMs: 1, totalMs: 2 },
 		};
 		const parseService = createMockParseService(emptyModel);
@@ -213,9 +236,9 @@ describe('DbtHoverProvider — wildcard column list (*)', () => {
 		'SELECT * FROM enriched',
 	].join('\n');
 
-	const addrRef: import('../services/parse-service').TableRefToken = {
-		type: 'table_ref', name: 'addr_cte', alias: 'addr', line: 5, col: 7, endCol: 22,
-	};
+	const addrCteSym = sym('cte', 'addr_cte', 5, 7, 22, { frame: 'enriched' });
+	const addrAliasSym = sym('alias', 'addr', 5, 23, 27, { modifiers: ['declaration'], frame: 'enriched' });
+	const streetColSym = sym('column', 'addr.street', 4, 9, 15, { frame: 'enriched' });
 
 	const model: DocumentModel = {
 		ctes: [
@@ -225,18 +248,12 @@ describe('DbtHoverProvider — wildcard column list (*)', () => {
 		refs: [],
 		sources: [],
 		finalColumns: [],
-		tokens: [
-			addrRef,
-			{
-				type: 'column_ref',
-				name: 'street',
-				table: 'addr',
-				line: 4,
-				col: 9,
-				endCol: 15,
-				resolvedTableRef: addrRef,
-			},
-		] as TokenInfo[],
+		tokens: [],
+		symbols: [addrCteSym, addrAliasSym, streetColSym],
+		symbolBindings: {
+			aliasOf: new Map([[addrCteSym, addrAliasSym]]),
+			sourceOf: new Map([[streetColSym, addrCteSym]]),
+		},
 		timing: { parseMs: 1, totalMs: 2 },
 	};
 
@@ -262,23 +279,16 @@ describe('DbtHoverProvider — wildcard column list (*)', () => {
 describe('ParseService.traceCteLineage', () => {
 	// Model shape:
 	//   address_with_country AS (             -- line 0..2
-	//     SELECT * FROM ref('gold__address')  -- ref token at line 1
+	//     SELECT * FROM ref('gold__address')  -- ref sym at line 1
 	//   ),                                    -- line 2
 	//   warehouses_enriched AS (              -- line 3..7
 	//     SELECT addr.street
-	//     FROM address_with_country AS addr   -- table_ref at line 5
+	//     FROM address_with_country AS addr   -- relation sym at line 5
 	//   )
-	//   SELECT * FROM warehouses_enriched     -- table_ref at line 8
+	//   SELECT * FROM warehouses_enriched     -- relation sym at line 8
 
-	const addrCteRef: import('../services/parse-service').TableRefToken = {
-		type: 'table_ref', name: 'address_with_country', alias: 'addr', line: 5, col: 9, endCol: 36,
-	};
-	const goldAddressRef: import('../services/parse-service').TableRefToken = {
-		type: 'table_ref', name: 'gold__address', line: 1, col: 18, endCol: 31,
-	};
-	const warehousesRef: import('../services/parse-service').TableRefToken = {
-		type: 'table_ref', name: 'warehouses_enriched', line: 8, col: 14, endCol: 32,
-	};
+	const addrCteRef = sym('cte', 'address_with_country', 5, 9, 36, { frame: 'warehouses_enriched' });
+	const goldAddressRef = sym('table', 'gold__address', 1, 18, 31, { frame: 'address_with_country' });
 
 	const model: DocumentModel = {
 		ctes: [
@@ -288,7 +298,9 @@ describe('ParseService.traceCteLineage', () => {
 		refs: [{ model: 'gold__address', line: 1, col: 18 }],
 		sources: [],
 		finalColumns: [],
-		tokens: [goldAddressRef, addrCteRef, warehousesRef] as TokenInfo[],
+		tokens: [],
+		symbols: [goldAddressRef, addrCteRef],
+		symbolBindings: { aliasOf: new Map(), sourceOf: new Map() },
 		timing: { parseMs: 1, totalMs: 2 },
 	};
 
@@ -298,31 +310,27 @@ describe('ParseService.traceCteLineage', () => {
 		expect(chain).toEqual(['address_with_country', 'ref(\'gold__address\')']);
 	});
 
-	it('returns just the CTE name when it has no upstream table_ref in its body', () => {
+	it('returns just the CTE name when it has no upstream relation sym in its body', () => {
 		const isolatedModel: DocumentModel = {
 			...model,
-			tokens: [addrCteRef], // no goldAddressRef in body
+			symbols: [addrCteRef], // no goldAddressRef in body
 		};
 		const chain = ParseService.traceCteLineage(addrCteRef, isolatedModel);
 		expect(chain).toEqual(['address_with_country']);
 	});
 
-	it('returns [name] for a non-CTE external table_ref with no alias', () => {
+	it('returns [name] for a non-CTE external relation with no alias', () => {
 		// warehousesRef is not a CTE name — no CTE named 'warehouses_enriched' in the ctes list?
-		// Actually it IS a CTE — so let's use a plain external ref token
-		const externalRef: import('../services/parse-service').TableRefToken = {
-			type: 'table_ref', name: 'raw_orders', line: 10, col: 9, endCol: 18,
-		};
+		// Actually it IS a CTE — so let's use a plain external ref symbol
+		const externalRef = sym('table', 'raw_orders', 10, 9, 18);
 		const chain = ParseService.traceCteLineage(externalRef, model);
 		// raw_orders is not a ref() in this model and has no alias — returns the bare table name
 		expect(chain).toEqual(['raw_orders']);
 	});
 
-	it('returns [ref(name)] for a direct ref() token with an alias', () => {
+	it('returns [ref(name)] for a direct ref() symbol with an alias', () => {
 		// FROM {{ ref('gold__address') }} wh — the alias is the qualifier, not a chain step
-		const directRef: import('../services/parse-service').TableRefToken = {
-			type: 'table_ref', name: 'gold__address', alias: 'wh', line: 1, col: 5, endCol: 18,
-		};
+		const directRef = sym('table', 'gold__address', 1, 5, 18);
 		// model has refs: [{ model: 'gold__address', line: 1 }]
 		const chain = ParseService.traceCteLineage(directRef, model);
 		expect(chain).toEqual(['ref(\'gold__address\')']);
@@ -331,12 +339,8 @@ describe('ParseService.traceCteLineage', () => {
 	it('follows a two-hop chain: cte_b → cte_a → ref', () => {
 		// cte_a (line 0..2): SELECT * FROM ref('source')
 		// cte_b (line 3..7): SELECT * FROM cte_a AS x
-		const sourceRef: import('../services/parse-service').TableRefToken = {
-			type: 'table_ref', name: 'source_table', line: 1, col: 5, endCol: 15,
-		};
-		const ctaARef: import('../services/parse-service').TableRefToken = {
-			type: 'table_ref', name: 'cte_a', alias: 'x', line: 5, col: 9, endCol: 14,
-		};
+		const sourceRef = sym('table', 'source_table', 1, 5, 15, { frame: 'cte_a' });
+		const ctaARef = sym('cte', 'cte_a', 5, 9, 14, { frame: 'cte_b' });
 		const twoHopModel: DocumentModel = {
 			ctes: [
 				{ name: 'cte_a', line: 0, endLine: 2, columns: [{ name: '*', line: 1 }] },
@@ -345,12 +349,12 @@ describe('ParseService.traceCteLineage', () => {
 			refs: [],
 			sources: [],
 			finalColumns: [],
-			tokens: [sourceRef, ctaARef] as TokenInfo[],
+			tokens: [],
+			symbols: [sourceRef, ctaARef],
+			symbolBindings: { aliasOf: new Map(), sourceOf: new Map() },
 			timing: { parseMs: 1, totalMs: 2 },
 		};
-		const cteBRef: import('../services/parse-service').TableRefToken = {
-			type: 'table_ref', name: 'cte_b', line: 8, col: 14, endCol: 18,
-		};
+		const cteBRef = sym('cte', 'cte_b', 8, 14, 18);
 		const chain = ParseService.traceCteLineage(cteBRef, twoHopModel);
 		expect(chain).toEqual(['cte_b', 'cte_a', 'source_table']);
 	});
