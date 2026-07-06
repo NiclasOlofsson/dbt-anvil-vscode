@@ -25,11 +25,11 @@
 # Single build (development mode, with source maps)
 npm run compile
 
-# Watch mode (rebuilds on save + type-checks + lints continuously)
+# Watch mode (rebuilds on save)
 npm run watch
 ```
 
-`npm run watch` runs three parallel watchers: esbuild, TypeScript type-checking, and ESLint. This is the normal working mode during active development.
+`npm run watch` runs the esbuild watcher only — it rebuilds `dist/` on save. Type errors show inline in the editor (via the TS language server); run `npm run typecheck` before committing, or start `npm run watch:types` for a continuous whole-project check. `npm run watch:lint` runs ESLint on save. Both type and lint watchers are opt-in separate processes.
 
 ### Lint
 
@@ -112,7 +112,8 @@ Do **not** manually commit `package.json` or `package-lock.json` after publishin
 | Command | Description |
 |---------|-------------|
 | `npm run compile` | One-off development build |
-| `npm run watch` | Watch mode (build + typecheck + lint) |
+| `npm run watch` | Watch mode (esbuild rebuild-on-save) |
+| `npm run watch:types` | Optional continuous `tsc --noEmit` |
 | `npm run lint` | Lint with ESLint |
 | `npm run lint:fix` | Lint and auto-fix |
 | `npm run typecheck` | TypeScript type-check only |

@@ -6,7 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Development
-npm run watch          # Watch mode: esbuild + tsc --noEmit in parallel (primary dev loop)
+npm run watch          # Watch mode: esbuild rebuild-on-save (primary dev loop)
+npm run watch:types    # Optional: continuous tsc --noEmit (opt-in; editor squiggles + npm run typecheck usually suffice)
 npm run watch:lint     # Optional: run ESLint on save (separate process, opt-in)
 npm run compile        # Single dev build with source maps
 npm run build          # Production build (no source maps)
