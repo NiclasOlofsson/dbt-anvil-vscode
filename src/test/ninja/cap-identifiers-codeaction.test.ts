@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mockDocument, cfg, model, colDef, tableRef, applyEditsToText } from './helpers';
+import { mockDocument, cfg, model, sym, colSym, symbolBindings, applyEditsToText } from './helpers';
 import { capIdentifiersRule } from '../../ninja/rules/cap-identifiers';
 import { filterAutoFixViolations } from '../../providers/sql/formatting-provider';
 import { FixAction } from '../../ninja/violation';
@@ -24,8 +24,8 @@ describe('cap-identifiers code-action integration', () => {
 		//                     ^^^^^^^ position 12..19
 		const sql = 'select 1 as orderId from t';
 		const doc = mockDocument(sql);
-		const aliasTok = colDef('orderId', 0, 12);
-		const m = model({ tokens: [aliasTok] });
+		const aliasSym = sym('column', 'orderId', 0, 12, { modifiers: ['declaration', 'output'] });
+		const m = model({ symbols: [aliasSym] });
 
 		const violations = capIdentifiersRule.check({ model: m, document: doc, config: withStyle('snake_case') });
 		expect(violations).toHaveLength(1);
@@ -40,14 +40,14 @@ describe('cap-identifiers code-action integration', () => {
 
 	it('renames a CTE definition and every reference atomically', () => {
 		// Source: with MyCte as (select 1) select * from MyCte
-		// Token positions (line 0):
+		// Sym positions (line 0):
 		//   MyCte def:  col 5..10
-		//   MyCte use:  col 47..52
+		//   MyCte use:  col 39..44
 		const sql = 'with MyCte as (select 1) select * from MyCte';
 		const doc = mockDocument(sql);
-		const cteDef = { type: 'table_ref' as const, name: 'MyCte', line: 0, col: 5, endCol: 10, cteDefinition: true as const };
-		const cteUse = { type: 'table_ref' as const, name: 'MyCte', line: 0, col: 39, endCol: 44 };
-		const m = model({ tokens: [cteDef, cteUse] });
+		const cteDef = sym('cte', 'MyCte', 0, 5, { modifiers: ['declaration'] });
+		const cteUse = sym('cte', 'MyCte', 0, 39);
+		const m = model({ symbols: [cteDef, cteUse] });
 
 		const violations = capIdentifiersRule.check({ model: m, document: doc, config: withStyle('snake_case') });
 		expect(violations).toHaveLength(1);
@@ -65,29 +65,25 @@ describe('cap-identifiers code-action integration', () => {
 		const sql = 'select OrdAlias.id from orders as OrdAlias';
 		const doc = mockDocument(sql);
 
-		const ordersRef = tableRef('orders', 0, 24, 'OrdAlias');
+		const ordersRelation = sym('table', 'orders', 0, 24);
 		// orders ends at col 30; ` as ` then alias starts at col 34, ends at 42.
-		ordersRef.aliasLine = 0;
-		ordersRef.aliasCol = 34;
-		ordersRef.aliasEndCol = 42;
+		const alias = sym('alias', 'OrdAlias', 0, 34, { modifiers: ['declaration'] });
+		// Qualifier `OrdAlias` spans col 7..15, name `id` spans col 16..18.
+		const colWithQualifier = colSym(0, [{ name: 'OrdAlias', col: 7 }, { name: 'id', col: 16 }]);
 
-		const colWithQualifier = {
-			type: 'column_ref' as const,
-			name: 'id',
-			line: 0, col: 16, endCol: 18,
-			table: 'OrdAlias',
-			tableLine: 0,
-			tableCol: 7,
-			tableEndCol: 15,
-		};
-
-		const m = model({ tokens: [ordersRef, colWithQualifier] });
+		const m = model({
+			symbols: [ordersRelation, alias, colWithQualifier],
+			symbolBindings: symbolBindings({
+				aliasOf: [[ordersRelation, alias]],
+				sourceOf: [[colWithQualifier, ordersRelation]],
+			}),
+		});
 
 		const violations = capIdentifiersRule.check({ model: m, document: doc, config: withStyle('snake_case') });
 		expect(violations).toHaveLength(1);
 
 		const action = violations[0].action as FixAction;
-		// Two ops — alias def + qualifier on the column_ref.
+		// Two ops — alias def + qualifier on the column ref.
 		expect(action.ops.length).toBe(2);
 
 		const after = applyEditsToText(sql, action.ops);
@@ -95,8 +91,8 @@ describe('cap-identifiers code-action integration', () => {
 	});
 
 	it('autoFix filter excludes the violation from bulk auto-fix flows', () => {
-		const aliasTok = colDef('orderId', 0, 12);
-		const m = model({ tokens: [aliasTok] });
+		const aliasSym = sym('column', 'orderId', 0, 12, { modifiers: ['declaration', 'output'] });
+		const m = model({ symbols: [aliasSym] });
 		const doc = mockDocument('select 1 as orderId from t');
 		const ninjaConfig = withStyle('snake_case');
 
@@ -111,8 +107,8 @@ describe('cap-identifiers code-action integration', () => {
 	it('autoFix filter includes the violation when config overrides the rule to true', () => {
 		// Even though the rule defaults to autoFix: false, config.autoFix.rules[ruleId]
 		// = true should opt the user into bulk apply. This documents the override path.
-		const aliasTok = colDef('orderId', 0, 12);
-		const m = model({ tokens: [aliasTok] });
+		const aliasSym = sym('column', 'orderId', 0, 12, { modifiers: ['declaration', 'output'] });
+		const m = model({ symbols: [aliasSym] });
 		const doc = mockDocument('select 1 as orderId from t');
 		const ninjaConfig: NinjaConfig = {
 			...withStyle('snake_case'),

@@ -2,8 +2,11 @@ import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../../indexing/manifest-indexer';
 import type { ILogger } from '../../types/logger';
 import { ParseService } from '../../services/parse-service';
+import type { DocumentModel } from '../../services/parse-service';
+import type { Sym } from '../../ftl/sqllens/api';
 import { isLinePositionInComment, computeCommentRanges, isOffsetInComment } from '../common/comment-utils';
 import { SQL_KEYWORDS } from './sql-keywords';
+import { isRelationSym, qualifierRangeOf, rangeOfSpan } from './sym-spans';
 
 /**
  * Find All References for ref('model'), source('src', 'table'), and column
@@ -48,31 +51,40 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 				);
 				if (src) return this._findSourceUsages(src.sourceName, src.tableName, token);
 
-				// Token-based dispatch using resolved position
-				const resolved = ParseService.resolveAtPosition(model, position.line, position.character);
+				// Sym-based dispatch using resolved position
+				const sym = ParseService.symAtPosition(model, position.line, position.character);
+				if (!sym) return [];
 
-				if (resolved?.kind === 'column' || resolved?.kind === 'column_def') {
-					return this._findColumnReferences(document, resolved.token.name, token);
+				if (sym.kind === 'column') {
+					const partIndex = ParseService.partIndexAtPosition(sym, position.line, position.character);
+					const isQualifierPart = sym.partSpans !== undefined
+						&& partIndex !== undefined
+						&& partIndex < sym.partSpans.length - 1;
+					if (isQualifierPart) {
+						// Qualifier `o` in `o.col` — find the relation it resolves to (identity-based:
+						// two nested scopes can share an alias name, so matching by name risks finding
+						// the wrong one). An unresolved qualifier yields no references.
+						const relation = model.symbolBindings?.sourceOf.get(sym);
+						if (relation) return this._findAliasReferences(document, relation, model);
+						return [];
+					}
+					const bareName = sym.name.split('.').pop()!;
+					return this._findColumnReferences(document, bareName, token);
 				}
 
-				if (resolved?.kind === 'table_ref') {
+				if (isRelationSym(sym)) {
 					// CTE name → in-file references
-					const cte = model.ctes.find(c => c.name === resolved.token.name);
-					if (cte) return this._findCteReferences(document, resolved.token.name, model, cte);
+					const cte = model.ctes.find(c => c.name === sym.name);
+					if (cte) return this._findCteReferences(document, sym.name, model, cte);
 
-					// table_ref that matches a ref() → cross-file references
-					const matchingRef = model.refs.find(r => r.model === resolved.token.name);
-					if (matchingRef) return this._findRefUsages(resolved.token.name, token);
+					// relation that matches a ref() → cross-file references
+					const matchingRef = model.refs.find(r => r.model === sym.name);
+					if (matchingRef) return this._findRefUsages(sym.name, token);
 				}
 
-				if (resolved?.kind === 'table_alias') {
-					return this._findAliasReferences(document, resolved.token.alias!, model);
-				}
-
-				if (resolved?.kind === 'table_qualifier') {
-					// Qualifier `o` in `o.col` — find the alias it resolves to
-					const alias = resolved.token.resolvedTableRef?.alias ?? resolved.token.table;
-					if (alias) return this._findAliasReferences(document, alias, model);
+				if (sym.kind === 'alias') {
+					const relation = [...(model.symbolBindings?.aliasOf ?? [])].find(([, a]) => a === sym)?.[0];
+					if (relation) return this._findAliasReferences(document, relation, model);
 				}
 
 				return [];
@@ -206,7 +218,7 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 	private _findCteReferences(
 		document: vscode.TextDocument,
 		cteName: string,
-		model: import('../../services/parse-service').DocumentModel,
+		model: DocumentModel,
 		cte: import('../../services/parse-service').CteInfo,
 	): vscode.Location[] {
 		const locations: vscode.Location[] = [];
@@ -218,16 +230,11 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 			new vscode.Range(cte.line, defCol, cte.line, defCol + cteName.length),
 		));
 
-		// All table_ref tokens in this file with the same name (FROM/JOIN uses)
-		for (const tok of model.tokens) {
-			if (tok.type !== 'table_ref') continue;
-			if (tok.name !== cteName) continue;
-			// Skip the definition line itself to avoid double-counting
-			if (tok.line === cte.line && tok.col === defCol) continue;
-			locations.push(new vscode.Location(
-				document.uri,
-				new vscode.Range(tok.line, tok.col, tok.line, tok.endCol),
-			));
+		// Every relation-kind reference Sym with the same name (FROM/JOIN uses)
+		for (const s of model.symbols ?? []) {
+			if (!isRelationSym(s) || !s.modifiers.includes('reference')) continue;
+			if (s.name !== cteName) continue;
+			locations.push(new vscode.Location(document.uri, rangeOfSpan(s.span)));
 		}
 
 		this.logger.debug(`ReferenceProvider: found ${locations.length} references for CTE '${cteName}'`);
@@ -236,39 +243,32 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 
 	// ---- Table alias references within the current file ----
 
+	/**
+	 * `relation` is matched by identity (object === ), not by alias name — two nested
+	 * scopes can declare the same alias text, and only symbolBindings tells them apart.
+	 */
 	private _findAliasReferences(
 		document: vscode.TextDocument,
-		alias: string,
-		model: import('../../services/parse-service').DocumentModel,
+		relation: Sym,
+		model: DocumentModel,
 	): vscode.Location[] {
 		const locations: vscode.Location[] = [];
 
-		// Find the table_ref token that declares this alias
-		for (const tok of model.tokens) {
-			if (tok.type !== 'table_ref' || tok.alias !== alias) continue;
-			if (tok.aliasLine === undefined || tok.aliasCol === undefined || tok.aliasEndCol === undefined) continue;
+		const alias = model.symbolBindings?.aliasOf.get(relation);
+		if (!alias) return locations;
 
-			// Alias definition site
-			locations.push(new vscode.Location(
-				document.uri,
-				new vscode.Range(tok.aliasLine, tok.aliasCol, tok.aliasLine, tok.aliasEndCol),
-			));
+		// Alias definition site
+		locations.push(new vscode.Location(document.uri, rangeOfSpan(alias.span)));
 
-			// All column_ref tokens where the qualifier matches this alias
-			for (const colTok of model.tokens) {
-				if (colTok.type !== 'column_ref') continue;
-				if (colTok.table !== alias) continue;
-				if (colTok.tableCol === undefined || colTok.tableEndCol === undefined) continue;
-				locations.push(new vscode.Location(
-					document.uri,
-					new vscode.Range(colTok.tableLine ?? colTok.line, colTok.tableCol, colTok.tableLine ?? colTok.line, colTok.tableEndCol),
-				));
-			}
-
-			break; // alias names are unique within a query
+		// Every column reference bound to this SAME relation (identity, not name)
+		for (const s of model.symbols ?? []) {
+			if (s.kind !== 'column' || !s.modifiers.includes('reference')) continue;
+			if (model.symbolBindings?.sourceOf.get(s) !== relation) continue;
+			const qRange = qualifierRangeOf(s);
+			if (qRange) locations.push(new vscode.Location(document.uri, qRange));
 		}
 
-		this.logger.debug(`ReferenceProvider: found ${locations.length} references for alias '${alias}'`);
+		this.logger.debug(`ReferenceProvider: found ${locations.length} references for alias '${alias.name}'`);
 		return locations;
 	}
 

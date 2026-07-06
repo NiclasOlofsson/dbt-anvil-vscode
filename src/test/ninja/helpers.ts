@@ -5,7 +5,7 @@ import type { SqlToken } from '../../ftl/sql-tokens';
 import type { DialectSymbols } from '../../ftl/sql-tokens';
 import { mergeSqlAndJinjaTokens } from '../../ftl/ninja-sql-tokens';
 import { MAIN_FRAME } from '../../ftl/sqllens/api';
-import type { Sym, SymbolModifier } from '../../ftl/sqllens/api';
+import type { PartSpan, Sym, SymbolModifier } from '../../ftl/sqllens/api';
 import type { SymbolBindings } from '../../ftl/sqllens/extract/symbols';
 import * as vscode from 'vscode';
 
@@ -193,6 +193,41 @@ export function sym(
 			endColumn: opts.endCol ?? col + name.length,
 		},
 		frame: opts.frame ?? MAIN_FRAME,
+	};
+}
+
+/**
+ * Build a column-reference `Sym` with real per-part spans, so `nameRangeOf`/
+ * `qualifierRangeOf` (`src/providers/sql/sym-spans.ts`) compute the same
+ * sub-ranges sqllens itself would for a dotted column ref (`o.customer_id` →
+ * one span for `o`, one for `customer_id`). `line` is 0-based, matching
+ * `sym()` above; each part's `col` is that part's own 0-based start column.
+ */
+export function colSym(
+	line: number,
+	parts: Array<{ name: string; col: number }>,
+	opts: { modifiers?: SymbolModifier[]; frame?: string } = {},
+): Sym {
+	const partSpans: PartSpan[] = parts.map(p => ({
+		start: 0,
+		end: 0,
+		line: line + 1,
+		column: p.col,
+		endLine: line + 1,
+		endColumn: p.col + p.name.length,
+	}));
+	return {
+		kind: 'column',
+		modifiers: opts.modifiers ?? ['reference'],
+		name: parts.map(p => p.name).join('.'),
+		span: {
+			line: line + 1,
+			column: parts[0].col,
+			endLine: line + 1,
+			endColumn: partSpans[partSpans.length - 1].endColumn,
+		},
+		frame: opts.frame ?? MAIN_FRAME,
+		partSpans,
 	};
 }
 

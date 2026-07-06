@@ -4,7 +4,6 @@ import { FixAction, type NinjaViolation } from '../violation';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { matchesStyle, convertToStyle, type IdentifierStyle } from '../identifier-style';
 import { buildInFileRenameOps } from '../../providers/sql/rename-edits';
-import type { PositionResolution } from '../../services/parse-service';
 
 const RULE_ID = 'ninja.cap.identifiers';
 
@@ -54,42 +53,29 @@ export const capIdentifiersRule: TokenRule = {
 
 		const violations: NinjaViolation[] = [];
 
-		for (const token of ctx.model.tokens) {
+		for (const sym of ctx.model.symbols ?? []) {
 			let name: string | undefined;
 			let range: vscode.Range | undefined;
-			let resolved: PositionResolution | undefined;
 
-			if (token.type === 'column_def') {
-				name = token.name;
-				range = new vscode.Range(token.line, token.col, token.line, token.endCol);
-				resolved = { kind: 'column_def', token };
-			} else if (
-				token.type === 'table_ref'
-				&& token.cteDefinition
-			) {
-				name = token.name;
-				range = new vscode.Range(token.line, token.col, token.line, token.endCol);
-				resolved = { kind: 'table_ref', token };
-			} else if (
-				token.type === 'table_ref'
-				&& token.alias !== undefined
-				&& token.aliasLine !== undefined
-				&& token.aliasCol !== undefined
-				&& token.aliasEndCol !== undefined
-			) {
-				name = token.alias;
-				range = new vscode.Range(token.aliasLine, token.aliasCol, token.aliasLine, token.aliasEndCol);
-				resolved = { kind: 'table_alias', token };
+			if (sym.kind === 'column' && sym.modifiers.includes('declaration')) {
+				name = sym.name;
+				range = new vscode.Range(sym.span.line - 1, sym.span.column, sym.span.endLine - 1, sym.span.endColumn);
+			} else if (sym.kind === 'cte' && sym.modifiers.includes('declaration')) {
+				name = sym.name;
+				range = new vscode.Range(sym.span.line - 1, sym.span.column, sym.span.endLine - 1, sym.span.endColumn);
+			} else if (sym.kind === 'alias') {
+				name = sym.name;
+				range = new vscode.Range(sym.span.line - 1, sym.span.column, sym.span.endLine - 1, sym.span.endColumn);
 			}
 
-			if (!name || !range || !resolved) continue;
+			if (!name || !range) continue;
 			if (name.length <= 1) continue;          // single-char short aliases — skip
 			if (matchesStyle(name, style, opts)) continue;
 
 			const suggestion = convertToStyle(name, style, opts);
 			if (!suggestion || suggestion === name) continue;
 
-			const ops = buildInFileRenameOps(resolved, ctx.model, suggestion);
+			const ops = buildInFileRenameOps(sym, undefined, ctx.model, suggestion);
 
 			violations.push({
 				rule: RULE_ID,

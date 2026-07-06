@@ -8,6 +8,7 @@ import { DbtWorkspaceSymbolProvider } from '../providers/workspace-symbol-provid
 import { DbtSignatureHelpProvider } from '../providers/sql/signature-help-provider';
 import { SqlCodeActionProvider } from '../ninja/code-actions/provider';
 import { createMockLogger } from './helpers';
+import { sym, colSym, symbolBindings } from './ninja/helpers';
 import type { ManifestIndexer, ManifestIndex, IndexedModel, IndexedSource, IndexedMacro } from '../indexing/manifest-indexer';
 import type { ManifestLoader } from '../dbt/manifest-loader';
 import type { DbtPathResolver, DbtFileCategory } from '../dbt/dbt-path-resolver';
@@ -229,18 +230,19 @@ describe('DbtReferenceProvider', () => {
 		expect(result[0].uri.fsPath).toContain('orders.sql');
 	});
 
-	it('finds CTE name references via token map', async () => {
+	it('finds CTE name references via symbol stream', async () => {
 		// SQL: with base as (...), final as (select * from base) select * from final
-		// Tokens: table_ref 'base' at line 0 col 5 (CTE def), table_ref 'base' at line 1 col 26 (usage)
+		// Syms: 'base' reference at line 1 col 26 (used inside final's body)
 		const mockModel: Partial<DocumentModel> = {
 			ctes: [
 				{ name: 'base', line: 0, col: 5, endLine: 0, endCol: 20, columns: [] },
 				{ name: 'final', line: 1, col: 5, endLine: 1, endCol: 50, columns: [] },
 			],
-			tokens: [
-				{ type: 'table_ref', name: 'base', line: 1, col: 26, endCol: 30 },
-				{ type: 'table_ref', name: 'final', line: 2, col: 14, endCol: 19 },
+			symbols: [
+				sym('cte', 'base', 1, 26),
+				sym('cte', 'final', 2, 14),
 			],
+			symbolBindings: symbolBindings(),
 			refs: [],
 		};
 		const ps = createMockParseServiceWithModel(mockModel);
@@ -261,20 +263,18 @@ describe('DbtReferenceProvider', () => {
 
 	it('finds table alias references and its column qualifiers', async () => {
 		// FROM orders o  →  o.id, o.amount
+		const ordersRelation = sym('table', 'orders', 1, 5);
+		const ordersAlias = sym('alias', 'o', 1, 12, { modifiers: ['declaration'] });
+		const idCol = colSym(0, [{ name: 'o', col: 5 }, { name: 'id', col: 7 }]);
+		const amountCol = colSym(0, [{ name: 'o', col: 13 }, { name: 'amount', col: 15 }]);
 		const mockModel: Partial<DocumentModel> = {
 			ctes: [],
 			refs: [],
-			tokens: [
-				{
-					type: 'table_ref',
-					name: 'orders',
-					line: 1, col: 5, endCol: 11,
-					alias: 'o',
-					aliasLine: 1, aliasCol: 12, aliasEndCol: 13,
-				},
-				{ type: 'column_ref', name: 'id',     line: 0, col: 7,  endCol: 9,  table: 'o', tableLine: 0, tableCol: 5, tableEndCol: 6 },
-				{ type: 'column_ref', name: 'amount', line: 0, col: 15, endCol: 21, table: 'o', tableLine: 0, tableCol: 13, tableEndCol: 14 },
-			],
+			symbols: [ordersRelation, ordersAlias, idCol, amountCol],
+			symbolBindings: symbolBindings({
+				aliasOf: [[ordersRelation, ordersAlias]],
+				sourceOf: [[idCol, ordersRelation], [amountCol, ordersRelation]],
+			}),
 		};
 		const ps = createMockParseServiceWithModel(mockModel);
 		const localProvider = new DbtReferenceProvider(indexer, createMockLogger(), ps);
@@ -292,26 +292,17 @@ describe('DbtReferenceProvider', () => {
 	});
 
 	it('finds alias references when cursor is on a qualifier (o.col)', async () => {
+		const ordersRelation = sym('table', 'orders', 1, 5);
+		const ordersAlias = sym('alias', 'o', 1, 12, { modifiers: ['declaration'] });
+		const idCol = colSym(0, [{ name: 'o', col: 5 }, { name: 'id', col: 7 }]);
 		const mockModel: Partial<DocumentModel> = {
 			ctes: [],
 			refs: [],
-			tokens: [
-				{
-					type: 'table_ref',
-					name: 'orders',
-					line: 1, col: 5, endCol: 11,
-					alias: 'o',
-					aliasLine: 1, aliasCol: 12, aliasEndCol: 13,
-				},
-				{
-					type: 'column_ref', name: 'id', line: 0, col: 7, endCol: 9,
-					table: 'o', tableLine: 0, tableCol: 5, tableEndCol: 6,
-					resolvedTableRef: {
-						type: 'table_ref', name: 'orders', line: 1, col: 5, endCol: 11,
-						alias: 'o', aliasLine: 1, aliasCol: 12, aliasEndCol: 13,
-					},
-				},
-			],
+			symbols: [ordersRelation, ordersAlias, idCol],
+			symbolBindings: symbolBindings({
+				aliasOf: [[ordersRelation, ordersAlias]],
+				sourceOf: [[idCol, ordersRelation]],
+			}),
 		};
 		const ps = createMockParseServiceWithModel(mockModel);
 		const localProvider = new DbtReferenceProvider(indexer, createMockLogger(), ps);
@@ -373,11 +364,9 @@ describe('DbtRenameProvider', () => {
 		expect(result).toBeUndefined();
 	});
 
-	it('prepareRename returns column range for column_ref token', async () => {
+	it('prepareRename returns column range for a column reference sym', async () => {
 		const mockModel: Partial<DocumentModel> = {
-			tokens: [
-				{ type: 'column_ref', name: 'order_id', line: 0, col: 7, endCol: 15 },
-			],
+			symbols: [colSym(0, [{ name: 'order_id', col: 7 }])],
 		};
 		const ps = createMockParseServiceWithModel(mockModel);
 		const localProvider = new DbtRenameProvider(indexer, createMockLoader(), createMockLogger(), ps);
@@ -390,13 +379,11 @@ describe('DbtRenameProvider', () => {
 		expect(result.range.end.character).toBe(15);
 	});
 
-	it('prepareRename returns alias range for table_alias token', async () => {
+	it('prepareRename returns alias range for an alias sym', async () => {
 		const mockModel: Partial<DocumentModel> = {
-			tokens: [
-				{
-					type: 'table_ref', name: 'orders', line: 1, col: 5, endCol: 11,
-					alias: 'o', aliasLine: 1, aliasCol: 12, aliasEndCol: 13,
-				},
+			symbols: [
+				sym('table', 'orders', 1, 5),
+				sym('alias', 'o', 1, 12, { modifiers: ['declaration'] }),
 			],
 		};
 		const ps = createMockParseServiceWithModel(mockModel);
@@ -409,17 +396,16 @@ describe('DbtRenameProvider', () => {
 		expect(result.range.start.character).toBe(12);
 	});
 
-	it('prepareRename returns alias range for table_qualifier token', async () => {
-		const tableRef = { type: 'table_ref' as const, name: 'orders', line: 1, col: 5, endCol: 11, alias: 'o', aliasLine: 1, aliasCol: 12, aliasEndCol: 13 };
+	it('prepareRename returns alias range for a column qualifier part', async () => {
+		const ordersRelation = sym('table', 'orders', 1, 5);
+		const ordersAlias = sym('alias', 'o', 1, 12, { modifiers: ['declaration'] });
+		const idCol = colSym(0, [{ name: 'o', col: 7 }, { name: 'id', col: 9 }]);
 		const mockModel: Partial<DocumentModel> = {
-			tokens: [
-				tableRef,
-				{
-					type: 'column_ref', name: 'id', line: 0, col: 9, endCol: 11,
-					table: 'o', tableLine: 0, tableCol: 7, tableEndCol: 8,
-					resolvedTableRef: tableRef,
-				},
-			],
+			symbols: [ordersRelation, ordersAlias, idCol],
+			symbolBindings: symbolBindings({
+				aliasOf: [[ordersRelation, ordersAlias]],
+				sourceOf: [[idCol, ordersRelation]],
+			}),
 		};
 		const ps = createMockParseServiceWithModel(mockModel);
 		const localProvider = new DbtRenameProvider(indexer, createMockLoader(), createMockLogger(), ps);
@@ -430,12 +416,10 @@ describe('DbtRenameProvider', () => {
 		expect(result.placeholder).toBe('o');
 	});
 
-	it('prepareRename returns CTE name range for table_ref on CTE', async () => {
+	it('prepareRename returns CTE name range for a cte reference sym', async () => {
 		const mockModel: Partial<DocumentModel> = {
 			ctes: [{ name: 'base', line: 0, col: 5, endLine: 0, endCol: 9, columns: [] }],
-			tokens: [
-				{ type: 'table_ref', name: 'base', line: 1, col: 14, endCol: 18 },
-			],
+			symbols: [sym('cte', 'base', 1, 14)],
 		};
 		const ps = createMockParseServiceWithModel(mockModel);
 		const localProvider = new DbtRenameProvider(indexer, createMockLoader(), createMockLogger(), ps);
@@ -448,11 +432,11 @@ describe('DbtRenameProvider', () => {
 
 	it('provideRenameEdits renames all column occurrences in-file', async () => {
 		const mockModel: Partial<DocumentModel> = {
-			tokens: [
-				{ type: 'column_def', name: 'order_id', line: 0, col: 7, endCol: 15 },
-				{ type: 'column_ref', name: 'order_id', line: 1, col: 4, endCol: 12 },
-				{ type: 'column_ref', name: 'order_id', line: 2, col: 0, endCol: 8 },
-				{ type: 'column_ref', name: 'amount',   line: 1, col: 14, endCol: 20 },
+			symbols: [
+				colSym(0, [{ name: 'order_id', col: 7 }], { modifiers: ['declaration', 'output'] }),
+				colSym(1, [{ name: 'order_id', col: 4 }]),
+				colSym(2, [{ name: 'order_id', col: 0 }]),
+				colSym(1, [{ name: 'amount', col: 14 }]),
 			],
 		};
 		const ps = createMockParseServiceWithModel(mockModel);
@@ -469,12 +453,16 @@ describe('DbtRenameProvider', () => {
 	});
 
 	it('provideRenameEdits renames alias definition and all qualifier spans', async () => {
+		const ordersRelation = sym('table', 'orders', 1, 5);
+		const ordersAlias = sym('alias', 'o', 1, 12, { modifiers: ['declaration'] });
+		const idCol = colSym(0, [{ name: 'o', col: 7 }, { name: 'id', col: 9 }]);
+		const amountCol = colSym(0, [{ name: 'o', col: 12 }, { name: 'amount', col: 14 }]);
 		const mockModel: Partial<DocumentModel> = {
-			tokens: [
-				{ type: 'table_ref', name: 'orders', line: 1, col: 5, endCol: 11, alias: 'o', aliasLine: 1, aliasCol: 12, aliasEndCol: 13 },
-				{ type: 'column_ref', name: 'id',     line: 0, col: 9,  endCol: 11, table: 'o', tableLine: 0, tableCol: 7, tableEndCol: 8 },
-				{ type: 'column_ref', name: 'amount', line: 0, col: 14, endCol: 20, table: 'o', tableLine: 0, tableCol: 12, tableEndCol: 13 },
-			],
+			symbols: [ordersRelation, ordersAlias, idCol, amountCol],
+			symbolBindings: symbolBindings({
+				aliasOf: [[ordersRelation, ordersAlias]],
+				sourceOf: [[idCol, ordersRelation], [amountCol, ordersRelation]],
+			}),
 		};
 		const ps = createMockParseServiceWithModel(mockModel);
 		const localProvider = new DbtRenameProvider(indexer, createMockLoader(), createMockLogger(), ps);
@@ -495,9 +483,9 @@ describe('DbtRenameProvider', () => {
 		// end (Bug #2 regression guard).
 		const mockModel: Partial<DocumentModel> = {
 			ctes: [{ name: 'base', line: 0, col: 5, endLine: 2, endCol: 1, columns: [] }],
-			tokens: [
-				{ type: 'table_ref', name: 'base', line: 0, col: 5, endCol: 9 },  // cte def site (emitted by bridge)
-				{ type: 'table_ref', name: 'base', line: 3, col: 14, endCol: 18 }, // usage in FROM
+			symbols: [
+				sym('cte', 'base', 0, 5, { modifiers: ['declaration'] }), // cte declaration
+				sym('cte', 'base', 3, 14), // usage in FROM
 			],
 		};
 		const ps = createMockParseServiceWithModel(mockModel);
@@ -516,9 +504,9 @@ describe('DbtRenameProvider', () => {
 	it('provideRenameEdits renames CTE from the definition site', async () => {
 		const mockModel: Partial<DocumentModel> = {
 			ctes: [{ name: 'base', line: 0, col: 5, endLine: 2, endCol: 1, columns: [] }],
-			tokens: [
-				{ type: 'table_ref', name: 'base', line: 0, col: 5, endCol: 9 },  // cte def site
-				{ type: 'table_ref', name: 'base', line: 3, col: 14, endCol: 18 }, // usage in FROM
+			symbols: [
+				sym('cte', 'base', 0, 5, { modifiers: ['declaration'] }), // cte declaration
+				sym('cte', 'base', 3, 14), // usage in FROM
 			],
 		};
 		const ps = createMockParseServiceWithModel(mockModel);

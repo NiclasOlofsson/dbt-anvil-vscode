@@ -3,8 +3,10 @@ import type { ManifestIndexer, ManifestIndex } from '../../indexing/manifest-ind
 import type { ManifestLoader } from '../../dbt/manifest-loader';
 import type { ILogger } from '../../types/logger';
 import { ParseService } from '../../services/parse-service';
-import type { PositionResolution } from '../../services/parse-service';
+import type { DocumentModel } from '../../services/parse-service';
+import type { Sym } from '../../ftl/sqllens/api';
 import { buildInFileRenameEdits } from './rename-edits';
+import { isRelationSym, nameRangeOf, qualifierRangeOf, rangeOfSpan } from './sym-spans';
 
 /**
  * Rename ref('model') across the workspace using the manifest dependency graph.
@@ -43,9 +45,10 @@ export class DbtRenameProvider implements vscode.RenameProvider {
 		if (this.parseService) {
 			const model = await this.parseService.getDocumentModel(document);
 			if (model) {
-				const resolved = ParseService.resolveAtPosition(model, position.line, position.character);
-				if (resolved) {
-					const r = this._tokenRenameRange(resolved, model);
+				const sym = ParseService.symAtPosition(model, position.line, position.character);
+				if (sym) {
+					const partIndex = ParseService.partIndexAtPosition(sym, position.line, position.character);
+					const r = this._tokenRenameRange(sym, partIndex, model);
 					if (r) return r;
 				}
 			}
@@ -119,13 +122,14 @@ export class DbtRenameProvider implements vscode.RenameProvider {
 			return edit;
 		}
 
-		// Token-based in-file rename (column, alias, CTE name)
+		// Sym-based in-file rename (column, alias, CTE name)
 		if (this.parseService) {
 			const docModel = await this.parseService.getDocumentModel(document);
 			if (docModel) {
-				const resolved = ParseService.resolveAtPosition(docModel, position.line, position.character);
-				if (resolved) {
-					return buildInFileRenameEdits(resolved, docModel, document.uri, newName);
+				const sym = ParseService.symAtPosition(docModel, position.line, position.character);
+				if (sym) {
+					const partIndex = ParseService.partIndexAtPosition(sym, position.line, position.character);
+					return buildInFileRenameEdits(sym, partIndex, docModel, document.uri, newName);
 				}
 			}
 		}
@@ -208,47 +212,39 @@ export class DbtRenameProvider implements vscode.RenameProvider {
 	}
 
 	/**
-	 * Map a resolved cursor position to a rename range + placeholder.
+	 * Map a resolved cursor symbol to a rename range + placeholder.
 	 * Returns null for positions that are not renameable in-file (e.g. a
-	 * table_ref that isn't a CTE — those are cross-file ref() renames).
+	 * relation that isn't a CTE — those are cross-file ref() renames).
 	 */
 	private _tokenRenameRange(
-		resolved: PositionResolution,
-		model: import('../../services/parse-service').DocumentModel,
+		sym: Sym,
+		partIndex: number | undefined,
+		model: DocumentModel,
 	): { range: vscode.Range; placeholder: string } | null {
-		const { kind, token } = resolved;
-
-		if (kind === 'column' || kind === 'column_def') {
-			return {
-				range: new vscode.Range(token.line, token.col, token.line, token.endCol),
-				placeholder: token.name,
-			};
+		if (sym.kind === 'column') {
+			const isQualifierPart = sym.partSpans !== undefined
+				&& partIndex !== undefined
+				&& partIndex < sym.partSpans.length - 1;
+			if (isQualifierPart) {
+				const qRange = qualifierRangeOf(sym);
+				if (!qRange) return null;
+				const resolved = model.symbolBindings?.sourceOf.get(sym);
+				const placeholder = (resolved && model.symbolBindings?.aliasOf.get(resolved)?.name)
+					?? sym.name.split('.').slice(0, -1).join('.');
+				return { range: qRange, placeholder };
+			}
+			return { range: nameRangeOf(sym), placeholder: sym.name.split('.').pop()! };
 		}
 
-		if (kind === 'table_alias') {
-			if (token.aliasLine === undefined || token.aliasCol === undefined || token.aliasEndCol === undefined || token.alias === undefined) return null;
-			return {
-				range: new vscode.Range(token.aliasLine, token.aliasCol, token.aliasLine, token.aliasEndCol),
-				placeholder: token.alias,
-			};
+		if (sym.kind === 'alias') {
+			return { range: rangeOfSpan(sym.span), placeholder: sym.name };
 		}
 
-		if (kind === 'table_qualifier') {
-			if (token.tableLine === undefined || token.tableCol === undefined || token.tableEndCol === undefined || token.table === undefined) return null;
-			return {
-				range: new vscode.Range(token.tableLine, token.tableCol, token.tableLine, token.tableEndCol),
-				placeholder: token.table,
-			};
-		}
-
-		if (kind === 'table_ref') {
+		if (isRelationSym(sym)) {
 			// Only allow in-file rename for CTEs (not for ref() model names — those go through the manifest path)
-			const isCte = model.ctes.some(c => c.name === token.name);
+			const isCte = model.ctes.some(c => c.name === sym.name);
 			if (!isCte) return null;
-			return {
-				range: new vscode.Range(token.line, token.col, token.line, token.endCol),
-				placeholder: token.name,
-			};
+			return { range: rangeOfSpan(sym.span), placeholder: sym.name };
 		}
 
 		return null;
