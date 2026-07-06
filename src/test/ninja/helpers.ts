@@ -4,6 +4,9 @@ import type { CteInfo, ColumnRefToken, TableRefToken, ColumnDefToken, DocumentMo
 import type { SqlToken } from '../../ftl/sql-tokens';
 import type { DialectSymbols } from '../../ftl/sql-tokens';
 import { mergeSqlAndJinjaTokens } from '../../ftl/ninja-sql-tokens';
+import { MAIN_FRAME } from '../../ftl/sqllens/api';
+import type { Sym, SymbolModifier } from '../../ftl/sqllens/api';
+import type { SymbolBindings } from '../../ftl/sqllens/extract/symbols';
 import * as vscode from 'vscode';
 
 type ConfigOverride = Omit<Partial<NinjaConfig>, 'indentation' | 'layout' | 'capitalisation'> & {
@@ -73,6 +76,8 @@ export const emptyModel: DocumentModel = {
 	sources: [],
 	finalColumns: [],
 	tokens: [],
+	symbols: [],
+	symbolBindings: { aliasOf: new Map(), sourceOf: new Map() },
 	timing: { parseMs: 0, totalMs: 0 },
 };
 
@@ -160,6 +165,45 @@ export function tableRef(name: string, line: number, col: number, alias?: string
 		endCol: col + name.length,
 		alias,
 		...(alias ? { aliasLine: line, aliasCol: col + name.length + 1, aliasEndCol: col + name.length + 1 + alias.length } : {}),
+	};
+}
+
+/**
+ * Build a `Sym` stub (Sym wave 2's replacement for colRef/tableRef/colDef above).
+ * `line`/`endLine` are 0-based, matching every other helper in this file — converted
+ * internally to `Sym.span`'s 1-based `line`/`endLine` (the ANTLR convention sqllens
+ * itself uses). `frame` defaults to `MAIN_FRAME`; pass a CTE/subquery name for a
+ * symbol inside one.
+ */
+export function sym(
+	kind: Sym['kind'],
+	name: string,
+	line: number,
+	col: number,
+	opts: { modifiers?: SymbolModifier[]; frame?: string; endCol?: number; endLine?: number } = {},
+): Sym {
+	return {
+		kind,
+		modifiers: opts.modifiers ?? ['reference'],
+		name,
+		span: {
+			line: line + 1,
+			column: col,
+			endLine: (opts.endLine ?? line) + 1,
+			endColumn: opts.endCol ?? col + name.length,
+		},
+		frame: opts.frame ?? MAIN_FRAME,
+	};
+}
+
+/** Build a `SymbolBindings` from `[relation, alias]` and `[column, source]` pairs. */
+export function symbolBindings(overrides: {
+	aliasOf?: [Sym, Sym][];
+	sourceOf?: [Sym, Sym][];
+} = {}): SymbolBindings {
+	return {
+		aliasOf: new Map(overrides.aliasOf ?? []),
+		sourceOf: new Map(overrides.sourceOf ?? []),
 	};
 }
 
