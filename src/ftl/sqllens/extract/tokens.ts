@@ -8,10 +8,10 @@
  *                    with its table qualifier and a `resolvedTableRef` link.
  *   - `column_def` — every aliased/computed projection (the alias declaration site).
  *
- * `scopeId` is a stable numeric id assigned per `Scope` in the walk. Nothing but
- * `resolveTableRefs` reads it; it exists to reproduce the legacy alias→definition
- * matching (a column's qualifier binds to a table_ref alias declared in the SAME
- * scope).
+ * A column_ref's `resolvedTableRef` (which FROM/JOIN source its qualifier — written
+ * or bare — names) comes from `Qualification.bindingOf`, sqllens's own scope-chain
+ * walk (real correlation support, not a same-scope heuristic): see the `bindingOf`
+ * call in Pass 2 below.
  */
 import type {
 	RefInfo,
@@ -80,7 +80,7 @@ function addAlias(tok: TableRefToken, alias: string | undefined, aliasCst?: CstN
 	// the legacy `synthesized` flag has no analog here.
 }
 
-function tableRefForSource(src: ResolvedSource, scopeId: number, tokens: Token[], dialect: Dialect): TableRefToken | undefined {
+function tableRefForSource(src: ResolvedSource, tokens: Token[], dialect: Dialect): TableRefToken | undefined {
 	if (src.kind === 'table' || src.kind === 'cte') {
 		const source = src.source;
 		const cst = asCst(source.cst);
@@ -115,7 +115,6 @@ function tableRefForSource(src: ResolvedSource, scopeId: number, tokens: Token[]
 				line: nameTok.line - 1,
 				col: nameTok.column,
 				endCol: tagWide ?? nameTok.column + display.length,
-				scopeId,
 			};
 		} else {
 			const s = cst.start;
@@ -125,7 +124,6 @@ function tableRefForSource(src: ResolvedSource, scopeId: number, tokens: Token[]
 				line: s ? s.line - 1 : 0,
 				col: s ? s.column : 0,
 				endCol: tagWide ?? (s ? s.column : 0) + canonical.length,
-				scopeId,
 			};
 		}
 		addAlias(tok, source.alias, aliasCst);
@@ -150,7 +148,6 @@ function tableRefForSource(src: ResolvedSource, scopeId: number, tokens: Token[]
 			aliasCol: s.column,
 			aliasEndCol: s.column + alias.length,
 			isSubquery: true,
-			scopeId,
 		};
 	}
 
@@ -201,7 +198,6 @@ function namePartPos(rawText: string, column: number, line1: number, dialect: Di
 
 function columnRefToken(
 	ref: { parts: string[]; partSpans?: PartSpan[]; cst: unknown },
-	scopeId: number,
 	tokens: Token[],
 	byStart: Map<number, Token>,
 	dialect: Dialect,
@@ -259,7 +255,6 @@ function columnRefToken(
 		line: namePos.line,
 		col: namePos.col,
 		endCol: namePos.endCol,
-		scopeId,
 	};
 
 	if (ref.parts.length >= 2 && qualName !== undefined) {
@@ -279,39 +274,9 @@ function columnRefsOf(body: QueryBody): ReadonlyArray<{ parts: string[]; partSpa
 	return []; // pipe: references live in per-stage child scopes
 }
 
-/**
- * Link each qualified column_ref to the FROM/JOIN table_ref its qualifier names,
- * matched within the same scope. Reproduces the legacy `resolveTableRefs` pass:
- * only alias-bearing table_refs are candidates, and the latest alias definition
- * at-or-before the column line wins (falling back to the latest in scope).
- */
-function resolveTableRefs(tokens: TokenInfo[], sourceRefs: TableRefToken[]): void {
-	const aliased = sourceRefs.filter(t => t.alias !== undefined);
-	for (const tok of tokens) {
-		if (tok.type !== 'column_ref' || !tok.table) continue;
-		const q = tok.table.toLowerCase();
-		const scopeRefs = aliased.filter(tr => tr.scopeId === tok.scopeId);
-
-		let best: TableRefToken | undefined;
-		for (const tr of scopeRefs) {
-			if ((tr.alias ?? '').toLowerCase() !== q) continue;
-			if (tr.line > tok.line) continue;
-			if (!best || tr.line > best.line) best = tr;
-		}
-		if (!best) {
-			for (const tr of scopeRefs) {
-				if ((tr.alias ?? '').toLowerCase() !== q) continue;
-				if (!best || tr.line > best.line) best = tr;
-			}
-		}
-		if (best) tok.resolvedTableRef = best;
-	}
-}
-
 export function extractTokens(parse: SqllensParse, qualification?: Qualification, starExpander?: StarExpander): TokenInfo[] {
 	const neutral = parse.tokens;
 	const scopes = allScopes(parse.scopes);
-	const scopeId = new Map(scopes.map((s, i) => [s, i] as const));
 
 	// Index every lexer token by its start offset so a `partSpans` entry resolves
 	// straight to the raw source token (its quoted text feeds normName).
@@ -319,15 +284,12 @@ export function extractTokens(parse: SqllensParse, qualification?: Qualification
 	for (const t of neutral) byStart.set(t.start, t);
 
 	const tokens: TokenInfo[] = [];
-	const sourceRefs: TableRefToken[] = [];
-	// Maps each resolved FROM/JOIN source to its emitted table_ref token, so a bare column's
+	// Maps each resolved FROM/JOIN source to its emitted table_ref token, so a column's
 	// qualify binding (bindingOf → ResolvedSource) can be pointed at the right table_ref.
 	const srcToRef = new Map<ResolvedSource, TableRefToken>();
 
 	// Pass 1: declaration sites — CTE defs, FROM/JOIN sources, projection aliases.
 	for (const scope of scopes) {
-		const id = scopeId.get(scope)!;
-
 		for (const [, cteRef] of scope.ctes) {
 			const s = asCst(cteRef.def.cst).start;
 			if (!s) continue;
@@ -340,15 +302,13 @@ export function extractTokens(parse: SqllensParse, qualification?: Qualification
 				col: s.column,
 				endCol: s.column + rawName.length,
 				cteDefinition: true,
-				scopeId: id,
 			});
 		}
 
 		for (const src of scope.sources.values()) {
-			const tok = tableRefForSource(src, id, neutral, parse.dialect);
+			const tok = tableRefForSource(src, neutral, parse.dialect);
 			if (tok) {
 				tokens.push(tok);
-				sourceRefs.push(tok);
 				srcToRef.set(src, tok);
 			}
 		}
@@ -363,23 +323,21 @@ export function extractTokens(parse: SqllensParse, qualification?: Qualification
 
 	// Pass 2: column references (need the full table_ref set for resolution).
 	for (const scope of scopes) {
-		const id = scopeId.get(scope)!;
 		for (const ref of columnRefsOf(scope.body)) {
-			const tok = columnRefToken(ref, id, neutral, byStart, parse.dialect);
+			const tok = columnRefToken(ref, neutral, byStart, parse.dialect);
 			if (!tok) continue;
-			// A BARE column (no written qualifier) can't be resolved by resolveTableRefs' alias
-			// matching. The legacy parser would rewrite `city` → `addr.city`; sqllens is read-only
-			// and never rewrites, so consume its column→source binding (Qualification.bindingOf,
-			// keyed off ref.parts) to point the token at the source it binds to. Qualified columns
-			// stay with resolveTableRefs below.
-			if (!tok.table && qualification) {
+			// sqllens is read-only and never rewrites a column's qualifier, so a BARE column
+			// (`city`) and a QUALIFIED one (`o.order_id`) resolve to their FROM/JOIN source the
+			// same way: Qualification.bindingOf — real scope-chain walking with correlation
+			// support, not a qualifier-string/same-scope heuristic. `.table` is upgraded to the
+			// resolved source's canonical alias/name when bindingOf succeeds; the qualifier text
+			// columnRefToken already carries stays as the fallback when it doesn't (e.g. a typo,
+			// or a reference bindingOf can't resolve from here).
+			if (qualification) {
 				const bound = qualification.bindingOf(scope, ref as unknown as ColumnRef)?.source;
 				const rt = bound && srcToRef.get(bound);
 				if (rt) {
 					tok.resolvedTableRef = rt;
-					// Reflect the resolved qualifier the way legacy's mutating qualify did (bare
-					// `city` gains table `addr`): the DocumentModel's `.table` field is "which table
-					// this column belongs to", which providers consume for column navigation.
 					tok.table = rt.alias ?? rt.name;
 				}
 			}
@@ -402,7 +360,6 @@ export function extractTokens(parse: SqllensParse, qualification?: Qualification
 	if (starExpander) {
 		for (const scope of scopes) {
 			if (scope.body.kind !== 'select') continue;
-			const id = scopeId.get(scope)!;
 			for (const p of scope.body.projections) {
 				if (p.expr.kind !== 'star') continue;
 				const expanded = starExpander.expandStar(scope, p);
@@ -421,7 +378,6 @@ export function extractTokens(parse: SqllensParse, qualification?: Qualification
 						line: anchor ? anchor.line - 1 : rt.line,
 						col: anchor ? anchor.column : rt.col,
 						endCol: anchor ? anchor.column : rt.col,
-						scopeId: id,
 						// The qualifier legacy's qualify_columns would have prepended —
 						// keeps ambiguity/alias rules seeing these as qualified refs.
 						table: rt.alias ?? rt.name,
@@ -432,7 +388,6 @@ export function extractTokens(parse: SqllensParse, qualification?: Qualification
 		}
 	}
 
-	resolveTableRefs(tokens, sourceRefs);
 	return tokens;
 }
 

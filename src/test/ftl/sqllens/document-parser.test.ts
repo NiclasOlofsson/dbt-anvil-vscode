@@ -155,12 +155,18 @@ describe('SqllensDocumentParser — column-ref per-part spans (1/2/3-part)', () 
 			table: 'a', tableLine: 2, tableCol: L[2].indexOf('a.name'), tableEndCol: L[2].indexOf('a.name') + 1,
 		});
 
-		// 3-part `db.sch.col`: qualifier is the part DIRECTLY before the column (`sch`),
-		// matching legacy's `Column.table` child — the leading `db` is dropped.
+		// 3-part `db.sch.col`: the WRITTEN qualifier text/span is still `sch` (the part
+		// directly before the column — legacy's `Column.table` child convention, unchanged).
+		// But `sch` names no real FROM/JOIN source in this scope (only `foo as a` is), so
+		// sqllens's own splitColumnRef (src/scope/scope.ts:118-136) correctly falls through
+		// to the unqualified reading — `db` becomes the "column" with `.sch.col` as a
+		// struct-field path — and `bindingOf` resolves it to the sole ambient source, same
+		// as the bare `bare` case above. `.table` reflects that RESOLVED source (`a`), not
+		// the fictional written qualifier; the qualifier's own span still points at `sch`.
 		const c = col('col');
 		expect(c).toMatchObject({
 			name: 'col', line: 3, col: L[3].indexOf('col'), endCol: L[3].indexOf('col') + 3,
-			table: 'sch', tableCol: L[3].indexOf('sch'), tableEndCol: L[3].indexOf('sch') + 3,
+			table: 'a', tableCol: L[3].indexOf('sch'), tableEndCol: L[3].indexOf('sch') + 3,
 		});
 	});
 });
@@ -211,6 +217,11 @@ describe('SqllensDocumentParser — quoted per-part spans (partSpans adoption)',
 		// correct reading. (The legacy parser mis-parses a quoted qualifier here, treating
 		// the quoted part as the column and dropping `.col`; sqllens is more faithful,
 		// an accepted divergence, not a span regression.)
+		// The FROM clause is bare `t` (no alias, and `` `My Table` `` names no real source),
+		// so sqllens's splitColumnRef falls through to the unqualified reading and
+		// `bindingOf` resolves the reference to the actual source `t` — same mechanism as
+		// the 3-part-qualifier case above. `.table` reflects that resolution; the
+		// qualifier's own span still points at the written `` `My Table` ``.
 		const sql = 'select `My Table`.col from t';
 		const model = await parser('databricks').parse(sql);
 		const col = model.tokens.find(
@@ -221,7 +232,7 @@ describe('SqllensDocumentParser — quoted per-part spans (partSpans adoption)',
 			name: 'col',
 			col: sql.indexOf('.col') + 1,
 			endCol: sql.indexOf('.col') + 1 + 'col'.length,
-			table: 'my table', // databricks lowercases the quoted qualifier too
+			table: 't',
 			tableCol: tq,
 			tableEndCol: tq + '`My Table`'.length,
 		});

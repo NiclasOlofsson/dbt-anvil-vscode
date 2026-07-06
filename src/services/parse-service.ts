@@ -129,12 +129,6 @@ export interface ColumnRefToken {
 	tableCol?: number;
 	tableEndCol?: number;
 	/**
-	 * AST index of the nearest enclosing Subquery or CTE node.
-	 * undefined means the token is at the top-level (outside all scopes).
-	 * Set during extractTokens; used by resolveTableRefs for scope matching.
-	 */
-	scopeId?: number;
-	/**
 	 * The table_ref token that this column's qualifier resolves to.
 	 * Populated by the bridge post-processing pass — avoids every provider
 	 * having to re-implement alias → definition-site lookup logic.
@@ -153,12 +147,6 @@ export interface TableRefToken {
 	aliasLine?: number;
 	aliasCol?: number;
 	aliasEndCol?: number;
-	/**
-	 * AST index of the nearest enclosing Subquery or CTE node.
-	 * undefined means the token is at the top-level (outside all scopes).
-	 * Set during extractTokens; used by resolveTableRefs for scope matching.
-	 */
-	scopeId?: number;
 	/**
 	 * True when this token represents a CTE definition site (the `name` in
 	 * `WITH name AS (...)`), not a FROM/JOIN reference. These should not be
