@@ -751,51 +751,51 @@ select count(*), sum(amount)
 
 ---
 
-## Future: sqlglot Optimizer-Inspired Rules & Refactorings
+## Future: Optimizer-Inspired Rules & Refactorings
 
-The vendored sqlglot optimizer (`resources/ftl/vendor/sqlglot/optimizer/`) has 20 modules with SQL analysis and transformation capabilities. Several map directly to new ninja rules and refactoring code actions, using the existing document model (tokens, CTEs, scope nodes, sqlTokens).
+Classic SQL optimizer transforms (eliminate-subqueries, merge-subqueries, predicate pushdown, simplify, canonicalize, …) map directly to new ninja rules and refactoring code actions, using the existing document model (tokens, CTEs, sqlTokens) and the parser's scope/qualification analysis.
 
-**Already covered:** `eliminate_ctes` → unused-cte, `eliminate_joins` → unused-join, `pushdown_projections` → unused-columns, `qualify_columns` → qualified-columns.
+**Already covered:** eliminate-ctes → unused-cte, eliminate-joins → unused-join, pushdown-projections → unused-columns, qualify-columns → qualified-columns.
 
 ### Tier 1 — Pure Ninja Rules (TypeScript only)
 
-**`ninja.structure.subquery-in-from`** ← `eliminate_subqueries.py`
-- Detect subqueries in FROM clauses (scope nodes with `type: 'derived_table'`)
+**`ninja.structure.subquery-in-from`** ← eliminate-subqueries
+- Detect subqueries in FROM clauses (derived-table sources in the scope tree)
 - dbt convention strongly prefers CTEs over inline subqueries
 - Fix: Extract to WITH clause as a new CTE, replace inline with CTE reference
 
-**`ninja.structure.passthrough-cte`** ← `merge_subqueries.py`
+**`ninja.structure.passthrough-cte`** ← merge-subqueries
 - Detect trivial pass-through CTEs: `WITH x AS (SELECT * FROM y) SELECT ... FROM x`
 - Adds unnecessary indirection, obscures lineage
 - Fix: Remove CTE, rewrite references to point at the underlying source
 
-**`ninja.structure.simplify-expression`** ← `simplify.py`
+**`ninja.structure.simplify-expression`** ← simplify
 - Detect trivially simplifiable expressions: `1 = 1`, `TRUE AND x`, `NOT NOT x`, `COALESCE(x, x)`
 - Fix: Replace with simplified form
 
-**`ninja.perf.predicate-pushdown`** ← `pushdown_predicates.py`
+**`ninja.perf.predicate-pushdown`** ← pushdown-predicates
 - Detect WHERE on outer query filtering columns from a single CTE that could be pushed down
 - Hint only (no auto-fix)
 
-**`ninja.perf.correlated-subquery`** ← `unnest_subqueries.py`
+**`ninja.perf.correlated-subquery`** ← unnest-subqueries
 - Detect correlated subqueries (WHERE EXISTS/IN referencing outer columns)
 - Hint only — suggest rewriting as JOIN
 
-**`ninja.structure.unused-columns` auto-fix** ← `pushdown_projections.py`
+**`ninja.structure.unused-columns` auto-fix** ← pushdown-projections
 - Existing rule detects unused CTE columns but has no fix — add auto-fix that removes the column from the SELECT list
 
 ### Tier 2 — Refactoring Code Actions
 
-**Qualify Columns refactoring** ← `qualify_columns.py`
+**Qualify Columns refactoring** ← qualify-columns
 - The parser already calls `qualify()` — qualified output exists
 - Code action: "Qualify all column references" → rewrites `col` to `table.col`
 - Compare pre/post-qualify column tokens; emit TextEdits
 
-**`ninja.convention.canonical-cast`** ← `canonicalize.py`
+**`ninja.convention.canonical-cast`** ← canonicalize
 - Detect non-standard function forms per dialect (e.g., `DATE('...')` → `CAST('...' AS DATE)`, `+` → `CONCAT()`)
 
 ### Tier 3 — Advanced / Future
 
-**Full expression simplification** — Add `simplify()` call in `sql_parser.py`, compare simplified AST with original, return structured diff to TypeScript.
+**Full expression simplification** — simplify the expression tree in the parser, compare with the original, and surface the differences as rule hints.
 
-**Join optimization hints** ← `optimize_joins.py` — Detect CROSS JOINs that should be INNER JOINs based on WHERE predicates.
+**Join optimization hints** ← optimize-joins — Detect CROSS JOINs that should be INNER JOINs based on WHERE predicates.

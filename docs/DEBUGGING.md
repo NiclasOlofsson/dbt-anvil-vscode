@@ -1,6 +1,6 @@
 # Debugging SQL: Architecture and Implementation
 
-This document explains how the dbt Anvil SQL debugger works — conceptually, architecturally, and in implementation detail. It covers `debug-adapter.ts`, `debug-symbols.ts`, `debug-pipeline-provider.ts`, the Python bridge, and their collective integration with the VS Code Debug Adapter Protocol.
+This document explains how the dbt Anvil SQL debugger works — conceptually, architecturally, and in implementation detail. It covers `debug-adapter.ts`, `debug-symbols.ts`, `debug-pipeline-provider.ts`, the native SQL parser (sqllens), the Python bridge (dbt compilation), and their collective integration with the VS Code Debug Adapter Protocol.
 
 ---
 
@@ -106,17 +106,17 @@ This is exactly why DAP works for SQL debugging even though SQL isn't an imperat
 │   SqlDebugAdapter        │
 │   (debug-adapter.ts)     │
 │                          │
+│  ┌───────────────────┐   │
+│  │ Debug Symbols     │   │  in-process (sqllens parser)
+│  │ (debug-symbols.ts)│   │
+│  └───────────────────┘   │
 │  ┌───────────────────┐   │     stdin/stdout JSON
-│  │ Debug Symbols     │   │◄──────────────────────┐
-│  │ (debug-symbols.ts)│   │                       │
-│  └───────────────────┘   │               ┌───────┴──────┐
-│  ┌───────────────────┐   │               │  bridge.py   │
-│  │ Compile Cache     │   │               │  (Python)    │
-│  │ (compile-cache.ts)│   │               │  • sqlglot   │
-│  └───────────────────┘   │               │  • dbt core  │
-│  ┌───────────────────┐   │               └──────────────┘
-│  │ Database Provider │   │
-│  │ (runs queries)    │   │
+│  │ Compile Cache     │   │◄──────────────────────┐
+│  │ (compile-cache.ts)│   │               ┌───────┴──────┐
+│  └───────────────────┘   │               │  bridge.py   │
+│  ┌───────────────────┐   │               │  (Python)    │
+│  │ Database Provider │   │               │  • dbt core  │
+│  │ (runs queries)    │   │               └──────────────┘
 │  └───────────────────┘   │
 └──────────────────────────┘
 ```
@@ -145,50 +145,37 @@ In the `initialize` response, the adapter declares what it supports:
 
 ## Part III: The Implementation
 
-### 3.1 The Python Bridge — Why Python in a Node.js Extension?
+### 3.1 The Two Runtimes — Native Parsing, Python for dbt Itself
 
-VS Code extensions run in Node.js. dbt runs in Python. The SQL parser we need (sqlglot) is a Python library with no JavaScript equivalent of comparable quality. We considered several approaches:
+The debugger spans two runtimes, each doing the only job it has to:
 
-- **Pure JavaScript SQL parsing**: Libraries like `node-sql-parser` exist but can't handle dbt's Jinja-SQL dialect, lack CTE decomposition, and have poor dialect support for DuckDB/Snowflake/BigQuery.
-- **WASM-compiled sqlglot**: sqlglot is pure Python but uses dynamic features (metaclasses, eval-based AST construction) that don't compile to WASM cleanly.
-- **Subprocess per command**: Spawning `python -c "..."` for each operation adds ~500ms startup overhead per call (Python interpreter + dbt manifest loading).
-- **Persistent child process**: Spawn Python once, keep it alive, communicate via line-buffered JSON on stdin/stdout.
+- **SQL understanding is native TypeScript.** Symbol emission, source mapping, and query decomposition all run in-process on the extension's SQL parser (sqllens — see `src/ftl/sqllens/`). No subprocess, no round-trip, synchronous parses.
+- **Jinja compilation is dbt's job, and dbt runs in Python.** `bridge-runner.ts` spawns `bridge.py` at first use and keeps it alive for the VS Code session. Commands are serialized through a queue — one request at a time, FIFO order. The bridge loads dbt's manifest once and caches it, so repeated compiles are fast (~50-200ms).
 
-We chose the persistent child process. `bridge-runner.ts` spawns `bridge.py` at first use and keeps it alive for the duration of the VS Code session. Commands are serialized through a queue — one request at a time, FIFO order. The bridge loads dbt's manifest once and caches it, making subsequent calls fast (~50-200ms for compile, ~10ms for decompose).
+The debugger uses exactly one bridge command:
 
-#### Bridge Commands Used by the Debugger
+**`compile_inline`** — Runs `dbt compile --inline <sql>` to resolve Jinja templates without executing. The debugger sends the *marker-annotated* source through this (see 3.2) — the `@dbg` comment markers are plain SQL comments, so they survive dbt compilation intact and come out attached to the compiled SQL.
 
-**`emit_debug_symbols`** — The compilation step. Takes source SQL, dialect, and schema mapping. Returns annotated SQL with `@dbg` markers injected and a symbol table.
+Frame extraction is native. `SqllensDocumentParser.decomposeQuery()` (`src/ftl/sqllens/decompose.ts`) takes the compiled SQL and returns:
 
-The bridge tokenizes the source using sqlglot's tokenizer, identifies Jinja regions (blanked to preserve offsets), classifies each Jinja span as `ref()`, `source()`, or generic macro, and emits four marker types:
+- `frames[]`: Each CTE and the final SELECT, with name, type, and line range
+- `clauses{}`: Per-frame breakdown into FROM, JOIN, WHERE, GROUP BY, HAVING, SELECT — each with SQL text, source line, and execution order
+- `refs{}`: Per-frame list of referenced CTEs (for the dependency DAG)
+
+Before extraction runs, a subquery-promotion pass lifts any inline subquery in a `FROM` or `JOIN` clause out into a synthetic named CTE (named after the subquery's alias, or `__subq_N__` if none), and `UNION` legs are promoted the same way. This means the rest of the pipeline always sees a flat list of named CTEs — no special-casing for inline subqueries anywhere downstream. Clause SQL is produced by *slicing the source text at CST spans* — the parser never regenerates SQL, so what you step through is byte-for-byte what the database sees. The `order` field on each clause reflects SQL's logical execution order (FROM=0, JOIN=1, WHERE=2, etc.), which is the order the debugger steps through.
+
+### 3.2 Debug Symbols and Source Maps (`debug-symbols.ts`)
+
+#### Marker Injection
+
+`emitDebugSymbols()` is pure TypeScript. sqllens parses the (jinja-blanked) source directly and `deriveSymbols` yields its semantic `Sym` model — every identifier, keyword, and literal with its frame attribution (`Sym.frame`: which CTE body owns it, `MAIN_FRAME` for the final select). Jinja tags are classified off the same parse's tag AST: `ref()`, `source()`, or generic macro. From that, `injectMarkers()` annotates the *raw source* with four marker types:
 
 - `/* @dbg:L{line}:C{col}:{role} */` around each SQL token
 - `/* @macro:start name="..." source_line=N */` … `/* @macro:end */` around macro expansions
 - `/* @ref:name="..." source_line=N */` … `/* /@ref */` around `ref()` expansions
 - `/* @source:schema="..." name="..." source_line=N */` … `/* /@source */` around `source()` expansions
 
-**`decompose_query`** — The frame extraction step. Takes compiled SQL (with markers) and returns:
-
-- `frames[]`: Each CTE and the final SELECT, with name, type, and line range
-- `clauses{}`: Per-frame breakdown into FROM, JOIN, WHERE, GROUP BY, HAVING, SELECT — each with SQL text, source line, and execution order
-- `refs{}`: Per-frame list of referenced CTEs (for the dependency DAG)
-
-Before extraction runs, a `promote_subqueries()` pass rewrites the AST in-place: any inline subquery in a `FROM` or `JOIN` clause is lifted out into a synthetic named CTE (named after the subquery's alias, or `__subq_N__` if none). This means the rest of the pipeline always sees a flat list of named CTEs — no special-casing for inline subqueries anywhere downstream.
-
-The decomposition uses sqlglot's AST parser. It walks the `WITH` clause to extract CTEs, then for each CTE's body, identifies clause boundaries by AST node type. The `order` field on each clause reflects SQL's logical execution order (FROM=0, JOIN=1, WHERE=2, etc.), which is the order the debugger steps through.
-
-**`compile_inline`** — Runs `dbt compile --inline <sql>` to resolve Jinja templates without executing. Used for the initial compilation before symbol injection.
-
-### 3.2 Debug Symbols and Source Maps (`debug-symbols.ts`)
-
-#### Marker Injection
-
-`emitDebugSymbols()` orchestrates the bridge call and parses the response. The bridge does the heavy lifting (tokenization, Jinja blanking, marker placement), and the TypeScript side parses the annotated SQL into a `SourceMap`.
-
-The injection is a two-pass process inside the bridge:
-
-1. **Token pass** (right-to-left): For each SQL token identified by sqlglot, insert `/* @dbg:L:C:role */` before and `/* /@dbg */` after. Right-to-left insertion preserves character offsets for earlier tokens.
-2. **Span pass**: Insert `@macro`, `@ref`, and `@source` span markers around Jinja regions, with shift compensation for markers already inserted in pass 1.
+The annotated source then goes through `compile_inline` — dbt expands the Jinja, the comment markers ride along unchanged, and the compiled output arrives already annotated. There is no separate "inject into compiled SQL" step.
 
 #### The Four-Marker System
 
@@ -233,9 +220,9 @@ When the user presses F5:
 1. **`initialize`** — Adapter declares DAP capabilities
 2. **`launch`** — The main setup:
    - Detect the SQL statement under cursor (or all statements if `scope: 'all'`)
-   - Call bridge `compile_inline` to resolve Jinja
-   - Call bridge `emit_debug_symbols` to inject markers and get the source map
-   - Call bridge `decompose_query` to extract frames, clauses, and refs
+   - Call `emitDebugSymbols()` (native, sqllens) to inject `@dbg` markers into the raw source
+   - Call bridge `compile_inline` on the annotated source — dbt resolves Jinja, markers ride through
+   - Call `decomposeQuery()` (native, sqllens) to extract frames, clauses, and refs
    - Apply line offsets (if cursor selected a statement mid-file)
    - Remap frame/clause positions from compiled space to source space via `_remapPositions()`
    - If `noDebug: true`: execute the full query and terminate
@@ -423,9 +410,10 @@ When a model references a database view (not a table), the database inlines the 
 | File | Role |
 |------|------|
 | `src/dbt/debug-adapter.ts` | DAP adapter — handles all protocol requests, manages frames/clauses/stepping/caching |
-| `src/dbt/debug-symbols.ts` | Symbol injection (`emitDebugSymbols`) and source map parsing (`parseSourceMap`) |
+| `src/dbt/debug-symbols.ts` | Symbol emission (`emitDebugSymbols`, sqllens `Sym`-backed), marker injection, and source map parsing (`parseSourceMap`) |
+| `src/ftl/sqllens/decompose.ts` | Native frame extraction — compiled SQL → frames/clauses/refs by CST-span slicing, with subquery/UNION promotion |
 | `src/dbt/debug-pipeline-provider.ts` | TreeView provider for the Data Pipeline view in the Debug sidebar |
 | `src/dbt/debug-config-provider.ts` | Debug configuration provider (launch config resolution) |
 | `src/dbt/compile-cache.ts` | Shared in-memory cache for compiled SQL, with mtime/hash validation |
 | `src/dbt/bridge-runner.ts` | Persistent Python child process manager — spawns `bridge.py`, serializes commands |
-| `resources/bridge/bridge.py` | Python bridge — `emit_debug_symbols` (tokenization + marker injection), `decompose_query` (AST → frames/clauses/refs), `compile_inline` (Jinja resolution) |
+| `resources/bridge/bridge.py` | Python bridge — `compile_inline` (dbt Jinja resolution) and the other dbt-side commands |

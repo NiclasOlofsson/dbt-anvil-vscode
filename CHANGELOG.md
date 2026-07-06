@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Native SQL engine — sqlglot retired** — SQL intelligence (hover, definition, rename, diagnostics, formatting, column lineage, debug symbols) now runs entirely on sqllens, a native TypeScript parser built for this extension. The Pyodide/sqlglot WASM worker pool, the vendored sqlglot tree, the `dbt-anvil.parser.engine` setting, and the `pyodide` dependency are gone. Parsing is in-process and synchronous: no worker boot at activation, lower memory, and a smaller VSIX.
+- **Multi-statement files** — scratch files with `;`-separated statements are parsed per statement; refs, tokens, and diagnostics come from every statement, not just the first.
+- **Star expansion without a warehouse connection** — `select *` through CTEs and subqueries now expands from the model text alone; schema enrichment still adds warehouse columns when available.
+- **Debugger internals** — symbol emission and query decomposition moved from the Python bridge to the native parser. Clause SQL is sliced from the source text at exact parser spans instead of being regenerated, so what you step through is byte-for-byte what runs.
+
 ## 0.1.14
 
 A packaging hotfix. The `0.1.13` VSIX accidentally bundled the in-progress `experiments/` folder, the GitHub Pages site under `docs/`, and a handful of internal development docs — pushing the install size from a few megabytes to over 200. This release tightens `.vscodeignore` so only what the extension actually needs at runtime ships: `dist/`, `resources/`, `syntaxes/`, the duckdb and pyodide native modules, `README.md`, `CHANGELOG.md`, and `LICENSE`. Functionally identical to `0.1.13`.

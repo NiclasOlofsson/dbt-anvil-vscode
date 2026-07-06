@@ -7,9 +7,11 @@ Ideas and planned work for the extension. Rough notes, not commitments — discu
 Currently it can provide a trace through the model on a column level for concatenated columns, e.g. fullname -> firstname, lastname.
 However,it can't visualize aggregations correctly, like count(orders). It should be able to at least visualize these aggregations somehow. Maybe a dotted line or something to the model where it is origin is (like orders for count(orders))
 
-## Process bridge improvement considerations _(done)_
+## Process bridge improvement considerations _(superseded)_
 
-They're completely separable. The four sqlglot handlers (parse_document, get_column_lineage, get_scope_columns, get_columns) are:
+Superseded: parsing, column lineage, and scope analysis left Python entirely — they run in the extension's native TypeScript parser now. The bridge carries only dbt operations, so the contention this item addressed no longer exists. Original notes kept below for context.
+
+They're completely separable. The four parse handlers (parse_document, get_column_lineage, get_scope_columns, get_columns) are:
 
 Zero dbt imports
 Zero filesystem access
@@ -61,7 +63,7 @@ VS Code has a rich context menu of language features. We already cover most of t
 
 ## Structure-aware smart completion
 
-Because we have a real SQL parser (sqlglot), completions can understand query structure and apply coordinated edits — not just insert text at the cursor. VS Code's `CompletionItem.additionalTextEdits` lets a completion atomically edit multiple locations in the document when accepted, exactly like TypeScript auto-imports.
+Because we have a real SQL parser (sqllens), completions can understand query structure and apply coordinated edits — not just insert text at the cursor. VS Code's `CompletionItem.additionalTextEdits` lets a completion atomically edit multiple locations in the document when accepted, exactly like TypeScript auto-imports.
 
 **Examples:**
 
