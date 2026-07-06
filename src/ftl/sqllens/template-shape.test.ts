@@ -50,10 +50,13 @@ describe('classifyMacroShape — literal call args bound to parameters', () => {
 		})).toBe('conjunct');
 	});
 
-	it('pins the where-mode call as unclassified — no where-clause shape exists yet', () => {
-		// conjunct's `AND 1=1` fill would regress the `from t {{ m('where') }}`
-		// slot, and the shape vocabulary has no where-clause entry. Stays the
-		// identifier fill until sqllens ships one (channel: sqllens-anvil).
-		expect(classifyMacroShape(MACRO, call('generic_is_deleted', ['ve.is_deleted', 'where']))).toBeUndefined();
+	it("classifies the where-mode call as where-clause via the bound 'stat' literal", () => {
+		// sqllens a269062 shipped the where-clause shape (fills WHERE 1=1),
+		// valid in both where-mode slots (`from t <tag>` and `on (...) <tag>`).
+		expect(classifyMacroShape(MACRO, call('generic_is_deleted', ['ve.is_deleted', 'where']))).toBe('where-clause');
+	});
+
+	it('classifies a WHERE-leading macro body as where-clause without call context', () => {
+		expect(classifyMacroShape('{% macro m(c) %}where {{ c }} = false{% endmacro %}')).toBe('where-clause');
 	});
 });

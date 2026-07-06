@@ -386,13 +386,10 @@ describe('SqllensDocumentParser — parse-failure paths', () => {
 		expect((model.parseWarnings ?? []).filter(w => w.type === 'syntax_error')).toEqual([]);
 	});
 
-	// TRIPWIRE (it.fails): the where-mode slot from gold__vendor.sql — after a
-	// complete ON predicate, before UNION ALL. No shipped expansion shape can
-	// fill it (conjunct regresses the `from t {{ m('where') }}` slot), so the
-	// identifier fill produces a syntax error on a valid model. Goes RED the
-	// moment sqllens ships a where-clause shape (channel: sqllens-anvil) —
-	// flip to a plain `it` then.
-	it.fails('parses a where-mode macro after a complete ON predicate', async () => {
+	// The where-mode slot from gold__vendor.sql — after a complete ON
+	// predicate, before UNION ALL. The where-clause shape (sqllens a269062)
+	// fills WHERE 1=1, valid here and in the `from t {{ m('where') }}` slot.
+	it('parses a where-mode macro after a complete ON predicate', async () => {
 		const sql = [
 			'select ve.vendorkey',
 			'from gold__vendor ve',
@@ -406,12 +403,11 @@ describe('SqllensDocumentParser — parse-failure paths', () => {
 		expect((model.parseWarnings ?? []).filter(w => w.type === 'syntax_error')).toEqual([]);
 	});
 
-	// TRIPWIRE (it.fails): a syntax-error MESSAGE must quote raw source, never
-	// the placeholder fill ("mismatched input 'jjjj…'" leaks mask text the user
-	// never wrote). Provider-less unknown macro, so this pin stays meaningful
-	// independently of the where-clause shape work (channel: sqllens-anvil).
-	// Flip to a plain `it` when the message fix ships.
-	it.fails('never quotes placeholder fill text in a syntax-error message', async () => {
+	// A syntax-error MESSAGE must quote raw source, never the placeholder fill
+	// ("mismatched input 'jjjj…'" leaked mask text the user never wrote).
+	// Provider-less unknown macro, so this holds independently of shape
+	// classification (sqllens a269062 shipped the both-surfaces scrub).
+	it('never quotes placeholder fill text in a syntax-error message', async () => {
 		const sql = [
 			'select a',
 			'from t',

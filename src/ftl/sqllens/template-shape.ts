@@ -11,11 +11,10 @@
  * ON/WHERE expression) classifies as `conjunct` (sqllens 012caf8, fills `AND 1=1`);
  * everything else returns `undefined` (the identifier fill).
  *
- * Why a WHERE-leading body is NOT `conjunct`: the where-mode variant of the same macro
- * family sits after a bare `FROM t`, where the identifier fill parses (as an alias)
- * and `AND 1=1` breaks — and sqllens's lexical slot guard cannot separate that slot
- * from the ON-trailing one (both end in an operand word), so answering `conjunct`
- * there would be a 0->1 regression. Where-mode macros keep the identifier fill.
+ * A WHERE-leading body (or a where-mode call of the mode-as-argument family)
+ * classifies as `where-clause` (sqllens a269062, fills `WHERE 1=1`) — valid after a
+ * bare `FROM t` and after a complete ON predicate alike, the two slots the family
+ * actually occupies. It is never `conjunct`: `AND 1=1` breaks the `FROM t` slot.
  *
  * Why `statement` and never `relation`: both fill `SELECT 1`, but `relation` is the shape
  * sqllens flags as a 0->1 regression risk in a bare `from {{ m() }}` slot (fills to the
@@ -59,6 +58,7 @@ export function classifyMacroShape(macroSql: string | undefined, call?: Template
 		.trim();
 	if (/^(with|select)\b/i.test(body)) return 'statement';
 	if (/^(and|or)\b/i.test(body)) return 'conjunct';
+	if (/^where\b/i.test(body)) return 'where-clause';
 	return undefined;
 }
 
