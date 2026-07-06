@@ -39,25 +39,6 @@
 					"endsPattern": "^\\[watch\\] build finished"
 				}
 			}
-		},
-		{
-			"label": "metricserver",
-			"type": "shell",
-			"command": "npm run metricserver:start",
-			"isBackground": true,
-			"group": "test",
-			"problemMatcher": {
-				"pattern": {
-					"regexp": "^\\[metricserver\\] ERROR",
-					"file": 1,
-					"message": 2
-				},
-				"background": {
-					"activeOnStart": true,
-					"beginsPattern": "^\\[metricserver\\] Starting",
-					"endsPattern": "^\\[metricserver\\] Ready"
-				}
-			}
 		}
 	]
 }
