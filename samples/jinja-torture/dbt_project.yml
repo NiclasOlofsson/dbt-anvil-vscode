@@ -1,0 +1,13 @@
+name: 'jinja_torture'
+version: '1.0.0'
+config-version: 2
+
+profile: 'jinja_torture'
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+
+# A purpose-built torture corpus for the SQL/jinja parser: every model distills
+# a templating shape that has bitten a real project (each model names its
+# origin in a header comment). Wired into src/test/ftl/jinja-torture.test.ts —
+# parse gates, format-idempotence gates, and ninja-diagnostic gates per model.

@@ -379,8 +379,8 @@ describe('SqllensDocumentParser — parse-failure paths', () => {
 			'select ve.vendorkey',
 			'from gold__vendor ve',
 			'left outer join gold__chain ca',
-			"    on (ve.chainkey = ca.chainkey and ca.gold_sourcesystemkey='d365')",
-			"{{ generic_is_deleted('ve.is_deleted','and') }}",
+			'    on (ve.chainkey = ca.chainkey and ca.gold_sourcesystemkey=\'d365\')',
+			'{{ generic_is_deleted(\'ve.is_deleted\',\'and\') }}',
 		].join('\n');
 		const model = await new SqllensDocumentParser({ adapterType: 'databricks', templateProvider: MODE_ARG_PROVIDER }).parse(sql);
 		expect((model.parseWarnings ?? []).filter(w => w.type === 'syntax_error')).toEqual([]);
@@ -394,10 +394,10 @@ describe('SqllensDocumentParser — parse-failure paths', () => {
 			'select ve.vendorkey',
 			'from gold__vendor ve',
 			'left outer join gold__chain ca',
-			"    on (ve.chainkey = ca.chainkey and ca.gold_sourcesystemkey='d365')",
-			"{{ generic_is_deleted('ve.is_deleted','where') }}",
+			'    on (ve.chainkey = ca.chainkey and ca.gold_sourcesystemkey=\'d365\')',
+			'{{ generic_is_deleted(\'ve.is_deleted\',\'where\') }}',
 			'union all',
-			"select '-1' as vendorkey",
+			'select \'-1\' as vendorkey',
 		].join('\n');
 		const model = await new SqllensDocumentParser({ adapterType: 'databricks', templateProvider: MODE_ARG_PROVIDER }).parse(sql);
 		expect((model.parseWarnings ?? []).filter(w => w.type === 'syntax_error')).toEqual([]);
@@ -412,7 +412,7 @@ describe('SqllensDocumentParser — parse-failure paths', () => {
 			'select a',
 			'from t',
 			'join u on (t.a = u.a)',
-			"{{ some_unknown_macro('t.x','where') }}",
+			'{{ some_unknown_macro(\'t.x\',\'where\') }}',
 			'union all',
 			'select b from v',
 		].join('\n');

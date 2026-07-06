@@ -33,7 +33,7 @@ describe('classifyMacroShape — literal call args bound to parameters', () => {
 	// and-mode call classify as a conjunct.
 	const MACRO = '{% macro generic_is_deleted(column_name,stat) %}\n    {{ stat }} {{ column_name }}=false\n{% endmacro %}';
 
-	it("classifies the and-mode call as conjunct via the bound 'stat' literal", () => {
+	it('classifies the and-mode call as conjunct via the bound \'stat\' literal', () => {
 		expect(classifyMacroShape(MACRO, call('generic_is_deleted', ['ve.is_deleted', 'and']))).toBe('conjunct');
 	});
 
@@ -50,7 +50,7 @@ describe('classifyMacroShape — literal call args bound to parameters', () => {
 		})).toBe('conjunct');
 	});
 
-	it("classifies the where-mode call as where-clause via the bound 'stat' literal", () => {
+	it('classifies the where-mode call as where-clause via the bound \'stat\' literal', () => {
 		// sqllens a269062 shipped the where-clause shape (fills WHERE 1=1),
 		// valid in both where-mode slots (`from t <tag>` and `on (...) <tag>`).
 		expect(classifyMacroShape(MACRO, call('generic_is_deleted', ['ve.is_deleted', 'where']))).toBe('where-clause');

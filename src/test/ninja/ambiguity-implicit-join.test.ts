@@ -155,10 +155,10 @@ describe(`${RULE} — live parse, templated left outer join`, () => {
 			'select ve.vendorkey',
 			'from {{ ref(\'gold__vendor\') }} ve',
 			'left outer join {{ ref(\'gold__chain\') }} ca',
-			"    on (ve.chainkey = ca.chainkey and ca.gold_sourcesystemkey='d365')",
+			'    on (ve.chainkey = ca.chainkey and ca.gold_sourcesystemkey=\'d365\')',
 			'left outer join {{ ref(\'gold__project\') }} pr',
 			'    on (ve.projectkey = pr.projectkey)',
-			"{{ generic_is_deleted('ve.is_deleted','where') }}",
+			'{{ generic_is_deleted(\'ve.is_deleted\',\'where\') }}',
 		].join('\n');
 		const parsed = await new SqllensDocumentParser({ adapterType: 'databricks' }).parse(sql);
 		const doc = mockDocument(sql);

@@ -30,6 +30,9 @@ function findModelFiles(): string[] {
 	const out: string[] = [];
 	if (!fs.existsSync(SAMPLES_ROOT)) return out;
 	for (const project of fs.readdirSync(SAMPLES_ROOT)) {
+		// jinja-torture deliberately carries broken and rule-violating models;
+		// its gates are curated per model in src/test/ftl/jinja-torture.test.ts.
+		if (project === 'jinja-torture') continue;
 		const modelsDir = path.join(SAMPLES_ROOT, project, 'models');
 		if (!fs.existsSync(modelsDir)) continue;
 		walk(modelsDir, out);
