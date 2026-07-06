@@ -87,6 +87,10 @@ function tableRefForSource(src: ResolvedSource, scopeId: number, tokens: Token[]
 		const aliasCst = source.aliasCst ? asCst(source.aliasCst) : undefined;
 		const canonical = src.kind === 'cte' ? src.ref.def.name : src.name[src.name.length - 1];
 		const nameTok = lastNameToken(tokens, cst, aliasCst);
+		// Mirrors sqllens's own sourceKey rule (scope.ts:587): a physical table's last
+		// name part folds as 'table' (bigquery preserves its case); a CTE reference
+		// folds as 'other', same as any other identifier.
+		const kind = src.kind === 'table' ? 'table' as const : 'other' as const;
 
 		// R3: a templated relation (`{{ ref('x') }}` in a FROM/JOIN slot) parses over a
 		// length-preserving placeholder, so its physical name token is filler (`jjj…`). The
@@ -107,7 +111,7 @@ function tableRefForSource(src: ResolvedSource, scopeId: number, tokens: Token[]
 			const display = template ? canonical : nameTok.text;
 			tok = {
 				type: 'table_ref',
-				name: normName(display, dialect),
+				name: normName(display, dialect, kind),
 				line: nameTok.line - 1,
 				col: nameTok.column,
 				endCol: tagWide ?? nameTok.column + display.length,
@@ -117,7 +121,7 @@ function tableRefForSource(src: ResolvedSource, scopeId: number, tokens: Token[]
 			const s = cst.start;
 			tok = {
 				type: 'table_ref',
-				name: normName(canonical, dialect),
+				name: normName(canonical, dialect, kind),
 				line: s ? s.line - 1 : 0,
 				col: s ? s.column : 0,
 				endCol: tagWide ?? (s ? s.column : 0) + canonical.length,

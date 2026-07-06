@@ -13,7 +13,8 @@
  * read (`start`/`stop` tokens, each with `start`/`stop`/`line`/`column`/`text`)
  * are stable and this keeps the boundary narrow.
  */
-import type { Dialect, QueryBody, QueryExpr, Scope, ScopeTree, SelectExpr, SyntaxDiagnostic, Token } from '../api';
+import { foldIdentifier } from '../api';
+import type { Dialect, IdentKind, QueryBody, QueryExpr, Scope, ScopeTree, SelectExpr, SyntaxDiagnostic, Token } from '../api';
 
 /** One antlr lexer token, as much of it as the extractors read. */
 export interface AntlrToken {
@@ -53,65 +54,25 @@ export function tokenPos(t: AntlrToken): Pos {
 	return { line: t.line - 1, col: t.column, endCol: t.column + (t.text?.length ?? 0) };
 }
 
-/** How a dialect folds identifier case, split by whether the identifier is quoted. */
-type Casing = 'lower' | 'upper' | 'preserve';
-interface NormPolicy {
-	/** Casing applied to an UNQUOTED identifier. */
-	unquoted: Casing;
-	/** Casing applied to a QUOTED identifier (after its delimiters are stripped). */
-	quoted: Casing;
-}
-
 /**
- * Per-dialect identifier-normalization policy. Each dialect has a NORMALIZATION_STRATEGY
- * that determines how identifiers are cased (uppercase, lowercase, or preserved).
- * These policies are the extension's identifier-casing behavior (snowflake `Foo_Bar`→`FOO_BAR`,
- * `"Out_Col"`→`Out_Col`; tsql `[Mixed]`→`mixed`; postgres unquoted lowered / quoted preserved).
- *
- * Strategy → policy:
- *   - CASE_INSENSITIVE → both lowercased (quoted included): databricks, tsql,
- *     bigquery, redshift, duckdb, trino.
- *   - UPPERCASE → unquoted uppercased, quoted preserved: snowflake.
- *   - LOWERCASE → unquoted lowercased, quoted preserved: postgres.
+ * Normalize a SQL identifier's NAME with sqllens's own dialect fold
+ * (`foldIdentifier` — the same vendor-doc-verified rows its scope binding
+ * uses), so the extension and the parser can never disagree on identity:
+ *   - databricks/tsql/bigquery/redshift/duckdb/trino: lowercased, quoted
+ *     included (`Upper_Col` → `upper_col`, `` `Mixed` `` → `mixed`) — except
+ *     bigquery TABLE names, which preserve case (`kind: 'table'`; tables are
+ *     case-sensitive there, columns are not).
+ *   - snowflake: unquoted uppercased (`Foo_Bar` → `FOO_BAR`), quoted
+ *     preserved (`"Out_Col"` → `Out_Col`).
+ *   - postgres: unquoted lowercased, quoted preserved.
+ * `kind` mirrors sqllens's sourceKey: physical table name parts fold as
+ * 'table'; aliases, CTE names, and columns fold as 'other' (the default).
+ * Delimiters are dialect-scoped and unescaped by the fold (doubling).
+ * This is a NAME-only transform — source spans (col/endCol) are computed from
+ * the raw token text and are never touched by it.
  */
-const NORM_POLICY: Record<Dialect, NormPolicy> = {
-	databricks: { unquoted: 'lower', quoted: 'lower' },
-	tsql: { unquoted: 'lower', quoted: 'lower' },
-	bigquery: { unquoted: 'lower', quoted: 'lower' },
-	redshift: { unquoted: 'lower', quoted: 'lower' },
-	duckdb: { unquoted: 'lower', quoted: 'lower' },
-	trino: { unquoted: 'lower', quoted: 'lower' },
-	snowflake: { unquoted: 'upper', quoted: 'preserve' },
-	postgres: { unquoted: 'lower', quoted: 'preserve' },
-};
-
-function applyCasing(s: string, c: Casing): string {
-	if (c === 'lower') return s.toLowerCase();
-	if (c === 'upper') return s.toUpperCase();
-	return s;
-}
-
-/**
- * Normalize a SQL identifier's NAME according to the dialect's rules (see `NORM_POLICY`).
- * The surrounding quotes are always stripped (`` `Mixed` `` / `"Mixed"` / `[Mixed]` → `Mixed`);
- * the case fold then depends on the dialect and on whether the identifier was quoted:
- *   - databricks/tsql/bigquery/redshift/duckdb/trino: everything lowercased —
- *     `Upper_Col` → `upper_col`, `` `Mixed` `` → `mixed` (case-insensitive engines).
- *   - snowflake: unquoted uppercased (`Foo_Bar` → `FOO_BAR`), quoted preserved
- *     (`"Out_Col"` → `Out_Col`).
- *   - postgres: unquoted lowercased, quoted preserved (`"Mixed"` → `Mixed`).
- * This is a NAME-only transform — source spans (col/endCol) are computed from the
- * raw token text and are never touched by it.
- */
-export function normName(raw: string, dialect: Dialect): string {
-	const policy = NORM_POLICY[dialect];
-	const c = raw[0];
-	if (c === '`' || c === '"' || c === '[') {
-		const close = c === '[' ? ']' : c;
-		const end = raw.length > 1 && raw[raw.length - 1] === close ? raw.length - 1 : raw.length;
-		return applyCasing(raw.slice(1, end), policy.quoted);
-	}
-	return applyCasing(raw, policy.unquoted);
+export function normName(raw: string, dialect: Dialect, kind: IdentKind = 'other'): string {
+	return foldIdentifier(raw, dialect, kind);
 }
 
 /**

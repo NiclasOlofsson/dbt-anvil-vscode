@@ -229,14 +229,13 @@ describe('SqllensDocumentParser — quoted per-part spans (partSpans adoption)',
 });
 
 describe('SqllensDocumentParser — dialect-aware identifier case normalization', () => {
-	// `normName` performs per-dialect identifier case normalization (a replica
-	// of the legacy path's normalize_identifiers behavior applied after parsing).
-	// Three strategies span the eight sqllens dialects:
+	// `normName` delegates to sqllens's own `foldIdentifier` (vendor-doc-verified
+	// per-dialect fold). Three strategies span the eight sqllens dialects:
 	//   - CASE_INSENSITIVE (databricks/tsql/bigquery/redshift/duckdb/trino): everything
-	//     lowercased, quoted included.
+	//     lowercased, quoted included — except bigquery TABLE names, which preserve
+	//     case (`kind: 'table'`; tables are case-sensitive there, columns are not).
 	//   - UPPERCASE (snowflake): unquoted uppercased, quoted preserved.
 	//   - LOWERCASE (postgres): unquoted lowercased, quoted preserved.
-	// Position cases pinned when the native parser replaced the legacy engine.
 
 	const colRefNames = (model: { tokens: readonly TokenInfo[] }): string[] =>
 		model.tokens
@@ -268,6 +267,19 @@ describe('SqllensDocumentParser — dialect-aware identifier case normalization'
 	it('postgres: unquoted lowercased, double-quoted preserved', async () => {
 		const model = await parser('postgres').parse('select Upper_Col, "Mixed"\nfrom foo');
 		expect(model.finalColumns.map(c => c.name)).toEqual(['upper_col', 'Mixed']);
+	});
+
+	it('bigquery: table names preserve case, columns and CTE names still lowercase', async () => {
+		const model = await parser('bigquery').parse(
+			'with MyCte as (select mycol from MyTable)\nselect mycol from MyCte',
+		);
+		const tableRef = model.tokens.find(
+			(t): t is TableRefToken => t.type === 'table_ref' && !t.cteDefinition && t.name === 'MyTable',
+		);
+		expect(tableRef).toBeDefined();
+		const cteDef = model.tokens.find(t => t.type === 'table_ref' && t.cteDefinition);
+		expect(cteDef?.name).toBe('mycte');
+		expect(colRefNames(model)).toEqual(expect.arrayContaining(['mycol']));
 	});
 });
 
