@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { model, sqlTok, run, violationsFor, mockDocument } from './helpers';
 import type { NinjaViolation } from '../../ninja/violation';
 import { FixAction } from '../../ninja/violation';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 
 const RULE = 'ninja.convention.coalesce';
 

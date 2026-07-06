@@ -3,7 +3,7 @@ import type { Diagnostic, SyntaxDiagnostic } from 'sqllens';
 import { collectWarnings, mapQualifyDiagnostics, mapSyntaxDiagnostics } from './warnings';
 
 describe('mapSyntaxDiagnostics', () => {
-	it('converts sqllens (1-based line / 0-based col) to the SqlglotWarning 0-based convention', () => {
+	it('converts sqllens (1-based line / 0-based col) to the ParseWarning 0-based convention', () => {
 		// A synthetic diagnostic pinned to a hand-computed position.
 		const diag: SyntaxDiagnostic = { message: 'extraneous input \'orders\'', line: 1, column: 13, offset: 13, length: 6 };
 		expect(mapSyntaxDiagnostics([diag])).toEqual([

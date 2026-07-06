@@ -13,7 +13,7 @@
  * pre-computed fix so rules don't have to re-derive positions.
  *
  * ## Spec shape
- * Each `TokenSpec` is keyed by one or more *sqlglot token type strings*
+ * Each `TokenSpec` is keyed by one or more *TokenType strings*
  * (not TokenKind — we need per-type precision for COMMA vs AND vs UNION).
  * Specs declare:
  *   - `diagnostic`       — the rule's tag (e.g. 'ninja.convention.comma-position')
@@ -24,7 +24,7 @@
  */
 
 import * as vscode from 'vscode';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 import type { NinjaSqlToken } from '../../ftl/ninja-sql-tokens';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 import type { NinjaConfig } from '../config';
@@ -35,7 +35,7 @@ export type LinePositionPolicy = 'leading' | 'trailing' | 'alone';
 export type SpacingPolicy = 'space' | 'no-space';
 
 export interface TokenSpec {
-	/** One or more sqlglot token type strings this spec applies to. */
+	/** One or more TokenType strings this spec applies to. */
 	tokenTypes: string | string[];
 	/** Rule id / diagnostic tag used to filter events. */
 	diagnostic: string;
@@ -128,7 +128,7 @@ export function runSpacingEngine(
 			// For UNION followed by ALL/DISTINCT on the same line, treat the
 			// pair as a single phrase: the "after" boundary sits past the
 			// qualifier, so `union all\n` counts as trailing/alone for UNION.
-			// sqlglot emits these as two separate tokens for some dialects;
+			// Some dialects emit these as two separate tokens;
 			// without this hop the rule double-fires on canonical output.
 			let afterAnchorCol = tok.col;
 			if (tok.type === 'UNION' && next && next.line === tok.line

@@ -2,12 +2,12 @@
  * End-to-end formatter roundtrip test.
  *
  * Parses a representative "kitchen-sink" SQL file with the native sqllens
- * parser (SqllensDocumentParser — synchronous, no Pyodide boot), runs it
+ * parser (SqllensDocumentParser — synchronous), runs it
  * through the same pipeline as
  * NinjaFormattingProvider.provideDocumentFormattingEdits (minus the VS Code
  * config plumbing), and asserts the output matches a committed expected file.
- * The *.out.sql oracles were produced by the legacy Pyodide/sqlglot path, so
- * this suite is also the byte-parity gate for the native parser cutover.
+ * The *.out.sql oracles are format references, verifying the formatter output
+ * is stable and converges consistently.
  *
  * Also asserts idempotence — running the formatter twice produces the same
  * result as running it once, which catches rules whose fixes don't converge.

@@ -4,7 +4,7 @@ import { indentOnRule } from '../../ninja/rules/layout-indent-on';
 import { indentJoinsRule } from '../../ninja/rules/layout-indent-joins';
 import { indentThenRule } from '../../ninja/rules/layout-indent-then';
 import { FixAction } from '../../ninja/violation';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 import { DEFAULT_CONFIG } from '../../ninja/config';
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -32,7 +32,7 @@ function checkThen(sql: string, tokens: SqlToken[], indentedThen: boolean) {
 }
 
 // sqlTok(type, start, end, line, col)
-// col = 1-based exclusive end col (sqlglot convention)
+// col = 1-based exclusive end col
 
 // ── indent-on ──────────────────────────────────────────────────────────────
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { mockDocument, cfg, model, sqlTok } from './helpers';
 import { leftJoinRule } from '../../ninja/rules/convention-left-join';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 
 const RULE = 'ninja.convention.left-join';
 

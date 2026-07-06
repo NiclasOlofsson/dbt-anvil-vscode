@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { mockDocument, cfg, model, sqlTok } from './helpers';
 import { orderByDirectionRule } from '../../ninja/rules/ambiguity-order-by-direction';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 
 const RULE = 'ninja.ambiguity.order-by-direction';
 

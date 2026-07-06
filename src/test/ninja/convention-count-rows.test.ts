@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mockDocument, cfg, model, sqlTok } from './helpers';
 import { countRowsRule } from '../../ninja/rules/convention-count-rows';
 import { FixAction } from '../../ninja/violation';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 
 const RULE = 'ninja.convention.count-rows';
 

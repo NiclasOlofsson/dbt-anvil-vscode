@@ -3,7 +3,7 @@ import type { TokenRule, TokenRuleContext } from '../rule';
 import type { NinjaViolation } from '../violation';
 import { tokenRange } from '../token-utils';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 
 /** Clause-level keywords that end an ORDER BY list at depth 0. */
 const ORDER_BY_TERMINATORS = new Set([

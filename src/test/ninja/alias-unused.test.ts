@@ -40,18 +40,4 @@ describe(RULE, () => {
 			colRef('id', 0, 15, 'o'),
 		])).toHaveLength(0);
 	});
-
-	it('does not flag synthesized alias (e.g. {{ ref(...) }} without explicit SQL alias)', () => {
-		const synthetic = {
-			...tableRef('gold__salesorderlinev2', 109, 18, 'gold__salesorderlinev2'),
-			synthesized: true as const,
-			aliasLine: undefined,
-			aliasCol: undefined,
-			aliasEndCol: undefined,
-		};
-		expect(check([
-			synthetic,
-			colRef('id', 110, 5),
-		])).toHaveLength(0);
-	});
 });

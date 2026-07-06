@@ -8,7 +8,7 @@ import { GetColumnLineageTool } from '../../tools/get-column-lineage';
 import { QueryDatabaseTool } from '../../tools/query-database';
 import type { ManifestLoader } from '../../dbt/manifest-loader';
 import type { DbtExecutionService } from '../../dbt/execution-service';
-import type { FtlDocumentParser } from '../../ftl/ftl-document-parser';
+import type { DocumentParser } from '../../services/document-parser';
 import { createMockLogger, createMockCompileCache } from '../helpers';
 
 vi.mock('fs', () => ({
@@ -195,7 +195,7 @@ describe('GetColumnLineageTool', () => {
 				via_ctes: [],
 				transformations: [],
 			}),
-		} as unknown as FtlDocumentParser;
+		} as unknown as DocumentParser;
 
 		const tool = new GetColumnLineageTool(indexer, mockLogger, mockCompileCache, mockDescribeCache, mockFtlParser);
 		const result = await tool.invoke(
@@ -233,7 +233,7 @@ describe('GetColumnLineageTool', () => {
 				timing: { parseMs: 0, totalMs: 0 },
 			}),
 			traceLineageV2: vi.fn().mockResolvedValue({ dependencies: [], via_ctes: [], transformations: [] }),
-		} as unknown as FtlDocumentParser;
+		} as unknown as DocumentParser;
 
 		const tool = new GetColumnLineageTool(indexer, mockLogger, mockCompileCache, mockDescribeCache, mockFtlParser);
 		const result = await tool.invoke(
@@ -252,7 +252,7 @@ describe('GetColumnLineageTool', () => {
 		const mockFtlParser = {
 			parse: vi.fn(),
 			traceLineage: vi.fn(),
-		} as unknown as FtlDocumentParser;
+		} as unknown as DocumentParser;
 		const tool = new GetColumnLineageTool(indexer, mockLogger, mockCompileCache, mockDescribeCache, mockFtlParser);
 
 		const result = await tool.invoke(
@@ -273,7 +273,7 @@ describe('GetColumnLineageTool', () => {
 		const mockFtlParser = {
 			parse: vi.fn(),
 			traceLineageV2: vi.fn(),
-		} as unknown as FtlDocumentParser;
+		} as unknown as DocumentParser;
 		const tool = new GetColumnLineageTool(indexer, mockLogger, mockCompileCache, mockDescribeCache, mockFtlParser);
 
 		const result = await tool.invoke(
@@ -307,7 +307,7 @@ describe('GetColumnLineageTool', () => {
 				timing: { parseMs: 0, totalMs: 0 },
 			}),
 			traceLineageV2: vi.fn().mockResolvedValue({ error: 'parse error' }),
-		} as unknown as FtlDocumentParser;
+		} as unknown as DocumentParser;
 
 		const tool = new GetColumnLineageTool(indexer, mockLogger, mockCompileCache, mockDescribeCache, mockFtlParser);
 		const result = await tool.invoke(

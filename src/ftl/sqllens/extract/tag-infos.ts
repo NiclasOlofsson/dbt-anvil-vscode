@@ -55,8 +55,29 @@
  * (see tag-infos.test.ts for the parity cases).
  */
 import type { MacroCall, PartSpan, TagNode } from '../api';
-import { NOT_MACRO_CALLS } from '../../extractors/jinja-tag-extractors';
 import type { MacroCallArgInfo, MacroCallInfo, RefInfo, SourceInfo } from '../../../services/parse-service';
+
+/**
+ * Jinja keywords and dbt globals that may appear as `identifier(` but are NOT
+ * user-defined macro calls. `ref` and `source` have dedicated consumer shapes;
+ * the rest are control flow, statement keywords, or jinja built-ins.
+ */
+export const NOT_MACRO_CALLS = new Set([
+	'ref', 'source',
+	'if', 'elif', 'else', 'endif',
+	'for', 'endfor', 'in',
+	'block', 'endblock',
+	'macro', 'endmacro',
+	'call', 'endcall',
+	'set', 'endset', 'do',
+	'with', 'endwith',
+	'filter', 'endfilter',
+	'from', 'import', 'as', 'include', 'extends',
+	'raw', 'endraw',
+	'not', 'and', 'or', 'is',
+	'none', 'None', 'true', 'True', 'false', 'False',
+	'config', 'var', 'env_var',
+]);
 
 export interface TagInfos {
 	refs: RefInfo[];

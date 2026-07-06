@@ -28,9 +28,6 @@ export const uniqueTableRule: TokenRule = {
 
 		for (const tok of model.tokens) {
 			if (tok.type !== 'table_ref') continue;
-			// Synthesised aliases (added by qualify()) are never user-written —
-			// skip them entirely so UNION ALL branches don't collide.
-			if (tok.synthesized) continue;
 			const label = tok.alias ?? tok.name;
 			const key = label.toLowerCase();
 			const scope = scopeFor(tok.line);

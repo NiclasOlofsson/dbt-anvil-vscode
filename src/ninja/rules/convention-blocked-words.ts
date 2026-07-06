@@ -40,7 +40,7 @@ export const blockedWordsRule: TokenRule = {
 		// Build a lowercased set for O(1) lookup.
 		const blocked = new Set(blockedWords.map(w => w.toLowerCase()));
 
-		// Identifier-like token types emitted by sqlglot.
+		// Identifier-like token types.
 		const ID_TYPES = new Set(['VAR', 'IDENTIFIER', 'PARAMETER', 'TABLE', 'COLUMN']);
 
 		for (const tok of tokens) {

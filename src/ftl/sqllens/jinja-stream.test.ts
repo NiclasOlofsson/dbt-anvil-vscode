@@ -23,7 +23,6 @@ import { parseTemplated } from './api';
 import { jinjaTokensFromStream } from './extract/jinja-stream';
 import type { JinjaToken } from '../jinja-tokenizer';
 import { referenceTokenizeJinja as tokenizeJinja } from '../../test/ftl/reference-jinja-tokenizers';
-import { extractMacroCalls, extractSources } from '../extractors/jinja-tag-extractors';
 
 function fromStream(sql: string): JinjaToken[] {
 	const t = parseTemplated(sql, 'databricks');
@@ -123,14 +122,5 @@ describe('jinjaTokensFromStream — whitespace-control divergence is consumer-in
 		expect(openA.start).toBe(openB.start);
 		expect(openA.tagEnd).toBe(openB.tagEnd);
 		expect(openA.type).toBe(openB.type);
-	});
-
-	it('extractSources produces identical output from both streams', () => {
-		expect(extractSources(fromStream(sql))).toEqual(extractSources(tokenizeJinja(sql)));
-	});
-
-	it('extractMacroCalls produces identical output from both streams', () => {
-		const m = 'select {{- dbt_utils.star(a, b) -}} from t';
-		expect(extractMacroCalls(fromStream(m))).toEqual(extractMacroCalls(tokenizeJinja(m)));
 	});
 });

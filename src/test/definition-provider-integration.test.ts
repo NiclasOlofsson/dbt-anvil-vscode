@@ -18,7 +18,7 @@
  *   - Multi-package ref() returning multiple locations (picker scenario)
  *   - source() alias resolution (no source() calls in the SQL fixture)
  *
- * Does not require a Python environment with dbt — only Pyodide/sqlglot via FTL.
+ * Does not require a Python environment with dbt — only the FTL SQL parser.
  */
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { SqllensDocumentParser, type AdapterContext } from '../ftl/sqllens/document-parser';
@@ -58,7 +58,7 @@ raw_orders as (
 )
 select * from warehouses_enriched`;
 
-// Column schema for the two refs in SQL — lets sqlglot qualify() resolve bare columns
+// Column schema for the two refs in SQL — enables the qualifier to resolve bare columns
 // (e.g. bare `city` → `addr`) even when they come through a SELECT * chain.
 const SQL_SCHEMA: Record<string, Record<string, string>> = {
 	gold__address: {
@@ -89,10 +89,10 @@ describe('definition-provider integration (FTL)', () => {
 
 	// ---- DocumentModel structure ----
 	//
-	// Validates that the Python bridge (sqlglot) produces the raw DocumentModel data
-	// we depend on. These tests are the contract between the bridge output and the
-	// rest of the TypeScript code — if they break, something changed in bridge.py or
-	// sqlglot's behaviour, not in our providers.
+	// Validates that the parser produces the raw DocumentModel data
+	// we depend on. These tests are the contract between the parser output and the
+	// rest of the TypeScript code — if they break, something changed in the parser,
+	// not in our providers.
 	//
 	// Coverage:
 	//   ✅ CTE names and line spans
@@ -238,7 +238,7 @@ describe('definition-provider integration (FTL)', () => {
 		it('emits table_ref token for raw_orders source() on line 24', () => {
 			// Line 24: "\tfrom {{ source('raw', 'orders') }}"
 			// _blank_jinja replaces {{ source('ns', 'tbl') }} with 'tbl' padded to tag length.
-			// So sqlglot sees 'orders' as the table identifier starting at the '{{' position.
+			// The parser sees 'orders' as the table identifier starting at the '{{' position.
 			// _jinja_ref_end now covers source tags too, so endCol spans the full jinja tag.
 			const tok = model.tokens
 				.filter((t): t is TableRefToken => t.type === 'table_ref')
@@ -871,7 +871,7 @@ describe('definition-provider integration (FTL)', () => {
 					expect(tok.resolvedTableRef!.line).toBe(2);
 				}
 			}
-			// If sqlglot collapses addr.* to no column_refs, that's fine — just assert no wrong ref
+			// If star expansion collapses addr.* to no column_refs, that's fine — just assert no wrong ref
 			for (const tok of cteAddrRefs) {
 				if (tok.resolvedTableRef) {
 					expect(tok.resolvedTableRef.line).not.toBe(6);

@@ -63,12 +63,9 @@ interface NormPolicy {
 }
 
 /**
- * Per-dialect identifier-normalization policy, reproducing sqlglot's
- * `Dialect.normalize_identifier` (dialects/dialect.py:1045) driven by each
- * dialect's `NORMALIZATION_STRATEGY`. The legacy path's token names are the output
- * of `normalize_identifiers` (optimizer/normalize_identifiers.py), which `qualify()`
- * runs unconditionally (optimizer/qualify.py:79) before the AST is serialized — so
- * these policies match what the legacy DocumentModel CONTAINS, verified through the
+ * Per-dialect identifier-normalization policy. Each dialect has a NORMALIZATION_STRATEGY
+ * that determines how identifiers are cased (uppercase, lowercase, or preserved).
+ * These policies match the behavior of the legacy parser, verified through the
  * shadow-diff harness (snowflake `Foo_Bar`→`FOO_BAR`, `"Out_Col"`→`Out_Col`; tsql
  * `[Mixed]`→`mixed`; postgres unquoted lowered / quoted preserved).
  *
@@ -100,10 +97,9 @@ function applyCasing(s: string, c: Casing): string {
 }
 
 /**
- * Normalize a SQL identifier's NAME the way the legacy sqlglot path serializes it
- * FOR THE GIVEN DIALECT (see `NORM_POLICY`). The surrounding quotes are always
- * stripped (`` `Mixed` `` / `"Mixed"` / `[Mixed]` → `Mixed`); the case fold then
- * depends on the dialect and on whether the identifier was quoted:
+ * Normalize a SQL identifier's NAME according to the dialect's rules (see `NORM_POLICY`).
+ * The surrounding quotes are always stripped (`` `Mixed` `` / `"Mixed"` / `[Mixed]` → `Mixed`);
+ * the case fold then depends on the dialect and on whether the identifier was quoted:
  *   - databricks/tsql/bigquery/redshift/duckdb/trino: everything lowercased —
  *     `Upper_Col` → `upper_col`, `` `Mixed` `` → `mixed` (case-insensitive engines).
  *   - snowflake: unquoted uppercased (`Foo_Bar` → `FOO_BAR`), quoted preserved

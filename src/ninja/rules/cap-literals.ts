@@ -7,7 +7,7 @@ import { tokenText, tokenRange } from '../token-utils';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 // Boolean/null literals that should follow capitalisation policy.
-// These token types are emitted by sqlglot and never appear inside SQL comments.
+// These token types are never isolated inside SQL comments.
 const LITERAL_TOKEN_TYPES = new Set(['null', 'true', 'false']);
 
 function checkPolicy(word: string, policy: CapitalisationPolicy, expected: Map<string, string>): string | undefined {

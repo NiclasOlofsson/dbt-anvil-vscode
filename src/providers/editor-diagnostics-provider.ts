@@ -10,7 +10,7 @@ import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { StatusBarManager } from '../views/status-bar';
 import type { ILogger } from '../types/logger';
 import { ParseService } from '../services/parse-service';
-import type { SqlglotWarning, DocumentModel } from '../services/parse-service';
+import type { ParseWarning, DocumentModel } from '../services/parse-service';
 import { computeCommentRanges, isOffsetInComment } from './common/comment-utils';
 import type { CommentRange } from './common/comment-utils';
 import { runNinja } from '../ninja/engine';
@@ -28,8 +28,8 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 	private readonly _parseCollection: vscode.DiagnosticCollection;
 	private readonly _refCollection: vscode.DiagnosticCollection;
 	private readonly _columnCollection: vscode.DiagnosticCollection;
-	/** Structural SQL warnings from sqlglot (e.g. Aliases node type from a dangling identifier). */
-	private readonly _sqlglotCollection: vscode.DiagnosticCollection;
+	/** Structural SQL warnings from parsing (e.g. Aliases node type from a dangling identifier). */
+	private readonly _sqlWarningCollection: vscode.DiagnosticCollection;
 	/** Warning shown on dbt_project.yml when SQLFluff is active alongside dbt Anvil. */
 	private readonly _sqlfluffCollection: vscode.DiagnosticCollection;
 	/** Warning shown on dbt_project.yml when auto-save is enabled (triggers frequent dbt parse). */
@@ -61,14 +61,14 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		private readonly parseService?: ParseService,
 		onAliasesReady?: vscode.Event<vscode.Uri>,
 		onIndexRebuild?: vscode.Event<{ indexer: ManifestIndexer; pivots: vscode.Uri[] }>,
-		onSqlglotWarnings?: vscode.Event<{ uri: vscode.Uri; warnings: SqlglotWarning[] }>,
+		onParseWarnings?: vscode.Event<{ uri: vscode.Uri; warnings: ParseWarning[] }>,
 		startupReady = true,
 	) {
 		this._startupReady = startupReady;
 		this._parseCollection = vscode.languages.createDiagnosticCollection('dbt-anvil');
 		this._refCollection = vscode.languages.createDiagnosticCollection('dbt-anvil-refs');
 		this._columnCollection = vscode.languages.createDiagnosticCollection('dbt-anvil-columns');
-		this._sqlglotCollection = vscode.languages.createDiagnosticCollection('dbt-anvil-sqlglot');
+		this._sqlWarningCollection = vscode.languages.createDiagnosticCollection('dbt-anvil-sql');
 		this._sqlfluffCollection = vscode.languages.createDiagnosticCollection('dbt-anvil-sqlfluff');
 		this._autoSaveCollection = vscode.languages.createDiagnosticCollection('dbt-anvil-autosave');
 		this._formatterCollection = vscode.languages.createDiagnosticCollection('dbt-anvil-formatter');
@@ -135,7 +135,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 			// vscode.workspace.onDidCloseTextDocument((doc) => {
 			// 	this._refCollection.delete(doc.uri);
 			// 	this._columnCollection.delete(doc.uri);
-			// 	this._sqlglotCollection.delete(doc.uri);
+			// 	this._sqlWarningCollection.delete(doc.uri);
 			// 	// Ninja diagnostics are intentionally kept after close — they represent
 			// 	// workspace-wide lint results that should remain visible in the Problems panel.
 			// 	this._ninjaResults.delete(doc.uri.toString());
@@ -210,13 +210,13 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 			);
 		}
 
-		// Surface sqlglot warnings as diagnostics. These fire on every parse — empty
+		// Surface parse warnings as diagnostics. These fire on every parse — empty
 		// list clears stale diagnostics, non-empty list replaces them.
 		// syntax_error → Error (red squiggle, precise token range)
 		// scope_warning → Warning (yellow squiggle, CTE line)
-		if (onSqlglotWarnings) {
+		if (onParseWarnings) {
 			this._disposables.push(
-				onSqlglotWarnings(({ uri, warnings }) => {
+				onParseWarnings(({ uri, warnings }) => {
 					const diagnostics = warnings.map((w) => {
 						const isSyntaxError = w.type === 'syntax_error';
 						const line = w.line ?? 0;
@@ -231,11 +231,11 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 							`${prefix}: ${w.message}`,
 							severity,
 						);
-						diag.source = 'dbt-anvil (sqlglot)';
-						diag.code = isSyntaxError ? 'sqlglot-syntax-error' : 'sqlglot-scope-warning';
+						diag.source = 'dbt-anvil (sql)';
+						diag.code = isSyntaxError ? 'sql-syntax-error' : 'sql-scope-warning';
 						return diag;
 					});
-					this._sqlglotCollection.set(uri, diagnostics);
+					this._sqlWarningCollection.set(uri, diagnostics);
 					this._updateSyntaxErrorDim(uri, warnings);
 				}),
 			);
@@ -248,7 +248,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 					this._parseCollection.delete(uri);
 					this._refCollection.delete(uri);
 					this._columnCollection.delete(uri);
-					this._sqlglotCollection.delete(uri);
+					this._sqlWarningCollection.delete(uri);
 					this._ninjaCollection.delete(uri);
 					this._ninjaResults.delete(uri.toString());
 					this._syntaxErrorDimRanges.delete(uri.toString());
@@ -634,21 +634,21 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 	}
 
 	private _updateStatusBar(): void {
-		// let parseCount = 0, refCount = 0, colCount = 0, sqlglotCount = 0, ninjaCount = 0;
+		// let parseCount = 0, refCount = 0, colCount = 0, warningCount = 0, ninjaCount = 0;
 		// this._parseCollection.forEach((_, diags) => { parseCount += diags.length; });
 		// this._refCollection.forEach((_, diags) => { refCount += diags.length; });
 		// this._columnCollection.forEach((_, diags) => { colCount += diags.length; });
-		// this._sqlglotCollection.forEach((_, diags) => { sqlglotCount += diags.length; });
+		// this._sqlWarningCollection.forEach((_, diags) => { warningCount += diags.length; });
 		// this._ninjaCollection.forEach((_, diags) => { ninjaCount += diags.length; });
-		// const total = parseCount + refCount + colCount + sqlglotCount + ninjaCount;
-		// this.logger.trace(`[diagnostics] counts — parse:${parseCount} refs:${refCount} columns:${colCount} sqlglot:${sqlglotCount} ninja:${ninjaCount} total:${total}`);
+		// const total = parseCount + refCount + colCount + warningCount + ninjaCount;
+		// this.logger.trace(`[diagnostics] counts — parse:${parseCount} refs:${refCount} columns:${colCount} warnings:${warningCount} ninja:${ninjaCount} total:${total}`);
 	}
 
 	clearAll(): void {
 		this._parseCollection.clear();
 		this._refCollection.clear();
 		this._columnCollection.clear();
-		this._sqlglotCollection.clear();
+		this._sqlWarningCollection.clear();
 		this._sqlfluffCollection.clear();
 		this._autoSaveCollection.clear();
 		this._formatterCollection.clear();
@@ -669,7 +669,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		this._parseCollection.dispose();
 		this._refCollection.dispose();
 		this._columnCollection.dispose();
-		this._sqlglotCollection.dispose();
+		this._sqlWarningCollection.dispose();
 		this._sqlfluffCollection.dispose();
 		this._autoSaveCollection.dispose();
 		this._formatterCollection.dispose();
@@ -729,7 +729,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		this._sqlfluffCollection.set(projectYml, [diag]);
 	}
 
-	private _updateSyntaxErrorDim(uri: vscode.Uri, warnings: SqlglotWarning[]): void {
+	private _updateSyntaxErrorDim(uri: vscode.Uri, warnings: ParseWarning[]): void {
 		const syntaxErr = warnings.find(w => w.type === 'syntax_error');
 		if (syntaxErr) {
 			const doc = vscode.workspace.textDocuments.find(d => d.uri.toString() === uri.toString());

@@ -47,40 +47,6 @@ describe(RULE, () => {
 		expect(v).toHaveLength(1);
 	});
 
-	it('no violation when same table appears in different CTE scopes', () => {
-		// qualify() synthesises aliases — they must be skipped entirely, including
-		// within a UNION ALL where the same table appears twice in one CTE.
-		const tokA: ReturnType<typeof tableRef> = {
-			type: 'table_ref', name: 'orders', line: 2, col: 5, endCol: 11,
-			alias: 'orders', synthesized: true,
-		};
-		const tokB: ReturnType<typeof tableRef> = {
-			type: 'table_ref', name: 'orders', line: 7, col: 5, endCol: 11,
-			alias: 'orders', synthesized: true,
-		};
-		const cteA = cte('cte_a', 1, 4);
-		const cteB = cte('cte_b', 6, 9);
-		const m = model({ tokens: [tokA, tokB], ctes: [cteA, cteB] });
-		const result = run('select 1', {}, m);
-		expect(violationsFor(result, RULE)).toHaveLength(0);
-	});
-
-	it('no violation when same table appears twice in a UNION ALL branch (synthesized)', () => {
-		// Both refs are in the same CTE scope but synthesized — must not collide.
-		const tokA: ReturnType<typeof tableRef> = {
-			type: 'table_ref', name: 'orders', line: 2, col: 5, endCol: 11,
-			alias: 'orders', synthesized: true,
-		};
-		const tokB: ReturnType<typeof tableRef> = {
-			type: 'table_ref', name: 'orders', line: 5, col: 5, endCol: 11,
-			alias: 'orders', synthesized: true,
-		};
-		const cteA = cte('cte_a', 1, 7);
-		const m = model({ tokens: [tokA, tokB], ctes: [cteA] });
-		const result = run('select 1', {}, m);
-		expect(violationsFor(result, RULE)).toHaveLength(0);
-	});
-
 	it('flags duplicate aliases within the same CTE scope', () => {
 		// Two aliased joins with the same alias inside one CTE body.
 		const tokA = tableRef('orders', 2, 5, 'o');

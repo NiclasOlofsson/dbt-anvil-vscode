@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { mockDocument, cfg, model, sqlTok } from './helpers';
 import { onVsUsingRule } from '../../ninja/rules/structure-on-vs-using';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 
 const RULE = 'ninja.structure.on-vs-using';
 

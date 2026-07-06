@@ -16,9 +16,6 @@ export const expressionNoAliasRule: TokenRule = {
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model } = ctx;
 		if (!model.finalSelect) return [];
-		// Pass 2 AST column numbers are in rendered-space and not remapped —
-		// building ranges from them causes negative-character errors.
-		if (model.isPass2) return [];
 		const violations: NinjaViolation[] = [];
 
 		for (const col of model.finalSelect.columns) {

@@ -1,36 +1,31 @@
 /**
- * Convert a sqllens (ANTLR) token stream into the extension's existing
- * `SqlToken` shape carrying sqlglot `TokenType` names, so the reflow printer,
- * ninja rules, and debug-symbols keep working unchanged after the migration
- * off sqlglot/Pyodide.
+ * Convert a sqllens (ANTLR) token stream into the extension's `SqlToken` shape
+ * with TokenType names, so the reflow printer, ninja rules, and debug-symbols
+ * keep working unchanged.
  *
- * The mapping replicates sqlglot's own tokenizer decisions (resources/ftl/
- * vendor/sqlglot/tokens.py) rather than trusting sqllens's coarse role:
+ * The mapping preserves the lexer conventions for token classification:
  *   - symbols/operators map by exact text (SINGLE_TOKENS + the multi-char
  *     entries in KEYWORDS), so `-`→DASH, `%`→MOD, `::`→DCOLON, `*`→STAR;
- *   - words map by uppercased text through the vendored KEYWORDS dict
+ *   - words map by uppercased text through the KEYWORDS dict
  *     (`AS`→ALIAS, `SELECT`→SELECT, …); a word absent from KEYWORDS is an
- *     identifier → VAR (or IDENTIFIER when quoted), matching sqlglot;
- *   - adjacent keyword pairs that sqlglot lexes as one token (`GROUP BY`→
- *     GROUP_BY, `ORDER BY`→ORDER_BY, …) are folded into a single SqlToken
- *     spanning both — ANTLR emits them separately.
+ *     identifier → VAR (or IDENTIFIER when quoted);
+ *   - adjacent keyword pairs like `GROUP BY` are folded into a single SqlToken
+ *     (GROUP_BY, ORDER_BY, …) spanning both — ANTLR emits them separately.
  *
- * Position conventions reproduced from resources/ftl/sql_parser.py `_tokenize`
- * and sqlglot's Token (_add): `start`/`end` are 0-based char offsets with `end`
- * INCLUSIVE; `line` is the 0-based line of the token's LAST char (sqlglot stamps
- * a token's line/col after consuming it); `col` is the 1-based inclusive end
- * column (= 0-based exclusive end column) on that line. Comments never surface
- * as tokens — each SqlToken carries the comments in the gap BEFORE it in
- * `comments[]` (trailing end-of-file comments attach to the last token); their
- * `end` is exclusive.
+ * Position conventions: `start`/`end` are 0-based char offsets with `end`
+ * INCLUSIVE; `line` is the 0-based line of the token's LAST char;
+ * `col` is the 1-based inclusive end column (= 0-based exclusive end column)
+ * on that line. Comments never surface as tokens — each SqlToken carries the
+ * comments in the gap BEFORE it in `comments[]` (trailing end-of-file comments
+ * attach to the last token); their `end` is exclusive.
  */
-import type { SqlToken } from '../parse-result';
+import type { SqlToken } from '../sql-tokens';
 import type { Dialect, Token } from './api';
 
 type CommentSpan = { start: number; end: number; text: string };
 
-/** Exact-text → sqlglot TokenType name for symbols/operators (SINGLE_TOKENS +
- *  the multi-char operator entries of the vendored KEYWORDS dict). */
+/** Exact-text → TokenType name for symbols/operators (SINGLE_TOKENS +
+ *  the multi-char operator entries of the KEYWORDS dict). */
 const OPERATOR_TOKENS: Record<string, string> = {
 	'(': 'L_PAREN',
 	')': 'R_PAREN',
@@ -82,8 +77,8 @@ const OPERATOR_TOKENS: Record<string, string> = {
 	'??': 'DQMARK',
 };
 
-/** Uppercased word → sqlglot TokenType name — the single-word entries of the
- *  vendored base tokenizer KEYWORDS. A word not present is an identifier (VAR).
+/** Uppercased word → TokenType name — the single-word entries of the
+ *  base tokenizer KEYWORDS. A word not present is an identifier (VAR).
  *  Space-compounds are handled by `COMPOUNDS` below, not here. */
 const KEYWORDS: Record<string, string> = {
 	ALL: 'ALL',
@@ -337,9 +332,9 @@ const KEYWORDS: Record<string, string> = {
 	VACUUM: 'COMMAND',
 };
 
-/** Two-word keyword phrases sqlglot lexes as ONE token — the space-bearing
- *  entries of the vendored KEYWORDS dict. ANTLR emits the two words
- *  separately, so the mapper folds an adjacent (whitespace-only) pair. Key is
+/** Two-word keyword phrases that are lexed as ONE token — the space-bearing
+ *  entries of the KEYWORDS dict. ANTLR emits the two words separately,
+ *  so the mapper folds an adjacent (whitespace-only) pair. Key is
  *  `WORD1 WORD2` uppercased with a single space. */
 const COMPOUNDS: Record<string, string> = {
 	'CHARACTER SET': 'CHARACTER_SET',
@@ -358,16 +353,14 @@ const COMPOUNDS: Record<string, string> = {
 	'START WITH': 'START_WITH',
 };
 
-/** Per-dialect additions/overrides on top of the base KEYWORDS map above,
- *  transcribed from each vendored dialect's `Tokenizer.KEYWORDS` in
- *  resources/ftl/vendor/sqlglot/dialects/{tsql,snowflake,bigquery,databricks,
- *  spark,spark2,hive,redshift,postgres}.py, following each class's
- *  inheritance chain (databricks -> spark -> spark2 -> hive; redshift ->
- *  postgres). Consulted BEFORE the base KEYWORDS map in `singleType`. Entries
+/** Per-dialect additions/overrides on top of the base KEYWORDS map above.
+ *  Each dialect defines keyword tokens based on its tokenizer rules,
+ *  following the dialect inheritance chain (databricks -> spark -> spark2 -> hive;
+ *  redshift -> postgres). Consulted BEFORE the base KEYWORDS map in `singleType`. Entries
  *  identical to the base value (e.g. tsql's `REAL` -> FLOAT, postgres's
  *  `TEMP` -> TEMPORARY) are omitted as redundant. A dialect that *removes* a
  *  base keyword (`KEYWORDS.pop(...)`) is modeled here by mapping it to
- *  'VAR', matching sqlglot's fallback-to-identifier.
+ *  'VAR', treating the word as an identifier.
  *
  *  Not transcribed (out of scope for a *word*-keyed KEYWORDS layer):
  *   - symbol/operator overrides living in the same Python KEYWORDS dict but
@@ -500,8 +493,8 @@ const DIALECT_KEYWORDS: Partial<Record<Dialect, Record<string, string>>> = {
 	},
 };
 
-/** Per-dialect additions to COMPOUNDS above (two-word phrases sqlglot lexes
- *  as one token), transcribed the same way and checked before COMPOUNDS.
+/** Per-dialect additions to COMPOUNDS above (two-word phrases lexed as one token),
+ *  transcribed the same way and checked before COMPOUNDS.
  *  Three-word phrases (Hive/Databricks `TIMESTAMP AS OF`, `VERSION AS OF`)
  *  are not transcribed — the fold below only joins adjacent *pairs*. */
 const DIALECT_COMPOUNDS: Partial<Record<Dialect, Record<string, string>>> = {
@@ -539,7 +532,7 @@ const DIALECT_COMPOUNDS: Partial<Record<Dialect, Record<string, string>>> = {
 };
 
 /**
- * The set of sqlglot `TokenType` NAMES the mapper can emit as a keyword for a
+ * The set of `TokenType` NAMES the mapper can emit as a keyword for a
  * dialect — the union of the VALUES of the base `KEYWORDS` + `COMPOUNDS` tables
  * and the dialect's `DIALECT_KEYWORDS` + `DIALECT_COMPOUNDS` overlays. This is the
  * membership set a keyword-capitalisation rule tests a mapped token's `.type`
@@ -588,8 +581,8 @@ function isQuotedIdentifier(text: string): boolean {
 }
 
 /**
- * A token that carries no SQL meaning — a whitespace/newline run. sqlglot emits
- * NO whitespace tokens, so the mapper drops these. We test BOTH the role and the
+ * A token that carries no SQL meaning — a whitespace/newline run. The token
+ * stream emits NO whitespace tokens, so the mapper drops these. We test BOTH the role and the
  * text: some sqllens builds tag a bare `\r\n` / `\n` with a non-`whitespace` role,
  * and a whitespace-TEXT token must be dropped whatever its role (else it leaks
  * through as a bogus `\r\n`-typed SqlToken, the top shadow-diff bucket). Dropped
@@ -600,7 +593,7 @@ function isWhitespaceToken(tok: Token): boolean {
 	return tok.role === 'whitespace' || /^\s+$/.test(tok.text ?? '');
 }
 
-/** Map one already-de-compounded sqllens token to a sqlglot TokenType name. */
+/** Map one already-de-compounded sqllens token to a TokenType name. */
 function singleType(tok: Token, dialect: Dialect): string {
 	switch (tok.role) {
 		case 'string':
@@ -617,13 +610,13 @@ function singleType(tok: Token, dialect: Dialect): string {
 	if (dialectKw) return dialectKw;
 	const kw = KEYWORDS[upper];
 	if (kw) return kw;
-	// A word ANTLR reserved that sqlglot does not know is an identifier (VAR);
+	// A word not in the keywords map becomes an identifier (VAR);
 	// an unmapped symbol keeps its uppercased text as a last resort.
 	return /^[A-Z_][A-Z0-9_$]*$/.test(upper) ? 'VAR' : upper;
 }
 
 /** Next non-whitespace token after index `i`, or null if a comment intervenes
- *  (sqlglot's keyword trie folds across whitespace only) or the stream ends. */
+ *  (keyword folding only happens across whitespace) or the stream ends. */
 function nextKeywordCandidate(tokens: Token[], i: number): { tok: Token; index: number } | null {
 	for (let j = i + 1; j < tokens.length; j++) {
 		const t = tokens[j];
@@ -643,9 +636,9 @@ export function mapTokens(tokens: Token[], sql: string, dialect: Dialect): SqlTo
 		const tok = tokens[i];
 		if (isWhitespaceToken(tok)) continue;
 		if (tok.role === 'comment') {
-			// ANTLR's line-comment token swallows the trailing newline; sqlglot's
-			// span ends AT the newline. The printer re-slices source by [start,end),
-			// so a span must never include the newline. `end` is exclusive.
+			// ANTLR's line-comment token swallows the trailing newline, but we need
+			// spans that exclude the newline (the printer re-slices source by [start,end)).
+			// `end` is exclusive.
 			let end = tok.stop + 1;
 			while (end > tok.start && (sql[end - 1] === '\n' || sql[end - 1] === '\r')) end--;
 			pending.push({ start: tok.start, end, text: sql.slice(tok.start, end) });

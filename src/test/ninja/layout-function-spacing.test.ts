@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { run, violationsFor, model } from './helpers';
 import { FixAction } from '../../ninja/violation';
-import type { SqlToken } from '../../ftl/parse-result';
-// Real sqlTokens captured from the pyodide parser. Regenerate with:
+import type { SqlToken } from '../../ftl/sql-tokens';
+// Real sqlTokens from test fixtures. Regenerate with:
 //   npx vitest run src/test/ninja/dump-layout-tokens.test.ts
 import FIXTURES from './fixtures/layout-function-spacing-tokens.json';
 
@@ -75,7 +75,7 @@ describe(RULE, () => {
 	});
 
 	it('does not flag function name inside a -- line comment', () => {
-		// Real-parser fixture: sqlTokens carry comment spans from the pyodide parser.
+		// Real-parser fixture: sqlTokens carry comment spans attached to tokens.
 		// The rule must mask the word "count" inside the -- comment.
 		const sql = FIXTURES.comment_with_count.sql;
 		const m = model({ sqlTokens: tokensFor('comment_with_count') });

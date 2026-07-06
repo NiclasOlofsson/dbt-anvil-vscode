@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mockDocument, cfg, model, sqlTok } from './helpers';
 import { trailingCommaRule } from '../../ninja/rules/convention-trailing-comma';
 import { FixAction } from '../../ninja/violation';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 import { DEFAULT_CONFIG } from '../../ninja/config';
 
 const RULE = 'ninja.convention.trailing-comma';

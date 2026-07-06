@@ -27,7 +27,7 @@ export class QueryDatabaseTool implements vscode.LanguageModelTool<QueryDatabase
 		const { cte_name, model_name } = options.input;
 		this.logger.info('LM Tool: queryDatabase');
 
-		// CTE extraction: compile the model and use sqlglot to find the CTE boundary
+		// CTE extraction: compile the model and parse to find the CTE boundary
 		if (cte_name && model_name) {
 			const resources = this.indexer.findResource(model_name, 'model');
 			if (resources.length === 0) {

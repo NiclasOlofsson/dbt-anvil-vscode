@@ -10,10 +10,10 @@ import { discoverFixtures, type Fixture } from './fixture-loader';
 
 const FIXTURES_ROOT = path.join(__dirname, 'fixtures', 'rules');
 
-// The live parser (native sqllens), synchronous — no Pyodide boot.
+// The live parser (native sqllens), fully synchronous.
 const documentParser = new SqllensDocumentParser({ adapterType: 'duckdb' });
 
-describe('rule parity harness', () => {
+describe('rule fixture regression', () => {
 	const fixtures = discoverFixtures(FIXTURES_ROOT);
 
 	if (fixtures.length === 0) {
@@ -23,19 +23,9 @@ describe('rule parity harness', () => {
 		return;
 	}
 
-	// Fixtures whose assertion encodes LEGACY behavior the native parser correctly does NOT
-	// reproduce. `ninja.layout.cte-bracket [02-jinja-config-then-with]`: the rule's job is
-	// "closing ) on its own line". In that fixture's violation.sql the `)` is ALREADY on its own
-	// line — and the "fixed" expected.sql doesn't change that, it only moves `with` off the
-	// `{{ config() }}` line. The legacy parser fires the rule only because the inline config
-	// corrupts its CTE line-span math; the native parser computes the span correctly and rightly
-	// stays silent. So "cte-bracket fires on violation.sql" is a legacy false-positive. Skipped
-	// (not deleted) pending a decision to remove or re-purpose the fixture.
-	const LEGACY_FALSE_POSITIVES = new Set(['ninja.layout.cte-bracket [02-jinja-config-then-with]']);
-
 	for (const fx of fixtures) {
 		const label = fx.variantName ? `${fx.ruleId} [${fx.variantName}]` : fx.ruleId;
-		(LEGACY_FALSE_POSITIVES.has(label) ? it.skip : it)(label, async () => {
+		it(label, async () => {
 			await runFixture(fx);
 		});
 	}

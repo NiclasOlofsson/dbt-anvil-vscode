@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { reflowDocument } from '../../../ninja/reflow/engine';
 import { cfg, mockDocument, model, sqlTok } from '../helpers';
-import type { DialectSymbols } from '../../../ftl/sql-parser';
+import type { DialectSymbols } from '../../../ftl/sql-tokens';
 
 describe('reflow.edge-cases', () => {
 	it('does not emit more than N consecutive blank lines (maxBlankLines)', () => {

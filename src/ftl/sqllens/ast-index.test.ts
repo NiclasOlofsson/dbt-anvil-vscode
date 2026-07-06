@@ -161,7 +161,6 @@ describe('createSqllensAstIndex — degenerate parse', () => {
 		// nunjucks-rendered text here, whose shifted offsets forbade attaching one.)
 		const sql = 'select a from t\n{{ some_statement_macro() }}\nselect b from u';
 		const model = await new SqllensDocumentParser({ adapterType: 'databricks' }).parse(sql);
-		expect(model.isPass2).toBeFalsy();
 		expect(model.astIndex).toBeDefined();
 		// Statement 1 parsed — its enclosure answers at raw offsets.
 		expect(model.astIndex!.enclosingClasses(sql.indexOf('a from t'))).toContain('Select');
@@ -169,15 +168,14 @@ describe('createSqllensAstIndex — degenerate parse', () => {
 
 	it('attaches an index on a clean parse', async () => {
 		const model = await new SqllensDocumentParser({ adapterType: 'databricks' }).parse('select a from t');
-		expect(model.isPass2).toBeFalsy();
 		expect(model.astIndex).toBeDefined();
 		expect(model.astIndex!.empty).toBe(false);
 	});
 });
 
 // ── Integration: format real fixtures through the sqllens path ──────────────
-// The committed *.out.sql fixtures were produced by the sqlglot (Pyodide) parser
-// + reflow printer. Formatting the SAME input through SqllensDocumentParser (whose
+// The committed *.out.sql fixtures are format oracles.
+// Formatting the SAME input through SqllensDocumentParser (whose
 // model carries the IR-built astIndex) must reach the same output — proving the
 // index drives the printer's AST-aware decisions equivalently.
 

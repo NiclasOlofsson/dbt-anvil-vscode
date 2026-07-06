@@ -1,14 +1,14 @@
-import type { SqlToken } from '../ftl/parse-result';
+import type { SqlToken } from '../ftl/sql-tokens';
 
 /**
  * Returns the last SQL token on the given 0-based line, or undefined if none.
  *
- * Comments are not standalone tokens in sqlglot — they are attached to adjacent
+ * Comments are not standalone tokens — they are attached to adjacent
  * tokens via `token.comments`. So every token in sqlTokens is a content token
  * and `.col` reflects the token's own end, before any trailing comment text.
  *
  * Use `.col` of the returned token as the insert column when appending to a line
- * (it is the 0-based exclusive end col = 1-based end col in sqlglot convention).
+ * (0-based exclusive end column).
  */
 export function lastContentTokenOnLine(tokens: SqlToken[], line: number): SqlToken | undefined {
 	let result: SqlToken | undefined;

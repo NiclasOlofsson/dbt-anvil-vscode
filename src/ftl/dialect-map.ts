@@ -1,7 +1,7 @@
 /**
- * Map a dbt adapter type to the canonical sqlglot dialect name.
- * Most adapter names match sqlglot's own dialect names; this handles the exceptions.
- * Lives in src/ftl/ because FtlDocumentParser is the sqlglot boundary.
+ * Map a dbt adapter type to the canonical dialect name.
+ * Most adapter names match the standard dialect names; this handles the exceptions.
+ * Lives in src/ftl/ because FtlDocumentParser is the SQL parsing boundary.
  */
 export function mapAdapterToDialect(adapterType: string | undefined): string | undefined {
 	if (!adapterType) return undefined;

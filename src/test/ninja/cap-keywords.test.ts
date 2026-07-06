@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { violationsFor, capCfg, mockDocument, cfg, model, sqlTok } from './helpers';
 import { runNinja } from '../../ninja/engine';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 import { FixAction } from '../../ninja/violation';
 
 const RULE = 'ninja.cap.keywords';
 
-// SQL keywords recognised by sqlglot — stored lowercase for comparison.
+// SQL keywords — stored lowercase for comparison.
 const KEYWORD_TYPES = new Set([
 	'select', 'from', 'where', 'and', 'or', 'not', 'in', 'is', 'null',
 	'as', 'on', 'join', 'left', 'right', 'inner', 'outer', 'full', 'cross',
@@ -28,7 +28,7 @@ const KEYWORD_TYPES = new Set([
 /**
  * Build a minimal SqlToken[] by scanning the SQL for keyword words only,
  * skipping -- line comments and /* *\/ block comments.
- * Used so unit tests don't need pyodide.
+ * Enables unit tests to verify rule behavior without a full parser.
  */
 function keywordTokens(sql: string): SqlToken[] {
 	const tokens: SqlToken[] = [];

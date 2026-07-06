@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { mockDocument, cfg, model, sqlTok } from './helpers';
 import { notEqualRule } from '../../ninja/rules/convention-not-equal';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 import { FixAction } from '../../ninja/violation';
 import { DEFAULT_CONFIG } from '../../ninja/config';
 

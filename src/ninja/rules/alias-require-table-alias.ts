@@ -22,7 +22,7 @@ export const requireTableAliasRule: TokenRule = {
 		const { model } = ctx;
 
 		const tableRefs = model.tokens.filter(t => t.type === 'table_ref') as TableRefToken[];
-		const fromRefs = tableRefs.filter(t => !t.cteDefinition && !t.synthesized);
+		const fromRefs = tableRefs.filter(t => !t.cteDefinition);
 		if (fromRefs.length < 2) return [];
 
 		const violations: NinjaViolation[] = [];

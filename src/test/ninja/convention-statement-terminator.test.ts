@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mockDocument, cfg, model, sqlTok, applyEditsToText } from './helpers';
 import { statementTerminatorRule } from '../../ninja/rules/convention-statement-terminator';
 import { FixAction } from '../../ninja/violation';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 
 const RULE = 'ninja.convention.statement-terminator';
 

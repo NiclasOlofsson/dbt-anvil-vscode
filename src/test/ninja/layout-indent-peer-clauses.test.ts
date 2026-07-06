@@ -9,7 +9,7 @@ import { indentLimitRule } from '../../ninja/rules/layout-indent-limit';
 import { indentSetOpRule } from '../../ninja/rules/layout-indent-set-op';
 import { FixAction } from '../../ninja/violation';
 import type { TokenRule } from '../../ninja/rule';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 
 function runRule(rule: TokenRule, sql: string, tokens: SqlToken[]) {
 	const doc = mockDocument(sql);

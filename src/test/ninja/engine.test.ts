@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { ruleIds, violationsFor, mockDocument, cfg as buildCfg, model, sqlTok } from './helpers';
 import { runNinja } from '../../ninja/engine';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 
 // SQL keyword token types (subset sufficient for engine tests)
 const KEYWORD_TYPES = new Set([

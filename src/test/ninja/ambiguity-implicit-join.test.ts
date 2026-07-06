@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { mockDocument, cfg, model, sqlTok } from './helpers';
 import { implicitJoinRule } from '../../ninja/rules/ambiguity-implicit-join';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 import { FixAction } from '../../ninja/violation';
 
 const RULE = 'ninja.ambiguity.implicit-join';

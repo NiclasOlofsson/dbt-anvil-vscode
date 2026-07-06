@@ -66,7 +66,7 @@ describe('firstContentTokenOnLine', () => {
 
 describe('tokenStartCol', () => {
 	it('returns 0 for a token at the very start of a line', () => {
-		// 'SELECT' at offsets 0..5 inclusive on line 0; sqlglot col = 6 (1-based end)
+		// 'SELECT' at offsets 0..5 inclusive on line 0; col = 6 (1-based end)
 		expect(tokenStartCol(sqlTok('SELECT', 0, 5, 0, 6))).toBe(0);
 	});
 

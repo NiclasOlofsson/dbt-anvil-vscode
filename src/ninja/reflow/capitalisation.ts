@@ -1,14 +1,14 @@
 import type { CapitalisationPolicy, NinjaConfig } from '../config';
-import type { DialectSymbols } from '../../ftl/sql-parser';
+import type { DialectSymbols } from '../../ftl/sql-tokens';
 
 /**
  * Capitalisation applied by the reflow printer.
  *
  * Keyword / function / type classification comes ENTIRELY from
- * `DialectSymbols` — the authoritative sets sqlglot produces for the
- * active dialect. Production always has them (ParseService resolves
+ * `DialectSymbols` — the authoritative per-dialect sets the parser produces
+ * for the active dialect. Production always has them (ParseService resolves
  * them once per dialect); tests that want to exercise recasing without
- * booting Pyodide build a stub `DialectSymbols` locally.
+ * a parser build a stub `DialectSymbols` locally.
  *
  * Identifier casing is NOT part of reflow: it changes meaning under
  * quoting policies and belongs in the `cap-identifiers` surgical rule.

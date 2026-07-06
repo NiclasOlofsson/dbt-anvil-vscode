@@ -8,7 +8,7 @@ import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 /**
  * CV11 — Consistent CAST style.
  *
- * Flags the PostgreSQL/DuckDB `::` shorthand (sqlglot token type `DCOLON`) and
+ * Flags the PostgreSQL/DuckDB `::` shorthand (the DCOLON token) and
  * suggests the standard `CAST(x AS type)` form instead. This keeps SQL more
  * portable across adapters that do not support the `::` operator.
  *

@@ -1,6 +1,6 @@
 /**
  * sqllens-native `DocumentParser` — builds the extension's `DocumentModel` from
- * the sibling `sqllens` parser (native TypeScript, no Pyodide/sqlglot).
+ * the sqllens parser (native TypeScript, synchronous).
  *
  * The jinja front end is sqllens's own: `parseTemplated` segments the tags, runs
  * the SQL grammar over a length/newline-preserving placeholder (all spans stay in
@@ -13,7 +13,7 @@
  */
 import type { DocumentModel } from '../../services/parse-service';
 import type { DocumentParser, ParseOptions } from '../../services/document-parser';
-import type { DialectSymbols } from '../sql-parser';
+import type { DialectSymbols } from '../sql-tokens';
 import { performance } from 'node:perf_hooks';
 import { dialectSymbols, parseTemplated, qualify, resolveScopes, Schema, toSqllensDialect, type Dialect, type Qualification, type SchemaMapping, type TemplatedParseOptions, type TemplatedParseResult, type TemplateProvider } from './api';
 import { keywordTokenTypesFor, mapTokens } from './token-mapper';
@@ -47,15 +47,14 @@ export interface AdapterContext {
 }
 
 /**
- * Verbatim mirror of sqlglot's `DataType.Type` enum values, lowercased — the
- * `DialectSymbols.types` contract the legacy path exposed (`_get_dialect_symbols`
- * in resources/ftl/sql_parser.py enumerates every enum member, for EVERY
- * dialect). Captured from the live Pyodide parser (sqlglot vendored in
- * resources/ftl/vendor). The type-capitalisation consumers (reflow recase,
- * cap-types rule) match bare identifier words against this set, so its exact
- * membership is behavior: `a.NAME` is recased because `name` is an enum member.
+ * Lowercased data type names — the canonical set used for type-aware
+ * capitalization and identifier classification. The `DialectSymbols.types` contract
+ * exposes dialect-independent and dialect-specific types. The type-capitalisation
+ * consumers (reflow recase, cap-types rule) match bare identifier words against this
+ * set, so its exact membership is behavior: `a.NAME` is recased because `name` is a
+ * type member.
  */
-const SQLGLOT_DATA_TYPE_NAMES: ReadonlySet<string> = new Set([
+const DATA_TYPE_NAMES: ReadonlySet<string> = new Set([
 	'aggregatefunction', 'array', 'bigdecimal', 'bigint', 'bignum', 'bigserial', 'binary', 'bit',
 	'blob', 'boolean', 'bpchar', 'char', 'date', 'date32', 'datemultirange', 'daterange',
 	'datetime', 'datetime2', 'datetime64', 'decfloat', 'decimal', 'decimal128', 'decimal256', 'decimal32',
@@ -85,24 +84,21 @@ export class SqllensDocumentParser implements DocumentParser {
 
 	/**
 	 * The dialect symbol lists the ninja capitalisation rules + reflow printer test
-	 * mapped tokens against. Shapes mirror the sqlglot path's `DialectSymbols`
-	 * (LOWERCASE — every consumer does `set.has(x.toLowerCase())`, and the interface
-	 * documents lowercase):
+	 * mapped tokens against. All sets are LOWERCASE — every consumer does
+	 * `set.has(x.toLowerCase())`, and the interface documents lowercase:
 	 *   - `functions` — sqllens's own `dialectSymbols(dialect)` membership set
 	 *     (canonical UPPERCASE), lowercased here.
-	 *   - `keywordTokenTypes` — sqlglot TokenType NAMES the token-mapper can emit for
+	 *   - `keywordTokenTypes` — TokenType names the token-mapper can emit for
 	 *     this dialect (`keywordTokenTypesFor`), lowercased. These are token `.type`
 	 *     values (SELECT, ALIAS…), NOT keyword words, so sqllens's own `keywords` set
-	 *     (grammar literals) is deliberately NOT used for them. Mirroring the legacy
-	 *     `_get_dialect_symbols` (sql_parser.py — `if name.isalpha()`), names that are
-	 *     not purely alphabetic (GROUP_BY, ORDER_BY, PARTITION_BY…) are FILTERED OUT:
-	 *     legacy keyword recasing never saw compound token types, so `GROUP BY`
-	 *     keeps its source casing, and the format oracles encode that.
-	 *   - `types` — the legacy contract is sqlglot's `DataType.Type` enum names,
-	 *     dialect-INDEPENDENT (`_get_dialect_symbols` enumerates the whole enum), so
-	 *     the same static mirror (`SQLGLOT_DATA_TYPE_NAMES`) is used here. sqllens's
+	 *     (grammar literals) is deliberately NOT used for them. Compound token types
+	 *     (GROUP_BY, ORDER_BY, PARTITION_BY…) are FILTERED OUT: keyword recasing
+	 *     never applies to compound tokens, so `GROUP BY` keeps its source casing,
+	 *     and the format oracles encode that.
+	 *   - `types` — the canonical set of data type names (dialect-INDEPENDENT),
+	 *     provided as a static mirror (`DATA_TYPE_NAMES`). sqllens's
 	 *     own per-dialect type-word set is deliberately not used: it both misses
-	 *     enum names the legacy recasing matched (`name`, `interval`, `map`…) and
+	 *     canonical names the legacy recasing matched (`name`, `interval`, `map`…) and
 	 *     adds dialect aliases legacy never recased (`int4`, `string`…).
 	 */
 	getDialectSymbols(): Promise<DialectSymbols | undefined> {
@@ -119,7 +115,7 @@ export class SqllensDocumentParser implements DocumentParser {
 						.map(x => x.toLowerCase())
 						.filter(x => /^[a-z]+$/.test(x)),
 				),
-				types: SQLGLOT_DATA_TYPE_NAMES,
+				types: DATA_TYPE_NAMES,
 			};
 			this._symbolsCache.set(dialect, symbols);
 		}
@@ -167,11 +163,11 @@ export class SqllensDocumentParser implements DocumentParser {
 
 	parse(sql: string, options?: ParseOptions): Promise<DocumentModel> {
 		// sqllens is synchronous; the Promise-returning signature matches the
-		// DocumentParser seam. `options.schema` (the sqlglot qualify hint, a 2-level
+		// DocumentParser seam. `options.schema` (the qualify hint, a 2-level
 		// `{ table: { column: type } }` map — assignable directly to sqllens's nested
 		// `SchemaMapping`) feeds `SELECT *` expansion; when absent, an EMPTY schema still
 		// expands CTE/subquery-sourced stars, which is all the legacy path does without an
-		// external catalog anyway (`infer_schema=True`).
+		// external catalog anyway.
 		return Promise.resolve(this._parse(sql, options?.schema));
 	}
 
@@ -232,11 +228,10 @@ export class SqllensDocumentParser implements DocumentParser {
 	 * macroCalls, warnings, jinja/ninja token streams) concatenate in source
 	 * order. `finalSelect`/`finalColumns` describe the LAST statement that has a
 	 * final select — a script's result set — and always describe the SAME
-	 * statement. (Legacy sqlglot only ever extracted statement 1 — a `parse_one`
-	 * artifact, not a design; statement execution splits through the same
-	 * splitter in the query editor.) The astIndex is the composite of the
-	 * per-cell indexes — disjoint entry sets, so reflow keeps AST precision in
-	 * every statement, not just the first.
+	 * statement. The legacy parser extracted statement 1 only; now we extract
+	 * all statements using the same splitter as the query editor.
+	 * The astIndex is the composite of the per-cell indexes — disjoint entry sets,
+	 * so reflow keeps AST precision in every statement, not just the first.
 	 */
 	private _parseCells(
 		rawSql: string,
@@ -277,7 +272,7 @@ export class SqllensDocumentParser implements DocumentParser {
 			finalColumns: final?.finalColumns ?? [],
 			finalSelect: final?.finalSelect,
 			tokens: cells.flatMap(c => c.tokens),
-			sqlglotWarnings: cells.flatMap(c => c.sqlglotWarnings ?? []),
+			parseWarnings: cells.flatMap(c => c.parseWarnings ?? []),
 			timing: { parseMs: Math.round(parseMs), totalMs: Math.round(performance.now() - t0) },
 			jinjaTokens: cells.flatMap(c => c.jinjaTokens ?? []),
 			ninjaSqlTokens: cells.flatMap(c => c.ninjaSqlTokens ?? []),
@@ -330,7 +325,7 @@ export class SqllensDocumentParser implements DocumentParser {
 		// every extractor falls back to unexpanded output.
 		const schemaObj = new Schema((schema ?? {}) as SchemaMapping);
 		// sqllens qualify is read-only — it never rewrites a bare column to add the qualifier
-		// sqlglot's mutating qualify did. extractTokens consumes this column→source binding to
+		// the legacy qualify did. extractTokens consumes this column→source binding to
 		// resolve bare columns to their table. Fail-soft (undefined) to match the expander.
 		let qualification: Qualification | undefined;
 		try { qualification = qualify(result.scopes, schemaObj); } catch { /* alias-only resolution */ }
@@ -355,7 +350,7 @@ export class SqllensDocumentParser implements DocumentParser {
 		// with `text` — mapTokens derives line starts from it.
 		const sqlTokens = mapTokens(result.tokens, text, dialect);
 		const ninjaSqlTokens = mergeSqlAndJinjaTokens(sqlTokens, jinjaTokens);
-		const sqlglotWarnings = mapDiagnostics(result.diagnostics);
+		const parseWarnings = mapDiagnostics(result.diagnostics);
 
 		const model: DocumentModel = {
 			refs,
@@ -365,11 +360,11 @@ export class SqllensDocumentParser implements DocumentParser {
 			finalColumns,
 			finalSelect,
 			tokens,
-			sqlglotWarnings,
+			parseWarnings,
 			timing: { parseMs: Math.round(parseMs), totalMs: Math.round(performance.now() - t0) },
 			jinjaTokens,
 			ninjaSqlTokens,
-			// `ast` stays undefined (the flat sqlglot serde payload) — the reflow
+			// `ast` stays undefined (no longer needed) — the reflow
 			// printer instead reads `astIndex`, built directly from the sqllens IR.
 		};
 

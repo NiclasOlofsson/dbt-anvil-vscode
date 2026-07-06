@@ -7,7 +7,7 @@ import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 const BOOL_TRUE = new Set(['true', '1']);
 const BOOL_FALSE = new Set(['false', '0']);
-// Token types sqlglot emits for boolean / numeric literals — checked alongside text so a
+// Token types for boolean / numeric literals — checked alongside text so a
 // VAR identifier whose text happens to be "true"/"1" isn't mistaken for the literal value.
 const LITERAL_TYPES = new Set(['TRUE', 'FALSE', 'NUMBER']);
 

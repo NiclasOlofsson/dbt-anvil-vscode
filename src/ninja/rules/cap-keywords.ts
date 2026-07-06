@@ -8,9 +8,9 @@ import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 const RULE_ID = 'ninja.cap.keywords';
 
-// sqlglot TokenType names that represent SQL keywords.
+// TokenType names that represent SQL keywords.
 // All stored lowercase for comparison against token.type.toLowerCase().
-// Includes compound token types emitted by sqlglot for multi-word keywords:
+// Includes compound token types for multi-word keywords:
 // `ALIAS` (the AS keyword), `GROUP_BY`, `ORDER_BY`, `ISNULL`, `NOTNULL`, etc.
 // For compound tokens, `tokenText` returns the raw multi-word slice
 // (e.g. "GROUP BY"), and the replace pass lowercases it intact.

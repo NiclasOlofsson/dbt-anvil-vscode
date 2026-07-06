@@ -7,7 +7,7 @@ import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 /**
  * RF04 — SQL keywords used as unquoted identifiers are a portability hazard.
  *
- * sqlglot normally tokenizes reserved words as their own keyword token type,
+ * Reserved words are normally emitted as their own keyword token type,
  * but in certain contexts (e.g. after AS, or as aliases) the parser emits them
  * as VAR tokens because the context allows it. When a VAR token's text matches
  * a known SQL keyword, flag it — wrapping with quotes is safer.

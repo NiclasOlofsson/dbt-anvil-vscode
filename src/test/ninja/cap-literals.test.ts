@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { violationsFor, capCfg, mockDocument, cfg, model, sqlTok } from './helpers';
 import { runNinja } from '../../ninja/engine';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 import { FixAction } from '../../ninja/violation';
 
 const RULE = 'ninja.cap.literals';
@@ -160,7 +160,7 @@ describe(RULE, () => {
 	});
 
 	it('does not flag null inside a string literal', () => {
-		// sqlglot tokenises 'null' as a string, not a NULL token
+		// The lexer tokenizes 'null' as a string, not a NULL token
 		const v = violationsFor(run('select \'null\''), RULE);
 		expect(v.length).toBe(0);
 	});

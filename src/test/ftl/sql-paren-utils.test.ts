@@ -3,7 +3,7 @@ import {
 	findCteDef,
 	findMatchingParen,
 	isPositionInComment,
-} from '../../../ftl/extractors/sql-paren-utils';
+} from '../../ftl/sql-paren-utils';
 
 describe('isPositionInComment', () => {
 	it('returns false for plain SQL positions', () => {

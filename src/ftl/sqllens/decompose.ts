@@ -5,8 +5,8 @@
 // It slices debug frames (CTEs + `_main_`) and per-frame stage clauses out of
 // COMPILED SQL (dbt-compiled output — no jinja).
 //
-// Difference from the Python original: the Python version regenerates each stage
-// via sqlglot's SQL generator. This version slices the ORIGINAL source text at IR
+// Difference from the Python original: the Python version regenerated each stage
+// via SQL generation. This version slices the ORIGINAL source text at IR
 // node spans, so every stage keeps the user's exact formatting verbatim (a
 // weirdly-spaced identifier survives). Because the input carries no jinja, slicing
 // the original text is both faithful and cheaper than re-emitting.
@@ -261,8 +261,8 @@ function joinStages(sel: SelectExpr, ctx: StageCtx, fromKwOff: number): Array<Om
 /**
  * Build the ordered stage clauses for one SELECT.
  *
- * Slicing strategy (the deliberate divergence from the Python original, which regenerates each
- * stage via sqlglot): the FROM stage slices FROM-keyword → first-join start (base sources only,
+ * Slicing strategy (the deliberate divergence from the Python original, which regenerated each
+ * stage rather than slicing): the FROM stage slices FROM-keyword → first-join start (base sources only,
  * joins excluded), then one JOIN stage per join slices the CUMULATIVE FROM → join-i region. The
  * WHERE / GROUP / HAVING stages slice ONE contiguous span (FROM- or SELECT-keyword → end-of-clause)
  * that already contains the join text, so they need no per-join reassembly — matching Python, whose
@@ -461,7 +461,7 @@ function extractSetopClauses(body: SetOpExpr, ctx: Omit<StageCtx, 'orderBy' | 'l
 // ── Synthetic frame promotion ──────────────────────────────────────────────────
 //
 // The legacy decompose (sql_parser.py `promote_subqueries` / `promote_unions`)
-// rewrote the sqlglot AST, inserting synthetic CTEs so FROM/JOIN subqueries and
+// rewrote the AST, inserting synthetic CTEs so FROM/JOIN subqueries and
 // UNION legs become steppable frames. The native version does not mutate the IR;
 // it keeps an ordered list of frame ENTRIES (real CTEs + synthetics) and derives
 // each synthetic frame's clauses straight from the original node spans. Stage SQL

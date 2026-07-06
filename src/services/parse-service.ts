@@ -5,8 +5,9 @@ import { parseTemplated, templateVariants, toSqllensDialect } from '../ftl/sqlle
 import { resolveTagRelations } from '../providers/common/jinja-utils';
 import type { ILogger } from '../types/logger';
 import type { DocumentParser } from './document-parser';
-import type { AstPayload, JinjaToken } from '../ftl/parse-result';
+import type { JinjaToken } from '../ftl/sql-tokens';
 import type { AstIndex } from '../ninja/reflow/ast-index';
+import { compositeAstIndex } from '../ftl/sqllens/ast-index';
 import type { NinjaSqlToken } from '../ftl/ninja-sql-tokens';
 
 export interface ColumnInfo {
@@ -159,12 +160,6 @@ export interface TableRefToken {
 	 */
 	scopeId?: number;
 	/**
-	 * True when the alias was synthesised by qualify() rather than written by the
-	 * user. Synthesised aliases have no source position (aliasLine is absent).
-	 * Rules should check this flag instead of inspecting aliasLine directly.
-	 */
-	synthesized?: true;
-	/**
 	 * True when this token represents a CTE definition site (the `name` in
 	 * `WITH name AS (...)`), not a FROM/JOIN reference. These should not be
 	 * flagged by aliasing rules that apply to FROM/JOIN table references.
@@ -200,17 +195,17 @@ export type PositionResolution =
 	| { kind: 'column_def'; token: ColumnDefToken };
 
 /**
- * A structural issue detected by sqlglot during parsing.
+ * A structural issue detected during parsing.
  *
- * - `scope_warning`: SQL parsed OK but sqlglot cannot analyse a CTE scope
+ * - `scope_warning`: SQL parsed OK but scope analysis failed
  *   (e.g. a bare identifier before the CTE body). `cteName` is set.
  * - `syntax_error`: outright parse failure (typo, missing keyword, etc.).
  *   `cteName` is absent; `line`/`col`/`endCol` point at the bad token.
  */
-export interface SqlglotWarning {
+export interface ParseWarning {
 	/** Discriminates between structural scope issues and outright syntax errors */
 	type: 'scope_warning' | 'syntax_error';
-	/** Full sqlglot warning message */
+	/** Full warning message */
 	message: string;
 	/** CTE name the warning refers to, if extractable */
 	cteName?: string;
@@ -286,11 +281,11 @@ export interface DocumentModel {
 	timing: { parseMs: number; totalMs: number };
 	/**
 	 * Parse status. 'syntax_error' means the model's structural data (ctes, tokens, etc.) is
-	 * carried over from the last good parse — only sqlglotWarnings reflects the current state.
+	 * carried over from the last good parse — only parseWarnings reflects the current state.
 	 */
 	status?: 'ok' | 'syntax_error';
-	/** Structural warnings emitted by sqlglot during scope building. */
-	sqlglotWarnings?: SqlglotWarning[];
+	/** Structural warnings from parsing and scope analysis. */
+	parseWarnings?: ParseWarning[];
 	/**
 	 * Alias → column-name map returned by the bridge after schema-aware parsing.
 	 * `undefined` only when enrichment is not configured; otherwise always a dict
@@ -312,37 +307,15 @@ export interface DocumentModel {
 	 */
 	ninjaSqlTokens?: NinjaSqlToken[];
 	/**
-	 * Flat AST payload from sqlglot's `serde.dump()`. Each entry carries its
-	 * byte range (`m.start` / `m.end`), class name (`c`), and parent linkage
-	 * (`i`, `k`, `a`). The reflow printer consults this to make clause-aware
+	 * Byte-range structural index for the reflow printer, built by the parser
+	 * from its IR/CST spans. The printer consults it to make clause-aware
 	 * layout decisions (comma-position, indented_on, CTE body break) instead
 	 * of inferring structure from token-stream heuristics.
 	 *
-	 * When a file has Jinja conditionals, the node set is the byte-range
-	 * union of every variant's AST — so each branch has structural coverage
-	 * at its own bytes. See `mergeModels` for the merge policy.
-	 */
-	ast?: AstPayload[];
-	/**
-	 * A prebuilt byte-range index for the reflow printer. Set by parsers that
-	 * produce an index directly from their own IR (the sqllens path) rather than
-	 * a flat `ast` payload. When present, the reflow path uses it verbatim; when
-	 * absent, the path falls back to `createAstIndex(ast ?? [])`. Additive — legacy
-	 * (sqlglot) models leave it undefined and are unaffected.
+	 * When a file has Jinja conditionals, `mergeModels` composes the variants'
+	 * indexes so each branch keeps structural coverage at its own bytes.
 	 */
 	astIndex?: AstIndex;
-	/**
-	 * Virtual columns synthesised by PIVOT/UNPIVOT clauses, keyed by the
-	 * lowercased source-table name. Used to suppress false "column not found"
-	 * errors for virtual columns that don't exist in the source CTE's schema.
-	 */
-	pivotVirtualColumns?: Record<string, string[]>;
-	/**
-	 * True when this model was produced by the nunjucks-render pass (pass 2).
-	 * AST column numbers are in rendered-space and are not remapped — rules
-	 * that build vscode.Range from `col.col`/`col.endCol` must skip this model.
-	 */
-	isPass2?: boolean;
 }
 
 /**
@@ -451,12 +424,12 @@ export function mergeModels(models: DocumentModel[]): DocumentModel {
 		}
 	}
 
-	// sqlglotWarnings: dedup by message
+	// parseWarnings: dedup by message
 	const warnMessages = new Set<string>();
-	const sqlglotWarnings: SqlglotWarning[] = [];
+	const parseWarnings: ParseWarning[] = [];
 	for (const m of models) {
-		for (const w of (m.sqlglotWarnings ?? [])) {
-			if (!warnMessages.has(w.message)) { warnMessages.add(w.message); sqlglotWarnings.push(w); }
+		for (const w of (m.parseWarnings ?? [])) {
+			if (!warnMessages.has(w.message)) { warnMessages.add(w.message); parseWarnings.push(w); }
 		}
 	}
 
@@ -468,19 +441,6 @@ export function mergeModels(models: DocumentModel[]): DocumentModel {
 	// finalSelect: take the first model that has one (variants produce the same select)
 	const finalSelect = models.find(m => m.finalSelect)?.finalSelect;
 
-	// pivotVirtualColumns: union per source table
-	const pivotVirtualColumns: Record<string, string[]> = {};
-	for (const m of models) {
-		for (const [table, cols] of Object.entries(m.pivotVirtualColumns ?? {})) {
-			if (!(table in pivotVirtualColumns)) {
-				pivotVirtualColumns[table] = [...cols];
-			} else {
-				const seen = new Set(pivotVirtualColumns[table]);
-				for (const c of cols) { if (!seen.has(c)) { pivotVirtualColumns[table].push(c); seen.add(c); } }
-			}
-		}
-	}
-
 	// jinjaTokens / ninjaSqlTokens: all variants are parsed from the same raw source
 	// (variant realization is length-preserving), so every variant's token streams carry
 	// the same positions. Take the first model that has them. Dropping them here
@@ -489,36 +449,19 @@ export function mergeModels(models: DocumentModel[]): DocumentModel {
 	const jinjaTokens = models.find(m => m.jinjaTokens)?.jinjaTokens;
 	const ninjaSqlTokens = models.find(m => m.ninjaSqlTokens)?.ninjaSqlTokens;
 
-	// ast: union by byte range. Each variant's AST covers the shared bytes
-	// (outside any Jinja conditional) PLUS its own active branches. Non-active
-	// branches in that variant are blanked to spaces, so they contribute no
-	// nodes. Unioning across variants gives structural coverage for every
-	// branch — nodes from different variants never overlap *inside*
-	// conditionals because their spans are disjoint there. Shared nodes
-	// (outside conditionals) appear at identical byte ranges in every
-	// variant and dedupe via the byte-range key.
-	//
-	// The combined tree is not logically consistent as a single executable
-	// statement (e.g. a Select may end up with two sibling Where nodes, one
-	// per branch). That's fine: consumers query by byte range for
-	// "what's the structural role here?", not tree traversal.
-	const astOut: AstPayload[] = [];
-	const covered = new Set<string>();
-	for (const m of models) {
-		if (!m.ast) continue;
-		for (const node of m.ast) {
-			const key = `${node.m?.start ?? ''}:${node.m?.end ?? ''}:${node.c ?? ''}`;
-			if (covered.has(key)) continue;
-			covered.add(key);
-			astOut.push(node);
-		}
-	}
+	// astIndex: first-hit composite over the variants' indexes. Each variant's
+	// index covers the shared bytes (outside any Jinja conditional) PLUS its
+	// own active branches — non-active branches are blanked to spaces and
+	// contribute nothing. Composing gives structural coverage for every
+	// branch: shared bytes answer identically from any variant, branch bytes
+	// answer only from the variant that parsed them.
+	const indexes = models.map(m => m.astIndex).filter((i): i is AstIndex => i !== undefined);
+	const astIndex = indexes.length > 0 ? compositeAstIndex(indexes) : undefined;
 
-	return { ctes: [...cteMap.values()], refs, sources, macroCalls, finalColumns, finalSelect, tokens, timing, sqlglotWarnings, aliases,
-		pivotVirtualColumns: Object.keys(pivotVirtualColumns).length > 0 ? pivotVirtualColumns : undefined,
+	return { ctes: [...cteMap.values()], refs, sources, macroCalls, finalColumns, finalSelect, tokens, timing, parseWarnings, aliases,
 		jinjaTokens,
 		ninjaSqlTokens,
-		ast: astOut.length > 0 ? astOut : undefined,
+		astIndex,
 	};
 }
 
@@ -540,9 +483,9 @@ export class ParseService {
 	private readonly _onAliasesReady = new vscode.EventEmitter<vscode.Uri>();
 	readonly onAliasesReady = this._onAliasesReady.event;
 
-	private readonly _onSqlglotWarnings = new vscode.EventEmitter<{ uri: vscode.Uri; warnings: SqlglotWarning[] }>();
-	/** Fired after each parse when sqlglot reported structural warnings (e.g. Aliases node type). */
-	readonly onSqlglotWarnings = this._onSqlglotWarnings.event;
+	private readonly _onParseWarnings = new vscode.EventEmitter<{ uri: vscode.Uri; warnings: ParseWarning[] }>();
+	/** Fired after each parse when structural warnings are detected (e.g. Aliases node type). */
+	readonly onParseWarnings = this._onParseWarnings.event;
 
 	constructor(
 		private readonly _parser: DocumentParser,
@@ -551,14 +494,14 @@ export class ParseService {
 	) {}
 
 	/** Cache for dialect symbol fetch — stored as a Promise for dedup on concurrent calls. */
-	private _symbolsPromise: Promise<import('../ftl/sql-parser').DialectSymbols | undefined> | undefined;
+	private _symbolsPromise: Promise<import('../ftl/sql-tokens').DialectSymbols | undefined> | undefined;
 
 	/**
 	 * Return the authoritative symbol lists (functions, keyword token types, data types)
 	 * for the active dialect. Fetched once and cached for the lifetime of this service.
 	 * Returns undefined when the parser does not support symbol extraction.
 	 */
-	getDialectSymbols(): Promise<import('../ftl/sql-parser').DialectSymbols | undefined> {
+	getDialectSymbols(): Promise<import('../ftl/sql-tokens').DialectSymbols | undefined> {
 		if (!this._symbolsPromise) {
 			this._symbolsPromise = this._parser.getDialectSymbols?.() ?? Promise.resolve(undefined);
 		}
@@ -629,11 +572,7 @@ export class ParseService {
 	static columnsForRef(ref: TableRefToken, model: DocumentModel): string[] | undefined {
 		const nameLc = ref.name.toLowerCase();
 		const cte = ParseService.cteForRef(ref, model);
-		if (cte) {
-			const base = cte.columns.map(c => c.name);
-			const extras = model.pivotVirtualColumns?.[nameLc];
-			return extras ? [...base, ...extras] : base;
-		}
+		if (cte) return cte.columns.map(c => c.name);
 		return model.aliases?.[ref.name] ?? model.aliases?.[nameLc];
 	}
 
@@ -940,12 +879,12 @@ export class ParseService {
 			model = mergeModels(variantModels);
 		}
 
-		const hasSyntaxError = model.sqlglotWarnings?.some(w => w.type === 'syntax_error') ?? false;
+		const hasSyntaxError = model.parseWarnings?.some(w => w.type === 'syntax_error') ?? false;
 		if (hasSyntaxError) {
 			// Overlay warnings onto last good model so consumers still get useful structural data.
 			const prev = this._cache.get(key)?.model;
 			if (prev) {
-				model = { ...prev, status: 'syntax_error', sqlglotWarnings: model.sqlglotWarnings, timing: model.timing };
+				model = { ...prev, status: 'syntax_error', parseWarnings: model.parseWarnings, timing: model.timing };
 			} else {
 				model = { ...model, status: 'syntax_error' };
 			}
@@ -960,10 +899,10 @@ export class ParseService {
 			+ `${model.refs.length} refs, ${Object.keys(model.aliases ?? {}).length} aliases in ${model.timing.totalMs}ms`,
 		);
 
-		if (model.sqlglotWarnings && model.sqlglotWarnings.length > 0) {
-			this._logger.debug(`[parse-service] ${model.sqlglotWarnings.length} sqlglot warning(s) in ${document.fileName}`);
+		if (model.parseWarnings && model.parseWarnings.length > 0) {
+			this._logger.debug(`[parse-service] ${model.parseWarnings.length} parse warning(s) in ${document.fileName}`);
 		}
-		this._onSqlglotWarnings.fire({ uri: document.uri, warnings: model.sqlglotWarnings ?? [] });
+		this._onParseWarnings.fire({ uri: document.uri, warnings: model.parseWarnings ?? [] });
 		this._onAliasesReady.fire(document.uri);
 
 		return model;
@@ -994,7 +933,7 @@ export class ParseService {
 
 	/**
 	 * Decompose compiled SQL into debug frames (CTEs + _main_) and per-frame clauses.
-	 * Returns raw JSON string from the Pyodide backend.
+	 * Returns a JSON string describing the frame structure.
 	 * Returns `undefined` when the parser backend does not support decompose.
 	 */
 	async decomposeQuery(compiledSql: string): Promise<string | undefined> {

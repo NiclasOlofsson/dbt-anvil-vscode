@@ -4,7 +4,7 @@ import type { TokenRule, TokenRuleContext } from '../rule';
 import type { NinjaViolation } from '../violation';
 import type { CteInfo, ColumnRefToken } from '../../services/parse-service';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 
 /**
  * Flags columns defined in a CTE that are never referenced downstream.
@@ -32,9 +32,6 @@ export const unusedColumnsRule: TokenRule = {
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model } = ctx;
 		if (model.ctes.length === 0) return [];
-		// Pass 2 AST column numbers are in rendered-space and not remapped —
-		// building ranges from them causes negative-character errors.
-		if (model.isPass2) return [];
 
 		// Build a map of CTE name (lower) → set of referenced column names (lower)
 		const referencedColumns = buildReferencedColumnsMap(model.ctes, model.tokens);

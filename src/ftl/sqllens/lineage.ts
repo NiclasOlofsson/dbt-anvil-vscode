@@ -1,7 +1,6 @@
 /**
- * sqllens-backed column lineage — the replacement for the sqlglot `_trace_lineage_v2`
- * + `walkLineageTree` path consumed by the get-column-lineage tool and the lineage
- * graph panel.
+ * sqllens-backed column lineage — used by the get-column-lineage tool and the lineage
+ * graph panel to trace column dependencies and transformations.
  *
  * Contract: `traceColumnLineage()` returns the SAME {@link LineageResult} shape that
  * `walkLineageTree` produces today (dependencies / via_ctes / transformations), so the
@@ -97,7 +96,7 @@ export interface LineageResult {
 	transformations: Transformation[];
 }
 
-/** Maximum length of an inlined expression string (matches the sqlglot path). */
+/** Maximum length of an inlined expression string. */
 const MAX_EXPR_LEN = 200;
 
 function truncateExpression(expr: string): string {
@@ -215,7 +214,7 @@ class SpineRenderer {
 	) {}
 
 	/** Name-anchored entry: locate the root producer for `columnName`, get its spine via
-	 *  `lineageOf`, and render. Column not projected → empty result (matches sqlglot). */
+	 *  `lineageOf`, and render. Column not projected → empty result. */
 	trace(columnName: string, schema: Schema): void {
 		const root = this.tree.root;
 		this.ctx = buildScopeCtx(root, this.dialect);
@@ -238,7 +237,7 @@ class SpineRenderer {
 		this.renderHead(head, root);
 	}
 
-	/** Assemble the ordered transformation list (outer_query first, like the sqlglot path). */
+	/** Assemble the ordered transformation list (outer_query first). */
 	transformations(columnName: string): Transformation[] {
 		const list = [...this.transformMap.values()];
 		if (this.outerQuerySources.size > 0) {

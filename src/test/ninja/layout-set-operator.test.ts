@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { mockDocument, cfg, model, sqlTok, applyEditsToText } from './helpers';
 import { setOperatorRule } from '../../ninja/rules/layout-set-operator';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 import { FixAction } from '../../ninja/violation';
 
 /**
- * SqlToken.col follows sqlglot's convention: 1-based end column, equivalent
- * to 0-based exclusive end col. `tokenStartCol(tok)` recovers the start by
+ * SqlToken.col represents the 1-based end column (equivalent to 0-based
+ * exclusive end column). `tokenStartCol(tok)` recovers the start by
  * `tok.col - (tok.end - tok.start + 1)`. All fixtures below use END col.
  */
 
@@ -71,7 +71,7 @@ describe(RULE, () => {
 
 	// ── UNION ALL ────────────────────────────────────────────────────────────
 	it('no violation when UNION ALL is alone on its own line', () => {
-		// sqlglot emits 'union all' as a single UNION_ALL token
+		// The lexer emits 'union all' as a single UNION_ALL token
 		const sql = 'select 1\nunion all\nselect 2\n';
 		const toks: SqlToken[] = [
 			sqlTok('SELECT',    0,  5, 0, 6),

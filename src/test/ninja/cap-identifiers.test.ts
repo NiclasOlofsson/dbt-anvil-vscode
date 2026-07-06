@@ -131,20 +131,6 @@ describe(RULE, () => {
 		expect(v[0].message).toContain('ord_alias');
 	});
 
-	it('does NOT flag a synthesized alias (no source position)', () => {
-		// Synthesized aliases come from qualify() — not user-written, so
-		// not a style violation the user can act on.
-		const ref: TokenInfo = {
-			type: 'table_ref',
-			name: 'orders',
-			line: 0, col: 5, endCol: 11,
-			alias: 'O',
-			synthesized: true,
-		};
-		const v = check([ref], withIdentifierStyle('snake_case'));
-		expect(v).toHaveLength(0);
-	});
-
 	// ── Column references are NOT flagged ────────────────────────────────
 
 	it('does NOT flag column references — only introductions', () => {

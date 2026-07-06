@@ -3,7 +3,7 @@ import type { NinjaViolation } from '../violation';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 import { tokenRange } from '../token-utils';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 
 const RULE_ID = 'ninja.layout.select-modifiers';
 
@@ -29,7 +29,7 @@ export const selectModifiersRule: TokenRule = {
 			if (tok.type.toUpperCase() !== 'SELECT') continue;
 
 			// Find the next non-whitespace SQL token after SELECT.
-			// sqlglot tokens do not include whitespace tokens, so the very
+			// The token stream does not include whitespace tokens, so the very
 			// next entry in the stream is already the first significant token.
 			const next = sqlTokens[i + 1];
 			if (!next) continue;

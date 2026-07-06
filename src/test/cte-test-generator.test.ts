@@ -6,7 +6,7 @@ import {
 	generateModelSql,
 	buildTestYaml,
 } from '../dbt/cte-test-generator';
-import { isPositionInComment } from '../ftl/extractors/sql-paren-utils';
+import { isPositionInComment } from '../ftl/sql-paren-utils';
 
 // ---------------------------------------------------------------------------
 // rowsToSql

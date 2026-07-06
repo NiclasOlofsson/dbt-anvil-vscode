@@ -20,7 +20,6 @@ export const unusedAliasRule: TokenRule = {
 		const aliased: { name: string; alias: string; line: number; col: number; endCol: number }[] = [];
 		for (const tok of model.tokens) {
 			if (tok.type !== 'table_ref' || !tok.alias) continue;
-			if (tok.synthesized) continue;
 			aliased.push({
 				name: tok.name,
 				alias: tok.alias,

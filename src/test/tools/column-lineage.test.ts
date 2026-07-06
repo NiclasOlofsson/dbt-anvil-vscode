@@ -11,9 +11,9 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import type { ManifestIndexer, ManifestIndex, IndexedModel, IndexedSource } from '../../indexing/manifest-indexer';
-import { mapAdapterToDialect } from '../../ftl/ftl-document-parser';
+import { mapAdapterToDialect } from '../../ftl/dialect-map';
 import { GetColumnLineageTool } from '../../tools/get-column-lineage';
-import type { FtlDocumentParser } from '../../ftl/ftl-document-parser';
+import type { DocumentParser } from '../../services/document-parser';
 import { createMockLogger, createMockCompileCache } from '../helpers';
 
 vi.mock('fs', () => ({
@@ -126,7 +126,7 @@ function createMockIndexer(index: ManifestIndex, rawNode?: Record<string, unknow
 	} as unknown as ManifestIndexer;
 }
 
-function makeFtlParser(colsResponse: string[], lineageData?: Record<string, unknown>): FtlDocumentParser {
+function makeFtlParser(colsResponse: string[], lineageData?: Record<string, unknown>): DocumentParser {
 	return {
 		parse: vi.fn().mockResolvedValue({
 			finalColumns: colsResponse.map(name => ({ name, line: 0 })),
@@ -142,7 +142,7 @@ function makeFtlParser(colsResponse: string[], lineageData?: Record<string, unkn
 			via_ctes: [],
 			transformations: [],
 		}),
-	} as unknown as FtlDocumentParser;
+	} as unknown as DocumentParser;
 }
 
 // ---------------------------------------------------------------------------

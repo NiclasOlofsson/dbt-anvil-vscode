@@ -1,7 +1,7 @@
 /**
  * Default spacing/line-position specs for the Ninja layout rules.
  *
- * Each spec maps one or more sqlglot token types to:
+ * Each spec maps one or more token types to:
  *   - the diagnostic tag (rule id) it belongs to
  *   - the expected line position (or runtime config path)
  *   - optional space requirements
@@ -45,9 +45,9 @@ export const OPERATOR_SPEC: TokenSpec = {
  * max-blank-lines rule; here we just enforce the "alone" line-position policy).
  */
 export const SET_OPERATOR_SPEC: TokenSpec = {
-	// sqlglot collapses `UNION ALL` into a single `UNION_ALL` token type and
+	// The lexer collapses `UNION ALL` into a single `UNION_ALL` token type and
 	// `UNION DISTINCT` into `UNION_DISTINCT`. Both must be covered here —
-	// leaving them out was the source of false-negatives on chained queries.
+	// leaving them out is a source of false-negatives on chained queries.
 	tokenTypes: ['UNION', 'UNION_ALL', 'UNION_DISTINCT', 'INTERSECT', 'EXCEPT'],
 	diagnostic: 'ninja.layout.set-operator',
 	linePosition: 'alone',
@@ -62,7 +62,7 @@ export const SET_OPERATOR_SPEC: TokenSpec = {
  * have frequent legitimate trailing positions (e.g. `select foo from t`
  * on one line). The reflow engine (Layer 3) handles the full SELECT layout.
  *
- * Note: GROUP, ORDER, HAVING, LIMIT are the individual sqlglot token types.
+ * Note: GROUP, ORDER, HAVING, LIMIT are individual keywords.
  * "GROUP BY" is two tokens; we flag GROUP and let the next token (BY) follow.
  */
 export const CLAUSE_KEYWORD_SPEC: TokenSpec = {

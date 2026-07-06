@@ -107,8 +107,8 @@ const RELATIVE_DIALECTS: Record<string, Dialect> = {
 
 /**
  * Resolve a dbt adapter type to the sqllens `Dialect` gate value: sqllens's
- * own adapter map first, then the relatives layer (accepting the sqlglot
- * canonical name as input too), finally `databricks` — the fallback keeps the
+ * own adapter map first, then the relatives layer (accepting alternate
+ * dialect names as input too), finally `databricks` — the fallback keeps the
  * shadow/test paths total; the ParseService wiring decides whether an unmapped
  * adapter should instead degrade to no SQL intelligence.
  */
@@ -116,8 +116,8 @@ export function toSqllensDialect(adapterType: string | undefined): Dialect {
 	if (!adapterType) return 'databricks';
 	const direct = adapterDialectOrRelative(adapterType);
 	if (direct) return direct;
-	const sqlglot = mapAdapterToDialect(adapterType);
-	return (sqlglot && adapterDialectOrRelative(sqlglot)) || 'databricks';
+	const mapped = mapAdapterToDialect(adapterType);
+	return (mapped && adapterDialectOrRelative(mapped)) || 'databricks';
 }
 
 function adapterDialectOrRelative(name: string): Dialect | undefined {

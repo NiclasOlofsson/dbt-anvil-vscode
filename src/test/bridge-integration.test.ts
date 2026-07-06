@@ -12,15 +12,11 @@ import * as path from 'node:path';
 import { templateVariants } from '../ftl/sqllens/api';
 import { BridgeRunner } from '../dbt/bridge-runner';
 import { detectPythonEnvironment, type PythonEnvironment } from '../dbt/env-detector';
-import { FtlDocumentParser } from '../ftl/ftl-document-parser';
-import type { AdapterContext } from '../ftl/ftl-document-parser';
+import { SqllensDocumentParser, type AdapterContext } from '../ftl/sqllens/document-parser';
 import { mergeModels, ParseService } from '../services/parse-service';
 import type { DocumentModel, TableRefToken, ColumnRefToken } from '../services/parse-service';
 import { createMockLogger } from './helpers';
 
-const PYODIDE_DIR = path.join(__dirname, '..', '..', 'node_modules', 'pyodide');
-const VENDOR_DIR = path.join(__dirname, '..', '..', 'resources', 'ftl', 'vendor');
-const SCRIPTS_DIR = path.join(__dirname, '..', '..', 'resources', 'ftl');
 const ANSI_CONTEXT: AdapterContext = { adapterType: 'ansi' };
 
 const JAFFLE_SHOP = path.join(__dirname, '..', '..', 'samples', 'jaffle_shop');
@@ -152,15 +148,10 @@ describe('bridge integration', () => {
 });
 
 describe('ftl parse_document', () => {
-	let parser: FtlDocumentParser;
+	let parser: SqllensDocumentParser;
 
-	beforeAll(async () => {
-		parser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR, ANSI_CONTEXT);
-		await parser.ready();
-	}, 60_000);
-
-	afterAll(() => {
-		parser.dispose();
+	beforeAll(() => {
+		parser = new SqllensDocumentParser(ANSI_CONTEXT);
 	});
 
 	function parseSql(sql: string, schema?: Record<string, Record<string, string>>) {
@@ -272,7 +263,7 @@ select * from orders`);
     {{ generic_is_deleted(wh2.is_deleted) }}
 )
 select mkey, sourcename from warehouse`);
-		expect(model.sqlglotWarnings?.some(w => w.type === 'syntax_error')).toBe(true);
+		expect(model.parseWarnings?.some(w => w.type === 'syntax_error')).toBe(true);
 		expect((model.macroCalls ?? []).filter(m => m.name === 'generic_is_deleted')).toHaveLength(2);
 	}, 30_000);
 
@@ -291,7 +282,7 @@ select mkey, sourcename from warehouse`);
 			'{{generic_is_deleted(\'co.is_deleted\',\'where\')}}',
 		].join('\n');
 		const model = await parseSql(sql);
-		expect(model.sqlglotWarnings?.some(w => w.type === 'syntax_error')).toBe(true);
+		expect(model.parseWarnings?.some(w => w.type === 'syntax_error')).toBe(true);
 		expect(model.refs.map(r => r.model).sort()).toEqual(['gold__sourcesystem', 'silver__company']);
 		expect(model.refs.find(r => r.model === 'silver__company')?.line).toBe(3);
 	}, 30_000);
@@ -331,16 +322,11 @@ from src`);
 	}, 30_000);
 });
 
-describe('ftl parse_document – sqlglotWarnings', () => {
-	let parser: FtlDocumentParser;
+describe('ftl parse_document – parseWarnings', () => {
+	let parser: SqllensDocumentParser;
 
-	beforeAll(async () => {
-		parser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR, ANSI_CONTEXT);
-		await parser.ready();
-	}, 60_000);
-
-	afterAll(() => {
-		parser.dispose();
+	beforeAll(() => {
+		parser = new SqllensDocumentParser(ANSI_CONTEXT);
 	});
 
 	function parseSql(sql: string) {
@@ -348,11 +334,11 @@ describe('ftl parse_document – sqlglotWarnings', () => {
 	}
 
 	it('reports a syntax_error with position for a typo in a keyword', async () => {
-		// 'FRON' is not a valid keyword — sqlglot interprets it as a column alias
+		// 'FRON' is not a valid keyword — the parser reads it as a column alias
 		// (SELECT order_id FRON), making 'orders' the unexpected token.
 		// 'orders' starts at col 21 (0-based) and ends at 27 (exclusive).
 		const model = await parseSql('select order_id FRON orders');
-		const syntaxErr = model.sqlglotWarnings?.find(w => w.type === 'syntax_error');
+		const syntaxErr = model.parseWarnings?.find(w => w.type === 'syntax_error');
 		expect(syntaxErr).toBeDefined();
 		expect(syntaxErr!.line).toBe(0);
 		expect(syntaxErr!.col).toBe(21);
@@ -364,15 +350,15 @@ describe('ftl parse_document – sqlglotWarnings', () => {
     select order_id, amount from raw_orders
 )
 select order_id, amount from orders`);
-		expect(model.sqlglotWarnings ?? []).toHaveLength(0);
+		expect(model.parseWarnings ?? []).toHaveLength(0);
 	}, 30_000);
 
 	it('syntax_error line and col are 0-based and match the bad token', async () => {
-		// The typo is on line 3 (0-based). Same 'FRON' pattern: sqlglot treats FRON
+		// The typo is on line 3 (0-based). Same 'FRON' pattern: the parser treats FRON
 		// as a column alias and flags 'orders' as unexpected.
 		// Within line 3 ('select order_id FRON orders'), 'orders' starts at col 21.
 		const model = await parseSql('with orders as (\n    select order_id from raw_orders\n)\nselect order_id FRON orders');
-		const syntaxErr = model.sqlglotWarnings?.find(w => w.type === 'syntax_error');
+		const syntaxErr = model.parseWarnings?.find(w => w.type === 'syntax_error');
 		expect(syntaxErr).toBeDefined();
 		expect(syntaxErr!.line).toBe(3);
 		expect(syntaxErr!.col).toBe(21);
@@ -381,15 +367,10 @@ select order_id, amount from orders`);
 });
 
 describe('ftl parse_document – conditional branches', () => {
-	let parser: FtlDocumentParser;
+	let parser: SqllensDocumentParser;
 
-	beforeAll(async () => {
-		parser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR, ANSI_CONTEXT);
-		await parser.ready();
-	}, 60_000);
-
-	afterAll(() => {
-		parser.dispose();
+	beforeAll(() => {
+		parser = new SqllensDocumentParser(ANSI_CONTEXT);
 	});
 
 	async function parseWithBranches(source: string): Promise<DocumentModel> {
@@ -524,79 +505,16 @@ describe('ftl parse_document – conditional branches', () => {
 	}, 30_000);
 });
 
-describe('ftl parse_document – PIVOT/UNPIVOT virtual columns', () => {
-	let parser: FtlDocumentParser;
+describe('ftl parse_document – subquery alias resolution', () => {
+	let parser: SqllensDocumentParser;
 
-	beforeAll(async () => {
-		parser = FtlDocumentParser.create(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR, ANSI_CONTEXT);
-		await parser.ready();
-	}, 60_000);
-
-	afterAll(() => {
-		parser.dispose();
+	beforeAll(() => {
+		parser = new SqllensDocumentParser(ANSI_CONTEXT);
 	});
 
 	function parseSql(sql: string) {
 		return parser.parse(sql);
 	}
-
-	it('UNPIVOT value and name columns are captured in pivotVirtualColumns', async () => {
-		const model = await parseSql(`with source_data as (
-    select country, revenue_2022, revenue_2023 from raw_sales
-)
-select country, revenue, year
-from source_data
-unpivot (revenue for year in (revenue_2022, revenue_2023))`);
-
-		expect(model.pivotVirtualColumns).toBeDefined();
-		const cols = model.pivotVirtualColumns!['source_data'];
-		expect(cols).toBeDefined();
-		expect(cols).toContain('revenue');
-		expect(cols).toContain('year');
-	}, 30_000);
-
-	it('columnsForRef includes UNPIVOT virtual columns alongside CTE columns', async () => {
-		const model = await parseSql(`with source_data as (
-    select country, revenue_2022, revenue_2023 from raw_sales
-)
-select country, revenue, year
-from source_data
-unpivot (revenue for year in (revenue_2022, revenue_2023))`);
-
-		// Find the table_ref for source_data used in the final select
-		const tblRef = model.tokens.find(t => t.type === 'table_ref' && t.name === 'source_data' && !('cteDefinition' in t));
-		expect(tblRef).toBeDefined();
-		const { ParseService } = await import('../services/parse-service.js');
-		const cols = ParseService.columnsForRef(tblRef as any, model);
-		expect(cols).toBeDefined();
-		// Original CTE columns
-		expect(cols).toContain('country');
-		// UNPIVOT virtual columns
-		expect(cols).toContain('revenue');
-		expect(cols).toContain('year');
-	}, 30_000);
-
-	it('plain PIVOT does not populate pivotVirtualColumns', async () => {
-		// A regular PIVOT should not pollute the virtual columns map
-		const model = await parseSql(`with data as (
-    select year, country, revenue from raw_sales
-),
-pivoted as (
-    select *
-    from data
-    pivot (sum(revenue) for year in (2022, 2023))
-)
-select * from pivoted`);
-
-		// pivotVirtualColumns may be populated for PIVOT aggregates; the point is
-		// that no entry should be keyed 'data' with value/name columns from UNPIVOT
-		const dataCols = model.pivotVirtualColumns?.['data'];
-		// PIVOT generates column names from the IN list values (2022, 2023), not
-		// value/name virtual columns — those should not appear as CTE column names.
-		// Simply assert no false positives: if there ARE entries they must not be
-		// the UNPIVOT-style pair ('revenue', 'year').
-		expect(dataCols?.includes('year')).toBeFalsy();
-	}, 30_000);
 
 	it('column resolution through subquery alias', async () => {
 		const model = await parseSql('SELECT x.col FROM (SELECT col FROM raw_orders) AS x');
@@ -628,14 +546,14 @@ SELECT * FROM cte`);
 			const cols = ParseService.columnsForRef(colRef.resolvedTableRef, model);
 			expect(cols).toContain('keepone');
 		}
-	}, 30_000);
+	});
 
 	it('subquery entries appear in model.ctes', async () => {
 		const model = await parseSql('SELECT x.col FROM (SELECT col FROM raw_orders) AS x');
 		const subCte = model.ctes.find(c => c.name === 'x');
 		expect(subCte).toBeDefined();
 		expect(subCte!.columns.map(c => c.name)).toContain('col');
-	}, 30_000);
+	});
 
 	it('subquery table_ref token has correct alias position', async () => {
 		const sql = 'SELECT x.col\nFROM (\n    SELECT col FROM raw_orders\n) AS x';
@@ -649,5 +567,5 @@ SELECT * FROM cte`);
 		expect(tableRef!.aliasCol).toBeDefined();
 		expect(tableRef!.aliasEndCol).toBeDefined();
 		expect(tableRef!.aliasEndCol! - tableRef!.aliasCol!).toBe(1); // 'x' is 1 char
-	}, 30_000);
+	});
 });

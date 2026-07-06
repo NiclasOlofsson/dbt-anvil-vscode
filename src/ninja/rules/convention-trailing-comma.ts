@@ -50,7 +50,7 @@ export const trailingCommaRule: TokenRule = {
 		const CLAUSE_TYPES = new Set([
 			'FROM', 'WHERE', 'GROUP_BY', 'HAVING', 'ORDER_BY', 'LIMIT', 'QUALIFY',
 			'WINDOW', 'UNION', 'UNION_ALL', 'INTERSECT', 'EXCEPT',
-			// sqlglot emits plain keyword tokens too
+			// Some dialects emit plain keyword tokens in addition to compounds
 			'GROUP', 'ORDER',
 		]);
 
@@ -99,7 +99,7 @@ export const trailingCommaRule: TokenRule = {
 			// comma and before the clause boundary.
 			let hasValueAfterLastComma = false;
 			for (let k = lastCommaIdx + 1; k < endIdx; k++) {
-				// Skip whitespace-only spans — sqlglot does not emit WS tokens, so
+				// Skip whitespace-only spans — the token stream doesn't include WS tokens, so
 				// any token here is a real value token.
 				hasValueAfterLastComma = true;
 				break;

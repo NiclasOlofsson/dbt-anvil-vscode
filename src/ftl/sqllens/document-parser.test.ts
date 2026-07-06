@@ -113,15 +113,12 @@ describe('SqllensDocumentParser — realistic dbt model (databricks)', () => {
 		expect(oOrderId!.resolvedTableRef).toBe(ordersRef);
 	});
 
-	it('parses a clean model on pass1 (isPass2 falsy) and reports timing', async () => {
+	it('parses a clean model and reports timing', async () => {
 		const model = await parser().parse(MODEL);
-		expect(model.isPass2).toBeFalsy();
-		expect(model.sqlglotWarnings).toEqual([]);
+		expect(model.parseWarnings).toEqual([]);
 		expect(typeof model.timing.totalMs).toBe('number');
 		expect(model.ninjaSqlTokens && model.ninjaSqlTokens.length).toBeGreaterThan(0);
 		expect(model.jinjaTokens && model.jinjaTokens.length).toBeGreaterThan(0);
-		// ast is intentionally absent (reflow AstIndex blocked on sqllens Join nodes).
-		expect(model.ast).toBeUndefined();
 	});
 });
 
@@ -143,8 +140,8 @@ describe('SqllensDocumentParser — column-ref per-part spans (1/2/3-part)', () 
 			model.tokens.find((t): t is ColumnRefToken => t.type === 'column_ref' && t.name === n)!;
 
 		// 1-part bare column: no qualifier IN SOURCE, but qualify binds it to the single FROM
-		// source `foo as a` — matching legacy sqlglot's qualify, which rewrote bare `bare` →
-		// `a.bare`. So `.table` is the resolved alias `a` (consumed from Qualification.bindingOf),
+		// source `foo as a` — the qualifier resolves bare `bare` to the source alias `a`.
+		// So `.table` is the resolved alias `a` (consumed from Qualification.bindingOf),
 		// with NO tableCol span since the qualifier is synthesized, not a real source token.
 		const bare = col('bare');
 		expect(bare).toMatchObject({ name: 'bare', line: 1, col: 2, endCol: 6 });
@@ -171,8 +168,8 @@ describe('SqllensDocumentParser — column-ref per-part spans (1/2/3-part)', () 
 describe('SqllensDocumentParser — quoted per-part spans (partSpans adoption)', () => {
 	// A quoted mixed-case column on an unquoted qualifier. sqllens adopts the IR
 	// `partSpans` (one span per dotted part) to place the column-name and qualifier
-	// sub-spans. The span QUIRK is inherited from legacy sqlglot: an identifier's
-	// span is anchored at `endCol - unquotedName.length`, so a QUOTED part's span
+	// sub-spans. The span logic (anchored at `endCol - unquotedName.length`) produces
+	// a quirk with quoted identifiers: the span
 	// drops the opening delimiter (and its first char) and keeps the trailing one.
 	// Verified byte-for-byte against FtlDocumentParser: `a.`My Col`` yields the same
 	// col=11/endCol=17 there. The NAME is dialect-normalized (databricks is
@@ -214,7 +211,7 @@ describe('SqllensDocumentParser — quoted per-part spans (partSpans adoption)',
 
 	it('handles a quoted mixed-case QUALIFIER with a plain column (`"My Table".col`)', async () => {
 		// sqllens parses this as qualifier=`My Table`, column=`col` — the structurally
-		// correct reading. (Legacy sqlglot mis-parses a quoted qualifier here, treating
+		// correct reading. (The legacy parser mis-parses a quoted qualifier here, treating
 		// the quoted part as the column and dropping `.col`; sqllens is more faithful,
 		// an accepted divergence, not a span regression.)
 		const sql = 'select `My Table`.col from t';
@@ -235,9 +232,9 @@ describe('SqllensDocumentParser — quoted per-part spans (partSpans adoption)',
 });
 
 describe('SqllensDocumentParser — dialect-aware identifier case normalization', () => {
-	// `normName` reproduces sqlglot's per-dialect `normalize_identifier` (which the
-	// legacy path applies via qualify() -> normalize_identifiers before serializing
-	// the AST). Three strategies span the eight sqllens dialects:
+	// `normName` performs per-dialect identifier case normalization (a replica
+	// of the legacy path's normalize_identifiers behavior applied after parsing).
+	// Three strategies span the eight sqllens dialects:
 	//   - CASE_INSENSITIVE (databricks/tsql/bigquery/redshift/duckdb/trino): everything
 	//     lowercased, quoted included.
 	//   - UPPERCASE (snowflake): unquoted uppercased, quoted preserved.
@@ -319,7 +316,7 @@ describe('SqllensDocumentParser — alias spans via Projection.aliasCst (ITEM 5)
 describe('SqllensDocumentParser — parse-failure paths', () => {
 	it('reports syntax_error warnings with 0-based positions for broken SQL', async () => {
 		const model = await parser().parse('select a from t )))');
-		const errs = (model.sqlglotWarnings ?? []).filter(w => w.type === 'syntax_error');
+		const errs = (model.parseWarnings ?? []).filter(w => w.type === 'syntax_error');
 		expect(errs.length).toBeGreaterThan(0);
 		expect(errs[0].line).toBe(0);
 		expect(typeof errs[0].col).toBe('number');
@@ -358,7 +355,7 @@ describe('SqllensDocumentParser — parse-failure paths', () => {
 			'select mkey, sourcename from warehouse',                // 17
 		].join('\n');
 		const model = await new SqllensDocumentParser({ adapterType: 'databricks', templateProvider }).parse(sql);
-		expect(model.sqlglotWarnings ?? []).toEqual([]);
+		expect(model.parseWarnings ?? []).toEqual([]);
 		expect(model.ctes).toHaveLength(1);
 		expect(model.ctes[0].name).toBe('warehouse');
 		expect(model.ctes[0].line).toBe(0);
@@ -370,12 +367,11 @@ describe('SqllensDocumentParser — parse-failure paths', () => {
 	it('yields an error-tolerant partial model for an unshaped statement-level macro', async () => {
 		// The macro sits between two full statements and no provider macro knowledge is bound, so the
 		// identifier fill leaves invalid SQL. There is no render pass anymore: the
-		// partial parse IS the result — raw coordinates (isPass2 never set), syntax
+		// partial parse IS the result — raw coordinates, syntax
 		// errors surfaced as warnings, and the tag-AST still delivers the macro call.
 		const sql = 'select a from t\n{{ some_statement_macro() }}\nselect b from u';
 		const model = await parser().parse(sql);
-		expect(model.isPass2).toBeFalsy();
-		expect((model.sqlglotWarnings ?? []).some(w => w.type === 'syntax_error')).toBe(true);
+		expect((model.parseWarnings ?? []).some(w => w.type === 'syntax_error')).toBe(true);
 		expect((model.macroCalls ?? []).map(m => m.name)).toContain('some_statement_macro');
 		// Statement 1 parsed — its table ref survives in the token stream.
 		expect(model.tokens.some(t => t.type === 'table_ref' && t.name === 't')).toBe(true);
@@ -387,17 +383,17 @@ describe('SqllensDocumentParser — dialect smoke', () => {
 		const model = await parser('tsql').parse('select a, b from t');
 		expect(model.finalColumns.map(c => c.name)).toEqual(['a', 'b']);
 		expect(model.tokens.some(t => t.type === 'table_ref' && t.name === 't')).toBe(true);
-		expect(model.sqlglotWarnings).toEqual([]);
+		expect(model.parseWarnings).toEqual([]);
 	});
 
 	it('parses a simple model under snowflake', async () => {
 		// snowflake's NORMALIZATION_STRATEGY is UPPERCASE — unquoted identifiers are
-		// uppercased (matching legacy sqlglot's normalize_identifier), unlike the
+		// uppercased per Snowflake's convention, unlike the
 		// lowercasing case-insensitive dialects above.
 		const model = await parser('snowflake').parse('select a, b from t');
 		expect(model.finalColumns.map(c => c.name)).toEqual(['A', 'B']);
 		expect(model.tokens.some(t => t.type === 'table_ref' && t.name === 'T')).toBe(true);
-		expect(model.sqlglotWarnings).toEqual([]);
+		expect(model.parseWarnings).toEqual([]);
 	});
 });
 
@@ -492,10 +488,10 @@ describe('SqllensDocumentParser — schema-fed SELECT * expansion', () => {
 
 describe('SqllensDocumentParser — getDialectSymbols', () => {
 	// The sets are LOWERCASE: every consumer (cap-keywords/functions/types, the reflow
-	// printer) tests membership with `set.has(x.toLowerCase())`, matching the sqlglot
-	// path's contract. keywordTokenTypes are sqlglot TokenType NAMES (select, alias…),
+	// printer) tests membership with `set.has(x.toLowerCase())`, matching the original
+	// convention. keywordTokenTypes are TokenType names (select, alias…),
 	// NOT keyword words; functions come from sqllens's own membership set, lowercased;
-	// types mirror sqlglot's DataType.Type enum (the legacy dialect-independent set).
+	// types mirror the DataType enum (the dialect-independent set).
 	it('exposes keyword TokenTypes, functions, and types for databricks', async () => {
 		const symbols = await parser('databricks').getDialectSymbols();
 		expect(symbols).toBeDefined();
@@ -603,8 +599,8 @@ describe('SqllensDocumentParser — multi-statement documents (per-cell extracti
 	// lowers to a flagged compound stub (empty body), and whole-doc extraction saw
 	// NOTHING — 0 tokens, 0 ctes, 0 warnings. `_parseCells` splits on the query
 	// editor's own splitter and runs the full pipeline per statement against a
-	// masked view of the document, so every span is doc-native. Legacy sqlglot
-	// only ever extracted statement 1 (`parse_one`); statements 2..n are new.
+	// masked view of the document, so every span is doc-native. The legacy parser
+	// only extracted statement 1; statements 2..n are new (extracted per statement).
 
 	const TWO = [
 		'select a from t;', // 0
@@ -625,7 +621,7 @@ describe('SqllensDocumentParser — multi-statement documents (per-cell extracti
 		expect(tok('c')?.line).toBe(1);
 		expect(tok('u')?.line).toBe(1);
 		expect(tok('u')?.col).toBe(TWO_LINES[1].indexOf('u'));
-		expect(model.sqlglotWarnings ?? []).toEqual([]);
+		expect(model.parseWarnings ?? []).toEqual([]);
 	});
 
 	it('finalSelect/finalColumns describe the LAST statement — the script result set', async () => {
@@ -648,7 +644,7 @@ describe('SqllensDocumentParser — multi-statement documents (per-cell extracti
 		// `)))` is this file's canonical broken input (see the parse-failure block);
 		// bare `select a from ;` is NOT an error — `from` parses as `a`'s alias.
 		const model = await parser().parse('select a from t )));\nselect b from u');
-		const errs = (model.sqlglotWarnings ?? []).filter(w => w.type === 'syntax_error');
+		const errs = (model.parseWarnings ?? []).filter(w => w.type === 'syntax_error');
 		expect(errs.length).toBeGreaterThan(0);
 		expect(errs.every(w => w.line === 0)).toBe(true); // all in statement 1
 		expect(model.tokens.some(t => t.type === 'table_ref' && t.name === 'u' && t.line === 1)).toBe(true);

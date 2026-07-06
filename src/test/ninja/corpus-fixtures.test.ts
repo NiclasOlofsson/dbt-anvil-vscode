@@ -23,7 +23,7 @@ const CONFIG_VARIANTS: Array<{ name: string; config: NinjaConfig }> = [
 
 const SAMPLES_ROOT = path.join(__dirname, '..', '..', '..', 'samples');
 
-// The live parser (native sqllens), synchronous — no Pyodide boot.
+// The live parser (native sqllens), fully synchronous.
 const documentParser = new SqllensDocumentParser({ adapterType: 'duckdb' });
 
 function findModelFiles(): string[] {
@@ -46,7 +46,7 @@ function walk(dir: string, acc: string[]): void {
 	}
 }
 
-describe('corpus parity', () => {
+describe('corpus fixture regression', () => {
 	const files = findModelFiles();
 
 	if (files.length === 0) {

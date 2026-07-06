@@ -1,7 +1,7 @@
 /**
- * Layout-semantic classification of sqlglot token types.
+ * Layout-semantic classification of token types.
  *
- * sqlglot emits raw token type strings like 'COMMA', 'AND', 'UNION'.
+ * Token types are raw strings like 'COMMA', 'AND', 'UNION'.
  * This module groups them into broad layout categories that spacing
  * and line-position rules reason about — one level of indirection so
  * rules don't hard-code raw type strings and dialect variants can add
@@ -27,7 +27,7 @@ export const enum TokenKind {
 	Unknown = 'unknown',
 }
 
-/** Sqlglot token type → TokenKind */
+/** Token type → TokenKind */
 const BASE_MAP: Record<string, TokenKind> = {
 	// Comma
 	'COMMA': TokenKind.Comma,
@@ -115,10 +115,10 @@ const BASE_MAP: Record<string, TokenKind> = {
  */
 export const EXTRA_MAPPINGS: Array<[string, TokenKind]> = [];
 
-/** Classify a raw sqlglot token type string. Unknown types → TokenKind.Unknown. */
-export function classify(sqlglotType: string): TokenKind {
+/** Classify a raw token type string. Unknown types → TokenKind.Unknown. */
+export function classify(tokenType: string): TokenKind {
 	for (let i = EXTRA_MAPPINGS.length - 1; i >= 0; i--) {
-		if (EXTRA_MAPPINGS[i][0] === sqlglotType) return EXTRA_MAPPINGS[i][1];
+		if (EXTRA_MAPPINGS[i][0] === tokenType) return EXTRA_MAPPINGS[i][1];
 	}
-	return BASE_MAP[sqlglotType] ?? TokenKind.Unknown;
+	return BASE_MAP[tokenType] ?? TokenKind.Unknown;
 }

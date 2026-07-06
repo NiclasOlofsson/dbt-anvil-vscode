@@ -25,9 +25,6 @@ export const unusedCteRule: TokenRule = {
 
 		// Collect table_ref names from real FROM/JOIN references only.
 		// Exclude cteDefinition tokens (the CTE name at its definition site).
-		// Do NOT exclude synthesized tokens: synthesized only means qualify() added a
-		// positionless alias to the Table node (e.g. for PIVOT/UNPIVOT). The table name
-		// itself is always user-written and is a genuine CTE reference.
 		const usedNames = new Set<string>();
 		for (const tok of model.tokens) {
 			if (tok.type === 'table_ref' && !tok.cteDefinition) {
@@ -68,7 +65,7 @@ export const unusedCteRule: TokenRule = {
 function buildDeleteFix(
 	ctes: typeof unusedCteRule extends never ? never : import('../../services/parse-service').CteInfo[],
 	index: number,
-	sqlTokens: import('../../ftl/parse-result').SqlToken[] | undefined,
+	sqlTokens: import('../../ftl/sql-tokens').SqlToken[] | undefined,
 	document: vscode.TextDocument,
 ): FixOp[] | undefined {
 	if (!sqlTokens || sqlTokens.length === 0) return undefined;
@@ -92,7 +89,7 @@ function buildDeleteFix(
 /** Delete the entire WITH clause when there's only one CTE. */
 function deleteOnlyCte(
 	cte: import('../../services/parse-service').CteInfo,
-	sqlTokens: import('../../ftl/parse-result').SqlToken[],
+	sqlTokens: import('../../ftl/sql-tokens').SqlToken[],
 	document: vscode.TextDocument,
 ): FixOp[] | undefined {
 	// Find the WITH keyword token
@@ -127,7 +124,7 @@ function deleteOnlyCte(
 function deleteFirstCte(
 	cte: import('../../services/parse-service').CteInfo,
 	nextCte: import('../../services/parse-service').CteInfo,
-	_sqlTokens: import('../../ftl/parse-result').SqlToken[],
+	_sqlTokens: import('../../ftl/sql-tokens').SqlToken[],
 	document: vscode.TextDocument,
 ): FixOp[] | undefined {
 	const nameCol = cte.col ?? 0;

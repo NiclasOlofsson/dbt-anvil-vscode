@@ -1,7 +1,7 @@
 /**
  * Token extraction from the sqllens scope tree.
  *
- * Emits the three DocumentModel token kinds mirroring the legacy sqlglot path:
+ * Emits the three DocumentModel token kinds:
  *   - `table_ref`  — every FROM/JOIN source (table / CTE-ref / aliased subquery)
  *                    plus one per CTE definition site (`cteDefinition: true`).
  *   - `column_ref` — every column reference at a scope level (`scope.body.columns`),
@@ -39,7 +39,7 @@ function identTokensInRange(tokens: Token[], lo: number, hi: number): Token[] {
  * The dotted name-part tokens inside a `[lo, hi]` range, in source order. Unlike
  * `identTokensInRange`, this also accepts `keyword`-role tokens: sqllens tags an
  * identifier that collides with a reserved word (`name`, `x`, …) as role
- * `keyword`, but legacy sqlglot still treats it as a column/qualifier Identifier.
+ * `keyword`, but the legacy parser still treated it as a column/qualifier Identifier.
  * A column reference's CST span is strictly `part (DOT part)*`, so every
  * identifier-or-keyword token in the span is a name part (no `AS`, no functions).
  */
@@ -181,8 +181,8 @@ function columnDefToken(p: Projection, dialect: Dialect): ColumnDefToken | undef
 	};
 }
 
-/** 0-based span of a single dotted name-part, computed the way legacy sqlglot
- *  serializes an identifier: the span is anchored at `endCol - unquotedName.length`,
+/** 0-based span of a single dotted name-part, computed to match the legacy
+ *  identifier span behavior: the span is anchored at `endCol - unquotedName.length`,
  *  NOT at the raw token start. For an UNQUOTED part this is identity (name width ==
  *  token width). For a QUOTED part legacy's `Column.this` is the quote-stripped name
  *  while its `_col` sits AFTER the closing quote, so the reported span drops the
@@ -366,10 +366,10 @@ export function extractTokens(parse: SqllensParse, qualification?: Qualification
 			const tok = columnRefToken(ref, id, neutral, byStart, parse.dialect);
 			if (!tok) continue;
 			// A BARE column (no written qualifier) can't be resolved by resolveTableRefs' alias
-			// matching. sqlglot's mutating qualify() rewrote `city` → `addr.city` so the qualifier
-			// was present; sqllens is read-only and never rewrites, so consume its column→source
-			// binding (Qualification.bindingOf, keyed off ref.parts) to point the token at the
-			// source it binds to. Qualified columns stay with resolveTableRefs below.
+			// matching. The legacy parser would rewrite `city` → `addr.city`; sqllens is read-only
+			// and never rewrites, so consume its column→source binding (Qualification.bindingOf,
+			// keyed off ref.parts) to point the token at the source it binds to. Qualified columns
+			// stay with resolveTableRefs below.
 			if (!tok.table && qualification) {
 				const bound = qualification.bindingOf(scope, ref as unknown as ColumnRef)?.source;
 				const rt = bound && srcToRef.get(bound);
@@ -385,12 +385,12 @@ export function extractTokens(parse: SqllensParse, qualification?: Qualification
 		}
 	}
 
-	// Pass 3: synthetic column_refs for `SELECT *`-expanded columns. Legacy sqlglot's
-	// mutating qualify() rewrote each star into explicit Column nodes, so the token
-	// stream carried one column_ref per expanded column with `resolvedTableRef`
-	// pointing at the source it came from — consumers (the unused-columns ninja rule's
+	// Pass 3: synthetic column_refs for `SELECT *`-expanded columns. The legacy parser
+	// would rewrite each star into explicit Column nodes, so the token stream carried
+	// one column_ref per expanded column with `resolvedTableRef` pointing at the
+	// source it came from — consumers (the unused-columns ninja rule's
 	// buildReferencedColumnsMap) key on name + resolvedTableRef to see a CTE's columns
-	// as "referenced" through a downstream `SELECT *`. sqllens never rewrites, so the
+	// as "referenced" through a downstream `SELECT *`. sqllens never rewrites, so we
 	// expansion is re-emitted here from the star expander (qualify columnsOf data).
 	// Spans are deliberately ZERO-WIDTH at the star's start token (legacy's synthetic
 	// tokens had broken positions; nothing keys on them): `col === endCol` never

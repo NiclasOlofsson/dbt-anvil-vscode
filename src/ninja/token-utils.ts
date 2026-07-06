@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { SqlToken } from '../ftl/parse-result';
+import type { SqlToken } from '../ftl/sql-tokens';
 
 /**
  * The absolute char offset of the first character on a given (0-based) line.

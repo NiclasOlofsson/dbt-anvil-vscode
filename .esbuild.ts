@@ -25,7 +25,7 @@ const commonOptions: esbuild.BuildOptions = {
 	// and leaves as a runtime require that fails at load time.
 	mainFields: ['module', 'main'],
 	plugins: [vscodeExternalPlugin],
-	external: ['vscode', '@duckdb/*', '*.node', 'pyodide'],
+	external: ['vscode', '@duckdb/*', '*.node'],
 	// sqllens is consumed as TS source from the sibling repo (no build/emit there).
 	// Its src/generated/ (ANTLR output) is gitignored — run `npm run gen` in
 	// ../sql-dialect-grammars before building here.
@@ -37,14 +37,6 @@ async function main(): Promise<void> {
 		...commonOptions,
 		entryPoints: ['src/extension.ts'],
 		outfile: 'dist/extension.js',
-		sourcemap: isDev,
-		minify: !isDev,
-	});
-
-	const workerContext = await esbuild.context({
-		...commonOptions,
-		entryPoints: ['src/ftl/pyodide-worker.ts'],
-		outfile: 'dist/pyodide-worker.js',
 		sourcemap: isDev,
 		minify: !isDev,
 	});
@@ -66,19 +58,15 @@ async function main(): Promise<void> {
 
 	if (isWatch) {
 		await extensionContext.watch();
-		await workerContext.watch();
 		await mcpProxyContext.watch();
 		process.on('SIGINT', async () => {
 			await extensionContext.dispose();
-			await workerContext.dispose();
 			await mcpProxyContext.dispose();
 			process.exit(0);
 		});
 	} else {
 		await extensionContext.rebuild();
 		await extensionContext.dispose();
-		await workerContext.rebuild();
-		await workerContext.dispose();
 		await mcpProxyContext.rebuild();
 		await mcpProxyContext.dispose();
 	}

@@ -4,7 +4,7 @@ import type { NinjaViolation } from './violation';
 import type { DocumentModel } from '../services/parse-service';
 import type { JinjaToken } from '../ftl/sqllens/extract/coarse-jinja';
 import type { NinjaConfig } from './config';
-import type { DialectSymbols } from '../ftl/sql-parser';
+import type { DialectSymbols } from '../ftl/sql-tokens';
 
 /**
  * Diagnostic level for a Ninja rule.
@@ -92,7 +92,7 @@ export interface TokenRuleContext {
 	/** Jinja token positions for the document — omit or pass [] when not available. */
 	jinjaTokens?: JinjaToken[];
 	config: NinjaConfig;
-	/** Authoritative symbol lists from sqlglot for the active dialect. Absent when not yet loaded. */
+	/** Authoritative symbol lists for the active dialect (keywords, functions, types). Absent when not yet loaded. */
 	dialectSymbols?: DialectSymbols;
 }
 

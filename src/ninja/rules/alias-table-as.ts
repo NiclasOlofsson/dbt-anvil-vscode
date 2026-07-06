@@ -29,7 +29,6 @@ export const tableAsRule: TokenRule = {
 
 		for (const ref of tableRefs) {
 			if (!ref.alias) continue;
-			if (ref.synthesized) continue;
 			if (ref.cteDefinition) continue;
 
 			if (ref.aliasLine === undefined || ref.aliasCol === undefined) continue;

@@ -1,5 +1,5 @@
 /**
- * Unified token stream for ninja consumers — interleaves sqlglot's lexer
+ * Unified token stream for ninja consumers — interleaves the SQL lexer
  * output (`SqlToken`) with the jinja tokenizer's output (`JinjaToken`) by
  * source position. SQL tokens that fall inside a jinja region (the lexer
  * sees the blanker's placeholders, e.g. `VAR(__j0__)`) are dropped — the
@@ -17,12 +17,12 @@
  * to `tagEnd` without scanning forward for the close.
  *
  * Position semantics differ between the two inputs:
- *   - `SqlToken.col` is sqlglot's exclusive end column on the start line.
+ *   - `SqlToken.col` is the exclusive end column on the start line.
  *   - `JinjaToken.col` is the 0-based start column.
  * Consumers should use `start`/`end` for cross-category position math —
  * those are normalized 0-based offsets in raw-source space on both sides.
  */
-import type { SqlToken } from './parse-result';
+import type { SqlToken } from './sql-tokens';
 import type { JinjaToken } from './jinja-tokenizer';
 
 export type NinjaSqlToken =
@@ -62,7 +62,7 @@ export function jinjaLeadingLines(stream: NinjaSqlToken[] | undefined): Set<numb
 }
 
 /**
- * Merge sqlglot and jinja token streams into a single position-ordered
+ * Merge SQL and jinja token streams into a single position-ordered
  * sequence. SQL tokens whose `start` falls inside a jinja tag region (as
  * marked by `*_open` tokens carrying `tagEnd`) are dropped — the jinja
  * stream is authoritative inside its own regions.

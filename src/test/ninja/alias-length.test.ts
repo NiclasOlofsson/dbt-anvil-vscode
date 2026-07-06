@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { mockDocument, cfg, model, sqlTok } from './helpers';
 import { aliasLengthRule } from '../../ninja/rules/alias-length';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 
 const RULE = 'ninja.alias.length';
 
@@ -14,7 +14,7 @@ function varTok(word: string, line: number, absStart: number): SqlToken {
 
 /**
  * Build an AS keyword token at the given position.
- * sqlglot emits the AS keyword as type 'AS'.
+ * The lexer emits the AS keyword as type 'AS'.
  */
 function asTok(line: number, absStart: number): SqlToken {
 	return sqlTok('AS', absStart, absStart + 1, line, absStart + 2);

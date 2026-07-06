@@ -2703,14 +2703,14 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 	}
 
 	/** Return the table/CTE name targeted by the current FROM or JOIN clause.
-	 *  Uses the structured refs list (already extracted by sqlglot) — no regex. */
+	 *  Uses the structured refs list (already extracted during parse) — no regex. */
 	private _resolveClauseStepInTarget(): string | undefined {
 		const frame = this._frames[this._currentFrameIndex];
 		const clauses = this._clauses[frame.name] ?? [];
 		const clause = clauses[this._currentClauseIndex];
 		if (!clause || (clause.stage !== 'from' && clause.stage !== 'join')) return undefined;
 
-		// _refs lists all FROM/JOIN targets in declaration order (from sqlglot AST).
+		// _refs lists all FROM/JOIN targets in declaration order (from the AST).
 		// The ref index is the position of this clause among the from/join clauses.
 		const refs = this._refs[frame.name] ?? [];
 		const refIndex = clauses

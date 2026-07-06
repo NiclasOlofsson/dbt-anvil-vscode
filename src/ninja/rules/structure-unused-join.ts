@@ -15,9 +15,9 @@ export const unusedJoinRule: TokenRule = {
 		const { model } = ctx;
 		const violations: NinjaViolation[] = [];
 
-		// Collect only real FROM/JOIN refs — exclude CTE definition sites and qualify()-synthesized aliases
+		// Collect only real FROM/JOIN refs — exclude CTE definition sites
 		const tableRefs = model.tokens.filter(
-			t => t.type === 'table_ref' && !t.cteDefinition && !t.synthesized,
+			t => t.type === 'table_ref' && !t.cteDefinition,
 		) as TableRefToken[];
 		if (tableRefs.length < 2) return [];
 

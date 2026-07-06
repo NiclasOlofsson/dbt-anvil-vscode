@@ -3,7 +3,7 @@ import type { TokenRule, TokenRuleContext } from '../rule';
 import type { NinjaViolation } from '../violation';
 import { tokenRange } from '../token-utils';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 
 const CLAUSE_KEYWORDS = new Set([
 	'FROM', 'WHERE', 'GROUP', 'HAVING', 'ORDER', 'LIMIT', 'QUALIFY', 'WINDOW',

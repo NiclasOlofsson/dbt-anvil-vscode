@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mergeSqlAndJinjaTokens } from '../../ftl/ninja-sql-tokens';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 import type { JinjaToken } from '../../ftl/jinja-tokenizer';
 
 const sql = (start: number, type = 'VAR'): SqlToken => ({

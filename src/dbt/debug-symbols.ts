@@ -2,7 +2,6 @@ import { buildLineStarts } from '../ftl/line-index';
 import { deriveSymbols, parseTemplated, tokenize, toSqllensDialect, MAIN_FRAME } from '../ftl/sqllens/api';
 import type { Sym, Dialect, TagNode } from '../ftl/sqllens/api';
 import { jinjaTokensFromStream } from '../ftl/sqllens/extract/jinja-stream';
-import type { SqlToken } from '../ftl/parse-result';
 import type { JinjaToken } from '../ftl/jinja-tokenizer';
 
 export interface SymbolEntry {
@@ -436,143 +435,9 @@ export function parseSourceMap(compiledSql: string): SourceMap {
 	};
 }
 
-// ---------------------------------------------------------------------------
-// emitDebugSymbolsFromTokens — pure-TS port of bridge emit_debug_symbols
-// ---------------------------------------------------------------------------
-
-const TOKEN_ROLE_MAP: Record<string, string> = {
-	SELECT: 'select',
-	FROM: 'from',
-	JOIN: 'join',
-	INNER: 'join',
-	LEFT: 'join',
-	RIGHT: 'join',
-	CROSS: 'join',
-	FULL: 'join',
-	WHERE: 'where',
-	GROUP_BY: 'group',
-	HAVING: 'having',
-	ORDER_BY: 'order',
-	LIMIT: 'limit',
-	SORT_BY: 'sort',
-	CLUSTER_BY: 'cluster',
-	DISTRIBUTE_BY: 'distribute',
-	OFFSET: 'offset',
-	WITH: 'cte',
-	STAR: 'star',
-};
-
-function buildCteRanges(
-	tokens: SqlToken[],
-	source: string,
-): Array<{ name: string; startLine: number; endLine: number }> {
-	const ranges: Array<{ name: string; startLine: number; endLine: number }> = [];
-	const withIdx = tokens.findIndex(t => t.type === 'WITH');
-	if (withIdx === -1) return ranges;
-
-	let i = withIdx + 1;
-	while (i < tokens.length) {
-		while (i < tokens.length && tokens[i].type !== 'VAR') {
-			if (tokens[i].type === 'SELECT' || tokens[i].type === 'FROM') return ranges;
-			i++;
-		}
-		if (i >= tokens.length) break;
-
-		const nameToken = tokens[i];
-		const cteName = source.slice(nameToken.start, nameToken.end + 1);
-		const startLine = nameToken.line;
-		i++;
-
-		if (i >= tokens.length || tokens[i].type !== 'ALIAS') break;
-		i++;
-
-		if (i >= tokens.length || tokens[i].type !== 'L_PAREN') break;
-		i++;
-
-		let depth = 1;
-		let endLine = startLine;
-		while (i < tokens.length && depth > 0) {
-			if (tokens[i].type === 'L_PAREN') depth++;
-			else if (tokens[i].type === 'R_PAREN') {
-				depth--;
-				if (depth === 0) endLine = tokens[i].line;
-			}
-			i++;
-		}
-
-		ranges.push({ name: cteName, startLine, endLine });
-
-		if (i < tokens.length && tokens[i].type === 'COMMA') {
-			i++;
-		} else {
-			break;
-		}
-	}
-	return ranges;
-}
-
-export function emitDebugSymbolsFromTokens(
-	source: string,
-	tokens: SqlToken[],
-	jinjaTokens: JinjaToken[],
-): EmitResult | undefined {
-	if (tokens.length === 0) return undefined;
-
-	const lineStarts = buildLineStarts(source);
-	const jinjaSpans = findJinjaSpans(source);
-
-	function inJinja(offset: number): boolean {
-		return jinjaSpans.some(s => offset >= s.start && offset < s.end);
-	}
-
-	const cteRanges = buildCteRanges(tokens, source);
-
-	function frameName(line: number): string {
-		for (const r of cteRanges) {
-			if (line >= r.startLine && line <= r.endLine) return r.name;
-		}
-		return '_main_';
-	}
-
-	const symbols: SymbolEntry[] = [];
-	for (let i = 0; i < tokens.length; i++) {
-		const t = tokens[i];
-		if (inJinja(t.start)) continue;
-
-		let role: string | undefined = TOKEN_ROLE_MAP[t.type];
-		if (role === undefined) {
-			if (t.type === 'VAR') {
-				const next = tokens[i + 1];
-				role = (next && next.type === 'L_PAREN') ? 'fn' : 'ident';
-			} else if (t.type === 'NUMBER' || t.type === 'STRING') {
-				role = 'lit';
-			}
-		}
-		if (role === undefined) continue;
-
-		const line = t.line;
-		const col = t.start - lineStarts[line];
-		const endCol = t.col;
-		symbols.push({ line, col, endCol, role, frameName: frameName(line) });
-	}
-
-	if (symbols.length === 0) return undefined;
-
-	// Tag classification is dialect-independent — the default dialect suffices
-	// (this path runs once per debug session, so the extra templated parse is
-	// negligible; the sqllens emit path reuses its own).
-	const { refMarkers, sourceMarkers, macroSpans } = buildJinjaClassifications(
-		jinjaTokens, parseTemplated(source, toSqllensDialect(undefined)).tags,
-	);
-
-	const annotatedSource = injectMarkers(source, symbols, jinjaSpans, { macroSpans, refMarkers, sourceMarkers });
-	return { annotatedSource, symbols, macroSpans, refMarkers, sourceMarkers };
-}
-
 /**
  * Extract @ref / @source / @macro Jinja classifications from a raw dbt source.
- * Shared by both emit paths (token-based and sqllens-based) — the Jinja marker
- * wire format is identical regardless of which SQL parser produced the symbols.
+ * The Jinja marker wire format is independent of the symbol emit pass.
  */
 function buildJinjaClassifications(
 	jinjaTokens: JinjaToken[],
@@ -686,7 +551,7 @@ export interface EmitResult {
 
 /** Clause-keyword text (uppercased) → debugger role. The sqllens analogue of
  *  TOKEN_ROLE_MAP: sqllens emits GROUP/ORDER/… as separate keyword tokens (not
- *  the collapsed GROUP_BY/ORDER_BY of sqlglot), so we key the *leading* keyword —
+ *  collapsed forms like GROUP_BY/ORDER_BY), so we key the *leading* keyword —
  *  its line is the one the debugger anchors the clause to. */
 const CLAUSE_KEYWORD_ROLE: Record<string, string> = {
 	SELECT: 'select',

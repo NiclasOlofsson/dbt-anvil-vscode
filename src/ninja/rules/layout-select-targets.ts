@@ -3,7 +3,7 @@ import type { NinjaViolation } from '../violation';
 import type { TokenRule, TokenRuleContext } from '../rule';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 import { tokenRange } from '../token-utils';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 
 const RULE_ID = 'ninja.layout.select-targets';
 

@@ -1,7 +1,7 @@
 /**
  * IR-native `AstIndex` for the reflow printer.
  *
- * The legacy index (`src/ninja/reflow/ast-index.ts`) is built over sqlglot's
+ * The legacy index (`src/ninja/reflow/ast-index.ts`) was built over a
  * flat serde dump; this one is built over the sqllens IR (QueryExpr / SelectExpr /
  * SetOpExpr / Expr trees, CteDef, sources, and `SelectExpr.joins`). It answers the
  * exact same byte-range questions the printer asks, using the SAME class-name

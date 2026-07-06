@@ -2,8 +2,8 @@
  * Schema-fed `SELECT *` expansion — the sqllens-native analog of the legacy path's
  * `qualify(ast, schema=…, infer_schema=True, qualify_columns=True)` star expansion.
  *
- * sqllens `qualify()` is READ-ONLY: unlike sqlglot it never rewrites the IR to replace
- * `*` with explicit columns. Instead it resolves each scope's output column names
+ * sqllens `qualify()` is READ-ONLY: it never rewrites the IR to replace
+ * `*` with explicit columns (unlike the legacy path). Instead it resolves each scope's output column names
  * (`Qualification.columnsOf`), stars expanded, against a `Schema` catalog. This module
  * turns that into per-star column lists the structural extractors splice into
  * `finalColumns` / `finalSelect.columns` / `CteInfo.columns`, so those fields match
@@ -11,8 +11,8 @@
  *
  * Like legacy, expansion is best-effort: a star whose sources' columns are unknown
  * (a bare table with no schema entry, an un-inferable derived relation) is left
- * unexpanded — the extractor keeps its `*` / skip behavior, exactly as sqlglot's
- * `infer_schema` leaves an unresolvable `*` in place. Running qualify with an EMPTY
+ * unexpanded — the extractor keeps its `*` / skip behavior, exactly as the legacy
+ * path leaves an unresolvable `*` in place. Running qualify with an EMPTY
  * schema still expands stars sourced from CTEs / subqueries whose columns are
  * structurally inferable, which is what the legacy path does unconditionally
  * (`infer_schema=True` + its CTE-schema supplement).
@@ -23,7 +23,7 @@ import { qualify } from '../api';
 import { asCst, normName } from './spans';
 
 /** One expanded star column: its (raw, un-normalized) output name and the source key it
- *  binds to — the qualifier sqlglot's qualify_columns would prepend (e.g. `joined` for
+ *  binds to — the qualifier prepended by the legacy qualify process (e.g. `joined` for
  *  `joined.customer_name`), used to fill `FinalSelectColumnInfo.table`. */
 export interface ExpandedColumn {
 	name: string;

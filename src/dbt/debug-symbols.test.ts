@@ -1,23 +1,15 @@
 /**
- * Unit tests for the sqllens-powered emit path (emitDebugSymbols).
- *
- * Pure-TS: sqllens parses the (jinja-blanked) SQL directly, so these run without
- * Pyodide. A final describe uses Pyodide to compare frames against the legacy
- * token path (emitDebugSymbolsFromTokens) on the same straightforward SQL.
+ * Unit tests for the debug-symbol emit path (emitDebugSymbols): sqllens parses
+ * the (jinja-blanked) SQL directly, symbols and frames come off its Sym model.
  */
-import { beforeAll, describe, expect, it } from 'vitest';
-import * as path from 'node:path';
+import { describe, expect, it } from 'vitest';
 import {
 	emitDebugSymbols,
-	emitDebugSymbolsFromTokens,
 	findJinjaSpans,
 	injectMarkers,
 	parseSourceMap,
 } from './debug-symbols';
 import type { SymbolEntry } from './debug-symbols';
-import { initPyodide } from '../ftl/pyodide-loader.js';
-import type { PyodideRuntime } from '../ftl/pyodide-loader.js';
-import { PyodideSqlParser } from '../ftl/pyodide-sql-parser.js';
 
 // A realistic dbt-model-shaped source: two CTEs (the second with a JOIN and an
 // aggregate), a final SELECT *, and {{ ref() }} tags on the FROM/JOIN relations.
@@ -186,20 +178,8 @@ describe('emitDebugSymbols (sqllens path)', () => {
 	});
 });
 
-describe('emitDebugSymbols vs emitDebugSymbolsFromTokens (frame parity)', () => {
-	const PYODIDE_DIR = path.join(__dirname, '..', '..', 'node_modules', 'pyodide');
-	const VENDOR_DIR = path.join(__dirname, '..', '..', 'resources', 'ftl', 'vendor');
-	const SCRIPTS_DIR = path.join(__dirname, '..', '..', 'resources', 'ftl');
-
-	let runtime: PyodideRuntime;
-	let parser: PyodideSqlParser;
-
-	beforeAll(async () => {
-		runtime = await initPyodide(PYODIDE_DIR, VENDOR_DIR, SCRIPTS_DIR);
-		parser = PyodideSqlParser.create(runtime.pyodide);
-	}, 60_000);
-
-	it('agrees with the legacy token path on CTE-body and main frames', async () => {
+describe('emitDebugSymbols — frame attribution on a plain CTE chain', () => {
+	it('assigns CTE-body frames by name and the final select to _main_', () => {
 		const source = [
 			'with', // 0
 			'cte_a as (', // 1
@@ -211,30 +191,20 @@ describe('emitDebugSymbols vs emitDebugSymbolsFromTokens (frame parity)', () => 
 			'select * from cte_b', // 7
 		].join('\n');
 
-		const parsed = await parser.parse(source, 'duckdb');
-		const legacy = emitDebugSymbolsFromTokens(source, parsed.sqlTokens ?? [], parsed.jinjaTokens ?? []);
-		const next = emitDebugSymbols(source, 'duckdb');
-		expect(legacy).toBeDefined();
-		expect(next).toBeDefined();
+		const res = emitDebugSymbols(source, 'duckdb');
+		expect(res).toBeDefined();
 
-		// The single frame assigned to symbols on a given line (both paths are consistent per line).
+		// The single frame assigned to symbols on a given line.
 		const frameOnLine = (syms: SymbolEntry[], line: number): string | undefined => {
 			const f = syms.filter(s => s.line === line).map(s => s.frameName);
 			return f.length ? f[0] : undefined;
 		};
 
-		// CTE-body lines (2, 5) and the main query line (7) must agree.
-		for (const line of [2, 5, 7]) {
-			expect(frameOnLine(next!.symbols, line), `line ${line}`).toBe(frameOnLine(legacy!.symbols, line));
-		}
-		expect(frameOnLine(next!.symbols, 2)).toBe('cte_a');
-		expect(frameOnLine(next!.symbols, 5)).toBe('cte_b');
-		expect(frameOnLine(next!.symbols, 7)).toBe('_main_');
-
-		// KNOWN DIVERGENCE: on the CTE *declaration* line the legacy walk assigns the
-		// CTE frame (its range starts at the name token), while the sqllens path leaves
-		// the name in the enclosing scope (_main_) — the CTE name is declared there.
-		expect(frameOnLine(legacy!.symbols, 1)).toBe('cte_a');
-		expect(frameOnLine(next!.symbols, 1)).toBe('_main_');
+		expect(frameOnLine(res!.symbols, 2)).toBe('cte_a');
+		expect(frameOnLine(res!.symbols, 5)).toBe('cte_b');
+		expect(frameOnLine(res!.symbols, 7)).toBe('_main_');
+		// The CTE *declaration* line stays in the enclosing scope (_main_) —
+		// the CTE name is declared there, its body frame starts at the paren.
+		expect(frameOnLine(res!.symbols, 1)).toBe('_main_');
 	});
 });

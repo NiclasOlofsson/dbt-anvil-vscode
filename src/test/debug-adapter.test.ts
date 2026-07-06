@@ -200,7 +200,7 @@ function mockParseService(decomposeResult?: object): ParseService {
 		getDocumentModel: vi.fn().mockResolvedValue(null),
 		decomposeQuery: vi.fn().mockResolvedValue(JSON.stringify(decomposeResult ?? DECOMPOSE_SIMPLE)),
 		onAliasesReady: { dispose: vi.fn() },
-		onSqlglotWarnings: { dispose: vi.fn() },
+		onParseWarnings: { dispose: vi.fn() },
 	} as unknown as ParseService;
 }
 

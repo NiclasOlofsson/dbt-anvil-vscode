@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { reflowDocument } from '../../../ninja/reflow/engine';
 import { cfg, mockDocument, model, sqlTok } from '../helpers';
-import type { SqlToken } from '../../../ftl/parse-result';
+import type { SqlToken } from '../../../ftl/sql-tokens';
 
 /**
  * CRITICAL: comments must survive reformatting. They ride on
- * SqlToken.comments[] (attached by sqlglot's tokenizer — trailing comments
+ * SqlToken.comments[] (trailing comments
  * land on the preceding token, leading comments on the following one).
  * Dropping them is data loss.
  */

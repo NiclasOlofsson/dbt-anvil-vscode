@@ -12,11 +12,11 @@ function types(sql: string, dialect: Dialect = 'databricks') {
 }
 
 describe('mapTokens — clause & compound naming', () => {
-	// Column 6 vs the char count of "select": sqlglot's `col` is the 1-based
+	// Column 6 vs the char count of "select": `col` is the 1-based
 	// inclusive end column (= 0-based exclusive end), not the start column.
 	const sql = 'select a, b\nfrom t\ngroup by a';
 
-	it('emits sqlglot TokenType names and folds GROUP BY into one token', () => {
+	it('emits TokenType names and folds GROUP BY into one token', () => {
 		expect(types(sql)).toEqual(['SELECT', 'VAR', 'COMMA', 'VAR', 'FROM', 'VAR', 'GROUP_BY', 'VAR']);
 	});
 
@@ -40,7 +40,7 @@ describe('mapTokens — clause & compound naming', () => {
 
 describe('keywordTokenTypesFor', () => {
 	// The union of the mapper's KEYWORDS/COMPOUNDS/DIALECT_* table VALUES — the
-	// sqlglot TokenType NAMES a mapped token's `.type` can carry. UPPERCASE (matches
+	// TokenType NAMES a mapped token's `.type` can carry. UPPERCASE (matches
 	// token.type); the document parser lowercases these into its DialectSymbols.
 	it('unions base keyword + compound token-type names', () => {
 		const s = keywordTokenTypesFor('databricks');
@@ -88,10 +88,10 @@ describe('mapTokens — comment folding', () => {
 	});
 });
 
-describe('mapTokens — whitespace never leaks (sqlglot emits no whitespace tokens)', () => {
+describe('mapTokens — whitespace never leaks (token stream emits no whitespace tokens)', () => {
 	it('drops every whitespace/newline run across blank lines yet keeps comment attachment', () => {
-		// Multi-line SQL with CRLF newlines and blank lines around a comment. sqlglot
-		// emits NO whitespace tokens; a `\r\n`-typed leak was the top shadow-diff bucket.
+		// Multi-line SQL with CRLF newlines and blank lines around a comment. The token
+		// stream emits NO whitespace tokens; a `\r\n`-typed leak was the top shadow-diff bucket.
 		const sql = 'select a\r\n\r\n-- gap comment\r\n\r\nfrom t';
 		const toks = map(sql);
 

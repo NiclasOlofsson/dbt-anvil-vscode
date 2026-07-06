@@ -1,9 +1,10 @@
 import * as vscode from 'vscode';
 import type { NinjaConfig } from '../config';
 import type { DocumentModel } from '../../services/parse-service';
-import type { DialectSymbols } from '../../ftl/sql-parser';
+import type { DialectSymbols } from '../../ftl/sql-tokens';
 import { parseFmtOffRegions, isInFmtOffRegion } from '../jinja/directive-parser';
 import { createIndentPolicy } from './indent-policy';
+import { EMPTY_AST_INDEX } from './ast-index';
 import { printDocument } from './printer';
 
 /**
@@ -44,7 +45,6 @@ export function reflowDocument(
 	if (stream.length === 0) {
 		return { edit: null, reason: 'no tokens to reflow' };
 	}
-	const ast = model.ast ?? [];
 
 	// Short-circuit when any fmt-off region covers the document — handing back a
 	// no-op edit is simpler than threading region-splicing through the printer
@@ -56,9 +56,7 @@ export function reflowDocument(
 	}
 
 	const policy = createIndentPolicy(config);
-	// Prefer a model-supplied index (the sqllens path builds one from its IR);
-	// otherwise the printer derives one from the flat `ast` payload.
-	const rendered = printDocument({ stream, ast, astIndex: model.astIndex, source, config, policy, symbols });
+	const rendered = printDocument({ stream, astIndex: model.astIndex ?? EMPTY_AST_INDEX, source, config, policy, symbols });
 
 	if (rendered === source) {
 		return { edit: null, reason: 'document already matches policy' };

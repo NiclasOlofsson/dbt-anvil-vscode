@@ -76,7 +76,6 @@ export const capIdentifiersRule: TokenRule = {
 				&& token.aliasLine !== undefined
 				&& token.aliasCol !== undefined
 				&& token.aliasEndCol !== undefined
-				&& !token.synthesized
 			) {
 				name = token.alias;
 				range = new vscode.Range(token.aliasLine, token.aliasCol, token.aliasLine, token.aliasEndCol);

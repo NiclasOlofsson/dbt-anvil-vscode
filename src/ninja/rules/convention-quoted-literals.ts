@@ -8,7 +8,7 @@ import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 /**
  * CV10 — Consistent quote style for string literals.
  *
- * By default, prefers single-quoted string literals (`'text'`). sqlglot emits:
+ * By default, prefers single-quoted string literals (`'text'`). The tokenizer emits:
  *   - `SINGLE_QUOTE`  for  'text'
  *   - `DOUBLE_QUOTE`  for  "text"  (when used as a string, not an identifier)
  *

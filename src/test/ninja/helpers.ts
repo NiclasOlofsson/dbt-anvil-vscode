@@ -1,8 +1,8 @@
 import { DEFAULT_CONFIG, type NinjaConfig } from '../../ninja/config';
 import { runNinja, type NinjaResult } from '../../ninja/engine';
 import type { CteInfo, ColumnRefToken, TableRefToken, ColumnDefToken, DocumentModel } from '../../services/parse-service';
-import type { SqlToken } from '../../ftl/parse-result';
-import type { DialectSymbols } from '../../ftl/sql-parser';
+import type { SqlToken } from '../../ftl/sql-tokens';
+import type { DialectSymbols } from '../../ftl/sql-tokens';
 import { mergeSqlAndJinjaTokens } from '../../ftl/ninja-sql-tokens';
 import * as vscode from 'vscode';
 
@@ -197,8 +197,8 @@ export function model(
 
 /**
  * Stub `DialectSymbols` for unit tests that want to exercise recasing
- * without booting Pyodide. Production always gets the real dialect-aware
- * sets from sqlglot — this fixture intentionally lives in test helpers
+ * without running the full parser. Production always gets the real dialect-aware
+ * sets from the active dialect — this fixture intentionally lives in test helpers
  * so no production code depends on hardcoded keyword/type lists.
  *
  * Callers can override any of the three sets; defaults cover the common

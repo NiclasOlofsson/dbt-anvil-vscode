@@ -22,10 +22,10 @@ export const qualifiedColumnsRule: TokenRule = {
 	check(ctx: TokenRuleContext): NinjaViolation[] {
 		const { model, document, jinjaTokens = [] } = ctx;
 
-		// Count only real FROM/JOIN refs — exclude cteDefinition and synthesized tokens
+		// Count only real FROM/JOIN refs — exclude cteDefinition tokens
 		// so a single-source CTE query is not treated as multi-source.
 		const tableRefs = model.tokens.filter(
-			t => t.type === 'table_ref' && !t.cteDefinition && !t.synthesized,
+			t => t.type === 'table_ref' && !t.cteDefinition,
 		);
 		if (tableRefs.length < 2) return [];
 

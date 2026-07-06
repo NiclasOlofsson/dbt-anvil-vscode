@@ -13,10 +13,10 @@ import { sqlOnly } from '../../ftl/ninja-sql-tokens';
  * and their quoting is inconsistent with the rest of the query.
  */
 
-/** Token types sqlglot emits for quoted identifiers. */
+/** Token types for quoted identifiers. */
 const QUOTED_TYPES = new Set(['QUOTED_IDENTIFIER', 'BACKTICK']);
 
-/** Token types sqlglot emits for unquoted identifiers and variables. */
+/** Token types for unquoted identifiers and variables. */
 const UNQUOTED_TYPES = new Set(['VAR', 'IDENTIFIER']);
 
 /** Matches identifiers that are safe to write without quotes. */

@@ -11,7 +11,6 @@ experiments/
 docs/
 node_modules/
 !node_modules/@duckdb/**
-!node_modules/pyodide/**
 .esbuild.ts
 .eslintcache
 .gitignore

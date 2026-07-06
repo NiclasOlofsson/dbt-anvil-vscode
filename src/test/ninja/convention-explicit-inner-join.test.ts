@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { mockDocument, cfg, model, sqlTok, applyEditsToText } from './helpers';
 import { explicitInnerJoinRule } from '../../ninja/rules/convention-explicit-inner-join';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 import { FixAction } from '../../ninja/violation';
 
 const RULE = 'ninja.convention.explicit-inner-join';

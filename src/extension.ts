@@ -41,7 +41,6 @@ import { NinjaFormattingProvider } from './providers/sql/formatting-provider';
 import { ConfigCodeActionProvider } from './providers/common/config-code-action-provider';
 import { DbtCallHierarchyProvider } from './providers/sql/call-hierarchy-provider';
 import { ParseService } from './services/parse-service';
-import { FtlDocumentParser } from './ftl/ftl-document-parser';
 import { SqllensDocumentParser } from './ftl/sqllens/document-parser';
 import type { DocumentParser } from './services/document-parser';
 import { DbtQueryService } from './services/dbt-query-service';
@@ -468,26 +467,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		compileCachePersistence.save(compileCache);
 	});
 
-	// -------- Parse service — engine routed by dbt-anvil.parser.engine (window-reload to switch) --------
-	// 'sqllens' (default): native TS parser, no Pyodide boot / no WASM worker pool.
-	// 'legacy': the sqlglot-on-Pyodide worker pool (kept until the Phase-3 cutover deletes it).
-	const engine = vscode.workspace.getConfiguration('dbt-anvil').get<'legacy' | 'sqllens'>('parser.engine', 'sqllens');
-	let documentParser: DocumentParser;
-	let ftlParser: FtlDocumentParser | undefined;
-	if (engine === 'sqllens') {
-		documentParser = new SqllensDocumentParser(manifestIndexer);
-		logger.info('Parse service: sqllens native parser (Pyodide not booted)');
-	} else {
-		const pyodideDir = path.join(context.extensionPath, 'node_modules', 'pyodide');
-		const vendorDir = path.join(context.extensionPath, 'resources', 'ftl', 'vendor');
-		const scriptsDir = path.join(context.extensionPath, 'resources', 'ftl');
-		ftlParser = FtlDocumentParser.create(pyodideDir, vendorDir, scriptsDir, manifestIndexer, { logger });
-		await ftlParser.ready();
-		documentParser = ftlParser;
-		logger.info('Parse service: FTL worker pool ready');
-	}
+	// -------- Parse service — sqllens native parser, synchronous and in-process --------
+	const documentParser: DocumentParser = new SqllensDocumentParser(manifestIndexer);
 	const parseService = new ParseService(documentParser, logger, { describeCache, indexer: manifestIndexer });
-	if (ftlParser) context.subscriptions.push(ftlParser);
 
 	context.subscriptions.push(
 		manifestWatcher.onEnrichmentInvalidated((evicted) => {
@@ -507,7 +489,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	context.subscriptions.push(modelProfiler);
 
 	// -------- Diagnostics provider --------
-	const diagnosticsProvider = new EditorDiagnosticsProvider(executionService, manifestIndexer, statusBar, projectDir, logger, parseService, parseService.onAliasesReady, manifestWatcher.onIndexRebuild, parseService.onSqlglotWarnings, startupReady);
+	const diagnosticsProvider = new EditorDiagnosticsProvider(executionService, manifestIndexer, statusBar, projectDir, logger, parseService, parseService.onAliasesReady, manifestWatcher.onIndexRebuild, parseService.onParseWarnings, startupReady);
 	context.subscriptions.push(diagnosticsProvider);
 
 	// -------- Set workspaceHasDBT context --------

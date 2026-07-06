@@ -20,7 +20,7 @@ import { expandedColumnInfos, expandedFinalSelectColumns, type StarExpander } fr
  * The output name of a projection, or `undefined` to skip it. A bare `*` (no
  * qualifier) is skipped (it names nothing concrete without a schema); a qualified
  * `t.*` surfaces as `'*'`. Mirrors the legacy final-select naming, with the
- * identifier NAME normalized (unquoted → lowercase) as the sqlglot path does.
+ * identifier NAME normalized (unquoted → lowercase per the dialect).
  */
 function projName(p: Projection, dialect: Dialect): string | undefined {
 	if (p.isStar) {
@@ -32,10 +32,10 @@ function projName(p: Projection, dialect: Dialect): string | undefined {
 
 /**
  * Collect the CST spans of every column reference reachable inside an expression
- * — the sqlglot `Identifier` set the legacy `expressionBounds` scans to anchor a
- * projection's span. Function names, literals, `*`, CAST type names, and operators
- * are NOT identifiers, so only `column` nodes contribute (recursed through the
- * modelled compound forms). Window PARTITION/ORDER BY columns count too.
+ * — this spans the projection's anchor bounds. Function names, literals, `*`, CAST
+ * type names, and operators are NOT column references, so only `column` nodes
+ * contribute (recursed through the modelled compound forms). Window PARTITION/ORDER
+ * BY columns count too.
  */
 function collectColumnCsts(expr: Expr, out: CstNode[]): void {
 	switch (expr.kind) {

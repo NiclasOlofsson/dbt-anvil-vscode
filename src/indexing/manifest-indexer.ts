@@ -6,12 +6,7 @@ import { classifyLayer, type LayerConfig, type LayerInfo } from './layer-classif
 import { makeTemplateProvider } from '../ftl/sqllens/template-shape';
 import type { TemplateProvider } from '../ftl/sqllens/api';
 
-/**
- * Map a dbt adapter type to the canonical sqlglot dialect name.
- * Most adapter names match sqlglot's own dialect names; this handles the exceptions.
- * @deprecated Moved to ftl/ftl-document-parser.ts — import from there.
- */
-export { mapAdapterToDialect } from '../ftl/ftl-document-parser';
+export { mapAdapterToDialect } from '../ftl/dialect-map';
 
 export interface LineageNode {
 	uniqueId: string;
@@ -135,7 +130,7 @@ export class ManifestIndexer {
 	/**
 	 * The raw dbt adapter type from the manifest or profiles.yml.
 	 * Returns the raw dbt value (e.g. 'postgresql', 'synapse') — dialect mapping
-	 * is deferred to the sqlglot boundary (FtlDocumentParser).
+	 * is deferred to the SQL parsing layer (FtlDocumentParser).
 	 */
 	get adapterType(): string | undefined {
 		return this.loader.resolveDialect();

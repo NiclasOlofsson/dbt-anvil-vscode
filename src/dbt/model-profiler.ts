@@ -182,7 +182,7 @@ export class ModelProfiler implements vscode.Disposable {
 		}
 		const { compiledSql, ctes } = compiled;
 
-		// 2. CTE names + endLine positions come from the sqlglot parse in getCompiledCtes.
+		// 2. CTE names + endLine positions come from the parse in getCompiledCtes.
 		// Compiled SQL is clean (no Jinja), giving reliable line positions for query slicing.
 		const compiledEndLineByName = new Map(ctes.map(c => [c.name, c.endLine]));
 

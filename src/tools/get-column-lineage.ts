@@ -5,7 +5,7 @@ import type { ILogger } from '../types/logger';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import type { CompileCache } from '../dbt/compile-cache';
 import type { DescribeCache } from '../dbt/describe-cache';
-import type { ColumnDependency, LineageResult } from '../ftl/ftl-document-parser';
+import type { ColumnDependency, LineageResult } from '../ftl/sqllens/lineage';
 import type { DocumentParser } from '../services/document-parser';
 import { toolResult } from './tool-helpers';
 
@@ -46,7 +46,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 	}
 
 	/**
-	 * Build sqlglot schema mapping from upstream nodes.
+	 * Build schema mapping from upstream nodes for column expansion.
 	 * Tries database_columns (list from warehouse) first, then manifest columns dict.
 	 * Format: {database: {schema: {table: {column: type}}}}
 	 * Ported from dbt-core-mcp get_column_lineage._build_schema_mapping.
@@ -233,7 +233,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 			return { columns: ['*'], source: 'wildcard' };
 		}
 
-		// Models: SQL parsing via Pyodide
+		// Models: Extract output columns from compiled SQL
 		const cols = await this._getOutputColumns(compiledCode, schemaMapping);
 		return { columns: cols, source: cols.length > 0 ? 'sql' : 'none' };
 	}
@@ -428,7 +428,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 	}
 
 	/**
-	 * Trace column lineage for a single model+column via Pyodide.
+	 * Trace column lineage for a single model+column through the dependency chain.
 	 */
 	private async _traceColumn(
 		modelUniqueId: string,
@@ -467,7 +467,7 @@ export class GetColumnLineageTool implements vscode.LanguageModelTool<GetColumnL
 	}
 
 	/**
-	 * Resolve output columns for the model by parsing compiled SQL via Pyodide.
+	 * Resolve output columns for the model by parsing the compiled SQL.
 	 */
 	private async _getOutputColumns(
 		compiledCode: string,

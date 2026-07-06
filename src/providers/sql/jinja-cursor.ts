@@ -4,7 +4,7 @@
  * parsed `DocumentModel.macroCalls` cannot represent (jinja-blanker only
  * tokenizes tags with a matching close).
  *
- * Pure-text walk over the document; no Pyodide, no AST.
+ * Pure-text walk over the document; no AST required.
  */
 
 /**

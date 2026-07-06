@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mockDocument, cfg, model, sqlTok } from './helpers';
 import { unionStyleRule } from '../../ninja/rules/convention-union-style';
 import { DEFAULT_CONFIG } from '../../ninja/config';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 import { FixAction } from '../../ninja/violation';
 
 const RULE = 'ninja.convention.union-style';

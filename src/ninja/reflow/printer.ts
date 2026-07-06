@@ -1,21 +1,15 @@
 import type { NinjaConfig } from '../config';
 import type { NinjaSqlToken } from '../../ftl/ninja-sql-tokens';
-import type { AstPayload, SqlToken } from '../../ftl/parse-result';
-import type { DialectSymbols } from '../../ftl/sql-parser';
+import type { DialectSymbols, SqlToken } from '../../ftl/sql-tokens';
 import type { IndentPolicy } from './indent-policy';
 import { createCapitalisationState, recaseToken } from './capitalisation';
-import { createAstIndex, type AstIndex } from './ast-index';
+import type { AstIndex } from './ast-index';
 import { normaliseTagSpacing } from '../jinja/tag-formatter';
 
 export interface PrinterInput {
 	stream: NinjaSqlToken[];
-	ast: AstPayload[];
-	/**
-	 * A prebuilt byte-range index. When supplied (the sqllens path builds one
-	 * from its IR), it is used verbatim; otherwise the printer derives one from
-	 * `ast` via `createAstIndex`.
-	 */
-	astIndex?: AstIndex;
+	/** Byte-range structural index the parser built from its IR. */
+	astIndex: AstIndex;
 	source: string;
 	config: NinjaConfig;
 	policy: IndentPolicy;
@@ -32,12 +26,12 @@ export interface PrinterInput {
  * break at paren depth 0. The printer emits a newline before each of these
  * and resets the indent to `baseIndent` (root-level clauses).
  *
- * Multi-word compounds like `GROUP_BY` / `ORDER_BY` are emitted by sqlglot
- * as single tokens, which is why they appear here as single strings.
+ * Multi-word compounds like `GROUP_BY` / `ORDER_BY` arrive from the token
+ * stream as single tokens, which is why they appear here as single strings.
  */
 const MAJOR_CLAUSES = new Set([
 	'SELECT', 'FROM', 'WHERE',
-	'GROUP_BY', 'GROUP', // sqlglot sometimes emits bare GROUP + BY
+	'GROUP_BY', 'GROUP', // the token stream sometimes emits bare GROUP + BY
 	'HAVING',
 	'ORDER_BY', 'ORDER',
 	'LIMIT', 'OFFSET', 'QUALIFY', 'WINDOW', 'FETCH',
@@ -66,7 +60,7 @@ const SET_OPERATOR = new Set(['UNION', 'INTERSECT', 'EXCEPT']);
 const NO_SPACE_BEFORE = new Set(['COMMA', 'R_PAREN', 'R_BRACKET', 'DOT', 'SEMICOLON', 'DCOLON']);
 
 /**
- * SQL builtins that sqlglot tokenises as keyword-typed tokens (not VAR /
+ * SQL builtins that the token stream tokenises as keyword-typed tokens (not VAR /
  * IDENTIFIER) but which still function syntactically as function calls.
  * The dialect-symbol path catches most builtins, but these ones are
  * absent from common dialect function sets (DuckDB, Snowflake) so we
@@ -130,10 +124,8 @@ const NO_SPACE_AFTER = new Set(['L_PAREN', 'L_BRACKET', 'DOT', 'DCOLON']);
  * regenerated — that is what makes this a reflow rather than a passthrough.
  */
 export function printDocument(input: PrinterInput): string {
-	const { stream, ast, source, config, policy, symbols } = input;
+	const { stream, astIndex, source, config, policy, symbols } = input;
 	if (stream.length === 0) return source;
-
-	const astIndex = input.astIndex ?? createAstIndex(ast);
 
 	// Pre-pass: collect byte ranges of every SQL comment. Jinja tokens that
 	// sit inside a comment range are false positives from the independent
@@ -156,25 +148,27 @@ export function printDocument(input: PrinterInput): string {
 	const mustWrapSelectRanges = computeMustWrapSelects(
 		stream, config.maxLineLength, policy, config.layout.alwaysWrap.select);
 	// Pre-pass token-stream fallback for SELECT-list comma detection. The AST
-	// path (`enclosing.includes('Select')`) misses commas when the Select node
-	// has no position metadata in sqlglot's serde dump — common for nested
-	// CTE-body selects. This set records the start offset of every comma that
-	// separates SELECT targets at depth 0 inside a SELECT...FROM/WHERE/etc.
-	// range.
+	// path (`enclosing.includes('Select')`) misses commas when the structural
+	// index carries no span for the Select node (degraded parses, or the
+	// empty index used by unit tests) — common for nested CTE-body selects.
+	// This set records the start offset of every comma that separates SELECT
+	// targets at depth 0 inside a SELECT...FROM/WHERE/etc. range.
 	const selectListCommaOffsets = computeSelectListCommas(stream);
 	// Pre-pass token-stream fallback for predicate AND/OR detection. The AST
 	// path (`enclosing.includes('Where' | 'Having' | 'Join')`) misses ANDs/ORs
-	// when sqlglot's serde drops position metadata on the Where/Having/Join
-	// node — without this fallback the predicate-boolean break never fires,
+	// when the structural index carries no span for the Where/Having/Join
+	// node (degraded parses, or the empty index used by unit tests) —
+	// without this fallback the predicate-boolean break never fires,
 	// leaving `where a = 1 and b = 2` un-wrapped.
 	const predicateBooleanOffsets = computePredicateBooleans(stream);
 	// Pre-pass token-stream fallback for multi-predicate JOIN-ON detection.
-	// sqlglot's serde leaves `Join.m` empty, so `findEnclosing(... 'Join')`
-	// returns a node with no byte range and `containsAny(... 'And'|'Or')`
-	// can't walk children that also lack ranges. Without this fallback the
-	// `indented_on` multi-predicate split never fires on real parser output,
-	// collapsing `... on a.x = b.x and a.y = b.y and ...` to a single
-	// mega-line.
+	// When the structural index carries no span for the Join node (degraded
+	// parses, or the empty index used by unit tests), `findEnclosing(...
+	// 'Join')` returns a node with no byte range and `containsAny(...
+	// 'And'|'Or')` can't walk children that also lack ranges. Without this
+	// fallback the `indented_on` multi-predicate split never fires on real
+	// parser output, collapsing `... on a.x = b.x and a.y = b.y and ...` to
+	// a single mega-line.
 	const {
 		ranges: multiPredicateJoinOnRanges,
 		breakOffsets: multiPredicateJoinOnBreakOffsets,
@@ -331,9 +325,10 @@ export function printDocument(input: PrinterInput): string {
 	// True between a top-level `WITH` token and the trailing top-level
 	// `SELECT` that consumes the WITH clause. Used as a token-stream
 	// fallback for CTE-separator-comma detection when the AST doesn't
-	// propagate positions to the `With` node — sqlglot's serde leaves
-	// `With.m` empty in current dumps, so byte-range queries can't see
-	// it. The flag flips off the first SELECT we see at parenDepth==0
+	// propagate positions to the `With` node — the structural index carries
+	// no span for it (degraded parses, or the empty index used by unit
+	// tests), so byte-range queries can't see it. The flag flips off the
+	// first SELECT we see at parenDepth==0
 	// after opening the WITH (the final SELECT after all CTEs).
 	let inWithClause = false;
 	// Function-call / non-indenting paren depth. Major clauses break on
@@ -591,7 +586,7 @@ export function printDocument(input: PrinterInput): string {
 			&& hasLeadingLineComment
 			&& !skipNextTokenLeadingComments;
 
-		// EOL comment reclassification: sqlglot may attribute a comment that
+		// EOL comment reclassification: the token stream may attribute a comment that
 		// was originally at end-of-line of the previous token to this token
 		// as a leading comment. Detect that (the comment's source line
 		// matches `prev.line`) and place it inline AFTER the previous
@@ -643,7 +638,7 @@ export function printDocument(input: PrinterInput): string {
 
 		// ── Leading comments ──────────────────────────────────────────────
 		// Comments whose byte range precedes the owning token were attached
-		// by sqlglot's tokenizer as "leading" — they belong ABOVE this
+		// by the token stream as "leading" — they belong ABOVE this
 		// token in the output. Drain them now before the clause/spacing
 		// logic runs, so they inherit the current indent level.
 		//
@@ -729,8 +724,9 @@ export function printDocument(input: PrinterInput): string {
 		// checking: inside With AND not inside a Paren / Func / Subquery
 		// ancestor that's a closer enclosure.
 		//
-		// AST fallback — sqlglot's serde leaves the outer `With` node's
-		// `m` empty, so `enclosing.includes('With')` is false for real
+		// AST fallback — when the structural index carries no span for the
+		// outer `With` node (degraded parses, or the empty index used by
+		// unit tests), `enclosing.includes('With')` is false for real
 		// parsed documents. We supplement with a token-stream flag
 		// (`inWithClause`) that tracks "we've seen a top-level WITH but
 		// not yet the final top-level SELECT", and require parenDepth==0
@@ -743,15 +739,18 @@ export function printDocument(input: PrinterInput): string {
 				|| (inWithClause && parenDepth === 0)
 			);
 		// A SELECT-list separator comma sits directly under a `Select`
-		// (again not inside a nested enclosure). When the AST lacks position
-		// metadata on Select nodes (common for CTE-body selects in sqlglot's
-		// serde dump), fall back to the token-stream pre-pass that classifies
+		// (again not inside a nested enclosure). When the structural index
+		// carries no span for Select nodes (degraded parses, or the empty
+		// index used by unit tests; also common for CTE-body selects),
+		// fall back to the token-stream pre-pass that classifies
 		// commas by tracking zone openings/closings off SELECT and FROM/WHERE.
 		// `Case`/`If` are in the exclusion list because a comma inside a CASE
 		// span (e.g. the type args of `cast(x as decimal(20, 6))` in a WHEN
 		// result) can never separate SELECT targets — CASE...END closes
-		// before any target comma. The legacy sqlglot serde never carried
-		// Case spans so the arm couldn't over-fire; the sqllens astIndex does.
+		// before any target comma. The empty index used by unit tests never
+		// carries Case spans so the arm couldn't over-fire against it; the
+		// real structural index does, so this exclusion guards against
+		// over-firing on live parses.
 		const isSelectListComma = typeUpper === 'COMMA'
 			&& (
 				(enclosing.includes('Select')
@@ -780,7 +779,7 @@ export function printDocument(input: PrinterInput): string {
 		// An L_PAREN opens an "indenting" span when it's a CTE body or a
 		// subquery — those deserve their body on a new indented line.
 		// Detection is token-stream-first (robust against AST variations
-		// across sqlglot versions / dialects) with AST confirmation as
+		// across dialects) with AST confirmation as
 		// a fallback:
 		//   - `base AS (...)`    → prev token is ALIAS → CTE body
 		//   - `FROM (...)`       → prev token is FROM → subquery body
@@ -835,10 +834,10 @@ export function printDocument(input: PrinterInput): string {
 		//      Func or Anonymous.
 		//   3. Prev token's literal matches the active dialect's function
 		//      name set (catches `coalesce`, `nullif`, `cast`, etc.).
-		//   4. Prev token's TYPE is a known keyword-builtin that sqlglot
-		//      tokenizes specially (`ISNULL`, `IIF`, `IF`, etc.) — these
-		//      function syntactically as function calls regardless of
-		//      what sqlglot's AST classifies them as.
+		//   4. Prev token's TYPE is a known keyword-builtin that the token
+		//      stream tokenizes specially (`ISNULL`, `IIF`, `IF`, etc.) —
+		//      these function syntactically as function calls regardless of
+		//      what the AST classifies them as.
 		const prevLiteralLower = prev && prev.category === 'sql'
 			? source.slice(prev.start, prev.end + 1).toLowerCase()
 			: '';
@@ -858,7 +857,8 @@ export function printDocument(input: PrinterInput): string {
 		// the legacy behavior, while the default stays compact.
 		// `indented_on` multi-predicate split: AST path covers hand-built
 		// fixtures where Join/And carry byte ranges; the token-stream
-		// fallback covers real sqlglot output where Join.m is empty.
+		// fallback covers real parser output where the structural index
+		// carries no span for the Join node.
 		let isJoinOnOrUsing = false;
 		if ((typeUpper === 'ON' || typeUpper === 'USING') && policy.indentedOn) {
 			if (enclosing.includes('Join')) {
@@ -877,11 +877,11 @@ export function printDocument(input: PrinterInput): string {
 		// `when x then y` is legal and stays inline; only a multi-line WHEN
 		// forces THEN onto its own line. `multiLineWhenThens` (token-stream
 		// pass) is the sole trigger — being enclosed by a Case/If node is
-		// deliberately NOT sufficient. sqlglot's serde never carried Case
-		// position metadata, so an enclosure-based trigger never fired on
-		// legacy real output; the sqllens astIndex DOES carry real Case
-		// spans, and an enclosure trigger would break every THEN in every
-		// CASE, diverging from the committed format oracles.
+		// deliberately NOT sufficient. The empty index used by unit tests
+		// never carries Case position metadata, so an enclosure-based
+		// trigger never fires there; the sqllens astIndex DOES carry real
+		// Case spans, and an enclosure trigger would break every THEN in
+		// every CASE, diverging from the committed format oracles.
 		const isIndentedThen = typeUpper === 'THEN'
 			&& multiLineWhenThens.has(tok.start)
 			&& policy.indentedThen;
@@ -1474,9 +1474,10 @@ export function printDocument(input: PrinterInput): string {
  * emit point to decide whether to enter wide-CASE mode (one WHEN/ELSE per
  * line, END flush with CASE).
  *
- * Why a token-stream pass rather than AST: sqlglot's serde frequently drops
- * `m` (position metadata) on `Case` nodes inside expressions, so
- * `findEnclosing(... 'Case')` can't recover the CASE's byte range. The
+ * Why a token-stream pass rather than AST: the structural index frequently
+ * carries no span for `Case` nodes inside expressions (degraded parses, or
+ * the empty index used by unit tests), so `findEnclosing(... 'Case')` can't
+ * recover the CASE's byte range. The
  * token stream has every CASE/WHEN/END token with its source position
  * intact, which is sufficient for a width estimate.
  *
@@ -1759,7 +1760,7 @@ function computeMustBreakAfterThens(
 	if (mustWrapCaseStarts.size === 0) return out;
 	const indentWidth = policy.at(1).length || 4;
 
-	// Sqlglot's tokenizer emits `THEN` (or `ELSE`/`END`) at any paren depth
+	// The token stream emits `THEN` (or `ELSE`/`END`) at any paren depth
 	// the source uses. We track paren depth and the stack of currently-open
 	// CASEs (start offset + paren depth where CASE opened + whether the
 	// `indent-body` engine would consider the surrounding scope "governed"
@@ -2532,10 +2533,11 @@ function isIndentingParenOpen(
  *      column expression is already too wide (in which case we still emit
  *      `select\n    <wide-expr>\nfrom ...` for readability).
  *
- * We work from the token stream (not AST `m` ranges) because sqlglot's serde
- * dump frequently omits position metadata on `Select` nodes, especially when
- * they sit inside CTE bodies — without this fallback the wrap heuristic
- * never fires for nested selects, which is the worst real-world bug.
+ * We work from the token stream (not AST `m` ranges) because the structural
+ * index frequently carries no span for `Select` nodes (degraded parses, or
+ * the empty index used by unit tests), especially when they sit inside CTE
+ * bodies — without this fallback the wrap heuristic never fires for nested
+ * selects, which is the worst real-world bug.
  *
  * Width estimate per SELECT:
  *   indentColumn (depth-of-indenting-parens * indent unit width)
@@ -2910,7 +2912,7 @@ function computeMultiLineWhenThens(
 			continue;
 		}
 		// Comments are attached to adjacent SQL tokens via tok.comments
-		// (sqlglot doesn't emit standalone COMMENT tokens). When any token
+		// (the token stream doesn't emit standalone COMMENT tokens). When any token
 		// inside a WHEN body — including the THEN itself — carries comments,
 		// the formatter has to emit those comments on their own lines, which
 		// forces THEN onto a new line. Mark the WHEN multi-line so the THEN
@@ -3116,10 +3118,10 @@ function computeWideCallBooleanOffsets(
  * of a SELECT at depth 0 (i.e. not inside a function call, IN list, or
  * nested subquery's own SELECT). Returns a set of comma `start` offsets.
  *
- * Used by the printer when the AST has no position metadata on `Select`
- * nodes (sqlglot's serde drops `m` on inner Selects under CTE bodies for
- * some dialects), which would otherwise leave nested SELECT-list commas
- * unrecognized — defeating the must-wrap path.
+ * Used by the printer when the structural index carries no span for `Select`
+ * nodes (degraded parses, or the empty index used by unit tests — common for
+ * inner Selects under CTE bodies for some dialects), which would otherwise
+ * leave nested SELECT-list commas unrecognized — defeating the must-wrap path.
  *
  * Scanning rules:
  *   - Each SELECT opens a target-list "zone" at the current paren depth.
@@ -3186,8 +3188,9 @@ function computeSelectListCommas(stream: NinjaSqlToken[]): Set<number> {
  * `start` offsets.
  *
  * The printer's AST path (`enclosing.includes('Where' | 'Having' | 'Join')`)
- * fails when sqlglot's serde dump drops position metadata on those nodes —
- * common for inner statements. Without a fallback the source layout sticks,
+ * fails when the structural index carries no span for those nodes
+ * (degraded parses, or the empty index used by unit tests) — common for
+ * inner statements. Without a fallback the source layout sticks,
  * even when it violates the configured operator position.
  *
  * We intentionally restrict the fallback to operators whose SOURCE position
@@ -3299,8 +3302,8 @@ function computePredicateBooleans(stream: NinjaSqlToken[]): Set<number> {
  * terminates the predicate chain (exclusive boundary, captured as
  * `end = chain-end-token.start - 1` so `inAnyRange` works).
  *
- * Why this exists: sqlglot's serde leaves `Join.m` empty in real parser
- * output, so the AST path
+ * Why this exists: the structural index carries no span for the Join node
+ * in degraded parses (or the empty index used by unit tests), so the AST path
  * (`findEnclosing(... 'Join')` + `containsAny(... 'And'|'Or')`) returns
  * false even when the source clearly has multi-predicate ONs. Without this
  * fallback, `indented_on` collapses to a single mega-line:

@@ -305,7 +305,7 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 		uris: vscode.Uri[],
 		signal: AbortSignal,
 		config: ReturnType<typeof loadConfig>,
-		dialectSymbols: import('../../ftl/sql-parser').DialectSymbols | undefined,
+		dialectSymbols: import('../../ftl/sql-tokens').DialectSymbols | undefined,
 	): Promise<void> {
 		const queue = uris.slice();
 		const openDocs = new Set(vscode.workspace.textDocuments.map(d => d.uri.toString()));
@@ -323,7 +323,7 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 		uri: vscode.Uri,
 		signal: AbortSignal,
 		config: ReturnType<typeof loadConfig>,
-		dialectSymbols: import('../../ftl/sql-parser').DialectSymbols | undefined,
+		dialectSymbols: import('../../ftl/sql-tokens').DialectSymbols | undefined,
 		openDocs: Set<string>,
 	): Promise<void> {
 		if (signal.aborted) return;

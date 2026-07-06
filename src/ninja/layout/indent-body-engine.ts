@@ -28,7 +28,7 @@
  */
 
 import * as vscode from 'vscode';
-import type { SqlToken } from '../../ftl/parse-result';
+import type { SqlToken } from '../../ftl/sql-tokens';
 import type { NinjaSqlToken } from '../../ftl/ninja-sql-tokens';
 import { sqlOnly, jinjaLeadingLines } from '../../ftl/ninja-sql-tokens';
 import type { NinjaConfig } from '../config';

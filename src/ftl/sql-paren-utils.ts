@@ -2,7 +2,7 @@
  * Byte-level paren / comment scanners over raw SQL.
  *
  * Used to locate CTE boundaries when the AST alone cannot give us the closing
- * `)` position — sqlglot's `_meta` carries only token start positions, so we
+ * `)` position — metadata carries only token start positions, so we
  * fall back to scanning the source. These helpers correctly skip strings,
  * SQL line/block comments, and Jinja comments.
  */

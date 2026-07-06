@@ -10,7 +10,7 @@ export class DbtQueryService {
 	) {}
 
 	/**
-	 * Compiles a model via CompileCache and parses CTE boundaries with sqlglot.
+	 * Compiles a model via CompileCache and parses CTE boundaries from the compiled SQL.
 	 * Returns the compiled SQL string and the full CTE list, or null if compilation
 	 * fails or the uniqueId is not a model node.
 	 *

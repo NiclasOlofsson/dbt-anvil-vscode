@@ -7,7 +7,7 @@ import { runIndentEngine, type IndentSpec } from '../layout/indent-engine';
  * GROUP BY should be at the same indent level as its preceding peer
  * (WHERE / FROM / SELECT).
  *
- * Triggers on both the combined sqlglot token `GROUP_BY` and the split form
+ * Triggers on both the combined token `GROUP_BY` and the split form
  * `GROUP` (which precedes a separate `BY` token in some dialects). Same for
  * the anchor check.
  */
