@@ -37,10 +37,17 @@ import type { ExpansionShape, TemplateCall } from './api';
  * Classify a macro's expansion shape from its `macro_sql` source. Returns `statement`
  * for a query-bodied macro (WITH/SELECT-first), `conjunct` for a trailing-conjunct
  * macro (AND/OR-first), `undefined` otherwise (identifier fill).
+ *
+ * When the call site is supplied, its LITERAL arguments are bound to the macro's
+ * declared parameters before classification, so a body that leads with a parameter
+ * (`{{ stat }} {{ column_name }}=false`, the mode-as-argument generic_is_deleted
+ * signature) classifies by the call's literal mode word: 'and'/'or' → `conjunct`.
+ * A 'where' mode still answers `undefined` — see the header on why no shipped
+ * shape fits that slot (tripwire tests pin it; channel: sqllens-anvil).
  */
-export function classifyMacroShape(macroSql: string | undefined): ExpansionShape | undefined {
+export function classifyMacroShape(macroSql: string | undefined, call?: TemplateCall): ExpansionShape | undefined {
 	if (!macroSql) return undefined;
-	const body = macroSql
+	const body = bindLiteralArgs(macroSql, call)
 		// drop the {% macro ... %} opener and {% endmacro %} closer (whitespace-trim variants)
 		.replace(/\{%-?\s*macro\b[\s\S]*?%\}/i, '')
 		.replace(/\{%-?\s*endmacro\s*-?%\}/i, '')
@@ -53,6 +60,29 @@ export function classifyMacroShape(macroSql: string | undefined): ExpansionShape
 	if (/^(with|select)\b/i.test(body)) return 'statement';
 	if (/^(and|or)\b/i.test(body)) return 'conjunct';
 	return undefined;
+}
+
+/**
+ * Substitute the call's literal arguments into bare `{{ param }}` references.
+ * Positional args map to the signature's parameter order; kwargs by name.
+ * Non-literal args (`null` — computed expressions the engine refuses to
+ * fabricate) bind nothing, leaving the reference for the jinja strip.
+ */
+function bindLiteralArgs(macroSql: string, call: TemplateCall | undefined): string {
+	if (!call) return macroSql;
+	const sig = /\{%-?\s*macro\s+[A-Za-z0-9_]+\s*\(([^)]*)\)/i.exec(macroSql);
+	if (!sig) return macroSql;
+	const params = sig[1].split(',').map(p => p.trim().split('=')[0].trim()).filter(Boolean);
+	const bound = new Map<string, string>();
+	params.forEach((p, i) => {
+		const arg = call.args[i];
+		if (typeof arg === 'string') bound.set(p, arg);
+	});
+	for (const kw of call.kwargs ?? []) {
+		if (typeof kw.value === 'string' && params.includes(kw.name)) bound.set(kw.name, kw.value);
+	}
+	if (bound.size === 0) return macroSql;
+	return macroSql.replace(/\{\{-?\s*([A-Za-z0-9_]+)\s*-?\}\}/g, (whole, name: string) => bound.get(name) ?? whole);
 }
 
 /**
@@ -71,7 +101,7 @@ class AnvilTemplateProvider extends DefaultTemplateProvider {
 	}
 
 	override shapeOf(call: TemplateCall): ExpansionShape | undefined {
-		return super.shapeOf(call) ?? classifyMacroShape(this.lookupMacroSql(call.name));
+		return super.shapeOf(call) ?? classifyMacroShape(this.lookupMacroSql(call.name), call);
 	}
 }
 

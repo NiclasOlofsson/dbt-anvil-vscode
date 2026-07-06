@@ -364,6 +364,67 @@ describe('SqllensDocumentParser — parse-failure paths', () => {
 		expect(cols.find(c => c.name === 'sourcename')?.line).toBe(3);
 	});
 
+	// The real generic_is_deleted signature takes the mode as a PARAMETER —
+	// `{{ stat }} {{ column_name }}=false` — so the body alone classifies as
+	// nothing and the tag gets the identifier fill, which is a syntax error
+	// after a complete ON predicate (gold__vendor.sql, F5 smoke finding).
+	const MODE_ARG_PROVIDER = makeTemplateProvider(name =>
+		name === 'generic_is_deleted'
+			? '{% macro generic_is_deleted(column_name,stat) %}\n    {{ stat }} {{ column_name }}=false\n{% endmacro %}'
+			: undefined,
+	);
+
+	it('parses an and-mode macro whose mode arrives as a call argument', async () => {
+		const sql = [
+			'select ve.vendorkey',
+			'from gold__vendor ve',
+			'left outer join gold__chain ca',
+			"    on (ve.chainkey = ca.chainkey and ca.gold_sourcesystemkey='d365')",
+			"{{ generic_is_deleted('ve.is_deleted','and') }}",
+		].join('\n');
+		const model = await new SqllensDocumentParser({ adapterType: 'databricks', templateProvider: MODE_ARG_PROVIDER }).parse(sql);
+		expect((model.parseWarnings ?? []).filter(w => w.type === 'syntax_error')).toEqual([]);
+	});
+
+	// TRIPWIRE (it.fails): the where-mode slot from gold__vendor.sql — after a
+	// complete ON predicate, before UNION ALL. No shipped expansion shape can
+	// fill it (conjunct regresses the `from t {{ m('where') }}` slot), so the
+	// identifier fill produces a syntax error on a valid model. Goes RED the
+	// moment sqllens ships a where-clause shape (channel: sqllens-anvil) —
+	// flip to a plain `it` then.
+	it.fails('parses a where-mode macro after a complete ON predicate', async () => {
+		const sql = [
+			'select ve.vendorkey',
+			'from gold__vendor ve',
+			'left outer join gold__chain ca',
+			"    on (ve.chainkey = ca.chainkey and ca.gold_sourcesystemkey='d365')",
+			"{{ generic_is_deleted('ve.is_deleted','where') }}",
+			'union all',
+			"select '-1' as vendorkey",
+		].join('\n');
+		const model = await new SqllensDocumentParser({ adapterType: 'databricks', templateProvider: MODE_ARG_PROVIDER }).parse(sql);
+		expect((model.parseWarnings ?? []).filter(w => w.type === 'syntax_error')).toEqual([]);
+	});
+
+	// TRIPWIRE (it.fails): a syntax-error MESSAGE must quote raw source, never
+	// the placeholder fill ("mismatched input 'jjjj…'" leaks mask text the user
+	// never wrote). Provider-less unknown macro, so this pin stays meaningful
+	// independently of the where-clause shape work (channel: sqllens-anvil).
+	// Flip to a plain `it` when the message fix ships.
+	it.fails('never quotes placeholder fill text in a syntax-error message', async () => {
+		const sql = [
+			'select a',
+			'from t',
+			'join u on (t.a = u.a)',
+			"{{ some_unknown_macro('t.x','where') }}",
+			'union all',
+			'select b from v',
+		].join('\n');
+		const model = await parser().parse(sql);
+		const msgs = (model.parseWarnings ?? []).map(w => w.message).join('\n');
+		expect(msgs).not.toMatch(/j{4,}/);
+	});
+
 	it('yields an error-tolerant partial model for an unshaped statement-level macro', async () => {
 		// The macro sits between two full statements and no provider macro knowledge is bound, so the
 		// identifier fill leaves invalid SQL. There is no render pass anymore: the
