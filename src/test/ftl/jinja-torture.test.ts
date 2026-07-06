@@ -44,6 +44,7 @@ const PARSE: Record<string, ParseExpectation> = {
 	'left_outer_ninja.sql': 'clean',
 	'bare_join_violation.sql': 'clean',
 	'quoted_identifiers.sql': 'clean',
+	'two_ctes.sql': 'clean',
 };
 
 /**
@@ -55,12 +56,26 @@ const PARSE: Record<string, ParseExpectation> = {
 const GLUED = 'glued_from.sql';
 
 /**
- * Format-gate tripwires: reflow is not yet a fixed point on these shapes —
- * pass 2 explodes a paren-wrapped multi-line ON predicate that pass 1 left
- * inline. Extension-side printer item (ours, not upstream). Flip to the
- * plain gate when the printer converges.
+ * Format-gate tripwires: `config:model` pairs where reflow is not yet a fixed
+ * point, tied to a named open item. Empty right now (the paren-ON explosion
+ * and the leading-comma CTE blank-line growth both converged); add an entry
+ * when a new non-idempotent shape appears.
  */
-const FORMAT_OPEN = new Set(['and_mode_trailing.sql', 'where_mode_trailing.sql']);
+const FORMAT_OPEN = new Set<string>([]);
+
+/**
+ * The format gate runs under BOTH layout families: the leading-comma /
+ * trailing-operator variant routes the printer through entirely different
+ * break emission paths (both printer fixed-point bugs found so far were
+ * variant-specific).
+ */
+const FORMAT_CONFIGS = [
+	{ name: 'default', config: cfg() },
+	{
+		name: 'alternate',
+		config: cfg({ layout: { commaPosition: 'leading', operatorPosition: 'trailing' } }),
+	},
+] as const;
 
 const NINJA: Record<string, { expects: string[]; absent: string[] }> = {
 	'left_outer_ninja.sql': { expects: [], absent: ['ninja.ambiguity.implicit-join'] },
@@ -135,22 +150,24 @@ describe('jinja-torture corpus — parse gate', () => {
 
 describe('jinja-torture corpus — format gate (reflow idempotence)', () => {
 	const cleanModels = Object.entries(PARSE).filter(([, e]) => e === 'clean').map(([n]) => n);
-	for (const name of cleanModels) {
-		const gate = async (): Promise<void> => {
-			const source = readModel(name);
-			const model = await parser.parse(source);
-			const first = reflowDocument(mockDocument(source), model, cfg());
-			const formatted = first.edit ? first.edit.newText : source;
-			const model2 = await parser.parse(formatted);
-			const second = reflowDocument(mockDocument(formatted), model2, cfg());
-			const reformatted = second.edit ? second.edit.newText : formatted;
-			expect(reformatted).toBe(formatted);
-		};
-		if (FORMAT_OPEN.has(name)) {
-			// TRIPWIRE: flips red when the printer converges on this shape.
-			it.fails(`${name} reflow not yet idempotent (paren-ON explosion, printer item)`, gate);
-		} else {
-			it(`${name} reflow is idempotent`, gate);
+	for (const variant of FORMAT_CONFIGS) {
+		for (const name of cleanModels) {
+			const gate = async (): Promise<void> => {
+				const source = readModel(name);
+				const model = await parser.parse(source);
+				const first = reflowDocument(mockDocument(source), model, variant.config);
+				const formatted = first.edit ? first.edit.newText : source;
+				const model2 = await parser.parse(formatted);
+				const second = reflowDocument(mockDocument(formatted), model2, variant.config);
+				const reformatted = second.edit ? second.edit.newText : formatted;
+				expect(reformatted).toBe(formatted);
+			};
+			if (FORMAT_OPEN.has(`${variant.name}:${name}`)) {
+				// TRIPWIRE: flips red when the printer converges on this shape.
+				it.fails(`[${variant.name}] ${name} reflow not yet idempotent (open printer item)`, gate);
+			} else {
+				it(`[${variant.name}] ${name} reflow is idempotent`, gate);
+			}
 		}
 	}
 });

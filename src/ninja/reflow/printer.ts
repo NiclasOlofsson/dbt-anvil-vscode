@@ -176,10 +176,16 @@ export function printDocument(input: PrinterInput): string {
 	// General-case logical predicate paren detection (applies in WHERE,
 	// HAVING, JOIN ON, CASE WHEN, anywhere `(` contains an AND/OR chain).
 	// Subsumes the JOIN-ON-specific wrapParens handling — any paren with
-	// logical content that's source-multi-line or width-overflowing opens
-	// as an indenting body.
+	// logical content that's source-multi-line, width-overflowing, OR about
+	// to be broken by THIS run's own predicate breaks opens as an indenting
+	// body. The planned-break input keeps reflow a fixed point: without it,
+	// a break landing inside a source-single-line paren makes the paren
+	// multi-line only in the NEXT run's source, exploding it on pass 2.
+	const plannedPredicateBreaks = new Set<number>([
+		...predicateBooleanOffsets, ...multiPredicateJoinOnBreakOffsets,
+	]);
 	const { parenStarts: logicalPredicateParens, breakOffsets: logicalPredicateBreakOffsets }
-		= computeLogicalPredicateParens(stream, config.maxLineLength);
+		= computeLogicalPredicateParens(stream, config.maxLineLength, plannedPredicateBreaks);
 	for (const off of logicalPredicateBreakOffsets) predicateBooleanOffsets.add(off);
 	// Pre-pass: locate CASE...END spans whose single-line projected width would
 	// exceed `maxLineLength`. The set of CASE token start offsets identifies
@@ -1019,7 +1025,13 @@ export function printDocument(input: PrinterInput): string {
 			if (config.layout.commaPosition === 'leading') {
 				// Leading mode: break BEFORE the comma so it leads the next
 				// CTE definition (`)\n\n, next_cte as (...)`). Push a literal
-				// `\n` first to insert the blank-line between CTEs.
+				// `\n` first to insert the blank-line between CTEs. The
+				// separator OWNS that blank: clear any source-blank-line
+				// preservation queued above, or a blank this printer emitted
+				// on the previous run stacks a second one every pass
+				// (fixed-point breaker; trailing mode is immune because both
+				// paths share the one-shot flag).
+				pendingBlankLine = false;
 				parts.push('\n');
 				// If the next SQL token carries leading comments (e.g. `--
 				// comment\n next_cte as (`), drain those FIRST so the block
@@ -2977,7 +2989,11 @@ function peekNextSqlTokenTypeAt(stream: NinjaSqlToken[], start: number): string 
  *   - Not a subquery (the body's first SQL token isn't SELECT).
  *   - Trigger: at least one of those AND/ORs is on a different source line
  *     than its neighbours (already in `predicateBooleanOffsets`), OR the
- *     collapsed body would overflow `maxLineLength`.
+ *     collapsed body would overflow `maxLineLength`, OR a break this run
+ *     already plans (`plannedBreaks` — predicate booleans + JOIN-ON
+ *     multi-predicate splits) lands on one of them. The last arm is the
+ *     fixed-point guarantee: a paren whose body is about to be broken must
+ *     open NOW, not on the next reflow when the break shows up as source.
  *
  * Returns:
  *   - `parenStarts`: L_PAREN offsets that should open as an indenting
@@ -2991,6 +3007,7 @@ function peekNextSqlTokenTypeAt(stream: NinjaSqlToken[], start: number): string 
 function computeLogicalPredicateParens(
 	stream: NinjaSqlToken[],
 	maxLineLength: number,
+	plannedBreaks: ReadonlySet<number>,
 ): { parenStarts: Set<number>; breakOffsets: Set<number> } {
 	const parenStarts = new Set<number>();
 	const breakOffsets = new Set<number>();
@@ -3068,7 +3085,8 @@ function computeLogicalPredicateParens(
 		if (bodyAndOr.length === 0) continue;
 
 		const projected = widthChars + Math.max(0, tokenCount - 1);
-		const triggerWrap = sourceMultiLineAndOr || projected > maxLineLength;
+		const plannedBreakInside = bodyAndOr.some(off => plannedBreaks.has(off));
+		const triggerWrap = sourceMultiLineAndOr || projected > maxLineLength || plannedBreakInside;
 		if (!triggerWrap) continue;
 
 		parenStarts.add(tok.start);
@@ -3354,6 +3372,9 @@ function computeMultiPredicateJoinOnRanges(
 		hasAndOr: boolean;
 		lastTokEnd: number;
 		candidateBreaks: number[];
+		/** True when one paren wraps the ENTIRE predicate body (`on (...)`).
+		 *  Only then are depth+1 operators top-level and collectable. */
+		wrapParen: boolean;
 	} | null = null;
 	// `scanningJoin` is true after a JOIN-cluster start has been seen at
 	// `joinDepth` but before its ON/USING. We use it to bind the ON to the
@@ -3422,6 +3443,7 @@ function computeMultiPredicateJoinOnRanges(
 				hasAndOr: false,
 				lastTokEnd: tok.end,
 				candidateBreaks: [],
+				wrapParen: false,
 			};
 			// Check whether the next SQL token is `(` and whether the
 			// matching `)` is followed by nothing more in the chain. If
@@ -3456,7 +3478,10 @@ function computeMultiPredicateJoinOnRanges(
 						isWrap = false;
 						break;
 					}
-					if (isWrap) wrapParenStarts.add(stream[nextSqlIdx].start);
+					if (isWrap) {
+						wrapParenStarts.add(stream[nextSqlIdx].start);
+						chain.wrapParen = true;
+					}
 				}
 			}
 			scanningJoin = null;
@@ -3464,16 +3489,19 @@ function computeMultiPredicateJoinOnRanges(
 			continue;
 		}
 
-		// Inside an open chain, track AND/OR at the chain's depth or exactly
-		// one paren deeper. The +1 case catches predicates wrapped in an
-		// outer paren (`on ((... and ...) or (... and ...))`) — the OR
-		// between the two inner parens sits at chain.joinDepth + 1. Deeper
-		// nesting (the AND inside each inner paren) is NOT flagged: those
-		// AND/ORs are inside a single sub-predicate group and should stay
-		// inline.
+		// Inside an open chain, track AND/OR at the chain's depth — plus one
+		// paren deeper, but ONLY when that paren wraps the entire predicate
+		// body (`on ((... and ...) or (... and ...))` — the OR between the two
+		// inner parens sits at chain.joinDepth + 1 yet is top-level). Without
+		// the wrap-paren gate, the OR inside a mere sub-group
+		// (`on a = b and (x or y)`) was collected too, breaking inside the
+		// group and leaving a non-fixed-point layout for the next reflow to
+		// explode. Deeper nesting is never flagged: those AND/ORs are inside
+		// a single sub-predicate group and stay inline.
 		if (chain) {
 			if ((type === 'AND' || type === 'OR')
-				&& (parenDepth === chain.joinDepth || parenDepth === chain.joinDepth + 1)
+				&& (parenDepth === chain.joinDepth
+					|| (parenDepth === chain.joinDepth + 1 && chain.wrapParen))
 			) {
 				chain.hasAndOr = true;
 				chain.candidateBreaks.push(tok.start);
