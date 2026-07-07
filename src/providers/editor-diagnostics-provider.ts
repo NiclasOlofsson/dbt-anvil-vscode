@@ -466,7 +466,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		const jinjaTokens = model?.jinjaTokens
 			? coarseJinjaTokens(model.jinjaTokens, document.getText())
 			: coarseJinjaTokensFromText(document.getText());
-		const emptyModel: DocumentModel = { ctes: [], refs: [], sources: [], tokens: [], finalColumns: [], timing: { parseMs: 0, totalMs: 0 } };
+		const emptyModel: DocumentModel = { ctes: [], refs: [], sources: [], finalColumns: [], timing: { parseMs: 0, totalMs: 0 } };
 		const result = runNinja(document, model ?? emptyModel, jinjaTokens, config, dialectSymbols ?? undefined);
 
 		this._ninjaResults.set(document.uri.toString(), result);

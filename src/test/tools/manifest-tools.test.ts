@@ -186,7 +186,7 @@ describe('GetColumnLineageTool', () => {
 				callCount++;
 				return Promise.resolve({
 					finalColumns: [{ name: 'customer_id', line: 0 }, { name: 'first_name', line: 0 }],
-					ctes: [], refs: [], sources: [], finalSelect: undefined, tokens: [],
+					ctes: [], refs: [], sources: [], finalSelect: undefined,
 					timing: { parseMs: 0, totalMs: 0 },
 				});
 			}),
@@ -229,7 +229,7 @@ describe('GetColumnLineageTool', () => {
 		const mockFtlParser = {
 			parse: vi.fn().mockResolvedValue({
 				finalColumns: [{ name: 'customer_id', line: 0 }],
-				ctes: [], refs: [], sources: [], finalSelect: undefined, tokens: [],
+				ctes: [], refs: [], sources: [], finalSelect: undefined,
 				timing: { parseMs: 0, totalMs: 0 },
 			}),
 			traceLineageV2: vi.fn().mockResolvedValue({ dependencies: [], via_ctes: [], transformations: [] }),
@@ -303,7 +303,7 @@ describe('GetColumnLineageTool', () => {
 		const mockFtlParser = {
 			parse: vi.fn().mockResolvedValue({
 				finalColumns: [{ name: 'customer_id', line: 0 }],
-				ctes: [], refs: [], sources: [], finalSelect: undefined, tokens: [],
+				ctes: [], refs: [], sources: [], finalSelect: undefined,
 				timing: { parseMs: 0, totalMs: 0 },
 			}),
 			traceLineageV2: vi.fn().mockResolvedValue({ error: 'parse error' }),

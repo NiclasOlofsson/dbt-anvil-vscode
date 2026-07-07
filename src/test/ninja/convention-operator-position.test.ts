@@ -66,7 +66,7 @@ describe(RULE, () => {
 
 	it('no violations without sqlTokens', () => {
 		const doc = mockDocument('select * from t where a = 1 AND b = 2');
-		const m: DocumentModel = { tokens: [], ctes: [], refs: [], sources: [], finalSelect: undefined, finalColumns: [], timing: { parseMs: 0, totalMs: 0 } };
+		const m: DocumentModel = { ctes: [], refs: [], sources: [], finalSelect: undefined, finalColumns: [], timing: { parseMs: 0, totalMs: 0 } };
 		expect(operatorPositionRule.check({ model: m, document: doc, config: cfg() })).toHaveLength(0);
 	});
 

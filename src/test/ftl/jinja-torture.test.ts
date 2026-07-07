@@ -24,6 +24,7 @@ import { makeTemplateProvider } from '../../ftl/sqllens/template-shape';
 import { reflowDocument } from '../../ninja/reflow/engine';
 import { runNinja } from '../../ninja/engine';
 import { cfg, mockDocument } from '../ninja/helpers';
+import { isRelationSym } from '../../providers/sql/sym-spans';
 import type { DocumentModel } from '../../services/parse-service';
 
 const PROJECT = path.join(__dirname, '..', '..', '..', 'samples', 'jinja-torture');
@@ -137,7 +138,7 @@ describe('jinja-torture corpus — parse gate', () => {
 	it(`${GLUED} parses with a real relation (no fill fusing into the keyword)`, async () => {
 		const model = await parser.parse(readModel(GLUED));
 		expect(syntaxErrors(model)).toEqual([]);
-		expect(model.tokens.some(t => t.type === 'table_ref')).toBe(true);
+		expect((model.symbols ?? []).some(isRelationSym)).toBe(true);
 	});
 
 	it('twin_tags: same-length fills stay distinct (name-keyed consumers must not collide)', async () => {

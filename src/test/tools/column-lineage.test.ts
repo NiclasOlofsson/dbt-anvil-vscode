@@ -134,7 +134,6 @@ function makeFtlParser(colsResponse: string[], lineageData?: Record<string, unkn
 			refs: [],
 			sources: [],
 			finalSelect: undefined,
-			tokens: [],
 			timing: { parseMs: 0, totalMs: 0 },
 		}),
 		traceLineageV2: vi.fn().mockResolvedValue(lineageData ?? {

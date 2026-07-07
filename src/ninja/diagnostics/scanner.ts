@@ -367,7 +367,7 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 
 		// Only commit the hash after the cache entry is written — if we abort between
 		// readFile and parseContent the hash stays uncommitted and the file is retried.
-		const parsedModel: DocumentModel = model ?? { ctes: [], refs: [], sources: [], tokens: [], finalColumns: [], timing: { parseMs: 0, totalMs: 0 } };
+		const parsedModel: DocumentModel = model ?? { ctes: [], refs: [], sources: [], finalColumns: [], timing: { parseMs: 0, totalMs: 0 } };
 		this._parsedModelCache.set(key, parsedModel);
 		this._contentHashes.set(key, hash);
 		if (stat) this._fileStats.set(key, { mtimeMs: stat.mtimeMs, size: stat.size });

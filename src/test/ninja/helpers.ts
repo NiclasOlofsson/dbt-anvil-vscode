@@ -1,6 +1,6 @@
 import { DEFAULT_CONFIG, type NinjaConfig } from '../../ninja/config';
 import { runNinja, type NinjaResult } from '../../ninja/engine';
-import type { CteInfo, ColumnRefToken, TableRefToken, ColumnDefToken, DocumentModel } from '../../services/parse-service';
+import type { CteInfo, DocumentModel } from '../../services/parse-service';
 import type { SqlToken } from '../../ftl/sql-tokens';
 import type { DialectSymbols } from '../../ftl/sql-tokens';
 import { mergeSqlAndJinjaTokens } from '../../ftl/ninja-sql-tokens';
@@ -69,13 +69,12 @@ export function mockDocument(text: string): vscode.TextDocument {
 	} as unknown as vscode.TextDocument;
 }
 
-/** Empty DocumentModel (no tokens → all words are candidates for capitalisation rules). */
+/** Empty DocumentModel (no symbols → all words are candidates for capitalisation rules). */
 export const emptyModel: DocumentModel = {
 	ctes: [],
 	refs: [],
 	sources: [],
 	finalColumns: [],
-	tokens: [],
 	symbols: [],
 	symbolBindings: { aliasOf: new Map(), sourceOf: new Map() },
 	timing: { parseMs: 0, totalMs: 0 },
@@ -142,34 +141,8 @@ export function cte(name: string, line: number, endLine: number, columns: string
 	};
 }
 
-/** Build a ColumnRefToken stub. */
-export function colRef(name: string, line: number, col: number, table?: string, resolved?: TableRefToken): ColumnRefToken {
-	return {
-		type: 'column_ref',
-		name,
-		line,
-		col,
-		endCol: col + name.length,
-		table,
-		resolvedTableRef: resolved,
-	};
-}
-
-/** Build a TableRefToken stub. */
-export function tableRef(name: string, line: number, col: number, alias?: string): TableRefToken {
-	return {
-		type: 'table_ref',
-		name,
-		line,
-		col,
-		endCol: col + name.length,
-		alias,
-		...(alias ? { aliasLine: line, aliasCol: col + name.length + 1, aliasEndCol: col + name.length + 1 + alias.length } : {}),
-	};
-}
-
 /**
- * Build a `Sym` stub (Sym wave 2's replacement for colRef/tableRef/colDef above).
+ * Build a `Sym` stub.
  * `line`/`endLine` are 0-based, matching every other helper in this file — converted
  * internally to `Sym.span`'s 1-based `line`/`endLine` (the ANTLR convention sqllens
  * itself uses). `frame` defaults to `MAIN_FRAME`; pass a CTE/subquery name for a
@@ -276,11 +249,6 @@ export function symbolBindings(overrides: {
 		aliasOf: new Map(overrides.aliasOf ?? []),
 		sourceOf: new Map(overrides.sourceOf ?? []),
 	};
-}
-
-/** Build a ColumnDefToken stub. */
-export function colDef(name: string, line: number, col: number): ColumnDefToken {
-	return { type: 'column_def', name, line, col, endCol: col + name.length };
 }
 
 /** Build a SqlToken stub. */

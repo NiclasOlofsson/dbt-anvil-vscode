@@ -122,7 +122,6 @@ describe('DbtHoverProvider — CTE hover via ParseService', () => {
 		refs: [],
 		sources: [],
 		finalColumns: [{ name: 'id', line: 8 }, { name: 'name', line: 8 }],
-		tokens: [],
 		symbols: [
 			// Line 2: "  FROM raw_customers" — inside `base`'s own body
 			sym('table', 'raw_customers', 2, 7, 21, { frame: 'base' }),
@@ -198,7 +197,6 @@ describe('DbtHoverProvider — CTE hover via ParseService', () => {
 	it('returns undefined when ParseService has no matching CTE', async () => {
 		const emptyModel: DocumentModel = {
 			ctes: [], refs: [], sources: [], finalColumns: [] as import('../services/parse-service').ColumnInfo[],
-			tokens: [],
 			// Symbol exists but no matching CTE in the model
 			symbols: [sym('cte', 'base', 6, 7, 11)],
 			symbolBindings: { aliasOf: new Map(), sourceOf: new Map() },
@@ -248,7 +246,6 @@ describe('DbtHoverProvider — wildcard column list (*)', () => {
 		refs: [],
 		sources: [],
 		finalColumns: [],
-		tokens: [],
 		symbols: [addrCteSym, addrAliasSym, streetColSym],
 		symbolBindings: {
 			aliasOf: new Map([[addrCteSym, addrAliasSym]]),
@@ -298,7 +295,6 @@ describe('ParseService.traceCteLineage', () => {
 		refs: [{ model: 'gold__address', line: 1, col: 18 }],
 		sources: [],
 		finalColumns: [],
-		tokens: [],
 		symbols: [goldAddressRef, addrCteRef],
 		symbolBindings: { aliasOf: new Map(), sourceOf: new Map() },
 		timing: { parseMs: 1, totalMs: 2 },
@@ -349,7 +345,6 @@ describe('ParseService.traceCteLineage', () => {
 			refs: [],
 			sources: [],
 			finalColumns: [],
-			tokens: [],
 			symbols: [sourceRef, ctaARef],
 			symbolBindings: { aliasOf: new Map(), sourceOf: new Map() },
 			timing: { parseMs: 1, totalMs: 2 },

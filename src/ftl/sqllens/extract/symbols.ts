@@ -12,6 +12,7 @@ import { deriveSymbols, displayName, MAIN_FRAME } from '../api';
 import type { Dialect, Qualification, ResolvedSource, Scope, ScopeTree, SchemaProvider, Sym } from '../api';
 import { asCst, columnRefsOf, normName } from './spans';
 import type { StarExpander } from './star-expand';
+import type { RefInfo, SourceInfo } from '../../../services/parse-service';
 
 /** The `SymbolKind` values `relationSymbol` (sqllens symbols.ts) produces — everything
  *  a FROM/JOIN source or CTE reference can be, i.e. every kind that can carry an alias. */
@@ -186,4 +187,34 @@ export function extractSymbols(
 	}
 
 	return { symbols, bindings };
+}
+
+/**
+ * Back-fill `alias` onto ref/source infos (built from the R2 tag-AST, which sees
+ * jinja tags but never SQL aliases) from the matching relation Sym's own alias
+ * binding — the Sym-native replacement for extract/tokens.ts's
+ * `backfillTagAliases`. Matched by POSITION alone (line + the tag's own start
+ * column): a templated relation's Sym.name is the length-preserving
+ * placeholder's own displayName (sqllens has no template awareness), never the
+ * canonical model/source name, so name matching — which the old TokenInfo
+ * bridge could do because it substituted the canonical name in for templated
+ * refs — doesn't carry over; position is the only anchor both sides share.
+ */
+export function backfillSymAliases(symbols: Sym[], bindings: SymbolBindings, refs: RefInfo[], sources: SourceInfo[]): void {
+	const relationSyms = symbols.filter(s => RELATION_KINDS.has(s.kind) && s.modifiers.includes('reference'));
+	const symAt = (line: number, col: number): Sym | undefined =>
+		relationSyms.find(s => s.span.line - 1 === line && s.span.column === col);
+
+	for (const ref of refs) {
+		if (ref.jinjaCol === undefined) continue;
+		const sym = symAt(ref.line, ref.jinjaCol);
+		const alias = sym && bindings.aliasOf.get(sym)?.name;
+		if (alias && alias !== ref.model) ref.alias = alias;
+	}
+	for (const src of sources) {
+		if (src.jinjaCol === undefined) continue;
+		const sym = symAt(src.line, src.jinjaCol);
+		const alias = sym && bindings.aliasOf.get(sym)?.name;
+		if (alias && alias !== src.tableName) src.alias = alias;
+	}
 }

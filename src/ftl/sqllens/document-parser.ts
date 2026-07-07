@@ -25,8 +25,7 @@ import { splitStatementsFromTemplated, type StatementRange } from '../../dbt/sta
 import { decompose } from './decompose';
 import { traceColumnLineage, type LineageResult } from './lineage';
 import { extractCtes } from './extract/ctes';
-import { backfillTagAliases, extractTokens } from './extract/tokens';
-import { extractSymbols, type SymbolBindings } from './extract/symbols';
+import { backfillSymAliases, extractSymbols, type SymbolBindings } from './extract/symbols';
 import { extractFinalColumns, extractFinalSelect } from './extract/final-select';
 import { buildStarExpander } from './extract/star-expand';
 import { mapDiagnostics } from './extract/warnings';
@@ -275,7 +274,6 @@ export class SqllensDocumentParser implements DocumentParser {
 			ctes: cells.flatMap(c => c.ctes),
 			finalColumns: final?.finalColumns ?? [],
 			finalSelect: final?.finalSelect,
-			tokens: cells.flatMap(c => c.tokens),
 			symbols: cells.flatMap(c => c.symbols ?? []),
 			symbolBindings,
 			parseWarnings: cells.flatMap(c => c.parseWarnings ?? []),
@@ -338,8 +336,6 @@ export class SqllensDocumentParser implements DocumentParser {
 			: undefined;
 
 		const ctes = extractCtes(result, expander);
-		const tokens = extractTokens(result, qualification, expander);
-		// Sym wave 2: additive alongside `tokens` for now — see extract/symbols.ts.
 		const { symbols, bindings: symbolBindings } = extractSymbols(result.scopes, dialect, schemaObj, qualification, expander);
 		const finalColumns = extractFinalColumns(result, expander);
 		const finalSelect = extractFinalSelect(result, expander);
@@ -348,9 +344,9 @@ export class SqllensDocumentParser implements DocumentParser {
 		// sqllens `af1170c` — the expression `macro` node's `calls: MacroCall[]` is
 		// symmetric to `control.calls`).
 		const { refs, sources, macroCalls } = tagInfos(templated.tags);
-		// Templated table_ref tokens are born tag-wide (extract/tokens reads
-		// `template.span`); only the alias back-fill onto refs/sources remains.
-		backfillTagAliases(tokens, refs, sources);
+		// The tag-AST sees jinja tags but never SQL aliases; back-fill them from
+		// the matching relation Sym's own alias binding (position-matched).
+		backfillSymAliases(symbols, symbolBindings, refs, sources);
 
 		// parseTemplated's placeholder is length-preserving, so token offsets line up
 		// with `text` — mapTokens derives line starts from it.
@@ -365,7 +361,6 @@ export class SqllensDocumentParser implements DocumentParser {
 			ctes,
 			finalColumns,
 			finalSelect,
-			tokens,
 			symbols,
 			symbolBindings,
 			parseWarnings,

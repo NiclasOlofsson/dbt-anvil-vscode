@@ -24,7 +24,6 @@ function createMockParseServiceWithModel(model: Partial<DocumentModel>): ParseSe
 		refs: [],
 		sources: [],
 		finalColumns: [],
-		tokens: [],
 		timing: { parseMs: 0, totalMs: 0 },
 		...model,
 	};

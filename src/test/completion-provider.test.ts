@@ -40,7 +40,6 @@ function makeParseServiceWithAliases(aliases: Record<string, string[]>): ParseSe
 		refs: [],
 		sources: [],
 		finalColumns: [],
-		tokens: [],
 		aliases,
 		timing: { parseMs: 0, totalMs: 0 },
 	} as unknown as DocumentModel;
@@ -206,7 +205,6 @@ describe('DbtCompletionProvider — FROM/JOIN with ParseService', () => {
 		refs: [],
 		sources: [],
 		finalColumns: [] as import('../services/parse-service').ColumnInfo[],
-		tokens: [],
 		timing: { parseMs: 1, totalMs: 2 },
 	};
 

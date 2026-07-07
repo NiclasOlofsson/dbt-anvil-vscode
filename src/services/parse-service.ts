@@ -116,74 +116,6 @@ export interface MacroCallInfo {
 	args: MacroCallArgInfo[];
 }
 
-export interface ColumnRefToken {
-	type: 'column_ref';
-	name: string;
-	/** 0-based line */
-	line: number;
-	/** 0-based inclusive start column */
-	col: number;
-	/** 0-based exclusive end column */
-	endCol: number;
-	/** Table/alias qualifier, e.g. `o` in `o.order_id` */
-	table?: string;
-	tableLine?: number;
-	tableCol?: number;
-	tableEndCol?: number;
-	/**
-	 * The table_ref token that this column's qualifier resolves to.
-	 * Populated by the bridge post-processing pass — avoids every provider
-	 * having to re-implement alias → definition-site lookup logic.
-	 */
-	resolvedTableRef?: TableRefToken;
-}
-
-export interface TableRefToken {
-	type: 'table_ref';
-	name: string;
-	line: number;
-	col: number;
-	endCol: number;
-	/** SQL alias, e.g. `o` in `FROM orders o` */
-	alias?: string;
-	aliasLine?: number;
-	aliasCol?: number;
-	aliasEndCol?: number;
-	/**
-	 * True when this token represents a CTE definition site (the `name` in
-	 * `WITH name AS (...)`), not a FROM/JOIN reference. These should not be
-	 * flagged by aliasing rules that apply to FROM/JOIN table references.
-	 */
-	cteDefinition?: true;
-	/**
-	 * True when this token was emitted for a subquery alias (`(SELECT ...) AS x`).
-	 * The token's `name` and `alias` are both the alias identifier — there is no
-	 * underlying table name being renamed, so self-alias checks must not fire.
-	 */
-	isSubquery?: true;
-}
-
-export interface ColumnDefToken {
-	type: 'column_def';
-	name: string;
-	line: number;
-	col: number;
-	endCol: number;
-}
-
-export type TokenInfo = ColumnRefToken | TableRefToken | ColumnDefToken;
-
-/**
- * Result of resolving a cursor position against the AST token map.
- * Tells the caller exactly what the cursor is sitting on.
- */
-export type PositionResolution =
-	| { kind: 'column'; token: ColumnRefToken }
-	| { kind: 'table_qualifier'; token: ColumnRefToken }
-	| { kind: 'table_ref'; token: TableRefToken }
-	| { kind: 'table_alias'; token: TableRefToken }
-	| { kind: 'column_def'; token: ColumnDefToken };
-
 /**
  * A structural issue detected during parsing.
  *
@@ -267,11 +199,10 @@ export interface DocumentModel {
 	finalColumns: ColumnInfo[];
 	/** Rich positional data for the final SELECT (replaces finalColumns over time). */
 	finalSelect?: FinalSelectInfo;
-	tokens: TokenInfo[];
 	/**
-	 * sqllens's native symbol model (Sym wave 2's successor to `tokens`). Absent only
-	 * on synthetic / test fixture models that hand-build a DocumentModel directly;
-	 * real parser output always sets it alongside `symbolBindings`.
+	 * sqllens's native symbol model. Absent only on synthetic / test fixture models
+	 * that hand-build a DocumentModel directly; real parser output always sets it
+	 * alongside `symbolBindings`.
 	 */
 	symbols?: Sym[];
 	/**
@@ -281,7 +212,7 @@ export interface DocumentModel {
 	symbolBindings?: SymbolBindings;
 	timing: { parseMs: number; totalMs: number };
 	/**
-	 * Parse status. 'syntax_error' means the model's structural data (ctes, tokens, etc.) is
+	 * Parse status. 'syntax_error' means the model's structural data (ctes, symbols, etc.) is
 	 * carried over from the last good parse — only parseWarnings reflects the current state.
 	 */
 	status?: 'ok' | 'syntax_error';
@@ -416,17 +347,7 @@ export function mergeModels(models: DocumentModel[]): DocumentModel {
 		}
 	}
 
-	// tokens: dedup by type:line:col
-	const tokKeys = new Set<string>();
-	const tokens: TokenInfo[] = [];
-	for (const m of models) {
-		for (const tok of m.tokens) {
-			const k = tok.type + ':' + tok.line + ':' + tok.col;
-			if (!tokKeys.has(k)) { tokKeys.add(k); tokens.push(tok); }
-		}
-	}
-
-	// symbols: dedup by kind:frame:span, same shape as the tokens dedup above.
+	// symbols: dedup by kind:frame:span.
 	// symbolBindings: union — each variant's Sym objects are distinct instances, so
 	// there is no key collision merging their Map entries directly.
 	const symKeys = new Set<string>();
@@ -497,7 +418,7 @@ export function mergeModels(models: DocumentModel[]): DocumentModel {
 	const indexes = models.map(m => m.astIndex).filter((i): i is AstIndex => i !== undefined);
 	const astIndex = indexes.length > 0 ? compositeAstIndex(indexes) : undefined;
 
-	return { ctes: [...cteMap.values()], refs, sources, macroCalls, finalColumns, finalSelect, tokens, timing, parseWarnings, aliases,
+	return { ctes: [...cteMap.values()], refs, sources, macroCalls, finalColumns, finalSelect, timing, parseWarnings, aliases,
 		symbols,
 		symbolBindings,
 		jinjaTokens,
@@ -721,13 +642,14 @@ export class ParseService {
 		}
 		// Resolve FROM/JOIN aliases that point to CTEs.
 		// e.g. `LEFT JOIN address_with_country AS addr` — `addr` maps to that CTE's columns.
-		for (const tok of model.tokens) {
-			if (tok.type === 'table_ref' && tok.alias) {
-				const aliasLc = tok.alias.toLowerCase();
-				if (aliasLc in cteAliases) continue;
-				const targetCols = cteAliases[tok.name.toLowerCase()];
-				if (targetCols) cteAliases[aliasLc] = targetCols;
-			}
+		for (const sym of model.symbols ?? []) {
+			if (!isRelationSym(sym)) continue;
+			const aliasSym = model.symbolBindings?.aliasOf.get(sym);
+			if (!aliasSym) continue;
+			const aliasLc = aliasSym.name.toLowerCase();
+			if (aliasLc in cteAliases) continue;
+			const targetCols = cteAliases[sym.name.toLowerCase()];
+			if (targetCols) cteAliases[aliasLc] = targetCols;
 		}
 		return { ...cteAliases, ...(model.aliases ?? {}) };
 	}
@@ -803,75 +725,14 @@ export class ParseService {
 	}
 
 	/**
-	 * Resolve a cursor position against the token map from the AST.
-	 * Returns what the cursor is sitting on: a column reference,
-	 * a table qualifier (the alias prefix of a column), a table reference
-	 * (in FROM/JOIN), or a table alias definition.
-	 */
-	static resolveAtPosition(
-		model: DocumentModel,
-		line: number,
-		col: number,
-	): PositionResolution | null {
-		// Table alias definitions take priority over column_ref qualifier spans.
-		// When schema-aware qualify() expands SELECT * it synthesises column_ref
-		// tokens whose tableCol lands on the alias token's position — without this
-		// priority pass those synthetic tokens would shadow the real alias site.
-		for (const token of model.tokens) {
-			if (
-				token.type === 'table_ref'
-				&& token.alias !== undefined
-				&& token.aliasLine === line
-				&& token.aliasCol !== undefined
-				&& token.aliasEndCol !== undefined
-				&& col >= token.aliasCol
-				&& col < token.aliasEndCol
-			) {
-				return { kind: 'table_alias', token };
-			}
-		}
-
-		for (const token of model.tokens) {
-			if (token.type === 'column_ref') {
-				// Check the column name span
-				if (token.line === line && col >= token.col && col < token.endCol) {
-					return { kind: 'column', token };
-				}
-				// Check the table qualifier span (e.g. the `o` in `o.order_id`)
-				if (
-					token.table !== undefined
-					&& token.tableLine === line
-					&& token.tableCol !== undefined
-					&& token.tableEndCol !== undefined
-					&& col >= token.tableCol
-					&& col < token.tableEndCol
-				) {
-					return { kind: 'table_qualifier', token };
-				}
-			} else if (token.type === 'column_def') {
-				if (token.line === line && col >= token.col && col < token.endCol) {
-					return { kind: 'column_def', token };
-				}
-			} else {
-				// table_ref — check the table name span
-				if (token.line === line && col >= token.col && col < token.endCol) {
-					return { kind: 'table_ref', token };
-				}
-			}
-		}
-		return null;
-	}
-
-	/**
-	 * Resolve a cursor position against sqllens's native symbols (the Sym wave 2
-	 * successor to `resolveAtPosition`). Returns the smallest-span `Sym` covering
-	 * the position — a column/table/cte/alias/function symbol, whichever is most
-	 * specific — or `undefined` when nothing covers it.
+	 * Resolve a cursor position against sqllens's native symbols. Returns the
+	 * smallest-span `Sym` covering the position — a column/table/cte/alias/function
+	 * symbol, whichever is most specific — or `undefined` when nothing covers it.
 	 *
-	 * Unlike `resolveAtPosition`, no alias-priority pass is needed: sqllens's Sym
-	 * spans always come from real CST nodes (frozen IR, never synthesized), so a
-	 * real alias span and a real column span never legitimately overlap the way
-	 * the legacy qualify()'s synthetic star-expansion tokens once could.
+	 * No alias-priority pass is needed: sqllens's Sym spans always come from real
+	 * CST nodes (frozen IR, never synthesized), so a real alias span and a real
+	 * column span never legitimately overlap the way the legacy qualify()'s
+	 * synthetic star-expansion tokens once could.
 	 */
 	static symAtPosition(model: DocumentModel, line: number, col: number): Sym | undefined {
 		let best: Sym | undefined;

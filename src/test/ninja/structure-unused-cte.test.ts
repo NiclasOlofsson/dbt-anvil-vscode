@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mockDocument, cfg, model, cte, sym, colRef, sqlTok } from './helpers';
+import { mockDocument, cfg, model, cte, sym, sqlTok } from './helpers';
 import { unusedCteRule } from '../../ninja/rules/structure-unused-cte';
 import type { NinjaConfig } from '../../ninja/config';
 import { FixAction } from '../../ninja/violation';

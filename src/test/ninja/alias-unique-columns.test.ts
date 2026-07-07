@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mockDocument, cfg, model, colDef } from './helpers';
+import { mockDocument, cfg, model } from './helpers';
 import { aliasUniqueColumnsRule } from '../../ninja/rules/alias-unique-columns';
 import type { FinalSelectInfo, FinalSelectColumnInfo, ColumnInfo } from '../../services/parse-service';
 

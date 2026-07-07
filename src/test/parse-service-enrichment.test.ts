@@ -6,6 +6,8 @@ import type { DocumentParser } from '../services/document-parser';
 import type { DescribeCache } from '../dbt/describe-cache';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
 import { createMockLogger } from './helpers';
+import { MAIN_FRAME } from '../ftl/sqllens/api';
+import type { Sym } from '../ftl/sqllens/api';
 
 const mockLogger = createMockLogger();
 
@@ -46,7 +48,6 @@ function createMockParser(opts?: {
 			sources: opts?.sources ?? [],
 			finalColumns: opts?.finalColumns ?? [],
 			aliases: opts?.aliases ?? {},
-			tokens: [],
 			timing: { parseMs: 1, totalMs: 2 },
 		}),
 	} as unknown as DocumentParser;
@@ -174,7 +175,6 @@ describe('ParseService — enrichment tier', () => {
 				refs: [],
 				sources: [],
 				finalColumns: [],
-				tokens: [],
 				timing: { parseMs: 0, totalMs: 0 },
 				aliases: {},
 				...overrides,
@@ -198,9 +198,18 @@ describe('ParseService — enrichment tier', () => {
 		});
 
 		it('resolves FROM/JOIN alias pointing to a CTE', () => {
+			const ordersRef: Sym = {
+				kind: 'cte', modifiers: ['reference'], name: 'orders',
+				span: { line: 2, column: 0, endLine: 2, endColumn: 6 }, frame: MAIN_FRAME,
+			};
+			const aliasSym: Sym = {
+				kind: 'alias', modifiers: [], name: 'o',
+				span: { line: 2, column: 7, endLine: 2, endColumn: 8 }, frame: MAIN_FRAME,
+			};
 			const model = makeModel({
 				ctes: [{ name: 'orders', columns: [{ name: 'id', line: 0 }], line: 0, endLine: 5 }],
-				tokens: [{ type: 'table_ref' as const, name: 'orders', alias: 'o', line: 1, col: 0, endCol: 6 }],
+				symbols: [ordersRef],
+				symbolBindings: { aliasOf: new Map([[ordersRef, aliasSym]]), sourceOf: new Map() },
 			});
 			expect(ParseService.resolveAliases(model)['o']).toEqual(['id']);
 		});
