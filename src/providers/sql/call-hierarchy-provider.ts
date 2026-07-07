@@ -4,7 +4,7 @@ import type { ILogger } from '../../types/logger';
 import { ParseService } from '../../services/parse-service';
 import type { CteInfo, DocumentModel, RefInfo, SourceInfo } from '../../services/parse-service';
 import { computeCommentRanges, isOffsetInComment } from '../common/comment-utils';
-import { isRelationSym, relationNameRangeOf } from './sym-spans';
+import { isRelationSym, relationNameRangeOf, symMatchesCte } from './sym-spans';
 
 // ── Tagged subclass so we can recover kind/metadata from the item VS Code echoes back ──
 
@@ -271,17 +271,20 @@ export class DbtCallHierarchyProvider implements vscode.CallHierarchyProvider {
 		if (!model || !item.cteName) return [];
 
 		const cteName = item.cteName;
+		const targetCte = model.ctes.find(c => c.name === cteName);
+		if (!targetCte) return [];
 		const lastCteEnd = Math.max(...model.ctes.map(c => c.endLine));
 
 		// Group table_ref tokens by the CTE they belong to (or "final SELECT")
 		const calls: vscode.CallHierarchyIncomingCall[] = [];
 
-		// Scan each other CTE's body for reference syms pointing at cteName
+		// Scan each other CTE's body for reference syms pointing at cteName (position-
+		// matched via symMatchesCte, not name-matched — see its doc comment)
 		for (const cte of model.ctes) {
 			if (cte.name === cteName) continue;
 			const refs = (model.symbols ?? []).filter(s =>
 				isRelationSym(s) && s.modifiers.includes('reference') &&
-				s.name === cteName &&
+				symMatchesCte(s, targetCte) &&
 				(s.span.line - 1) >= cte.line && (s.span.line - 1) <= cte.endLine,
 			);
 			if (refs.length === 0) continue;
@@ -294,7 +297,7 @@ export class DbtCallHierarchyProvider implements vscode.CallHierarchyProvider {
 		// Also scan the final SELECT (lines after all CTEs)
 		const finalRefs = (model.symbols ?? []).filter(s =>
 			isRelationSym(s) && s.modifiers.includes('reference') &&
-			s.name === cteName &&
+			symMatchesCte(s, targetCte) &&
 			(s.span.line - 1) > lastCteEnd,
 		);
 		if (finalRefs.length > 0) {

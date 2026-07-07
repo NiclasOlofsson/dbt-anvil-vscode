@@ -52,7 +52,7 @@ describe('cap-identifiers code-action integration', () => {
 		const sql = 'with MyCte as (select 1) select * from MyCte';
 		const doc = mockDocument(sql);
 		const cteDef = sym('cte', 'MyCte', 0, 5, { modifiers: ['declaration'], endCol: 24 });
-		const cteUse = sym('cte', 'MyCte', 0, 39);
+		const cteUse = sym('cte', 'MyCte', 0, 39, { definitionOf: cteDef });
 		const m = model({ symbols: [cteDef, cteUse] });
 
 		const violations = capIdentifiersRule.check({ model: m, document: doc, config: withStyle('snake_case') });

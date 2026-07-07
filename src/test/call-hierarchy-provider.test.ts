@@ -283,7 +283,7 @@ describe('DbtCallHierarchyProvider', () => {
 				ctes: [baseCte, finalCte],
 				symbols: [
 					// reference to 'base' inside 'final' CTE body
-					sym('cte', 'base', 6, 14),
+					sym('cte', 'base', 6, 14, { definitionOf: baseCte }),
 				],
 				refs: [],
 			});
@@ -318,9 +318,9 @@ describe('DbtCallHierarchyProvider', () => {
 			const docModel = makeDocumentModel({
 				ctes: [baseCte, finalCte],
 				symbols: [
-					sym('cte', 'base', 6, 14),
+					sym('cte', 'base', 6, 14, { definitionOf: baseCte }),
 					// final SELECT also uses base
-					sym('cte', 'base', 8, 14),
+					sym('cte', 'base', 8, 14, { definitionOf: baseCte }),
 				],
 				refs: [],
 			});

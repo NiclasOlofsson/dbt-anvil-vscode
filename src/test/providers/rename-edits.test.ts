@@ -142,8 +142,8 @@ describe('buildInFileRenameEdits', () => {
 		// (the name comes first) — the rename must narrow to just the name (col
 		// 5..11), not replace the whole clause (which would delete the CTE body).
 		const cteDecl = sym('cte', 'my_cte', 0, 5, { modifiers: ['declaration'], endCol: 30 });
-		const cteUse1 = sym('cte', 'my_cte', 1, 15);
-		const cteUse2 = sym('cte', 'my_cte', 1, 27);
+		const cteUse1 = sym('cte', 'my_cte', 1, 15, { definitionOf: cteDecl });
+		const cteUse2 = sym('cte', 'my_cte', 1, 27, { definitionOf: cteDecl });
 		const m = model({ symbols: [cteDecl, cteUse1, cteUse2], symbolBindings: symbolBindings() });
 
 		const edit = buildInFileRenameEdits(cteDecl, undefined, m, URI, 'renamed_cte');

@@ -4,8 +4,8 @@ import { makeTemplateProvider } from '../../../ftl/sqllens/template-shape';
 import { decompose } from '../../../ftl/sqllens/decompose';
 import { traceColumnLineage } from '../../../ftl/sqllens/lineage';
 import { buildStarExpander } from '../../../ftl/sqllens/extract/star-expand';
-import { Schema, type ScopeTree } from '../../../ftl/sqllens/api';
-import type { ColumnRefToken, TableRefToken, TokenInfo } from '../../../services/parse-service';
+import { Schema, type ScopeTree, type Sym } from '../../../ftl/sqllens/api';
+import { isRelationSym, nameRangeOf, qualifierRangeOf, rangeOfSpan } from '../../../providers/sql/sym-spans';
 
 function parser(adapterType = 'databricks') {
 	return new SqllensDocumentParser({ adapterType });
@@ -87,32 +87,6 @@ describe('SqllensDocumentParser — realistic dbt model (databricks)', () => {
 		expect(total.aliasCol).toBe(LINES[13].indexOf('total'));
 	});
 
-	it('emits column_ref / table_ref / column_def tokens with resolved links', async () => {
-		const model = await parser().parse(MODEL);
-		const colRefs = model.tokens.filter((t): t is ColumnRefToken => t.type === 'column_ref');
-		const tableRefs = model.tokens.filter((t): t is TableRefToken => t.type === 'table_ref');
-		const colDefs = model.tokens.filter(t => t.type === 'column_def');
-
-		// The `AS customer_name` alias in the joined CTE is a column definition site.
-		expect(colDefs.some(d => d.name === 'customer_name')).toBe(true);
-
-		// CTE definition sites are marked so aliasing rules skip them.
-		expect(tableRefs.some(t => t.name === 'orders' && t.cteDefinition)).toBe(true);
-
-		// The FROM alias `orders o` inside the joined CTE.
-		const ordersRef = tableRefs.find(t => t.name === 'orders' && t.alias === 'o');
-		expect(ordersRef).toBeDefined();
-
-		// A qualified column `o.order_id` on line 9 resolves to that table_ref, with
-		// the column-name sub-span and qualifier sub-span both correct (0-based).
-		const oOrderId = colRefs.find(t => t.name === 'order_id' && t.table === 'o' && t.line === 9);
-		expect(oOrderId).toBeDefined();
-		expect(oOrderId!.col).toBe(LINES[9].indexOf('order_id'));
-		expect(oOrderId!.endCol).toBe(LINES[9].indexOf('order_id') + 'order_id'.length);
-		expect(oOrderId!.tableCol).toBe(LINES[9].indexOf('o.order_id'));
-		expect(oOrderId!.resolvedTableRef).toBe(ordersRef);
-	});
-
 	it('parses a clean model and reports timing', async () => {
 		const model = await parser().parse(MODEL);
 		expect(model.parseWarnings).toEqual([]);
@@ -123,25 +97,37 @@ describe('SqllensDocumentParser — realistic dbt model (databricks)', () => {
 });
 
 describe('SqllensDocumentParser — Sym wave 2: symbols/symbolBindings wired end-to-end', () => {
-	it('populates model.symbols and model.symbolBindings alongside the legacy tokens', async () => {
+	it('populates model.symbols and model.symbolBindings with resolved links', async () => {
 		const model = await parser().parse(MODEL);
 		expect(model.symbols).toBeDefined();
 		expect(model.symbols!.length).toBeGreaterThan(0);
 		expect(model.symbolBindings).toBeDefined();
 
-		// The `orders` CTE reference in the `joined` CTE's FROM clause resolves its
-		// alias `o` the same way the legacy resolvedTableRef assertion above does.
+		// The `AS customer_name` alias in the joined CTE is a column declaration site.
+		expect(model.symbols!.some(s => s.kind === 'column' && s.modifiers.includes('declaration') && s.name === 'customer_name')).toBe(true);
+
+		// CTE declaration sites are marked so aliasing rules skip them.
+		expect(model.symbols!.some(s => s.kind === 'cte' && s.modifiers.includes('declaration') && s.name === 'orders')).toBe(true);
+
+		// The `orders` CTE reference in the `joined` CTE's FROM clause resolves its alias `o`.
 		const ordersRef = model.symbols!.find(s => s.kind === 'cte' && s.modifiers.includes('reference') && s.name === 'orders')!;
 		expect(ordersRef).toBeDefined();
 		expect(model.symbolBindings!.aliasOf.get(ordersRef)?.name).toBe('o');
 
 		// `o.order_id` appears twice (once inside the `orders` CTE's own body, aliasing
 		// the ref() source; once inside `joined`, aliasing the `orders` CTE reference
-		// this test is about) — disambiguate by frame, same as the legacy assertion
-		// above disambiguates by line.
+		// this test is about) — disambiguate by frame.
 		const oOrderId = model.symbols!.find(s => s.kind === 'column' && s.modifiers.includes('reference') && s.name === 'o.order_id' && s.frame === 'joined');
 		expect(oOrderId).toBeDefined();
 		expect(model.symbolBindings!.sourceOf.get(oOrderId!)).toBe(ordersRef);
+
+		// The column-name sub-span and qualifier sub-span are both correct (0-based).
+		const nameRange = nameRangeOf(oOrderId!);
+		expect(nameRange.start.line).toBe(9);
+		expect(nameRange.start.character).toBe(LINES[9].indexOf('order_id'));
+		expect(nameRange.end.character).toBe(LINES[9].indexOf('order_id') + 'order_id'.length);
+		const qualRange = qualifierRangeOf(oOrderId!);
+		expect(qualRange!.start.character).toBe(LINES[9].indexOf('o.order_id'));
 	});
 });
 
@@ -160,37 +146,53 @@ describe('SqllensDocumentParser — column-ref per-part spans (1/2/3-part)', () 
 	it('splits each ref into column + qualifier with exact 0-based spans (endCol exclusive)', async () => {
 		const model = await parser().parse(SQL);
 		const col = (n: string) =>
-			model.tokens.find((t): t is ColumnRefToken => t.type === 'column_ref' && t.name === n)!;
+			(model.symbols ?? []).find(s => s.kind === 'column' && s.modifiers.includes('reference') && s.name.split('.').pop() === n)!;
+		const resolvedAlias = (sym: Sym) => {
+			const relation = model.symbolBindings?.sourceOf.get(sym!);
+			return relation && model.symbolBindings?.aliasOf.get(relation)?.name;
+		};
 
 		// 1-part bare column: no qualifier IN SOURCE, but qualify binds it to the single FROM
 		// source `foo as a` — the qualifier resolves bare `bare` to the source alias `a`.
-		// So `.table` is the resolved alias `a` (consumed from Qualification.bindingOf),
-		// with NO tableCol span since the qualifier is synthesized, not a real source token.
+		// So the resolved alias is `a` (consumed from Qualification.bindingOf), with NO
+		// qualifier sub-span since there's no written qualifier to point at.
 		const bare = col('bare');
-		expect(bare).toMatchObject({ name: 'bare', line: 1, col: 2, endCol: 6 });
-		expect(bare.table).toBe('a');
-		expect(bare.tableCol).toBeUndefined();
+		const bareRange = nameRangeOf(bare);
+		expect(bareRange.start.line).toBe(1);
+		expect(bareRange.start.character).toBe(2);
+		expect(bareRange.end.character).toBe(6);
+		expect(resolvedAlias(bare)).toBe('a');
+		expect(qualifierRangeOf(bare)).toBeUndefined();
 
 		// 2-part `a.name`: last part is the column, `a` the qualifier.
 		const nm = col('name');
-		expect(nm).toMatchObject({
-			name: 'name', line: 2, col: L[2].indexOf('name'), endCol: L[2].indexOf('name') + 4,
-			table: 'a', tableLine: 2, tableCol: L[2].indexOf('a.name'), tableEndCol: L[2].indexOf('a.name') + 1,
-		});
+		const nmRange = nameRangeOf(nm);
+		expect(nmRange.start.line).toBe(2);
+		expect(nmRange.start.character).toBe(L[2].indexOf('name'));
+		expect(nmRange.end.character).toBe(L[2].indexOf('name') + 4);
+		const nmQual = qualifierRangeOf(nm)!;
+		expect(nmQual.start.line).toBe(2);
+		expect(nmQual.start.character).toBe(L[2].indexOf('a.name'));
+		expect(nmQual.end.character).toBe(L[2].indexOf('a.name') + 1);
+		expect(resolvedAlias(nm)).toBe('a');
 
 		// 3-part `db.sch.col`: the WRITTEN qualifier text/span is still `sch` (the part
-		// directly before the column — legacy's `Column.table` child convention, unchanged).
-		// But `sch` names no real FROM/JOIN source in this scope (only `foo as a` is), so
-		// sqllens's own splitColumnRef (src/scope/scope.ts:118-136) correctly falls through
-		// to the unqualified reading — `db` becomes the "column" with `.sch.col` as a
-		// struct-field path — and `bindingOf` resolves it to the sole ambient source, same
-		// as the bare `bare` case above. `.table` reflects that RESOLVED source (`a`), not
-		// the fictional written qualifier; the qualifier's own span still points at `sch`.
+		// directly before the column). But `sch` names no real FROM/JOIN source in this
+		// scope (only `foo as a` is), so sqllens's own splitColumnRef (src/scope/scope.ts:
+		// 118-136) correctly falls through to the unqualified reading — `db` becomes the
+		// "column" with `.sch.col` as a struct-field path — and `bindingOf` resolves it to
+		// the sole ambient source, same as the bare `bare` case above. The RESOLVED alias
+		// reflects that resolution (`a`), not the fictional written qualifier; the
+		// qualifier's own span still points at `sch`.
 		const c = col('col');
-		expect(c).toMatchObject({
-			name: 'col', line: 3, col: L[3].indexOf('col'), endCol: L[3].indexOf('col') + 3,
-			table: 'a', tableCol: L[3].indexOf('sch'), tableEndCol: L[3].indexOf('sch') + 3,
-		});
+		const cRange = nameRangeOf(c);
+		expect(cRange.start.line).toBe(3);
+		expect(cRange.start.character).toBe(L[3].indexOf('col'));
+		expect(cRange.end.character).toBe(L[3].indexOf('col') + 3);
+		const cQual = qualifierRangeOf(c)!;
+		expect(cQual.start.character).toBe(L[3].indexOf('sch'));
+		expect(cQual.end.character).toBe(L[3].indexOf('sch') + 3);
+		expect(resolvedAlias(c)).toBe('a');
 	});
 });
 
@@ -199,40 +201,36 @@ describe('SqllensDocumentParser — quoted per-part spans (partSpans adoption)',
 	// `partSpans` (one span per dotted part) to place the column-name and qualifier
 	// sub-spans. Each sub-span covers the WHOLE raw source token including its
 	// delimiters: a quoted part starts at its opening delimiter and ends just past
-	// its closing one. The NAME is dialect-normalized (databricks is
-	// case-insensitive, so a backtick-quoted name is lowercased too) — that's
-	// `normName`'s domain, not the span logic, and normalization never moves the span.
+	// its closing one. The NAME (`Sym.name`, sqllens's `displayName`) strips the
+	// quoting delimiters but never changes case, regardless of dialect — that's
+	// `normName`'s domain (a different extractor, `model.finalColumns`), not
+	// `displayName`'s, and neither one moves the span.
 	it('places a backtick-quoted column + unquoted qualifier (databricks)', async () => {
 		const sql = 'select a.`My Col` from t as a';
 		const model = await parser('databricks').parse(sql);
-		const col = model.tokens.find(
-			(t): t is ColumnRefToken => t.type === 'column_ref' && t.name === 'my col',
-		)!;
+		const col = (model.symbols ?? []).find(s => s.kind === 'column' && s.modifiers.includes('reference') && s.name.split('.').pop() === 'My Col')!;
 		const q = sql.indexOf('`My Col`');
-		expect(col).toMatchObject({
-			name: 'my col', // databricks lowercases even a quoted identifier
-			line: 0,
-			col: q,                          // the opening backtick
-			endCol: q + '`My Col`'.length,   // just past the closing backtick
-			table: 'a',
-			tableCol: sql.indexOf('a.'),
-			tableEndCol: sql.indexOf('a.') + 1,
-		});
+		const range = nameRangeOf(col);
+		expect(range.start.line).toBe(0);
+		expect(range.start.character).toBe(q); // the opening backtick
+		expect(range.end.character).toBe(q + '`My Col`'.length); // just past the closing backtick
+		const qualRange = qualifierRangeOf(col)!;
+		expect(qualRange.start.character).toBe(sql.indexOf('a.'));
+		expect(qualRange.end.character).toBe(sql.indexOf('a.') + 1);
+		const relation = model.symbolBindings?.sourceOf.get(col);
+		expect(model.symbolBindings?.aliasOf.get(relation!)?.name).toBe('a');
 	});
 
 	it('places a bracket-quoted column + unquoted qualifier (tsql)', async () => {
 		const sql = 'select a.[My Col] from t as a';
 		const model = await parser('tsql').parse(sql);
-		const col = model.tokens.find(
-			(t): t is ColumnRefToken => t.type === 'column_ref' && t.name === 'my col',
-		)!;
+		const col = (model.symbols ?? []).find(s => s.kind === 'column' && s.modifiers.includes('reference') && s.name.split('.').pop() === 'My Col')!;
 		const q = sql.indexOf('[My Col]');
-		expect(col).toMatchObject({
-			name: 'my col', // tsql is case-insensitive: a bracket-quoted name is lowercased
-			col: q,
-			endCol: q + '[My Col]'.length,
-			table: 'a',
-		});
+		const range = nameRangeOf(col);
+		expect(range.start.character).toBe(q);
+		expect(range.end.character).toBe(q + '[My Col]'.length);
+		const relation = model.symbolBindings?.sourceOf.get(col);
+		expect(model.symbolBindings?.aliasOf.get(relation!)?.name).toBe('a');
 	});
 
 	it('handles a quoted mixed-case QUALIFIER with a plain column (`"My Table".col`)', async () => {
@@ -243,43 +241,49 @@ describe('SqllensDocumentParser — quoted per-part spans (partSpans adoption)',
 		// The FROM clause is bare `t` (no alias, and `` `My Table` `` names no real source),
 		// so sqllens's splitColumnRef falls through to the unqualified reading and
 		// `bindingOf` resolves the reference to the actual source `t` — same mechanism as
-		// the 3-part-qualifier case above. `.table` reflects that resolution; the
+		// the 3-part-qualifier case above. The RESOLVED source reflects that resolution; the
 		// qualifier's own span still points at the written `` `My Table` ``.
 		const sql = 'select `My Table`.col from t';
 		const model = await parser('databricks').parse(sql);
-		const col = model.tokens.find(
-			(t): t is ColumnRefToken => t.type === 'column_ref' && t.name === 'col',
-		)!;
+		const col = (model.symbols ?? []).find(s => s.kind === 'column' && s.modifiers.includes('reference') && s.name.split('.').pop() === 'col')!;
 		const tq = sql.indexOf('`My Table`');
-		expect(col).toMatchObject({
-			name: 'col',
-			col: sql.indexOf('.col') + 1,
-			endCol: sql.indexOf('.col') + 1 + 'col'.length,
-			table: 't',
-			tableCol: tq,
-			tableEndCol: tq + '`My Table`'.length,
-		});
+		const range = nameRangeOf(col);
+		expect(range.start.character).toBe(sql.indexOf('.col') + 1);
+		expect(range.end.character).toBe(sql.indexOf('.col') + 1 + 'col'.length);
+		const qualRange = qualifierRangeOf(col)!;
+		expect(qualRange.start.character).toBe(tq);
+		expect(qualRange.end.character).toBe(tq + '`My Table`'.length);
+		const relation = model.symbolBindings?.sourceOf.get(col);
+		expect(relation?.name).toBe('t');
 	});
 });
 
 describe('SqllensDocumentParser — dialect-aware identifier case normalization', () => {
-	// `normName` delegates to sqllens's own `foldIdentifier` (vendor-doc-verified
-	// per-dialect fold). Three strategies span the eight sqllens dialects:
+	// `model.finalColumns` (this extension's own `extractFinalColumns`) folds through
+	// `normName`/`foldIdentifier` for dialect-aware casing (vendor-doc-verified per-dialect
+	// fold). Three strategies span the eight sqllens dialects:
 	//   - CASE_INSENSITIVE (databricks/tsql/bigquery/redshift/duckdb/trino): everything
 	//     lowercased, quoted included — except bigquery TABLE names, which preserve
 	//     case (`kind: 'table'`; tables are case-sensitive there, columns are not).
 	//   - UPPERCASE (snowflake): unquoted uppercased, quoted preserved.
 	//   - LOWERCASE (postgres): unquoted lowercased, quoted preserved.
+	//
+	// `model.symbols` (sqllens's own `deriveSymbols`) does NOT go through this fold at
+	// all — `Sym.name` is sqllens's `displayName`, which only strips quoting delimiters
+	// and never changes case, regardless of dialect (verified empirically; `displayName`'s
+	// own doc comment: "never use this for comparison" — precisely because it carries no
+	// dialect-fold guarantee). So `colRefNames` below always shows the RAW/declared
+	// spelling, unlike `model.finalColumns`.
 
-	const colRefNames = (model: { tokens: readonly TokenInfo[] }): string[] =>
-		model.tokens
-			.filter((t): t is ColumnRefToken => t.type === 'column_ref')
-			.map(t => t.name);
+	const colRefNames = (model: { symbols?: readonly Sym[] }): string[] =>
+		(model.symbols ?? [])
+			.filter(s => s.kind === 'column' && s.modifiers.includes('reference'))
+			.map(s => s.name);
 
-	it('databricks: unquoted lowercased, backtick-quoted lowercased', async () => {
+	it('databricks: finalColumns unquoted/backtick-quoted lowercased; Sym.name preserves the declared spelling', async () => {
 		const model = await parser('databricks').parse('select Upper_Col, `Mixed`\nfrom foo');
 		expect(model.finalColumns.map(c => c.name)).toEqual(['upper_col', 'mixed']);
-		expect(colRefNames(model)).toEqual(expect.arrayContaining(['upper_col', 'mixed']));
+		expect(colRefNames(model)).toEqual(expect.arrayContaining(['Upper_Col', 'Mixed']));
 	});
 
 	it('tsql: unquoted lowercased, bracket-quoted lowercased', async () => {
@@ -292,10 +296,10 @@ describe('SqllensDocumentParser — dialect-aware identifier case normalization'
 		expect(model.finalColumns.map(c => c.name)).toEqual(['upper_col', 'mixed']);
 	});
 
-	it('snowflake: unquoted UPPERCASED, double-quoted preserved', async () => {
+	it('snowflake: finalColumns unquoted UPPERCASED/double-quoted preserved; Sym.name preserves the declared spelling', async () => {
 		const model = await parser('snowflake').parse('select Upper_Col, "Mixed"\nfrom foo');
 		expect(model.finalColumns.map(c => c.name)).toEqual(['UPPER_COL', 'Mixed']);
-		expect(colRefNames(model)).toEqual(expect.arrayContaining(['UPPER_COL', 'Mixed']));
+		expect(colRefNames(model)).toEqual(expect.arrayContaining(['Upper_Col', 'Mixed']));
 	});
 
 	it('postgres: unquoted lowercased, double-quoted preserved', async () => {
@@ -303,16 +307,15 @@ describe('SqllensDocumentParser — dialect-aware identifier case normalization'
 		expect(model.finalColumns.map(c => c.name)).toEqual(['upper_col', 'Mixed']);
 	});
 
-	it('bigquery: table names preserve case, columns and CTE names still lowercase', async () => {
+	it('bigquery: finalColumns/ctes fold table names case-preserved, columns/CTE names lowercase; Sym.name always preserves the declared spelling', async () => {
 		const model = await parser('bigquery').parse(
 			'with MyCte as (select mycol from MyTable)\nselect mycol from MyCte',
 		);
-		const tableRef = model.tokens.find(
-			(t): t is TableRefToken => t.type === 'table_ref' && !t.cteDefinition && t.name === 'MyTable',
-		);
+		const tableRef = (model.symbols ?? []).find(s => s.kind === 'table' && s.modifiers.includes('reference') && s.name === 'MyTable');
 		expect(tableRef).toBeDefined();
-		const cteDef = model.tokens.find(t => t.type === 'table_ref' && t.cteDefinition);
-		expect(cteDef?.name).toBe('mycte');
+		const cteDef = (model.symbols ?? []).find(s => s.kind === 'cte' && s.modifiers.includes('declaration'));
+		expect(cteDef?.name).toBe('MyCte'); // Sym.name: declared spelling, not normName-folded
+		expect(model.ctes.map(c => c.name)).toContain('mycte'); // CteInfo.name: normName-folded
 		expect(colRefNames(model)).toEqual(expect.arrayContaining(['mycol']));
 	});
 });
@@ -337,10 +340,11 @@ describe('SqllensDocumentParser — alias spans via Projection.aliasCst (ITEM 5)
 	it('anchors the alias after a trailing line comment on the projection', async () => {
 		const sql = 'select a + b as x -- note\nfrom t';
 		const model = await parser().parse(sql);
-		const def = model.tokens.find(t => t.type === 'column_def' && t.name === 'x')!;
-		expect(def.line).toBe(0);
-		expect(def.col).toBe('select a + b as '.length); // `x`, not the comment token
-		expect(def.endCol).toBe('select a + b as x'.length);
+		const def = (model.symbols ?? []).find(s => s.kind === 'column' && s.modifiers.includes('declaration') && s.name === 'x')!;
+		const range = nameRangeOf(def);
+		expect(range.start.line).toBe(0);
+		expect(range.start.character).toBe('select a + b as '.length); // `x`, not the comment token
+		expect(range.end.character).toBe('select a + b as x'.length);
 
 		const col = model.finalSelect!.columns.find(c => c.name === 'x')!;
 		expect(col.aliasCol).toBe('select a + b as '.length);
@@ -350,9 +354,10 @@ describe('SqllensDocumentParser — alias spans via Projection.aliasCst (ITEM 5)
 	it('anchors the alias of a parenthesized expression projection', async () => {
 		const sql = 'select (a+b) as x from t';
 		const model = await parser().parse(sql);
-		const def = model.tokens.find(t => t.type === 'column_def' && t.name === 'x')!;
-		expect(def.col).toBe('select (a+b) as '.length);
-		expect(def.endCol).toBe('select (a+b) as x'.length);
+		const def = (model.symbols ?? []).find(s => s.kind === 'column' && s.modifiers.includes('declaration') && s.name === 'x')!;
+		const range = nameRangeOf(def);
+		expect(range.start.character).toBe('select (a+b) as '.length);
+		expect(range.end.character).toBe('select (a+b) as x'.length);
 	});
 });
 
@@ -474,7 +479,7 @@ describe('SqllensDocumentParser — parse-failure paths', () => {
 		expect((model.parseWarnings ?? []).some(w => w.type === 'syntax_error')).toBe(true);
 		expect((model.macroCalls ?? []).map(m => m.name)).toContain('some_statement_macro');
 		// Statement 1 parsed — its table ref survives in the token stream.
-		expect(model.tokens.some(t => t.type === 'table_ref' && t.name === 't')).toBe(true);
+		expect((model.symbols ?? []).some(s => isRelationSym(s) && s.name === 't')).toBe(true);
 	});
 });
 
@@ -482,17 +487,18 @@ describe('SqllensDocumentParser — dialect smoke', () => {
 	it('parses a simple model under tsql', async () => {
 		const model = await parser('tsql').parse('select a, b from t');
 		expect(model.finalColumns.map(c => c.name)).toEqual(['a', 'b']);
-		expect(model.tokens.some(t => t.type === 'table_ref' && t.name === 't')).toBe(true);
+		expect((model.symbols ?? []).some(s => isRelationSym(s) && s.name === 't')).toBe(true);
 		expect(model.parseWarnings).toEqual([]);
 	});
 
 	it('parses a simple model under snowflake', async () => {
-		// snowflake's NORMALIZATION_STRATEGY is UPPERCASE — unquoted identifiers are
-		// uppercased per Snowflake's convention, unlike the
-		// lowercasing case-insensitive dialects above.
+		// snowflake's NORMALIZATION_STRATEGY is UPPERCASE — finalColumns (normName-folded)
+		// uppercases unquoted identifiers per Snowflake's convention; Sym.name (sqllens's
+		// displayName) is never folded, so it preserves the declared spelling ('t') as
+		// literally written, regardless of dialect.
 		const model = await parser('snowflake').parse('select a, b from t');
 		expect(model.finalColumns.map(c => c.name)).toEqual(['A', 'B']);
-		expect(model.tokens.some(t => t.type === 'table_ref' && t.name === 'T')).toBe(true);
+		expect((model.symbols ?? []).some(s => isRelationSym(s) && s.name === 't')).toBe(true);
 		expect(model.parseWarnings).toEqual([]);
 	});
 });
@@ -708,9 +714,16 @@ describe('SqllensDocumentParser — multi-statement documents (per-cell extracti
 	].join('\n');
 	const TWO_LINES = TWO.split('\n');
 
-	it('extracts tokens for EVERY statement at doc-native positions', async () => {
+	it('extracts symbols for EVERY statement at doc-native positions', async () => {
 		const model = await parser().parse(TWO);
-		const tok = (name: string) => model.tokens.find(t => t.name === name);
+		const tok = (name: string) => {
+			const sym = (model.symbols ?? []).find(s =>
+				(s.kind === 'column' && s.name.split('.').pop() === name) || (isRelationSym(s) && s.name === name),
+			);
+			if (!sym) return undefined;
+			const range = sym.kind === 'column' ? nameRangeOf(sym) : rangeOfSpan(sym.span);
+			return { line: range.start.line, col: range.start.character };
+		};
 
 		// statement 1
 		expect(tok('a')?.line).toBe(0);
@@ -737,7 +750,7 @@ describe('SqllensDocumentParser — multi-statement documents (per-cell extracti
 		expect(model.refs.map(r => r.model)).toEqual(['dim_x']);
 		expect(model.refs[0].line).toBe(1);
 		expect(model.refs[0].jinjaCol).toBe(sql.split('\n')[1].indexOf('{{'));
-		expect(model.tokens.some(t => t.type === 'table_ref' && t.name === 'dim_x' && t.line === 1)).toBe(true);
+		expect((model.symbols ?? []).some(s => isRelationSym(s) && s.name === 'dim_x' && s.span.line - 1 === 1)).toBe(true);
 	});
 
 	it('a syntax error in one statement does not suppress the others', async () => {
@@ -747,7 +760,7 @@ describe('SqllensDocumentParser — multi-statement documents (per-cell extracti
 		const errs = (model.parseWarnings ?? []).filter(w => w.type === 'syntax_error');
 		expect(errs.length).toBeGreaterThan(0);
 		expect(errs.every(w => w.line === 0)).toBe(true); // all in statement 1
-		expect(model.tokens.some(t => t.type === 'table_ref' && t.name === 'u' && t.line === 1)).toBe(true);
+		expect((model.symbols ?? []).some(s => isRelationSym(s) && s.name === 'u' && s.span.line - 1 === 1)).toBe(true);
 	});
 
 	it('extracts CTEs in later statements with doc-native lines', async () => {
@@ -760,8 +773,8 @@ describe('SqllensDocumentParser — multi-statement documents (per-cell extracti
 	it('handles a config-topped multi-statement scratch (jinja before statement 1)', async () => {
 		const sql = '{{ config(materialized=\'table\') }}\nselect a from t;\nselect b from u';
 		const model = await parser().parse(sql);
-		expect(model.tokens.some(t => t.name === 't' && t.line === 1)).toBe(true);
-		expect(model.tokens.some(t => t.name === 'u' && t.line === 2)).toBe(true);
+		expect((model.symbols ?? []).some(s => isRelationSym(s) && s.name === 't' && s.span.line - 1 === 1)).toBe(true);
+		expect((model.symbols ?? []).some(s => isRelationSym(s) && s.name === 'u' && s.span.line - 1 === 2)).toBe(true);
 	});
 
 	it('composes the reflow astIndex across statements — AST precision beyond statement 1', async () => {
@@ -775,7 +788,7 @@ describe('SqllensDocumentParser — multi-statement documents (per-cell extracti
 	it('leaves a single statement with trailing `;` on the whole-doc path', async () => {
 		// One element -> never flagged compound -> no split, byte-identical to today.
 		const model = await parser().parse('select a from t;\n');
-		expect(model.tokens.some(t => t.name === 't' && t.line === 0)).toBe(true);
+		expect((model.symbols ?? []).some(s => isRelationSym(s) && s.name === 't' && s.span.line - 1 === 0)).toBe(true);
 		expect(model.finalColumns.map(c => c.name)).toEqual(['a']);
 	});
 });

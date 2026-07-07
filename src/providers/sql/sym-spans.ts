@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import type { Sym } from '../../ftl/sqllens/api';
+import type { CteInfo } from '../../services/parse-service';
 
 /** A sqllens `Span` (1-based line, 0-based column, end-exclusive) — narrowed to the
  *  fields these helpers read, so callers can pass `Sym['span']` or `Sym['definition']`. */
@@ -90,6 +91,56 @@ export function relationNameRangeOf(sym: Sym): vscode.Range {
 		return new vscode.Range(line - 1, column, line - 1, column + sym.name.length);
 	}
 	return rangeOfSpan(sym.span);
+}
+
+/**
+ * A `cte`-kind Sym's own anchor to its declaration: a declaration Sym's own `span`,
+ * or a reference Sym's `.definition` (the span sqllens itself resolved the reference
+ * to, via the real scope-tree walk — not a name lookup). `undefined` only for a
+ * non-cte Sym or an unresolved reference.
+ *
+ * This is the SAME kind of structural identity `symbolBindings.sourceOf`/`aliasOf`
+ * already use elsewhere in this extension (object identity between Syms) — CTEs are
+ * the one case that also needs to bridge to `CteInfo` (this extension's separate,
+ * non-Sym CTE extraction), which carries no back-reference to any `Sym`. Position is
+ * the shared anchor across that boundary: `extractCtes` anchors `CteInfo.line/col`
+ * at the same start token `deriveSymbols` anchors a declaration's `span` (or a
+ * reference's `definition`) at.
+ *
+ * `.name` is NOT a safe substitute here: for a CTE, `Sym.name` is sqllens's
+ * `displayName` — the DECLARED spelling, copied from the declaration's own name
+ * object onto every Sym for that CTE regardless of how each individual reference was
+ * actually typed (`displayName`'s own doc comment: "never use this for comparison;
+ * two displayName results being equal proves nothing about identity"). `CteInfo.name`
+ * (this extension's `extractCtes`) instead folds through `normName`/`foldIdentifier`
+ * for dialect-aware casing (e.g. Snowflake uppercases unquoted identifiers). The two
+ * disagree for any CTE name containing a non-lowercase letter — found live while
+ * migrating the reference/rename/call-hierarchy cluster off `model.tokens`.
+ */
+function cteAnchorOf(sym: Sym): SpanLike | undefined {
+	if (sym.kind !== 'cte') return undefined;
+	return sym.modifiers.includes('declaration') ? sym.span : sym.definition;
+}
+
+/** True when a `cte`-kind Sym (declaration or reference) identifies the same CTE as
+ *  `cte` — matched by structural anchor (see `cteAnchorOf`), never by name string. */
+export function symMatchesCte(sym: Sym, cte: CteInfo): boolean {
+	const anchor = cteAnchorOf(sym);
+	if (!anchor) return false;
+	return anchor.line - 1 === cte.line && anchor.column === (cte.col ?? 0);
+}
+
+/** True when two `cte`-kind Syms (declaration and/or reference, any combination)
+ *  identify the SAME CTE — matched by structural anchor (see `cteAnchorOf`), never
+ *  by `.name`. Every Sym for one CTE happens to carry the same `displayName`-derived
+ *  `.name` already (see `cteAnchorOf`'s doc comment on why that's incidental, not a
+ *  safe general rule) — this compares anchors directly instead, with no `CteInfo`
+ *  needed at all. */
+export function symsMatchSameCte(a: Sym, b: Sym): boolean {
+	const anchorA = cteAnchorOf(a);
+	const anchorB = cteAnchorOf(b);
+	if (!anchorA || !anchorB) return false;
+	return anchorA.line === anchorB.line && anchorA.column === anchorB.column;
 }
 
 /**

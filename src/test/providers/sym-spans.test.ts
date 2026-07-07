@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { nameRangeOf, qualifierRangeOf, relationNameRangeOf, rangeOfSpan, isRelationSym } from '../../providers/sql/sym-spans';
+import { nameRangeOf, qualifierRangeOf, relationNameRangeOf, rangeOfSpan, isRelationSym, symMatchesCte, symsMatchSameCte } from '../../providers/sql/sym-spans';
 import { sym, colSym } from '../ninja/helpers';
 
 describe('nameRangeOf', () => {
@@ -90,5 +90,59 @@ describe('isRelationSym', () => {
 		expect(isRelationSym(sym('lateral', 'x', 0, 0))).toBe(true);
 		expect(isRelationSym(sym('alias', 'x', 0, 0))).toBe(false);
 		expect(isRelationSym(sym('column', 'x', 0, 0))).toBe(false);
+	});
+});
+
+describe('symMatchesCte / symsMatchSameCte', () => {
+	// Regression coverage for a real, live bug: Sym.name for a CTE is sqllens's
+	// displayName (the DECLARED spelling — e.g. written "MyCte" — copied onto
+	// every Sym for that CTE regardless of how a given reference was typed).
+	// CteInfo.name (this extension's extractCtes) instead folds through
+	// normName/foldIdentifier for dialect casing (e.g. Snowflake uppercases
+	// unquoted identifiers to "MYCTE"). A name-string comparison between the
+	// two silently fails for any CTE name with a non-lowercase letter — these
+	// helpers compare structural anchors instead, immune to that mismatch.
+
+	it('matches a reference Sym to its CteInfo by anchor position, even when the folded names disagree', () => {
+		// Declared "MyCte" (Sym.name, displayName); CteInfo.name folded to "MYCTE"
+		// (Snowflake uppercases unquoted identifiers) — deliberately DIFFERENT strings.
+		const cte = { name: 'MYCTE', line: 0, col: 5, endLine: 0, endCol: 30, columns: [] };
+		const declSym = sym('cte', 'MyCte', 0, 5, { modifiers: ['declaration'] });
+		const refSym = sym('cte', 'MyCte', 1, 14, { definitionOf: cte });
+
+		expect(symMatchesCte(declSym, cte)).toBe(true);
+		expect(symMatchesCte(refSym, cte)).toBe(true);
+	});
+
+	it('does not match a Sym anchored at a different position', () => {
+		const cte = { name: 'MYCTE', line: 0, col: 5, endLine: 0, endCol: 30, columns: [] };
+		const otherCte = { name: 'OTHER', line: 5, col: 5, endLine: 5, endCol: 30, columns: [] };
+		const refToOther = sym('cte', 'Other', 1, 14, { definitionOf: otherCte });
+
+		expect(symMatchesCte(refToOther, cte)).toBe(false);
+	});
+
+	it('matches two reference Syms for the same CTE, even when their folded names would disagree', () => {
+		const declSym = sym('cte', 'MyCte', 0, 5, { modifiers: ['declaration'] });
+		const ref1 = sym('cte', 'MyCte', 1, 14, { definitionOf: declSym });
+		const ref2 = sym('cte', 'MyCte', 2, 20, { definitionOf: declSym });
+
+		expect(symsMatchSameCte(declSym, ref1)).toBe(true);
+		expect(symsMatchSameCte(ref1, ref2)).toBe(true);
+	});
+
+	it('does not match two references to different CTEs', () => {
+		const declA = sym('cte', 'A', 0, 5, { modifiers: ['declaration'] });
+		const declB = sym('cte', 'B', 5, 5, { modifiers: ['declaration'] });
+		const refA = sym('cte', 'A', 1, 14, { definitionOf: declA });
+		const refB = sym('cte', 'B', 6, 14, { definitionOf: declB });
+
+		expect(symsMatchSameCte(refA, refB)).toBe(false);
+	});
+
+	it('returns false for a non-cte Sym or an unresolved reference', () => {
+		const cte = { name: 'MYCTE', line: 0, col: 5, endLine: 0, endCol: 30, columns: [] };
+		expect(symMatchesCte(sym('table', 'orders', 0, 0), cte)).toBe(false);
+		expect(symMatchesCte(sym('cte', 'MyCte', 1, 14), cte)).toBe(false); // no definitionOf set
 	});
 });

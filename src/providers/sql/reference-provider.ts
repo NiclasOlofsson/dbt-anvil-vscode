@@ -6,7 +6,7 @@ import type { DocumentModel } from '../../services/parse-service';
 import type { Sym } from '../../ftl/sqllens/api';
 import { isLinePositionInComment, computeCommentRanges, isOffsetInComment } from '../common/comment-utils';
 import { SQL_KEYWORDS } from './sql-keywords';
-import { isRelationSym, qualifierRangeOf, rangeOfSpan, relationNameRangeOf } from './sym-spans';
+import { isRelationSym, qualifierRangeOf, rangeOfSpan, relationNameRangeOf, symMatchesCte } from './sym-spans';
 
 /**
  * Find All References for ref('model'), source('src', 'table'), and column
@@ -73,9 +73,10 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 				}
 
 				if (isRelationSym(sym)) {
-					// CTE name → in-file references
-					const cte = model.ctes.find(c => c.name === sym.name);
-					if (cte) return this._findCteReferences(document, sym.name, model, cte);
+					// CTE name → in-file references (position-matched, not name-matched —
+					// see symMatchesCte's doc comment for why name comparison is unsafe here)
+					const cte = model.ctes.find(c => symMatchesCte(sym, c));
+					if (cte) return this._findCteReferences(document, model, cte);
 
 					// relation that matches a ref() → cross-file references
 					const matchingRef = model.refs.find(r => r.model === sym.name);
@@ -217,7 +218,6 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 
 	private _findCteReferences(
 		document: vscode.TextDocument,
-		cteName: string,
 		model: DocumentModel,
 		cte: import('../../services/parse-service').CteInfo,
 	): vscode.Location[] {
@@ -227,17 +227,18 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 		const defCol = cte.col ?? 0;
 		locations.push(new vscode.Location(
 			document.uri,
-			new vscode.Range(cte.line, defCol, cte.line, defCol + cteName.length),
+			new vscode.Range(cte.line, defCol, cte.line, defCol + cte.name.length),
 		));
 
-		// Every relation-kind reference Sym with the same name (FROM/JOIN uses)
+		// Every relation-kind reference Sym identifying the SAME cte (position-matched,
+		// not name-matched — see symMatchesCte's doc comment).
 		for (const s of model.symbols ?? []) {
 			if (!isRelationSym(s) || !s.modifiers.includes('reference')) continue;
-			if (s.name !== cteName) continue;
+			if (!symMatchesCte(s, cte)) continue;
 			locations.push(new vscode.Location(document.uri, relationNameRangeOf(s)));
 		}
 
-		this.logger.debug(`ReferenceProvider: found ${locations.length} references for CTE '${cteName}'`);
+		this.logger.debug(`ReferenceProvider: found ${locations.length} references for CTE '${cte.name}'`);
 		return locations;
 	}
 

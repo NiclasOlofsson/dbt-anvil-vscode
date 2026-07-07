@@ -174,14 +174,27 @@ export function tableRef(name: string, line: number, col: number, alias?: string
  * internally to `Sym.span`'s 1-based `line`/`endLine` (the ANTLR convention sqllens
  * itself uses). `frame` defaults to `MAIN_FRAME`; pass a CTE/subquery name for a
  * symbol inside one.
+ *
+ * `definitionOf` wires up `.definition` (the span a REFERENCE Sym resolves to) —
+ * from a declaration Sym's own span, or straight from a `CteInfo` (0-based
+ * `line`/`col`, matching this file's other CTE fixtures) when there's no
+ * declaration Sym in the fixture. Needed for a `cte`-kind reference fixture:
+ * matching it to its declaration (`symMatchesCte`/`symsMatchSameCte`,
+ * sym-spans.ts) compares structural anchors, never `.name` (a CTE's `Sym.name`
+ * is sqllens's `displayName` — the declared spelling, not safe for identity
+ * comparison on its own).
  */
 export function sym(
 	kind: Sym['kind'],
 	name: string,
 	line: number,
 	col: number,
-	opts: { modifiers?: SymbolModifier[]; frame?: string; endCol?: number; endLine?: number } = {},
+	opts: { modifiers?: SymbolModifier[]; frame?: string; endCol?: number; endLine?: number; definitionOf?: Sym | CteInfo } = {},
 ): Sym {
+	const defSource = opts.definitionOf;
+	const definition = defSource === undefined ? undefined
+		: 'span' in defSource ? defSource.span
+			: { line: defSource.line + 1, column: defSource.col ?? 0, endLine: defSource.line + 1, endColumn: (defSource.col ?? 0) + name.length };
 	return {
 		kind,
 		modifiers: opts.modifiers ?? ['reference'],
@@ -193,6 +206,7 @@ export function sym(
 			endColumn: opts.endCol ?? col + name.length,
 		},
 		frame: opts.frame ?? MAIN_FRAME,
+		...(definition ? { definition } : {}),
 	};
 }
 

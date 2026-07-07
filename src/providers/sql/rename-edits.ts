@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import type { DocumentModel } from '../../services/parse-service';
 import type { Sym } from '../../ftl/sqllens/api';
 import { type FixOp, replaceOp } from '../../ninja/fix-op';
-import { isRelationSym, nameRangeOf, qualifierRangeOf, rangeOfSpan, relationNameRangeOf } from './sym-spans';
+import { isRelationSym, nameRangeOf, qualifierRangeOf, rangeOfSpan, relationNameRangeOf, symsMatchSameCte } from './sym-spans';
 
 /**
  * Rename every occurrence of the alias `sym` names (or that `sym`'s qualifier
@@ -70,10 +70,10 @@ export function buildInFileRenameOps(
 	}
 
 	if (isRelationSym(sym)) {
-		const cteName = sym.name;
+		// Matched by structural anchor, not name — see symsMatchSameCte's doc comment.
 		const ops: FixOp[] = [];
 		for (const s of model.symbols ?? []) {
-			if (isRelationSym(s) && s.name === cteName) {
+			if (symsMatchSameCte(sym, s)) {
 				ops.push(replaceOp(relationNameRangeOf(s), newName));
 			}
 		}

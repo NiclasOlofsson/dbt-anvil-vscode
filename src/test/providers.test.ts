@@ -233,14 +233,13 @@ describe('DbtReferenceProvider', () => {
 	it('finds CTE name references via symbol stream', async () => {
 		// SQL: with base as (...), final as (select * from base) select * from final
 		// Syms: 'base' reference at line 1 col 26 (used inside final's body)
+		const baseCte = { name: 'base', line: 0, col: 5, endLine: 0, endCol: 20, columns: [] };
+		const finalCte = { name: 'final', line: 1, col: 5, endLine: 1, endCol: 50, columns: [] };
 		const mockModel: Partial<DocumentModel> = {
-			ctes: [
-				{ name: 'base', line: 0, col: 5, endLine: 0, endCol: 20, columns: [] },
-				{ name: 'final', line: 1, col: 5, endLine: 1, endCol: 50, columns: [] },
-			],
+			ctes: [baseCte, finalCte],
 			symbols: [
-				sym('cte', 'base', 1, 26),
-				sym('cte', 'final', 2, 14),
+				sym('cte', 'base', 1, 26, { definitionOf: baseCte }),
+				sym('cte', 'final', 2, 14, { definitionOf: finalCte }),
 			],
 			symbolBindings: symbolBindings(),
 			refs: [],
@@ -255,6 +254,34 @@ describe('DbtReferenceProvider', () => {
 		const result = await localProvider.provideReferences(doc, pos, { includeDeclaration: true }, mockToken);
 
 		// Definition at (line 0, col 5) + usage at (line 1, col 26)
+		expect(result).toHaveLength(2);
+		const lines = result.map(l => l.range.start.line);
+		expect(lines).toContain(0); // definition
+		expect(lines).toContain(1); // usage
+	});
+
+	it('finds CTE name references when the folded CteInfo name disagrees with the declared Sym name (regression)', async () => {
+		// Regression coverage for a real bug: Sym.name for a CTE is sqllens's displayName
+		// (the declared spelling, "MyCte"); CteInfo.name (extractCtes) folds through
+		// normName for dialect casing — e.g. Snowflake uppercases unquoted identifiers to
+		// "MYCTE". A name-string comparison between the two silently fails; the provider
+		// must match by structural anchor (symMatchesCte) instead.
+		const myCte = { name: 'MYCTE', line: 0, col: 5, endLine: 0, endCol: 20, columns: [] };
+		const mockModel: Partial<DocumentModel> = {
+			ctes: [myCte],
+			symbols: [
+				sym('cte', 'MyCte', 0, 5, { modifiers: ['declaration'] }),
+				sym('cte', 'MyCte', 1, 14, { definitionOf: myCte }),
+			],
+			symbolBindings: symbolBindings(),
+			refs: [],
+		};
+		const ps = createMockParseServiceWithModel(mockModel);
+		const localProvider = new DbtReferenceProvider(indexer, createMockLogger(), ps);
+		const doc = createMockDocument('with MyCte as (select 1 id)\nselect * from MyCte');
+		const pos = new vscode.Position(1, 16); // cursor on the 'MyCte' reference
+		const result = await localProvider.provideReferences(doc, pos, { includeDeclaration: true }, mockToken);
+
 		expect(result).toHaveLength(2);
 		const lines = result.map(l => l.range.start.line);
 		expect(lines).toContain(0); // definition
@@ -417,9 +444,10 @@ describe('DbtRenameProvider', () => {
 	});
 
 	it('prepareRename returns CTE name range for a cte reference sym', async () => {
+		const baseCte = { name: 'base', line: 0, col: 5, endLine: 0, endCol: 9, columns: [] };
 		const mockModel: Partial<DocumentModel> = {
-			ctes: [{ name: 'base', line: 0, col: 5, endLine: 0, endCol: 9, columns: [] }],
-			symbols: [sym('cte', 'base', 1, 14)],
+			ctes: [baseCte],
+			symbols: [sym('cte', 'base', 1, 14, { definitionOf: baseCte })],
 		};
 		const ps = createMockParseServiceWithModel(mockModel);
 		const localProvider = new DbtRenameProvider(indexer, createMockLoader(), createMockLogger(), ps);
@@ -481,11 +509,12 @@ describe('DbtRenameProvider', () => {
 		// endLine/endCol represent the closing paren of the CTE body — on a
 		// different line from the name. The rename must NOT use endCol as the name
 		// end (Bug #2 regression guard).
+		const baseCteDecl = sym('cte', 'base', 0, 5, { modifiers: ['declaration'] });
 		const mockModel: Partial<DocumentModel> = {
 			ctes: [{ name: 'base', line: 0, col: 5, endLine: 2, endCol: 1, columns: [] }],
 			symbols: [
-				sym('cte', 'base', 0, 5, { modifiers: ['declaration'] }), // cte declaration
-				sym('cte', 'base', 3, 14), // usage in FROM
+				baseCteDecl, // cte declaration
+				sym('cte', 'base', 3, 14, { definitionOf: baseCteDecl }), // usage in FROM
 			],
 		};
 		const ps = createMockParseServiceWithModel(mockModel);
@@ -502,11 +531,12 @@ describe('DbtRenameProvider', () => {
 	});
 
 	it('provideRenameEdits renames CTE from the definition site', async () => {
+		const baseCteDecl = sym('cte', 'base', 0, 5, { modifiers: ['declaration'] });
 		const mockModel: Partial<DocumentModel> = {
 			ctes: [{ name: 'base', line: 0, col: 5, endLine: 2, endCol: 1, columns: [] }],
 			symbols: [
-				sym('cte', 'base', 0, 5, { modifiers: ['declaration'] }), // cte declaration
-				sym('cte', 'base', 3, 14), // usage in FROM
+				baseCteDecl, // cte declaration
+				sym('cte', 'base', 3, 14, { definitionOf: baseCteDecl }), // usage in FROM
 			],
 		};
 		const ps = createMockParseServiceWithModel(mockModel);
