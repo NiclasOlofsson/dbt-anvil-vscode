@@ -9,12 +9,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import * as path from 'node:path';
-import { templateVariants } from '../ftl/sqllens/api';
+import { MAIN_FRAME, templateVariants } from '../ftl/sqllens/api';
 import { BridgeRunner } from '../dbt/bridge-runner';
 import { detectPythonEnvironment, type PythonEnvironment } from '../dbt/env-detector';
 import { SqllensDocumentParser, type AdapterContext } from '../ftl/sqllens/document-parser';
 import { mergeModels, ParseService } from '../services/parse-service';
-import type { DocumentModel, TableRefToken } from '../services/parse-service';
+import type { DocumentModel } from '../services/parse-service';
+import { isRelationSym, rangeOfSpan } from '../providers/sql/sym-spans';
 import { createMockLogger } from './helpers';
 
 const ANSI_CONTEXT: AdapterContext = { adapterType: 'ansi' };
@@ -172,10 +173,15 @@ select order_id, amount from orders`);
     select order_id, amount from raw_orders
 )
 select order_id, amount from orders`);
-		type ColToken = { type: string; name: string; table?: string };
-		const tokens = model.tokens as ColToken[];
-		const finalOrderId = tokens.find(t => t.type === 'column_ref' && t.name === 'order_id' && t.table === 'orders');
-		expect(finalOrderId?.table).toBe('orders');
+		// The final SELECT's bare order_id (not the CTE-internal one, which lives
+		// in the 'orders' frame rather than MAIN_FRAME) should resolve ownership
+		// to the 'orders' CTE.
+		const finalOrderId = (model.symbols ?? []).find(s =>
+			s.kind === 'column' && s.modifiers.includes('reference') && s.name === 'order_id' && s.frame === MAIN_FRAME,
+		);
+		expect(finalOrderId).toBeDefined();
+		const resolved = model.symbolBindings?.sourceOf.get(finalOrderId!);
+		expect(resolved?.name).toBe('orders');
 	}, 30_000);
 
 	it('column line numbers point to their source line', async () => {
@@ -491,17 +497,18 @@ describe('ftl parse_document – conditional branches', () => {
 		expect(cols.find(c => c.name === 'base_col')?.line).toBe(3);
 	}, 30_000);
 
-	it('token positions outside conditional branches are preserved exactly', async () => {
+	it('symbol positions outside conditional branches are preserved exactly', async () => {
 		const source = 'SELECT {% if v %}col_a{% else %}col_b{% endif %}, c FROM anchor_table';
 		expect(source.indexOf('anchor_table')).toBe(57);
 		expect(source.indexOf('anchor_table') + 'anchor_table'.length).toBe(69);
 
 		const model = await parseWithBranches(source);
-		const tableRefs = model.tokens.filter(t => t.type === 'table_ref' && t.name === 'anchor_table');
+		const tableRefs = (model.symbols ?? []).filter(s => isRelationSym(s) && s.name === 'anchor_table');
 		expect(tableRefs.length).toBe(1);
-		expect(tableRefs[0].line).toBe(0);
-		expect(tableRefs[0].col).toBe(57);
-		expect(tableRefs[0].endCol).toBe(69);
+		const range = rangeOfSpan(tableRefs[0].span);
+		expect(range.start.line).toBe(0);
+		expect(range.start.character).toBe(57);
+		expect(range.end.character).toBe(69);
 	}, 30_000);
 });
 
@@ -557,17 +564,14 @@ SELECT * FROM cte`);
 		expect(subCte!.columns.map(c => c.name)).toContain('col');
 	});
 
-	it('subquery table_ref token has correct alias position', async () => {
+	it('subquery alias sym has correct position', async () => {
 		const sql = 'SELECT x.col\nFROM (\n    SELECT col FROM raw_orders\n) AS x';
 		const model = await parseSql(sql);
-		const tableRef = model.tokens.find((t): t is TableRefToken =>
-			t.type === 'table_ref' && 'alias' in t && t.alias === 'x',
-		);
-		expect(tableRef).toBeDefined();
+		const aliasSym = (model.symbols ?? []).find(s => s.kind === 'alias' && s.name === 'x');
+		expect(aliasSym).toBeDefined();
 		// 'x' is on line 3 ("`) AS x`"), at a known position
-		expect(tableRef!.aliasLine).toBe(3);
-		expect(tableRef!.aliasCol).toBeDefined();
-		expect(tableRef!.aliasEndCol).toBeDefined();
-		expect(tableRef!.aliasEndCol! - tableRef!.aliasCol!).toBe(1); // 'x' is 1 char
+		const range = rangeOfSpan(aliasSym!.span);
+		expect(range.start.line).toBe(3);
+		expect(range.end.character - range.start.character).toBe(1); // 'x' is 1 char
 	});
 });

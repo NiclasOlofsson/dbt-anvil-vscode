@@ -4,7 +4,7 @@ import type { ILogger } from '../../types/logger';
 import { ParseService } from '../../services/parse-service';
 import type { CteInfo, DocumentModel, RefInfo, SourceInfo } from '../../services/parse-service';
 import { computeCommentRanges, isOffsetInComment } from '../common/comment-utils';
-import { isRelationSym, rangeOfSpan } from './sym-spans';
+import { isRelationSym, relationNameRangeOf } from './sym-spans';
 
 // ── Tagged subclass so we can recover kind/metadata from the item VS Code echoes back ──
 
@@ -287,7 +287,7 @@ export class DbtCallHierarchyProvider implements vscode.CallHierarchyProvider {
 			if (refs.length === 0) continue;
 
 			const callerItem = this._prepareCteItem(document, cte);
-			const fromRanges = refs.map(s => rangeOfSpan(s.span));
+			const fromRanges = refs.map(s => relationNameRangeOf(s));
 			calls.push(new vscode.CallHierarchyIncomingCall(callerItem, fromRanges));
 		}
 
@@ -315,7 +315,7 @@ export class DbtCallHierarchyProvider implements vscode.CallHierarchyProvider {
 			);
 			calls.push(new vscode.CallHierarchyIncomingCall(
 				finalItem,
-				finalRefs.map(s => rangeOfSpan(s.span)),
+				finalRefs.map(s => relationNameRangeOf(s)),
 			));
 		}
 
@@ -360,7 +360,7 @@ export class DbtCallHierarchyProvider implements vscode.CallHierarchyProvider {
 		const byName = new Map<string, vscode.Range[]>();
 		for (const s of tableRefs) {
 			const ranges = byName.get(s.name) ?? [];
-			ranges.push(rangeOfSpan(s.span));
+			ranges.push(relationNameRangeOf(s));
 			byName.set(s.name, ranges);
 		}
 
@@ -401,7 +401,7 @@ export class DbtCallHierarchyProvider implements vscode.CallHierarchyProvider {
 			if ((s.span.line - 1) <= lastCteEnd) continue;
 			if (!cteNames.has(s.name)) continue;
 			const ranges = byName.get(s.name) ?? [];
-			ranges.push(rangeOfSpan(s.span));
+			ranges.push(relationNameRangeOf(s));
 			byName.set(s.name, ranges);
 		}
 

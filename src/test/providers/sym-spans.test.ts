@@ -56,7 +56,26 @@ describe('relationNameRangeOf', () => {
 		expect(range.end.character).toBe(5 + 'my_cte'.length);
 	});
 
-	it('passes a relation REFERENCE span through unchanged', () => {
+	it('narrows an ALIASED CTE reference span to just the name, excluding the alias', () => {
+		// Verified empirically: `FROM orders o` gives the relation Sym a span
+		// covering "orders o" (through the alias), not just "orders" — a CTE
+		// reference behaves the same way, e.g. "my_cte x" spanning col 5..13.
+		const ref = sym('cte', 'my_cte', 0, 5, { endCol: 13 });
+		const range = relationNameRangeOf(ref);
+		expect(range.start.character).toBe(5);
+		expect(range.end.character).toBe(5 + 'my_cte'.length);
+	});
+
+	it('passes an unaliased CTE reference span through unchanged (already name-only)', () => {
+		const ref = sym('cte', 'my_cte', 0, 5);
+		const range = relationNameRangeOf(ref);
+		expect(range).toEqual(rangeOfSpan(ref.span));
+	});
+
+	it('passes a table/subquery/lateral relation span through unchanged', () => {
+		// A ref()/source()-backed table Sym's name doesn't match its source text
+		// width (a jinja tag renders as a different width than the resolved table
+		// name) — unlike a CTE name, which is always a literal SQL identifier.
 		const ref = sym('table', 'orders', 1, 5);
 		const range = relationNameRangeOf(ref);
 		expect(range).toEqual(rangeOfSpan(ref.span));

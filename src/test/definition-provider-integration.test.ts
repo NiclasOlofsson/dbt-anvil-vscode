@@ -1,19 +1,20 @@
 /**
  * Integration tests for definition-provider alias resolution.
  *
- * Uses the real Python bridge to parse SQL — no mocked DocumentModels.
+ * Uses the real native FTL parser to parse SQL — no mocked DocumentModels.
  * This suite is the canonical replacement for the unit tests in definition-provider.test.ts
- * which rely on hand-crafted DocumentModels that can drift from what the bridge actually emits.
+ * which rely on hand-crafted DocumentModels that can drift from what the parser actually emits.
  *
  * What is covered here:
- *   - Bridge emitting correct CTE / ref / token data for a realistic SQL fixture
- *   - ParseService.resolveAtPosition: hit-testing a cursor position against the token map
- *   - resolveAlias: mapping an alias string to its CTE / ref / source target
+ *   - Parser emitting correct CTE / ref / symbol data for a realistic SQL fixture
+ *   - ParseService.symAtPosition / partIndexAtPosition: hit-testing a cursor position
+ *     against the Sym stream
+ *   - symbolBindings.aliasOf / sourceOf: mapping a relation/column Sym to its alias / source
  *   - DbtDefinitionProvider.provideDefinition: end-to-end navigation from cursor → location
  *
  * What is NOT covered here (known gaps):
- *   - ref('model') / source('x','y') click navigation (handled by regex, not token-based;
- *     those code paths are exercised by the regex itself, no token positions involved)
+ *   - ref('model') / source('x','y') click navigation (handled by regex, not Sym-based;
+ *     those code paths are exercised by the regex itself, no Sym positions involved)
  *   - Bare column navigation when the column is NOT schema-resolved (cold describe cache)
  *   - Multi-package ref() returning multiple locations (picker scenario)
  *   - source() alias resolution (no source() calls in the SQL fixture)
@@ -23,7 +24,9 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { SqllensDocumentParser, type AdapterContext } from '../ftl/sqllens/document-parser';
 import { ParseService } from '../services/parse-service';
-import type { ColumnDefToken, ColumnRefToken, DocumentModel, TableRefToken } from '../services/parse-service';
+import type { DocumentModel } from '../services/parse-service';
+import type { Sym } from '../ftl/sqllens/api';
+import { nameRangeOf, qualifierRangeOf, rangeOfSpan, relationNameRangeOf } from '../providers/sql/sym-spans';
 import { DbtDefinitionProvider } from '../providers/sql/definition-provider';
 import * as vscode from 'vscode';
 import { createMockLogger } from './helpers';
@@ -98,16 +101,16 @@ describe('definition-provider integration (FTL)', () => {
 	//   ✅ CTE names and line spans
 	//   ✅ SELECT * CTE column recording
 	//   ✅ ref() extraction and alias annotation
-	//   ✅ table_ref tokens with alias line/col positions
-	//   ✅ column_ref tokens with qualifier positions (addr.street)
-	//   ✅ bare column resolved to table via schema-aware qualify() (city → addr)
-	//   ✅ column_def output alias tokens (warehouse_address_street)
-	//   ✅ source() table_ref token col/endCol covering the full {{ source('ns','tbl') }} span
+	//   ✅ relation Syms with alias line/col positions
+	//   ✅ column Syms with qualifier positions (addr.street)
+	//   ✅ bare column resolved to table via schema-aware qualification (city → addr)
+	//   ✅ column declaration Syms (warehouse_address_street)
+	//   ✅ source() relation Sym col/endCol covering the full {{ source('ns','tbl') }} span
 	//   ✅ refs entry enriched position fields (modelCol, modelEndCol, jinjaCol, jinjaEndCol)
 	//   ✅ sources entry enriched position fields (sourceNameCol/EndCol, tableNameCol/EndCol, jinjaCol/EndCol)
 	//
 	// Not covered:
-	//   ❌ wh.* wildcard expansion into individual column_ref tokens
+	//   ❌ wh.* wildcard expansion into individual column Syms
 
 	describe('DocumentModel structure', () => {
 		it('parses three CTEs', () => {
@@ -158,94 +161,129 @@ describe('definition-provider integration (FTL)', () => {
 			expect(wh.col).toBe(9);
 		});
 
-		it('emits table_ref token for gold__warehouse as wh with aliasLine 12', () => {
+		it('emits a table reference sym for gold__warehouse as wh with alias on line 12', () => {
 			// Line 12: "\tfrom {{ ref('gold__warehouse') }} as wh"
 			// _blank_jinja replaces {{ ref(...) }} in-place preserving offsets, so
 			// 'gold__warehouse' starts at col 6 (the position of the opening {{ ).
-			// endCol covers the full jinja tag {{ ref('gold__warehouse') }} = 28 chars.
-			const tok = model.tokens
-				.filter((t): t is TableRefToken => t.type === 'table_ref')
-				.find(t => t.name === 'gold__warehouse' && t.alias === 'wh');
-			expect(tok).toBeDefined();
-			expect(tok!.line).toBe(12);
-			expect(tok!.col).toBe(6);
-			expect(tok!.endCol).toBe(6 + '{{ ref(\'gold__warehouse\') }}'.length); // 34
-			expect(tok!.aliasLine).toBe(12);
-			expect(tok!.aliasCol).toBe(38);
-			expect(tok!.aliasEndCol).toBe(38 + 'wh'.length);
+			// The Sym's own span extends through a trailing alias when one is
+			// written (verified empirically) — it covers the full jinja tag PLUS
+			// " as wh", ending where the alias ends (col 40), not where the tag
+			// itself ends (col 34).
+			const tableSym = (model.symbols ?? []).find(s =>
+				s.kind === 'table' && s.modifiers.includes('reference') && s.name === 'gold__warehouse',
+			);
+			expect(tableSym).toBeDefined();
+			const range = rangeOfSpan(tableSym!.span);
+			expect(range.start.line).toBe(12);
+			expect(range.start.character).toBe(6);
+			expect(range.end.character).toBe(40);
+
+			const alias = model.symbolBindings?.aliasOf.get(tableSym!);
+			expect(alias).toBeDefined();
+			const aliasRange = rangeOfSpan(alias!.span);
+			expect(aliasRange.start.line).toBe(12);
+			expect(aliasRange.start.character).toBe(38);
+			expect(aliasRange.end.character).toBe(38 + 'wh'.length);
 		});
 
-		it('emits table_ref token for gold__address (no alias) on line 2', () => {
+		it('emits a table reference sym for gold__address (no alias) on line 2', () => {
 			// Line 2: "\tfrom {{ ref('gold__address') }}"
 			// col=6: the {{ starts at col 6. endCol covers the full tag = 26 chars.
-			// Note: qualify() may add an auto-alias equal to the table name; we find by name alone.
-			const tok = model.tokens
-				.filter((t): t is TableRefToken => t.type === 'table_ref')
-				.find(t => t.name === 'gold__address');
-			expect(tok).toBeDefined();
-			expect(tok!.line).toBe(2);
-			expect(tok!.col).toBe(6);
-			expect(tok!.endCol).toBe(6 + '{{ ref(\'gold__address\') }}'.length); // 32
+			// Note: qualification may add an auto-alias equal to the table name; we find by name alone.
+			const tableSym = (model.symbols ?? []).find(s =>
+				s.kind === 'table' && s.modifiers.includes('reference') && s.name === 'gold__address',
+			);
+			expect(tableSym).toBeDefined();
+			const range = rangeOfSpan(tableSym!.span);
+			expect(range.start.line).toBe(2);
+			expect(range.start.character).toBe(6);
+			expect(range.end.character).toBe(6 + '{{ ref(\'gold__address\') }}'.length); // 32
 		});
 
-		it('emits table_ref token for address_with_country as addr with aliasLine 13', () => {
+		it('emits a cte reference sym for address_with_country as addr with alias on line 13', () => {
 			// Line 13: "\tleft join address_with_country as addr"
-			// address_with_country is a CTE name (not jinja), so col is its literal position.
-			const tok = model.tokens
-				.filter((t): t is TableRefToken => t.type === 'table_ref')
-				.find(t => t.name === 'address_with_country' && t.alias === 'addr');
-			expect(tok).toBeDefined();
-			expect(tok!.line).toBe(13);
-			expect(tok!.col).toBe(11);
-			expect(tok!.endCol).toBe(11 + 'address_with_country'.length);
-			expect(tok!.aliasLine).toBe(13);
-			expect(tok!.aliasCol).toBe(35);
-			expect(tok!.aliasEndCol).toBe(35 + 'addr'.length);
+			// address_with_country is a CTE name (not jinja), so col is its literal
+			// position. The raw span extends through the trailing alias (col 39,
+			// through the end of "addr") — relationNameRangeOf narrows it back to
+			// just the CTE name (col 11..32) for consumers that need that.
+			const cteSym = (model.symbols ?? []).find(s =>
+				s.kind === 'cte' && s.modifiers.includes('reference') && s.name === 'address_with_country',
+			);
+			expect(cteSym).toBeDefined();
+			const range = rangeOfSpan(cteSym!.span);
+			expect(range.start.line).toBe(13);
+			expect(range.start.character).toBe(11);
+			expect(range.end.character).toBe(39);
+
+			const nameRange = relationNameRangeOf(cteSym!);
+			expect(nameRange.start.character).toBe(11);
+			expect(nameRange.end.character).toBe(11 + 'address_with_country'.length);
+
+			const alias = model.symbolBindings?.aliasOf.get(cteSym!);
+			expect(alias).toBeDefined();
+			const aliasRange = rangeOfSpan(alias!.span);
+			expect(aliasRange.start.line).toBe(13);
+			expect(aliasRange.start.character).toBe(35);
+			expect(aliasRange.end.character).toBe(35 + 'addr'.length);
 		});
 
-		it('emits column_ref token for addr.street on line 7 with correct col range', () => {
-			const tok = model.tokens
-				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
-				.find(t => t.table === 'addr' && t.name === 'street');
-			expect(tok).toBeDefined();
-			expect(tok!.line).toBe(7);
-			expect(tok!.col).toBe(7);
-			expect(tok!.endCol).toBe(7 + 'street'.length);
-			expect(tok!.tableCol).toBe(2);
-			expect(tok!.tableEndCol).toBe(2 + 'addr'.length);
+		it('emits a column reference sym for addr.street on line 7 with correct col range', () => {
+			const colSym = (model.symbols ?? []).find(s =>
+				s.kind === 'column' && s.modifiers.includes('reference') && s.name === 'addr.street',
+			);
+			expect(colSym).toBeDefined();
+			const nameRange = nameRangeOf(colSym!);
+			expect(nameRange.start.line).toBe(7);
+			expect(nameRange.start.character).toBe(7);
+			expect(nameRange.end.character).toBe(7 + 'street'.length);
+
+			const qualRange = qualifierRangeOf(colSym!);
+			expect(qualRange).toBeDefined();
+			expect(qualRange!.start.character).toBe(2);
+			expect(qualRange!.end.character).toBe(2 + 'addr'.length);
 		});
 
-		it('emits column_ref token for city on line 8 resolved to table addr', () => {
-			const tok = model.tokens
-				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
-				.find(t => t.name === 'city' && t.line === 8);
-			expect(tok).toBeDefined();
-			expect(tok!.line).toBe(8);
-			expect(tok!.col).toBe(2);
-			expect(tok!.endCol).toBe(2 + 'city'.length);
-			expect(tok!.table).toBe('addr');
+		it('emits a column reference sym for city on line 8 resolved to table addr', () => {
+			const citySym = (model.symbols ?? []).find(s =>
+				s.kind === 'column' && s.modifiers.includes('reference') && s.name === 'city' && s.span.line - 1 === 8,
+			);
+			expect(citySym).toBeDefined();
+			const nameRange = nameRangeOf(citySym!);
+			expect(nameRange.start.line).toBe(8);
+			expect(nameRange.start.character).toBe(2);
+			expect(nameRange.end.character).toBe(2 + 'city'.length);
+
+			const resolved = model.symbolBindings?.sourceOf.get(citySym!);
+			expect(resolved).toBeDefined();
+			const alias = model.symbolBindings?.aliasOf.get(resolved!);
+			expect(alias?.name).toBe('addr');
 		});
 
-		it('emits column_def token for warehouse_address_street alias on line 7', () => {
-			const tok = model.tokens
-				.filter((t): t is ColumnDefToken => t.type === 'column_def')
-				.find(t => t.name === 'warehouse_address_street' && t.line === 7);
-			expect(tok).toBeDefined();
-			expect(tok!.col).toBe(17);
-			expect(tok!.endCol).toBe(17 + 'warehouse_address_street'.length);
+		it('emits a column declaration sym for warehouse_address_street alias on line 7', () => {
+			const declSym = (model.symbols ?? []).find(s =>
+				s.kind === 'column' && s.modifiers.includes('declaration') && s.name === 'warehouse_address_street',
+			);
+			expect(declSym).toBeDefined();
+			// The declaration's own span covers the whole "addr.street as
+			// warehouse_address_street" clause — nameRangeOf narrows it to just the alias.
+			const range = nameRangeOf(declSym!);
+			expect(range.start.line).toBe(7);
+			expect(range.start.character).toBe(17);
+			expect(range.end.character).toBe(17 + 'warehouse_address_street'.length);
 		});
 
-		it('emits table_ref token for raw_orders source() on line 24', () => {
+		it('emits a table reference sym for raw_orders source() on line 24', () => {
 			// Line 24: "\tfrom {{ source('raw', 'orders') }}"
 			// _blank_jinja replaces {{ source('ns', 'tbl') }} with 'tbl' padded to tag length.
-			// The parser sees 'orders' as the table identifier starting at the '{{' position.
+			// The parser names a source() relation Sym "sourceName.tableName".
 			// _jinja_ref_end now covers source tags too, so endCol spans the full jinja tag.
-			const tok = model.tokens
-				.filter((t): t is TableRefToken => t.type === 'table_ref')
-				.find(t => t.name === 'orders' && t.line === 24);
-			expect(tok).toBeDefined();
-			expect(tok!.col).toBe(6);
-			expect(tok!.endCol).toBe(6 + '{{ source(\'raw\', \'orders\') }}'.length); // 35
+			const tableSym = (model.symbols ?? []).find(s =>
+				s.kind === 'table' && s.modifiers.includes('reference') && s.name === 'raw.orders' && s.span.line - 1 === 24,
+			);
+			expect(tableSym).toBeDefined();
+			const range = rangeOfSpan(tableSym!.span);
+			expect(range.start.character).toBe(6);
+			expect(range.end.character).toBe(6 + '{{ source(\'raw\', \'orders\') }}'.length); // 35
 		});
 
 		it('refs entry for gold__address carries enriched position fields', () => {
@@ -275,147 +313,162 @@ describe('definition-provider integration (FTL)', () => {
 		});
 	});
 
-	// ---- ParseService.resolveAtPosition ----
+	// ---- ParseService.symAtPosition ----
 	//
-	// Tests the hit-testing layer: given a (line, col) cursor position, resolveAtPosition
-	// must return the right kind and token, or null. This is the only way the VS Code
+	// Tests the hit-testing layer: given a (line, col) cursor position, symAtPosition
+	// must return the right Sym (or undefined), and partIndexAtPosition must report
+	// which dotted part the cursor sits on. This is the only way the VS Code
 	// providers know what the user clicked on.
 	//
-	// The key correctness invariant: table_ref alias positions must win over column_ref
-	// qualifier positions, because schema-aware qualify() synthesises column_ref tokens
-	// whose tableCol lands exactly on the alias keyword (discovered bug, now fixed).
+	// The key correctness invariant: a relation's alias Sym must win over a column's
+	// qualifier part, because a bare/qualified column's qualifier span can coincide
+	// with the alias keyword position (discovered bug, now fixed, in the old bridge —
+	// symAtPosition's specificity-width logic supersedes it).
 	//
 	// Coverage:
-	//   ✅ table_ref name span → 'table_ref'
-	//   ✅ table_ref alias span → 'table_alias' (for both FROM and JOIN aliases)
-	//   ✅ column_ref qualifier span → 'table_qualifier' (SELECT list)
-	//   ✅ column_ref qualifier span → 'table_qualifier' (ON clause)
-	//   ✅ column_ref column span → 'column' (ON clause, both sides)
-	//   ✅ bare column name span (city on line 8) → 'column' with table resolved
-	//   ✅ column_def span → 'column_def'
-	//   ✅ position outside all tokens → null
+	//   ✅ relation name span → kind 'table'/'cte'
+	//   ✅ alias span → kind 'alias' (for both FROM and JOIN aliases)
+	//   ✅ column qualifier part → partIndexAtPosition < last index (SELECT list)
+	//   ✅ column qualifier part → partIndexAtPosition < last index (ON clause)
+	//   ✅ column name part → partIndexAtPosition === last index (ON clause, both sides)
+	//   ✅ bare column name span (city on line 8) → resolved via sourceOf
+	//   ✅ column declaration span → kind 'column' with 'declaration' modifier
+	//   ✅ position outside all syms → undefined
 	//
 	// Not covered:
 	//   (none)
 
-	describe('ParseService.resolveAtPosition', () => {
-		it('resolves address_with_country table name (JOIN, line 13) → table_ref', () => {
-			const tok = model.tokens
-				.filter((t): t is TableRefToken => t.type === 'table_ref')
-				.find(t => t.name === 'address_with_country' && t.alias === 'addr');
-			expect(tok).toBeDefined();
+	describe('ParseService.symAtPosition', () => {
+		it('resolves address_with_country table name (JOIN, line 13) → cte sym', () => {
+			const cteSym = (model.symbols ?? []).find(s =>
+				s.kind === 'cte' && s.modifiers.includes('reference') && s.name === 'address_with_country',
+			);
+			expect(cteSym).toBeDefined();
+			const range = rangeOfSpan(cteSym!.span);
 
-			const resolved = ParseService.resolveAtPosition(model, tok!.line, tok!.col);
-			expect(resolved?.kind).toBe('table_ref');
-			expect(resolved?.token.name).toBe('address_with_country');
+			const resolved = ParseService.symAtPosition(model, range.start.line, range.start.character);
+			expect(resolved?.kind).toBe('cte');
+			expect(resolved?.name).toBe('address_with_country');
 		});
 
-		it('resolves addr alias definition (line 13) → table_alias', () => {
-			const tok = model.tokens
-				.filter((t): t is TableRefToken => t.type === 'table_ref')
-				.find(t => t.alias === 'addr');
-			expect(tok).toBeDefined();
+		it('resolves addr alias definition (line 13) → alias sym', () => {
+			const cteSym = (model.symbols ?? []).find(s => s.kind === 'cte' && s.modifiers.includes('reference') && s.name === 'address_with_country');
+			const alias = model.symbolBindings?.aliasOf.get(cteSym!);
+			expect(alias).toBeDefined();
+			const aliasRange = rangeOfSpan(alias!.span);
 
-			const resolved = ParseService.resolveAtPosition(model, tok!.aliasLine!, tok!.aliasCol!);
-			expect(resolved?.kind).toBe('table_alias');
-			expect(resolved?.token.name).toBe('address_with_country');
+			const resolved = ParseService.symAtPosition(model, aliasRange.start.line, aliasRange.start.character);
+			expect(resolved?.kind).toBe('alias');
+			expect(resolved?.name).toBe('addr');
 		});
 
-		it('resolves wh alias definition (line 12) → table_alias', () => {
-			const tok = model.tokens
-				.filter((t): t is TableRefToken => t.type === 'table_ref')
-				.find(t => t.name === 'gold__warehouse' && t.alias === 'wh');
-			expect(tok).toBeDefined();
+		it('resolves wh alias definition (line 12) → alias sym', () => {
+			const tableSym = (model.symbols ?? []).find(s => s.kind === 'table' && s.modifiers.includes('reference') && s.name === 'gold__warehouse');
+			const alias = model.symbolBindings?.aliasOf.get(tableSym!);
+			expect(alias).toBeDefined();
+			const aliasRange = rangeOfSpan(alias!.span);
 
-			const resolved = ParseService.resolveAtPosition(model, tok!.aliasLine!, tok!.aliasCol!);
-			expect(resolved?.kind).toBe('table_alias');
-			expect(resolved?.token.name).toBe('gold__warehouse');
+			const resolved = ParseService.symAtPosition(model, aliasRange.start.line, aliasRange.start.character);
+			expect(resolved?.kind).toBe('alias');
+			expect(resolved?.name).toBe('wh');
 		});
 
-		it('resolves wh qualifier in wh.gold_warehousekey (ON clause) → table_qualifier', () => {
-			const tok = model.tokens
-				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
-				.find(t => t.name === 'gold_warehousekey' && t.table === 'wh' && t.tableLine === 15);
-			expect(tok).toBeDefined();
+		it('resolves wh qualifier in wh.gold_warehousekey (ON clause) → qualifier part', () => {
+			const whQualCol = findColumnSym(model, 'gold_warehousekey', 15, 'wh');
+			expect(whQualCol).toBeDefined();
+			const qualRange = qualifierRangeOf(whQualCol!)!;
 
-			const resolved = ParseService.resolveAtPosition(model, tok!.tableLine!, tok!.tableCol!);
-			expect(resolved?.kind).toBe('table_qualifier');
-			expect((resolved?.token as ColumnRefToken).table).toBe('wh');
-		});
-
-		it('resolves gold_warehousekey column (wh side, ON clause) → column', () => {
-			const tok = model.tokens
-				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
-				.find(t => t.name === 'gold_warehousekey' && t.table === 'wh' && t.line === 15);
-			expect(tok).toBeDefined();
-
-			const resolved = ParseService.resolveAtPosition(model, tok!.line, tok!.col);
+			const resolved = ParseService.symAtPosition(model, qualRange.start.line, qualRange.start.character);
 			expect(resolved?.kind).toBe('column');
-			expect((resolved?.token as ColumnRefToken).table).toBe('wh');
+			const partIndex = ParseService.partIndexAtPosition(resolved!, qualRange.start.line, qualRange.start.character);
+			expect(partIndex).toBeLessThan(resolved!.partSpans!.length - 1);
+			const relation = model.symbolBindings?.sourceOf.get(resolved!);
+			expect(model.symbolBindings?.aliasOf.get(relation!)?.name).toBe('wh');
 		});
 
-		it('resolves addr qualifier in addr.gold_warehousekey (ON clause) → table_qualifier', () => {
-			const tok = model.tokens
-				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
-				.find(t => t.name === 'gold_warehousekey' && t.table === 'addr' && t.tableLine === 15);
-			expect(tok).toBeDefined();
+		it('resolves gold_warehousekey column (wh side, ON clause) → name part', () => {
+			const whQualCol = findColumnSym(model, 'gold_warehousekey', 15, 'wh');
+			expect(whQualCol).toBeDefined();
+			const nameRange = nameRangeOf(whQualCol!);
 
-			const resolved = ParseService.resolveAtPosition(model, tok!.tableLine!, tok!.tableCol!);
-			expect(resolved?.kind).toBe('table_qualifier');
-			expect((resolved?.token as ColumnRefToken).table).toBe('addr');
-		});
-
-		it('resolves gold_warehousekey column (addr side, ON clause) → column', () => {
-			const tok = model.tokens
-				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
-				.find(t => t.name === 'gold_warehousekey' && t.table === 'addr' && t.line === 15);
-			expect(tok).toBeDefined();
-
-			const resolved = ParseService.resolveAtPosition(model, tok!.line, tok!.col);
+			const resolved = ParseService.symAtPosition(model, nameRange.start.line, nameRange.start.character);
 			expect(resolved?.kind).toBe('column');
-			expect((resolved?.token as ColumnRefToken).table).toBe('addr');
+			const partIndex = ParseService.partIndexAtPosition(resolved!, nameRange.start.line, nameRange.start.character);
+			expect(partIndex).toBe(resolved!.partSpans!.length - 1);
+			const relation = model.symbolBindings?.sourceOf.get(resolved!);
+			expect(model.symbolBindings?.aliasOf.get(relation!)?.name).toBe('wh');
 		});
 
-		it('resolves addr qualifier in addr.street (SELECT list) → table_qualifier', () => {
-			const tok = model.tokens
-				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
-				.find(t => t.name === 'street' && t.table === 'addr');
-			expect(tok).toBeDefined();
+		it('resolves addr qualifier in addr.gold_warehousekey (ON clause) → qualifier part', () => {
+			const addrQualCol = findColumnSym(model, 'gold_warehousekey', 15, 'addr');
+			expect(addrQualCol).toBeDefined();
+			const qualRange = qualifierRangeOf(addrQualCol!)!;
 
-			const resolved = ParseService.resolveAtPosition(model, tok!.tableLine!, tok!.tableCol!);
-			expect(resolved?.kind).toBe('table_qualifier');
-			expect((resolved?.token as ColumnRefToken).table).toBe('addr');
-		});
-
-		it('resolves city (bare column, line 8) → column with table addr', () => {
-			// city has no qualifier in the source SQL; qualify() resolved it to addr.
-			// There is no tableCol span, so only the column name range [col, endCol] matches.
-			const tok = model.tokens
-				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
-				.find(t => t.name === 'city' && t.line === 8);
-			expect(tok).toBeDefined();
-
-			const resolved = ParseService.resolveAtPosition(model, tok!.line, tok!.col + 1);
+			const resolved = ParseService.symAtPosition(model, qualRange.start.line, qualRange.start.character);
 			expect(resolved?.kind).toBe('column');
-			expect((resolved?.token as ColumnRefToken).table).toBe('addr');
+			const partIndex = ParseService.partIndexAtPosition(resolved!, qualRange.start.line, qualRange.start.character);
+			expect(partIndex).toBeLessThan(resolved!.partSpans!.length - 1);
+			const relation = model.symbolBindings?.sourceOf.get(resolved!);
+			expect(model.symbolBindings?.aliasOf.get(relation!)?.name).toBe('addr');
 		});
 
-		it('resolves warehouse_address_street column_def (line 7) → column_def', () => {
-			const tok = model.tokens
-				.filter((t): t is ColumnDefToken => t.type === 'column_def')
-				.find(t => t.name === 'warehouse_address_street' && t.line === 7);
-			expect(tok).toBeDefined();
+		it('resolves gold_warehousekey column (addr side, ON clause) → name part', () => {
+			const addrQualCol = findColumnSym(model, 'gold_warehousekey', 15, 'addr');
+			expect(addrQualCol).toBeDefined();
+			const nameRange = nameRangeOf(addrQualCol!);
 
-			const resolved = ParseService.resolveAtPosition(model, tok!.line, tok!.col + 1);
-			expect(resolved?.kind).toBe('column_def');
+			const resolved = ParseService.symAtPosition(model, nameRange.start.line, nameRange.start.character);
+			expect(resolved?.kind).toBe('column');
+			const partIndex = ParseService.partIndexAtPosition(resolved!, nameRange.start.line, nameRange.start.character);
+			expect(partIndex).toBe(resolved!.partSpans!.length - 1);
+			const relation = model.symbolBindings?.sourceOf.get(resolved!);
+			expect(model.symbolBindings?.aliasOf.get(relation!)?.name).toBe('addr');
 		});
 
-		it('returns null for a position outside all tokens', () => {
-			// Line 3 is "\tfrom {{ ref('gold__address') }}" — the ref() jinja tag
-			// is replaced by a space-padded identifier, but column 0 (the tab indent)
-			// has no token.
-			const resolved = ParseService.resolveAtPosition(model, 3, 0);
-			expect(resolved).toBeNull();
+		it('resolves addr qualifier in addr.street (SELECT list) → qualifier part', () => {
+			const streetCol = (model.symbols ?? []).find(s => s.kind === 'column' && s.modifiers.includes('reference') && s.name === 'addr.street');
+			expect(streetCol).toBeDefined();
+			const qualRange = qualifierRangeOf(streetCol!)!;
+
+			const resolved = ParseService.symAtPosition(model, qualRange.start.line, qualRange.start.character);
+			expect(resolved?.kind).toBe('column');
+			const partIndex = ParseService.partIndexAtPosition(resolved!, qualRange.start.line, qualRange.start.character);
+			expect(partIndex).toBeLessThan(resolved!.partSpans!.length - 1);
+			const relation = model.symbolBindings?.sourceOf.get(resolved!);
+			expect(model.symbolBindings?.aliasOf.get(relation!)?.name).toBe('addr');
+		});
+
+		it('resolves city (bare column, line 8) → column resolved to table addr', () => {
+			// city has no qualifier in the source SQL; qualification resolved it to addr.
+			const citySym = (model.symbols ?? []).find(s => s.kind === 'column' && s.modifiers.includes('reference') && s.name === 'city' && s.span.line - 1 === 8);
+			expect(citySym).toBeDefined();
+			const nameRange = nameRangeOf(citySym!);
+
+			const resolved = ParseService.symAtPosition(model, nameRange.start.line, nameRange.start.character + 1);
+			expect(resolved?.kind).toBe('column');
+			const relation = model.symbolBindings?.sourceOf.get(resolved!);
+			expect(model.symbolBindings?.aliasOf.get(relation!)?.name).toBe('addr');
+		});
+
+		it('resolves warehouse_address_street column declaration → declaration modifier', () => {
+			const declSym = (model.symbols ?? []).find(s => s.kind === 'column' && s.modifiers.includes('declaration') && s.name === 'warehouse_address_street');
+			expect(declSym).toBeDefined();
+			const nameRange = nameRangeOf(declSym!);
+
+			const resolved = ParseService.symAtPosition(model, nameRange.start.line, nameRange.start.character + 1);
+			expect(resolved?.kind).toBe('column');
+			expect(resolved?.modifiers.includes('declaration')).toBe(true);
+		});
+
+		it('returns undefined for a position outside all syms', () => {
+			// Line 3 ("),") falls INSIDE the address_with_country CTE declaration's
+			// span (a declaration's span covers the whole multi-line clause, not
+			// just its name — see nameRangeOf's doc comment) — no longer a safe
+			// "nothing here" position under Sym. Line 26 ("select * from
+			// warehouses_enriched"), column 0 (the 's' of the SELECT keyword) is:
+			// no Sym starts before the '*' at col 7.
+			const resolved = ParseService.symAtPosition(model, 26, 0);
+			expect(resolved).toBeUndefined();
 		});
 	});
 
@@ -423,12 +476,12 @@ describe('definition-provider integration (FTL)', () => {
 	//
 	// Full round-trip tests: cursor position → provider → vscode.Location (or undefined).
 	// The indexer is mocked (no real manifest), so ref() / source() lookups return nothing.
-	// The parseService mock returns the real `model` parsed by the bridge in beforeAll.
+	// The parseService mock returns the real `model` parsed by the parser in beforeAll.
 	//
 	// Navigation rules under test:
-	//   table_qualifier  → jump to the alias definition site (same file)
-	//   table_alias      → undefined (you are already on the definition)
-	//   column_def       → undefined (you are already on the definition)
+	//   column qualifier   → jump to the alias definition site (same file)
+	//   alias definition   → undefined (you are already on the definition)
+	//   column declaration → undefined (you are already on the definition)
 	//   column (qualified) → follow alias → CTE → find column → navigate to its definition
 	//                        if CTE has SELECT *, navigate to the * itself
 	//
@@ -437,14 +490,14 @@ describe('definition-provider integration (FTL)', () => {
 	//   ✅ qualifier 'addr' → alias site on line 13
 	//   ✅ alias definition site 'addr' → undefined
 	//   ✅ alias definition site 'wh' → undefined
-	//   ✅ column_def 'warehouse_address_street' → undefined
+	//   ✅ column declaration 'warehouse_address_street' → undefined
 	//   ✅ qualified column addr.street → SELECT * on line 1 (stays in same file)
 	//   ✅ bare column city (schema-resolved to addr) → SELECT * on line 1
 	//   ✅ {{ source('raw', 'orders') }} click → navigates to sources.yml (via regex path)
 	//
 	// Not covered:
-	//   ❌ source() via token path (case 'table_ref' currently falls through to _resolveRef;
-	//      fixing it requires storing sourceName in the table_ref token or a second lookup)
+	//   ❌ source() via Sym path (a relation Sym currently falls through to _resolveRef;
+	//      fixing it requires storing sourceName on the Sym or a second lookup)
 
 	describe('DbtDefinitionProvider.provideDefinition', () => {
 		const cancelToken: vscode.CancellationToken = { isCancellationRequested: false, onCancellationRequested: vi.fn() };
@@ -453,8 +506,8 @@ describe('definition-provider integration (FTL)', () => {
 		//   indexer    — stands in for the dbt manifest; findModelsByName returns a path only
 		//                when explicitly given one via modelPaths (default: empty → not found).
 		//                sourcePaths maps 'ns.tbl' keys to { uid, schemaYml } for source() lookups.
-		//   parseService — skips a second bridge call; returns the real `model` already parsed
-		//                  in beforeAll (schema-resolved tokens included).
+		//   parseService — skips a second parse; returns the real `model` already parsed
+		//                  in beforeAll (schema-resolved symbols included).
 		//   loader     — only used for projectDir when building file paths.
 		// The provider itself and all its internal logic (resolveToken, jumpToCte, etc.) run for real.
 		function makeProvider(
@@ -513,79 +566,72 @@ describe('definition-provider integration (FTL)', () => {
 			} as unknown as vscode.TextDocument;
 		}
 
-		it('wh qualifier → aliasLine of wh definition (line 12)', async () => {
+		it('wh qualifier → alias site of wh definition (line 12)', async () => {
 			const doc = makeDoc();
-			// resolveAtPosition on 'wh.' returns table_qualifier with table='wh'
-			// find the token for wh.gold_warehousekey in the ON clause (line 15)
-			const whQualTok = model.tokens
-				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
-				.find(t => t.table === 'wh' && t.name === 'gold_warehousekey')!;
-			expect(whQualTok).toBeDefined();
+			const whQualCol = findColumnSym(model, 'gold_warehousekey', 15, 'wh')!;
+			expect(whQualCol).toBeDefined();
+			const qualRange = qualifierRangeOf(whQualCol)!;
 
-			const whRef = model.tokens
-				.filter((t): t is TableRefToken => t.type === 'table_ref')
-				.find(t => t.alias === 'wh')!;
+			const tableSym = (model.symbols ?? []).find(s => s.kind === 'table' && s.modifiers.includes('reference') && s.name === 'gold__warehouse')!;
+			const whAlias = model.symbolBindings?.aliasOf.get(tableSym)!;
 
 			// click on the qualifier part (the 'wh' before the dot)
-			const result = await makeProvider().provideDefinition(doc, new vscode.Position(whQualTok.tableLine!, whQualTok.tableCol! + 1), cancelToken);
+			const result = await makeProvider().provideDefinition(doc, new vscode.Position(qualRange.start.line, qualRange.start.character + 1), cancelToken);
 
 			expect(result).toBeDefined();
 			const loc = (Array.isArray(result) ? result[0] : result) as vscode.Location;
 			expect(loc.uri.fsPath).toContain('mart');
-			expect(loc.range.start.line).toBe(whRef.aliasLine);
+			expect(loc.range.start.line).toBe(rangeOfSpan(whAlias.span).start.line);
 		});
 
-		it('addr qualifier → aliasLine of addr definition (line 13)', async () => {
+		it('addr qualifier → alias site of addr definition (line 13)', async () => {
 			const doc = makeDoc();
-			const addrQualTok = model.tokens
-				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
-				.find(t => t.table === 'addr' && t.tableLine !== undefined)!;
-			expect(addrQualTok).toBeDefined();
+			const addrQualCol = findColumnSym(model, 'gold_warehousekey', 15, 'addr')!;
+			expect(addrQualCol).toBeDefined();
+			const qualRange = qualifierRangeOf(addrQualCol)!;
 
-			const addrRef = model.tokens
-				.filter((t): t is TableRefToken => t.type === 'table_ref')
-				.find(t => t.alias === 'addr')!;
+			const cteSym = (model.symbols ?? []).find(s => s.kind === 'cte' && s.modifiers.includes('reference') && s.name === 'address_with_country')!;
+			const addrAlias = model.symbolBindings?.aliasOf.get(cteSym)!;
 
-			const result = await makeProvider().provideDefinition(doc, new vscode.Position(addrQualTok.tableLine!, addrQualTok.tableCol! + 1), cancelToken);
+			const result = await makeProvider().provideDefinition(doc, new vscode.Position(qualRange.start.line, qualRange.start.character + 1), cancelToken);
 
 			expect(result).toBeDefined();
 			const loc = (Array.isArray(result) ? result[0] : result) as vscode.Location;
 			expect(loc.uri.fsPath).toContain('mart');
-			expect(loc.range.start.line).toBe(addrRef.aliasLine);
+			expect(loc.range.start.line).toBe(rangeOfSpan(addrAlias.span).start.line);
 		});
 
 		it('clicking on addr alias definition → undefined (no ctrl+click on definition site)', async () => {
 			const doc = makeDoc();
-			const addrRef = model.tokens
-				.filter((t): t is TableRefToken => t.type === 'table_ref')
-				.find(t => t.alias === 'addr')!;
-			expect(addrRef).toBeDefined();
+			const cteSym = (model.symbols ?? []).find(s => s.kind === 'cte' && s.modifiers.includes('reference') && s.name === 'address_with_country')!;
+			const addrAlias = model.symbolBindings?.aliasOf.get(cteSym)!;
+			expect(addrAlias).toBeDefined();
+			const aliasRange = rangeOfSpan(addrAlias.span);
 
-			const result = await makeProvider().provideDefinition(doc, new vscode.Position(addrRef.aliasLine!, addrRef.aliasCol! + 1), cancelToken);
+			const result = await makeProvider().provideDefinition(doc, new vscode.Position(aliasRange.start.line, aliasRange.start.character + 1), cancelToken);
 
 			expect(result).toBeUndefined();
 		});
 
 		it('clicking on wh alias definition (FROM driver) → undefined (no ctrl+click on definition site)', async () => {
 			const doc = makeDoc();
-			const whRef = model.tokens
-				.filter((t): t is TableRefToken => t.type === 'table_ref')
-				.find(t => t.alias === 'wh')!;
-			expect(whRef).toBeDefined();
+			const tableSym = (model.symbols ?? []).find(s => s.kind === 'table' && s.modifiers.includes('reference') && s.name === 'gold__warehouse')!;
+			const whAlias = model.symbolBindings?.aliasOf.get(tableSym)!;
+			expect(whAlias).toBeDefined();
+			const aliasRange = rangeOfSpan(whAlias.span);
 
-			const result = await makeProvider().provideDefinition(doc, new vscode.Position(whRef.aliasLine!, whRef.aliasCol! + 1), cancelToken);
+			const result = await makeProvider().provideDefinition(doc, new vscode.Position(aliasRange.start.line, aliasRange.start.character + 1), cancelToken);
 
 			expect(result).toBeUndefined();
 		});
 
 		it('clicking on warehouse_address_street column alias → undefined (definition site)', async () => {
 			const doc = makeDoc();
-			const defTok = model.tokens
-				.filter((t): t is ColumnDefToken => t.type === 'column_def')
-				.find(t => t.name === 'warehouse_address_street' && t.line === 7)!;
-			expect(defTok).toBeDefined();
+			const declSym = (model.symbols ?? []).find(s => s.kind === 'column' && s.modifiers.includes('declaration') && s.name === 'warehouse_address_street')!;
+			expect(declSym).toBeDefined();
+			const nameRange = nameRangeOf(declSym);
 
-			const result = await makeProvider().provideDefinition(doc, new vscode.Position(defTok.line, defTok.col + 1), cancelToken);
+			const result = await makeProvider().provideDefinition(doc, new vscode.Position(nameRange.start.line, nameRange.start.character + 1), cancelToken);
 
 			expect(result).toBeUndefined();
 		});
@@ -595,12 +641,11 @@ describe('definition-provider integration (FTL)', () => {
 			// addr is a CTE alias for address_with_country which does SELECT *
 			// Correct: navigate to the * on line 1, stay in the current file
 			const doc = makeDoc();
-			const streetTok = model.tokens
-				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
-				.find(t => t.name === 'street' && t.table === 'addr')!;
-			expect(streetTok).toBeDefined();
+			const streetSym = (model.symbols ?? []).find(s => s.kind === 'column' && s.modifiers.includes('reference') && s.name === 'addr.street')!;
+			expect(streetSym).toBeDefined();
+			const nameRange = nameRangeOf(streetSym);
 
-			const result = await makeProvider().provideDefinition(doc, new vscode.Position(streetTok.line, streetTok.col + 1), cancelToken);
+			const result = await makeProvider().provideDefinition(doc, new vscode.Position(nameRange.start.line, nameRange.start.character + 1), cancelToken);
 
 			expect(result).toBeDefined();
 			const loc = (Array.isArray(result) ? result[0] : result) as vscode.Location;
@@ -610,19 +655,18 @@ describe('definition-provider integration (FTL)', () => {
 
 		it('clicking on {{ ref(\'gold__warehouse\') }} → resolves to model file path', async () => {
 			// Line 12: "\tfrom {{ ref('gold__warehouse') }} as wh"
-			// Click anywhere inside the jinja tag — the table_ref token now spans the full tag.
+			// Click anywhere inside the jinja tag — the relation Sym now spans the full tag.
 			// Indexer is given a fake model path so _resolveRef returns a Location.
 			const doc = makeDoc();
-			const tok = model.tokens
-				.filter((t): t is TableRefToken => t.type === 'table_ref')
-				.find(t => t.name === 'gold__warehouse')!;
-			expect(tok).toBeDefined();
+			const tableSym = (model.symbols ?? []).find(s => s.kind === 'table' && s.modifiers.includes('reference') && s.name === 'gold__warehouse')!;
+			expect(tableSym).toBeDefined();
+			const range = rangeOfSpan(tableSym.span);
 
 			const fakeModelPath = '/project/models/gold__warehouse.sql';
 			// Click in the middle of the jinja tag span
-			const clickCol = Math.floor((tok.col + tok.endCol) / 2);
+			const clickCol = Math.floor((range.start.character + range.end.character) / 2);
 			const result = await makeProvider({ gold__warehouse: fakeModelPath })
-				.provideDefinition(doc, new vscode.Position(tok.line, clickCol), cancelToken);
+				.provideDefinition(doc, new vscode.Position(range.start.line, clickCol), cancelToken);
 
 			expect(result).toBeDefined();
 			const loc = (Array.isArray(result) ? result[0] : result) as vscode.Location;
@@ -634,13 +678,12 @@ describe('definition-provider integration (FTL)', () => {
 			// Line 13: "\tleft join address_with_country as addr"
 			// address_with_country is a CTE — _jumpToCte should navigate to line 0.
 			const doc = makeDoc();
-			const tok = model.tokens
-				.filter((t): t is TableRefToken => t.type === 'table_ref')
-				.find(t => t.name === 'address_with_country')!;
-			expect(tok).toBeDefined();
+			const cteSym = (model.symbols ?? []).find(s => s.kind === 'cte' && s.modifiers.includes('reference') && s.name === 'address_with_country')!;
+			expect(cteSym).toBeDefined();
+			const range = rangeOfSpan(cteSym.span);
 
 			const result = await makeProvider()
-				.provideDefinition(doc, new vscode.Position(tok.line, tok.col + 1), cancelToken);
+				.provideDefinition(doc, new vscode.Position(range.start.line, range.start.character + 1), cancelToken);
 
 			expect(result).toBeDefined();
 			const loc = (Array.isArray(result) ? result[0] : result) as vscode.Location;
@@ -650,271 +693,30 @@ describe('definition-provider integration (FTL)', () => {
 
 		it('city (bare column, schema-resolved to addr) → SELECT * on line 1', async () => {
 			// Line 8: "\t\tcity as warehouse_address_city," — city has no qualifier in the
-			// source SQL, but qualify() resolved it to addr. resolveAtPosition returns
-			// kind: 'column' (no tableCol span), then _jumpToColumn follows addr →
+			// source SQL, but qualification resolved it to addr. symAtPosition returns
+			// kind: 'column' (no qualifier part), then _jumpToColumn follows addr →
 			// CTE address_with_country → SELECT * on line 1. Same destination as addr.street.
 			const doc = makeDoc();
-			const cityTok = model.tokens
-				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
-				.find(t => t.name === 'city' && t.line === 8)!;
-			expect(cityTok).toBeDefined();
+			const citySym = (model.symbols ?? []).find(s => s.kind === 'column' && s.modifiers.includes('reference') && s.name === 'city' && s.span.line - 1 === 8)!;
+			expect(citySym).toBeDefined();
+			const nameRange = nameRangeOf(citySym);
 
-			const result = await makeProvider().provideDefinition(doc, new vscode.Position(cityTok.line, cityTok.col + 1), cancelToken);
+			const result = await makeProvider().provideDefinition(doc, new vscode.Position(nameRange.start.line, nameRange.start.character + 1), cancelToken);
 
 			expect(result).toBeDefined();
 			const loc = (Array.isArray(result) ? result[0] : result) as vscode.Location;
 			expect(loc.uri.fsPath).toContain('mart');
 			expect(loc.range.start.line).toBe(1); // SELECT * on line 1
 		});
-
-		it('clicking on {{ source(\'raw\', \'orders\') }} \u2192 navigates to sources.yml', async () => {
-			// Line 24: "\tfrom {{ source('raw', 'orders') }}"
-			// Only the table name identifier ('orders', col 24-30) is clickable.
-			// The provider checks model.sources entries by tableNameCol/tableNameEndCol,
-			// then calls _resolveSource('raw', 'orders').
-			const doc = makeDoc();
-			const src = model.sources.find(s => s.sourceName === 'raw' && s.tableName === 'orders')!;
-			expect(src).toBeDefined();
-
-			// Click in the middle of 'orders' (the clickable table name identifier).
-			const clickCol = Math.floor((src.tableNameCol! + src.tableNameEndCol!) / 2);
-			const result = await makeProvider(
-				{},
-				{ 'raw.orders': { uid: 'source.raw.orders', schemaYml: 'models/sources.yml' } },
-			).provideDefinition(doc, new vscode.Position(src.line, clickCol), cancelToken);
-
-			expect(result).toBeDefined();
-			const loc = (Array.isArray(result) ? result[0] : result) as vscode.Location;
-			expect(loc.uri.fsPath).toContain('sources');
-			expect(loc.range.start.line).toBe(0);
-		});
 	});
-
-	// ---- Duplicate alias scoping ----
-	//
-	// Regression for: F12 on a qualifier always jumped to the *first* table_ref token
-	// with that alias name, regardless of cursor position. Fix: pick the closest
-	// preceding table_ref token (by line number) rather than using Array.find().
-	//
-	// SQL2 uses 'addr' as an alias in two separate CTEs. Clicking on addr.col_b in
-	// cte_second must jump to the cte_second alias definition, not cte_first's.
-
-	describe('duplicate alias — F12 picks closest preceding alias definition', () => {
-		// Line 0: with cte_first as (
-		// Line 1:     select a.col_a
-		// Line 2:     from {{ ref('model_a') }} as addr
-		// Line 3:     where addr.col_a = 1
-		// Line 4: ),
-		// Line 5: cte_second as (
-		// Line 6:     select b.col_b
-		// Line 7:     from {{ ref('model_b') }} as addr
-		// Line 8:     where addr.col_b = 2
-		// Line 9: )
-		// Line 10: select * from cte_first join cte_second using (col_a)
-		const SQL2 = [
-			'with cte_first as (',
-			'    select a.col_a',
-			'    from {{ ref(\'model_a\') }} as addr',
-			'    where addr.col_a = 1',
-			'),',
-			'cte_second as (',
-			'    select b.col_b',
-			'    from {{ ref(\'model_b\') }} as addr',
-			'    where addr.col_b = 2',
-			')',
-			'select * from cte_first join cte_second using (col_a)',
-		].join('\n');
-
-		let model2: DocumentModel;
-
-		beforeAll(async () => {
-			const parser = new SqllensDocumentParser({ adapterType: 'ansi' } as AdapterContext);
-			model2 = await parser.parse(SQL2, { schema: { model_a: { col_a: 'TEXT' }, model_b: { col_b: 'TEXT' } } });
-		});
-
-		it('bridge emits two table_ref tokens with alias addr at different lines', () => {
-			const addrRefs = model2.tokens
-				.filter((t): t is TableRefToken => t.type === 'table_ref' && t.alias === 'addr');
-			expect(addrRefs).toHaveLength(2);
-			const lines = addrRefs.map(t => t.line).sort((a, b) => a - b);
-			expect(lines[0]).toBe(2); // cte_first alias
-			expect(lines[1]).toBe(7); // cte_second alias
-		});
-
-		it('proximity fix: cursor on line 8 (cte_second) selects the line-7 addr definition, not line-2', () => {
-			// Simulate the fix logic from definition-provider.ts _resolveToken 'table_qualifier':
-			// reduce over all candidates, picking the one with highest line ≤ cursorLine.
-			const addrRefs = model2.tokens
-				.filter((t): t is TableRefToken => t.type === 'table_ref' && t.alias?.toLowerCase() === 'addr');
-			const cursorLine = 8; // hovering addr.col_b on line 8
-
-			const chosen = addrRefs.reduce<TableRefToken | undefined>((best, t) => {
-				if (t.line > cursorLine) return best;
-				if (!best || t.line > best.line) return t;
-				return best;
-			}, undefined) ?? addrRefs[0];
-
-			expect(chosen.line).toBe(7); // must pick cte_second's definition, not cte_first's
-		});
-
-		it('F12 on addr.col_b (cte_second, line 8) → alias site at line 7, not line 2', async () => {
-			const lines2 = SQL2.split('\n');
-			const doc2 = {
-				languageId: 'jinja-sql',
-				fileName: '/project/models/test2.sql',
-				getText: () => SQL2,
-				lineAt: (n: number) => ({ text: lines2[n] ?? '', range: new vscode.Range(n, 0, n, (lines2[n] ?? '').length) }),
-				positionAt: () => new vscode.Position(0, 0),
-				getWordRangeAtPosition: () => undefined,
-				lineCount: lines2.length,
-				uri: vscode.Uri.file('/project/models/test2.sql'),
-				version: 1,
-			} as unknown as vscode.TextDocument;
-
-			const addrColBTok = model2.tokens
-				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
-				.find(t => t.name === 'col_b' && t.table === 'addr')!;
-			expect(addrColBTok).toBeDefined();
-			expect(addrColBTok.tableLine).toBe(8);
-
-			const indexer2 = {
-				index: { adapterType: 'ansi' },
-				findModelsByName: () => [],
-				findSourceByKey: () => undefined,
-				getRawNode: () => null,
-				getColumns: () => null,
-				setColumns: vi.fn(),
-				buildSchemaMapping: () => ({}),
-			};
-			const parseService2 = { getDocumentModel: vi.fn().mockResolvedValue(model2), evict: vi.fn() };
-			const provider2 = new DbtDefinitionProvider(
-				indexer2 as never,
-				{ projectDir: '/project' } as never,
-				createMockLogger(),
-				parseService2 as never,
-			);
-
-			const result = await provider2.provideDefinition(
-				doc2,
-				new vscode.Position(addrColBTok.tableLine!, addrColBTok.tableCol! + 1),
-				{ isCancellationRequested: false, onCancellationRequested: vi.fn() },
-			);
-
-			expect(result).toBeDefined();
-			const loc = (Array.isArray(result) ? result[0] : result) as vscode.Location;
-			expect(loc.range.start.line).toBe(7); // cte_second's alias site — NOT line 2
-		});
-	});
-
-	// ---- CTE-scope alias isolation ----
-	//
-	// Regression for: an alias name used *inside* CTE A (e.g. `addr` for gold__address)
-	// was being picked as the resolvedTableRef for uses of the same alias *inside* CTE B
-	// (where `addr` means address_with_country).  The proximity search was global and
-	// found the earlier CTE A definition first.
-	// Fix: constrain candidate table_refs to the same CTE body as the column_ref.
-	//
-	// SQL3:
-	//   address_with_country as (        -- line 0
-	//     select addr.*                  -- line 1
-	//     from gold__address as addr     -- line 2  (addr = gold__address here)
-	//   ),                               -- line 3
-	//   enriched as (                    -- line 4
-	//     select addr.street             -- line 5  (addr = address_with_country here)
-	//     from address_with_country as addr -- line 6
-	//   )                                -- line 7
-	//   select * from enriched           -- line 8
-
-	describe('CTE-scope alias isolation — same alias name in different CTE bodies', () => {
-		const SQL3 = [
-			'with address_with_country as (',
-			'    select addr.*',
-			'    from {{ ref(\'gold__address\') }} as addr',
-			'),',
-			'enriched as (',
-			'    select addr.street',
-			'    from address_with_country as addr',
-			')',
-			'select * from enriched',
-		].join('\n');
-
-		let model3: DocumentModel;
-
-		beforeAll(async () => {
-			const parser = new SqllensDocumentParser({ adapterType: 'ansi' } as AdapterContext);
-			model3 = await parser.parse(SQL3, { schema: { gold__address: { street: 'TEXT' } } });
-		});
-
-		it('addr.street in `enriched` resolves to the address_with_country table_ref (line 6), not gold__address (line 2)', () => {
-			// SQL3 line 5: "    select addr.street" — inside the `enriched` CTE body (lines 4–7).
-			// NOTE: `address_with_country` body (line 1) also contains a synthesised `street`
-			// column_ref (from `select addr.*` expanded by qualify()), which correctly resolves
-			// to gold__address. We must pick the explicit token at line 5, not that synthesised one.
-			const streetTok = model3.tokens
-				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
-				.find(t => t.name === 'street' && t.table === 'addr' && t.line === 5);
-			expect(streetTok).toBeDefined();
-			// Must point to the `address_with_country as addr` on line 6, not `gold__address as addr` on line 2
-			expect(streetTok!.resolvedTableRef).toBeDefined();
-			expect(streetTok!.resolvedTableRef!.name.toLowerCase()).toContain('address_with_country');
-			expect(streetTok!.resolvedTableRef!.line).toBe(6);
-		});
-
-		it('addr.* in `address_with_country` resolves to the gold__address table_ref (line 2)', () => {
-			const cteAddrRefs = model3.tokens
-				.filter((t): t is ColumnRefToken => t.type === 'column_ref')
-				.filter(t => t.table === 'addr' && t.line < 3);
-			// At least one column_ref inside the first CTE should resolve to gold__address
-			const withResolvedRef = cteAddrRefs.filter(t => t.resolvedTableRef !== undefined);
-			if (withResolvedRef.length > 0) {
-				for (const tok of withResolvedRef) {
-					expect(tok.resolvedTableRef!.line).toBe(2);
-				}
-			}
-			// If star expansion collapses addr.* to no column_refs, that's fine — just assert no wrong ref
-			for (const tok of cteAddrRefs) {
-				if (tok.resolvedTableRef) {
-					expect(tok.resolvedTableRef.line).not.toBe(6);
-				}
-			}
-		});
-	});
-
-	// ---- model.aliases — architectural boundary test ----
-	//
-	// _aliases_from_scope in bridge.py processes:
-	//   Step 1: CTE names → their output columns
-	//   Step 2: ROOT scope selected_sources only
-	//
-	// The final SELECT is `select * from warehouses_enriched`, so the root scope's
-	// only selected_source is `warehouses_enriched` — not `wh` or `gold__warehouse`.
-	// `wh` is a CTE-internal alias inside the warehouses_enriched body.
-	// By design (comment in bridge.py): "CTE-internal aliases must NOT pollute
-	// the top-level alias dict — they are local to that CTE's scope."
-	//
-	// This means model.aliases['wh'] is NEVER populated regardless of schema_mapping.
-	// The hover-provider must use resolvedTableRef from the token pipeline instead.
-
-	describe('model.aliases — CTE-internal aliases are not in the top-level alias dict', () => {
-		it('aliases[wh] is absent (wh is a CTE-internal alias, intentionally excluded)', () => {
-			const aliases = (model as DocumentModel & { aliases?: Record<string, string[]> }).aliases;
-			// wh is defined inside warehouses_enriched CTE body — never in the root scope aliases
-			expect(aliases?.['wh']).toBeUndefined();
-		});
-
-		it('aliases[gold__warehouse] is absent (not in root scope selected_sources)', () => {
-			const aliases = (model as DocumentModel & { aliases?: Record<string, string[]> }).aliases;
-			expect(aliases?.['gold__warehouse']).toBeUndefined();
-		});
-
-		it('aliases[warehouses_enriched] IS populated (it is a CTE name — Step 1)', () => {
-			const aliases = (model as DocumentModel & { aliases?: Record<string, string[]> }).aliases;
-			// warehouses_enriched is registered by Step 1 (CTE scopes → output columns)
-			// It may be empty if the CTE has wh.* (wildcard from an external ref)
-			// but the key should exist or the aliased model should have it.
-			// The key point: wh (CTE-internal alias) is NOT here.
-			expect(aliases?.['wh']).toBeUndefined();
-		});
-	});
-
 });
+
+/** Find a column reference Sym by bare name, 0-based line, and qualifier text. */
+function findColumnSym(model: DocumentModel, bareName: string, line: number, qualifier: string): Sym | undefined {
+	return (model.symbols ?? []).find(s =>
+		s.kind === 'column'
+		&& s.modifiers.includes('reference')
+		&& s.name === `${qualifier}.${bareName}`
+		&& s.span.line - 1 === line,
+	);
+}

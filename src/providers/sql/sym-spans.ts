@@ -63,19 +63,29 @@ export function isRelationSym(sym: Sym): sym is Sym & { kind: 'table' | 'cte' | 
 }
 
 /**
- * The `vscode.Range` for a relation Sym's own name. A CTE DECLARATION
- * (`WITH name AS (body)`) is the one relation-kind Sym that can carry
- * `modifiers: ['declaration']`, and like a column declaration its own `span`
- * covers the whole clause, not just the name (`CteDef.nameCst` has the narrow
- * span in the IR; `deriveSymbols` doesn't surface it). Unlike a column alias,
- * the CTE name comes FIRST in the clause, so its own range is derived from
- * the span's start plus the name's length. Every other relation Sym (a plain
- * reference, or a subquery/lateral/table, none of which get a declaration
- * form) already has a name-only span and passes through `rangeOfSpan`
- * unchanged.
+ * The `vscode.Range` for a CTE Sym's own name — declaration (`WITH name AS
+ * (body)`) or reference (`FROM name`/`JOIN name AS alias`). Both cases can
+ * have a `span` wider than just the name:
+ *   - A DECLARATION's span covers the whole clause (`CteDef.nameCst` has the
+ *     narrow span in the IR; `deriveSymbols` doesn't surface it).
+ *   - A REFERENCE's span extends through a trailing alias when one is
+ *     written (verified empirically — `FROM orders o` gives the relation Sym
+ *     a span covering "orders o", not just "orders"; `Sym.alias` carries the
+ *     alias's own sub-span separately).
+ * A CTE name is always a literal SQL identifier (never a jinja tag, unlike a
+ * `ref()`/`source()`-backed table Sym), so it's always the FIRST thing at the
+ * span's start in both cases — the name's own range is derived from the
+ * span's start plus the name's length uniformly, whether there's a
+ * declaration body or a trailing alias to exclude. A `table`/`subquery`/
+ * `lateral` reference Sym is NOT narrowed this way — its `name` may not match
+ * its source text width (a `ref()`/`source()` tag renders as a different
+ * width than the resolved table name) — those pass through `rangeOfSpan`
+ * unchanged; in practice the CTE-only callers of this helper never see one
+ * (renaming a `ref()`-backed table goes through the cross-file manifest path,
+ * gated well before reaching here).
  */
 export function relationNameRangeOf(sym: Sym): vscode.Range {
-	if (sym.kind === 'cte' && sym.modifiers.includes('declaration')) {
+	if (sym.kind === 'cte') {
 		const { line, column } = sym.span;
 		return new vscode.Range(line - 1, column, line - 1, column + sym.name.length);
 	}

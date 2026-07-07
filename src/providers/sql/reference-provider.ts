@@ -6,7 +6,7 @@ import type { DocumentModel } from '../../services/parse-service';
 import type { Sym } from '../../ftl/sqllens/api';
 import { isLinePositionInComment, computeCommentRanges, isOffsetInComment } from '../common/comment-utils';
 import { SQL_KEYWORDS } from './sql-keywords';
-import { isRelationSym, qualifierRangeOf, rangeOfSpan } from './sym-spans';
+import { isRelationSym, qualifierRangeOf, rangeOfSpan, relationNameRangeOf } from './sym-spans';
 
 /**
  * Find All References for ref('model'), source('src', 'table'), and column
@@ -234,7 +234,7 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 		for (const s of model.symbols ?? []) {
 			if (!isRelationSym(s) || !s.modifiers.includes('reference')) continue;
 			if (s.name !== cteName) continue;
-			locations.push(new vscode.Location(document.uri, rangeOfSpan(s.span)));
+			locations.push(new vscode.Location(document.uri, relationNameRangeOf(s)));
 		}
 
 		this.logger.debug(`ReferenceProvider: found ${locations.length} references for CTE '${cteName}'`);
