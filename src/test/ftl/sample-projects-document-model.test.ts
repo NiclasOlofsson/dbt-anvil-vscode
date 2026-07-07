@@ -18,7 +18,6 @@ import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { SqllensDocumentParser } from '../../ftl/sqllens/document-parser';
 import { makeTemplateProvider } from '../../ftl/sqllens/template-shape';
-import type { ColumnRefToken } from '../../services/parse-service';
 
 const SAMPLES_ROOT = path.join(__dirname, '..', '..', '..', 'samples');
 
@@ -68,7 +67,7 @@ function macroSqlLookup(manifestPaths: string[]): (name: string) => string | und
 interface FileResult {
 	label: string;
 	warnings: number;
-	extraction: { ctes: number; refs: number; sources: number; finalColumns: number; tokens: number };
+	extraction: { ctes: number; refs: number; sources: number; finalColumns: number; symbols: number };
 }
 const RESULTS: FileResult[] = [];
 
@@ -99,7 +98,7 @@ describe('sample project DocumentModel (sqllens — live engine)', () => {
 			expect(Array.isArray(model.refs)).toBe(true);
 			expect(Array.isArray(model.sources)).toBe(true);
 			expect(Array.isArray(model.finalColumns)).toBe(true);
-			expect(Array.isArray(model.tokens)).toBe(true);
+			expect(Array.isArray(model.symbols)).toBe(true);
 			expect(typeof model.timing.parseMs).toBe('number');
 			expect(typeof model.timing.totalMs).toBe('number');
 
@@ -111,7 +110,7 @@ describe('sample project DocumentModel (sqllens — live engine)', () => {
 					refs: model.refs.length,
 					sources: model.sources.length,
 					finalColumns: model.finalColumns.length,
-					tokens: model.tokens.length,
+					symbols: (model.symbols ?? []).length,
 				},
 			});
 		});
@@ -124,13 +123,13 @@ describe('sample project DocumentModel (sqllens — live engine)', () => {
 		console.log(`\nsqllens DocumentModel summary: ${total} real models parsed, ${withWarn} with warnings`);
 		expect(total).toBeGreaterThan(0);
 
-		// Every model must produce SOME token stream — a totally empty token list means the
+		// Every model must produce SOME symbol stream — a totally empty symbol list means the
 		// SQL body never reached the parser (dialect routing broken, or a macro-only model
 		// that failed to parse). With C4's manifest-sourced shapeOf, even the fully
 		// macro-generated models (`with cte as ({{ macro() }}) {{ macro_end() }}`) parse
 		// natively, so there are NO exceptions left — any model going empty fails loudly.
 		const emptyModels = RESULTS
-			.filter(r => r.extraction.tokens === 0)
+			.filter(r => r.extraction.symbols === 0)
 			.map(r => r.label);
 		expect(emptyModels).toEqual([]);
 	});
@@ -140,12 +139,10 @@ describe('sample project DocumentModel (sqllens — live engine)', () => {
 // qualify() dialect regression (sqllens twin) — GROUP BY ALL (DuckDB) + cross-CTE
 // SELECT * expansion.
 //
-// Star expansion resolves `SELECT * FROM cte_interim_calcs` in cte_final
-// into resolved column_ref tokens (name=home_team, resolvedTableRef=cte_interim_calcs).
-// The native path restores that format in extractTokens Pass 3: synthetic zero-width
-// column_refs re-emitted from the star expander, one per expanded column, resolved to
-// the source's table_ref. Downstream this is what keeps the unused-columns ninja rule
-// from false-flagging every star-consumed CTE column.
+// Star expansion resolves `SELECT * FROM cte_interim_calcs` in cte_final into
+// column reference Syms (name=home_team) whose symbolBindings.sourceOf points at the
+// cte_interim_calcs relation Sym. Downstream this is what keeps the unused-columns
+// ninja rule from false-flagging every star-consumed CTE column.
 // ---------------------------------------------------------------------------
 describe('qualify() dialect regression (sqllens)', () => {
 	it('reg_season_predictions — SELECT * in cte_final expands to column_refs for cte_interim_calcs columns', async () => {
@@ -162,11 +159,12 @@ describe('qualify() dialect regression (sqllens)', () => {
 
 		const model = await parser.parse(raw, { schema });
 
-		const columnRefs = (model.tokens ?? []).filter((t): t is ColumnRefToken => t.type === 'column_ref');
-		const interimColRefs = columnRefs.filter(
-			t => t.resolvedTableRef?.name.toLowerCase() === 'cte_interim_calcs',
-		);
-		const homeTeamRefs = interimColRefs.filter(t => t.name.toLowerCase() === 'home_team');
+		const columnRefs = (model.symbols ?? []).filter(s => s.kind === 'column' && s.modifiers.includes('reference'));
+		const homeTeamRefs = columnRefs.filter(s => {
+			if (s.name.split('.').pop()!.toLowerCase() !== 'home_team') return false;
+			const source = model.symbolBindings?.sourceOf.get(s);
+			return source?.name.toLowerCase() === 'cte_interim_calcs';
+		});
 		expect(homeTeamRefs.length).toBeGreaterThan(0);
 	});
 });

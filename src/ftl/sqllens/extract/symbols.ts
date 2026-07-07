@@ -10,7 +10,8 @@
  */
 import { deriveSymbols, displayName, MAIN_FRAME } from '../api';
 import type { Dialect, Qualification, ResolvedSource, Scope, ScopeTree, SchemaProvider, Sym } from '../api';
-import { columnRefsOf } from './spans';
+import { asCst, columnRefsOf, normName } from './spans';
+import type { StarExpander } from './star-expand';
 
 /** The `SymbolKind` values `relationSymbol` (sqllens symbols.ts) produces — everything
  *  a FROM/JOIN source or CTE reference can be, i.e. every kind that can carry an alias. */
@@ -74,12 +75,15 @@ function allScopesOf(root: Scope): Scope[] {
  * column-source correlations consumers need on top of it (see module doc).
  * `qualification` is optional — without it `bindings.sourceOf` stays empty (the
  * caller falls back to whatever `.table`/qualifier text a column carries itself).
+ * `starExpander` is optional — without it a `SELECT *` stays a single `star`-modifier
+ * Sym with no per-column breakdown (see the star-expansion pass below).
  */
 export function extractSymbols(
 	scopes: ScopeTree,
 	dialect: Dialect,
 	schema: SchemaProvider,
 	qualification?: Qualification,
+	starExpander?: StarExpander,
 ): { symbols: Sym[]; bindings: SymbolBindings } {
 	const symbols = deriveSymbols(scopes, schema, { dialect });
 	const bindings: SymbolBindings = { aliasOf: new Map(), sourceOf: new Map() };
@@ -134,6 +138,49 @@ export function extractSymbols(
 				const bound = qualification.bindingOf(scope, refs[i])?.source;
 				const relSym = bound && sourceToSym.get(bound);
 				if (relSym) bindings.sourceOf.set(columnSyms[i], relSym);
+			}
+		}
+
+		// Synthetic column-reference Syms for a `SELECT *`'s expanded columns.
+		// deriveSymbols emits only a single 'star'-modifier Sym for `*` — it never
+		// breaks a star down into its resolved output columns — so a CTE consumed
+		// only through a downstream `SELECT *` (possibly through a CHAIN of
+		// pass-through stars) would otherwise look unreferenced to any consumer
+		// walking column Syms (e.g. structure-unused-columns.ts's
+		// buildReferencedColumnsMap). Mirrors extract/tokens.ts's Pass 3 (the
+		// retiring bridge's own fix for the same gap): expand via the same
+		// starExpander, one synthetic Sym per expanded column, bound via
+		// bindings.sourceOf to the star's resolved source — expanding EVERY
+		// star (not just the outermost) is what makes a multi-hop chain resolve,
+		// since each star in the chain contributes its own link. Spans are
+		// deliberately zero-width at the star's own position: `symSpanContains`
+		// never matches a zero-width span (column === endColumn is always
+		// outside `[column, endColumn)`), so these never affect hover/definition
+		// hit-testing — they exist purely for consumers that walk `symbols`
+		// looking for a name + resolved source.
+		if (starExpander && scope.body.kind === 'select') {
+			for (const p of scope.body.projections) {
+				if (p.expr.kind !== 'star') continue;
+				const expanded = starExpander.expandStar(scope, p);
+				if (!expanded) continue; // unresolvable star — leave unexpanded, like the bridge
+				const anchor = asCst(p.cst).start;
+				if (!anchor) continue;
+				for (const ec of expanded) {
+					const src = ec.table !== undefined ? scope.sources.get(ec.table) : undefined;
+					const relSym = src && sourceToSym.get(src);
+					if (!relSym) continue; // source with no relation Sym analog (lateral/pivot/…)
+					const qualifier = bindings.aliasOf.get(relSym)?.name ?? relSym.name;
+					const span = { line: anchor.line, column: anchor.column, endLine: anchor.line, endColumn: anchor.column };
+					const synthetic: Sym = {
+						kind: 'column',
+						modifiers: ['reference'],
+						name: `${qualifier}.${normName(ec.name, dialect)}`,
+						span,
+						frame,
+					};
+					symbols.push(synthetic);
+					bindings.sourceOf.set(synthetic, relSym);
+				}
 			}
 		}
 	}

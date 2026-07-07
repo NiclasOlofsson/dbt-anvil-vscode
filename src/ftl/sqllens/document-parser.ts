@@ -340,7 +340,7 @@ export class SqllensDocumentParser implements DocumentParser {
 		const ctes = extractCtes(result, expander);
 		const tokens = extractTokens(result, qualification, expander);
 		// Sym wave 2: additive alongside `tokens` for now — see extract/symbols.ts.
-		const { symbols, bindings: symbolBindings } = extractSymbols(result.scopes, dialect, schemaObj, qualification);
+		const { symbols, bindings: symbolBindings } = extractSymbols(result.scopes, dialect, schemaObj, qualification, expander);
 		const finalColumns = extractFinalColumns(result, expander);
 		const finalSelect = extractFinalSelect(result, expander);
 		// refs + sources + macroCalls come from the R2 tag-AST (span-accurate; covers
