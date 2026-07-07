@@ -183,18 +183,39 @@ export function tableRef(name: string, line: number, col: number, alias?: string
  * sym-spans.ts) compares structural anchors, never `.name` (a CTE's `Sym.name`
  * is sqllens's `displayName` — the declared spelling, not safe for identity
  * comparison on its own).
+ *
+ * `alias` wires up `Sym.alias` (a relation Sym's own alias, carried directly
+ * per sqllens's native `Sym.alias` field) — pass its 0-based `line`/`col`.
+ * `relationNameRangeOf` (sym-spans.ts) checks this field's presence to decide
+ * whether a reference needs narrowing at all.
  */
 export function sym(
 	kind: Sym['kind'],
 	name: string,
 	line: number,
 	col: number,
-	opts: { modifiers?: SymbolModifier[]; frame?: string; endCol?: number; endLine?: number; definitionOf?: Sym | CteInfo } = {},
+	opts: {
+		modifiers?: SymbolModifier[];
+		frame?: string;
+		endCol?: number;
+		endLine?: number;
+		definitionOf?: Sym | CteInfo;
+		alias?: { name: string; line: number; col: number; endCol?: number };
+	} = {},
 ): Sym {
 	const defSource = opts.definitionOf;
 	const definition = defSource === undefined ? undefined
 		: 'span' in defSource ? defSource.span
 			: { line: defSource.line + 1, column: defSource.col ?? 0, endLine: defSource.line + 1, endColumn: (defSource.col ?? 0) + name.length };
+	const aliasField = opts.alias === undefined ? undefined : {
+		name: opts.alias.name,
+		span: {
+			line: opts.alias.line + 1,
+			column: opts.alias.col,
+			endLine: opts.alias.line + 1,
+			endColumn: opts.alias.endCol ?? opts.alias.col + opts.alias.name.length,
+		},
+	};
 	return {
 		kind,
 		modifiers: opts.modifiers ?? ['reference'],
@@ -207,6 +228,7 @@ export function sym(
 		},
 		frame: opts.frame ?? MAIN_FRAME,
 		...(definition ? { definition } : {}),
+		...(aliasField ? { alias: aliasField } : {}),
 	};
 }
 

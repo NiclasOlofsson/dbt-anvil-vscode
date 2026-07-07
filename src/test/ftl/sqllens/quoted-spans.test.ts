@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SqllensDocumentParser } from '../../../ftl/sqllens/document-parser';
-import type { ColumnRefToken, TableRefToken } from '../../../services/parse-service';
+import { nameRangeOf, qualifierRangeOf, rangeOfSpan } from '../../../providers/sql/sym-spans';
 
 function parser(adapterType: string) {
 	return new SqllensDocumentParser({ adapterType });
@@ -9,117 +9,114 @@ function parser(adapterType: string) {
 /**
  * Quoted-identifier span contract: for ANY quoted identifier, every span
  * (col inclusive start, endCol exclusive end, 0-based line) covers the WHOLE
- * raw source token INCLUDING its delimiters. Name STRINGS keep whatever
- * `normName` produces for the dialect — only the SPAN is pinned here.
+ * raw source token INCLUDING its delimiters. `Sym.name` (sqllens's
+ * `displayName`) strips the delimiters but never changes case, regardless of
+ * dialect — only the SPAN is pinned here, not the name string.
  */
 describe('quoted-identifier spans — extract-boundary contract', () => {
-	it('databricks: backtick-quoted column_ref covers the whole raw token', async () => {
+	it('databricks: backtick-quoted column covers the whole raw token', async () => {
 		const sql = 'select `My Col` from t';
 		const raw = '`My Col`';
 		const q = sql.indexOf(raw);
 		const model = await parser('databricks').parse(sql);
-		const col = model.tokens.find(
-			(t): t is ColumnRefToken => t.type === 'column_ref' && t.name === 'my col', // databricks lowercases even a quoted name
-		)!;
+		const col = (model.symbols ?? []).find(s => s.kind === 'column' && s.modifiers.includes('reference') && s.name === 'My Col')!;
 		expect(col).toBeDefined();
-		expect(col.line).toBe(0);
-		expect(col.col).toBe(q); // whole token, INCLUDING the opening backtick
-		expect(col.endCol).toBe(q + raw.length);
+		const range = nameRangeOf(col);
+		expect(range.start.line).toBe(0);
+		expect(range.start.character).toBe(q); // whole token, INCLUDING the opening backtick
+		expect(range.end.character).toBe(q + raw.length);
 	});
 
-	it('databricks: backtick-quoted column_ref with an unquoted qualifier — both spans exact', async () => {
+	it('databricks: backtick-quoted column with an unquoted qualifier — both spans exact', async () => {
 		const sql = 'select o.`My Col` from orders o';
 		const raw = '`My Col`';
 		const q = sql.indexOf(raw);
 		const model = await parser('databricks').parse(sql);
-		const col = model.tokens.find(
-			(t): t is ColumnRefToken => t.type === 'column_ref' && t.name === 'my col',
-		)!;
-		expect(col.col).toBe(q);
-		expect(col.endCol).toBe(q + raw.length);
+		const col = (model.symbols ?? []).find(s => s.kind === 'column' && s.modifiers.includes('reference') && s.name.split('.').pop() === 'My Col')!;
+		const range = nameRangeOf(col);
+		expect(range.start.character).toBe(q);
+		expect(range.end.character).toBe(q + raw.length);
 
-		// The unquoted qualifier `o` — token-width based (identity case).
-		expect(col.table).toBe('o');
-		expect(col.tableLine).toBe(0);
-		expect(col.tableCol).toBe(sql.indexOf('o.'));
-		expect(col.tableEndCol).toBe(sql.indexOf('o.') + 1);
+		// The unquoted qualifier `o` — token-width based (identity case), resolved
+		// to the `orders o` relation via symbolBindings.sourceOf (never by name).
+		const qualRange = qualifierRangeOf(col)!;
+		expect(qualRange.start.character).toBe(sql.indexOf('o.'));
+		expect(qualRange.end.character).toBe(sql.indexOf('o.') + 1);
+		const relation = model.symbolBindings?.sourceOf.get(col);
+		expect(model.symbolBindings?.aliasOf.get(relation!)?.name).toBe('o');
 	});
 
-	it('snowflake: double-quoted column_ref covers the whole raw token', async () => {
+	it('snowflake: double-quoted column covers the whole raw token', async () => {
 		const sql = 'select "My Col" from t';
 		const raw = '"My Col"';
 		const q = sql.indexOf(raw);
 		const model = await parser('snowflake').parse(sql);
-		const col = model.tokens.find(
-			(t): t is ColumnRefToken => t.type === 'column_ref' && t.name === 'My Col', // snowflake preserves quoted case
-		)!;
+		const col = (model.symbols ?? []).find(s => s.kind === 'column' && s.modifiers.includes('reference') && s.name === 'My Col')!; // snowflake preserves quoted case
 		expect(col).toBeDefined();
-		expect(col.line).toBe(0);
-		expect(col.col).toBe(q); // whole token, INCLUDING the opening double quote
-		expect(col.endCol).toBe(q + raw.length);
+		const range = nameRangeOf(col);
+		expect(range.start.line).toBe(0);
+		expect(range.start.character).toBe(q); // whole token, INCLUDING the opening double quote
+		expect(range.end.character).toBe(q + raw.length);
 	});
 
-	it('postgres: double-quoted column_ref covers the whole raw token', async () => {
+	it('postgres: double-quoted column covers the whole raw token', async () => {
 		const sql = 'select "My Col" from t';
 		const raw = '"My Col"';
 		const q = sql.indexOf(raw);
 		const model = await parser('postgres').parse(sql);
-		const col = model.tokens.find(
-			(t): t is ColumnRefToken => t.type === 'column_ref' && t.name === 'My Col', // postgres preserves quoted case too
-		)!;
+		const col = (model.symbols ?? []).find(s => s.kind === 'column' && s.modifiers.includes('reference') && s.name === 'My Col')!; // postgres preserves quoted case too
 		expect(col).toBeDefined();
-		expect(col.line).toBe(0);
-		expect(col.col).toBe(q); // whole token, INCLUDING the opening double quote
-		expect(col.endCol).toBe(q + raw.length);
+		const range = nameRangeOf(col);
+		expect(range.start.line).toBe(0);
+		expect(range.start.character).toBe(q); // whole token, INCLUDING the opening double quote
+		expect(range.end.character).toBe(q + raw.length);
 	});
 
 	it('snowflake: double-quoted table alias covers the whole raw token', async () => {
-		// `addAlias` computes `aliasEndCol = column + alias.length`. Unlike a column
-		// NAME (delimiter-stripped by the IR for double quotes, per `quotedRaw`), a
-		// table_ref's `alias` string arrives with its quotes intact, so the arithmetic
-		// lands on the whole raw token.
+		// Sym.alias.name (sqllens's displayName) strips the quoting delimiters —
+		// unlike the retired TokenInfo bridge's alias string, which kept them intact.
+		// The alias Sym's own SPAN still covers the whole raw token, quotes included.
 		const sql = 'select 1 as x from tbl "My Alias"';
 		const raw = '"My Alias"';
 		const q = sql.indexOf(raw);
 		const model = await parser('snowflake').parse(sql);
-		const ref = model.tokens.find(
-			(t): t is TableRefToken => t.type === 'table_ref' && t.name === 'TBL',
-		)!;
-		expect(ref).toBeDefined();
-		expect(ref.alias).toBe(raw); // delimiters intact in the IR alias string
-		expect(ref.aliasLine).toBe(0);
-		expect(ref.aliasCol).toBe(q);
-		expect(ref.aliasEndCol).toBe(q + raw.length);
+		// Sym.name is never dialect-folded (unlike model.finalColumns/model.ctes) — the
+		// unquoted table name 'tbl' keeps its declared (lowercase) spelling here.
+		const tableSym = (model.symbols ?? []).find(s => s.kind === 'table' && s.modifiers.includes('reference') && s.name === 'tbl')!;
+		expect(tableSym).toBeDefined();
+		const alias = model.symbolBindings?.aliasOf.get(tableSym);
+		expect(alias).toBeDefined();
+		expect(alias!.name).toBe('My Alias'); // delimiters stripped, case preserved
+		const aliasRange = rangeOfSpan(alias!.span);
+		expect(aliasRange.start.line).toBe(0);
+		expect(aliasRange.start.character).toBe(q); // whole token, INCLUDING the opening quote
+		expect(aliasRange.end.character).toBe(q + raw.length);
 	});
 
-	it('snowflake: double-quoted CTE name — definition token, FROM-reference token, and CteInfo all cover the raw token', async () => {
-		// The CTE-definition token emission computes `endCol: s.column + rawName.length`
-		// where `rawName` is `cteRef.def.name`. For a WITH-clause CTE name the IR's
-		// `.name` string is NOT delimiter-stripped (unlike a Column/Table name part),
-		// so `rawName.length` equals the raw token's width and the span covers the
-		// whole token.
+	it('snowflake: double-quoted CTE name — declaration start, reference span, and CteInfo all anchor at the raw token', async () => {
+		// The declaration Sym's own span covers the WHOLE "name AS (body)" clause
+		// (relationNameRangeOf's narrowing territory) — but narrowing via
+		// Sym.name.length would undershoot for a quoted name (delimiters stripped),
+		// so only the declaration's START position is asserted here, which is exact
+		// regardless of quoting (the name always starts the clause).
 		const sql = 'with "My Cte" as (select 1 as a) select * from "My Cte"';
 		const raw = '"My Cte"';
 		const defQ = sql.indexOf(raw);
 		const refQ = sql.indexOf(raw, defQ + 1);
 		const model = await parser('snowflake').parse(sql);
 
-		const defTok = model.tokens.find(
-			(t): t is TableRefToken => t.type === 'table_ref' && t.cteDefinition === true,
-		)!;
-		expect(defTok).toBeDefined();
-		expect(defTok.line).toBe(0);
-		expect(defTok.col).toBe(defQ);
-		expect(defTok.endCol).toBe(defQ + raw.length);
+		const defSym = (model.symbols ?? []).find(s => s.kind === 'cte' && s.modifiers.includes('declaration'))!;
+		expect(defSym).toBeDefined();
+		expect(defSym.span.line - 1).toBe(0);
+		expect(defSym.span.column).toBe(defQ);
 
-		// The FROM-clause reference token resolves off the actual lexer token text
-		// (not the IR name string), so its span is token-width by construction.
-		const refTok = model.tokens.find(
-			(t): t is TableRefToken => t.type === 'table_ref' && !t.cteDefinition,
-		)!;
-		expect(refTok).toBeDefined();
-		expect(refTok.col).toBe(refQ);
-		expect(refTok.endCol).toBe(refQ + raw.length);
+		// The reference has no alias, so its span is already name-only (unwidened) —
+		// a raw quoted token, no narrowing needed or attempted.
+		const refSym = (model.symbols ?? []).find(s => s.kind === 'cte' && s.modifiers.includes('reference'))!;
+		expect(refSym).toBeDefined();
+		const refRange = rangeOfSpan(refSym.span);
+		expect(refRange.start.character).toBe(refQ);
+		expect(refRange.end.character).toBe(refQ + raw.length);
 
 		// CteInfo.col is the name-token start. CteInfo.endCol anchors the CLOSING
 		// PAREN of the CTE body (see parse-service.ts CteInfo doc comment and

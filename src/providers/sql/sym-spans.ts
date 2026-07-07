@@ -65,28 +65,39 @@ export function isRelationSym(sym: Sym): sym is Sym & { kind: 'table' | 'cte' | 
 
 /**
  * The `vscode.Range` for a CTE Sym's own name — declaration (`WITH name AS
- * (body)`) or reference (`FROM name`/`JOIN name AS alias`). Both cases can
- * have a `span` wider than just the name:
- *   - A DECLARATION's span covers the whole clause (`CteDef.nameCst` has the
- *     narrow span in the IR; `deriveSymbols` doesn't surface it).
- *   - A REFERENCE's span extends through a trailing alias when one is
- *     written (verified empirically — `FROM orders o` gives the relation Sym
- *     a span covering "orders o", not just "orders"; `Sym.alias` carries the
- *     alias's own sub-span separately).
+ * (body)`) or reference (`FROM name`/`JOIN name AS alias`). Two cases need
+ * narrowing down from a wider `span`:
+ *   - A DECLARATION's span always covers the whole clause (`CteDef.nameCst`
+ *     has the narrow span in the IR; `deriveSymbols` doesn't surface it).
+ *   - An ALIASED reference's span extends through the trailing alias
+ *     (verified empirically — `FROM orders o` gives the relation Sym a span
+ *     covering "orders o", not just "orders"; `Sym.alias` carries the
+ *     alias's own sub-span separately, and its presence is what signals
+ *     narrowing is needed here).
+ * An UNALIASED reference's span is already name-only — narrowing it via
+ * `name.length` would be actively wrong for a QUOTED name (`Sym.name` has
+ * its delimiters stripped, so its length undershoots the raw token's width,
+ * cutting off the closing delimiter); passing it through unchanged is both
+ * simpler and correct.
+ *
  * A CTE name is always a literal SQL identifier (never a jinja tag, unlike a
  * `ref()`/`source()`-backed table Sym), so it's always the FIRST thing at the
- * span's start in both cases — the name's own range is derived from the
- * span's start plus the name's length uniformly, whether there's a
- * declaration body or a trailing alias to exclude. A `table`/`subquery`/
- * `lateral` reference Sym is NOT narrowed this way — its `name` may not match
- * its source text width (a `ref()`/`source()` tag renders as a different
- * width than the resolved table name) — those pass through `rangeOfSpan`
- * unchanged; in practice the CTE-only callers of this helper never see one
- * (renaming a `ref()`-backed table goes through the cross-file manifest path,
- * gated well before reaching here).
+ * span's start in both narrowing cases — derived from the span's start plus
+ * the name's length. That arithmetic is exact for an UNQUOTED name; a QUOTED
+ * declaration or aliased reference still undershoots the same way an
+ * unaliased one would have (delimiter chars `name` doesn't carry) — the same
+ * class of gap `nameRangeOf` has for a quoted column alias, tracked on the
+ * sqllens-anvil channel, not solved here.
+ *
+ * A `table`/`subquery`/`lateral` reference Sym is NOT narrowed at all — its
+ * `name` may not match its source text width (a `ref()`/`source()` tag
+ * renders as a different width than the resolved table name) — those pass
+ * through `rangeOfSpan` unchanged; in practice the CTE-only callers of this
+ * helper never see one (renaming a `ref()`-backed table goes through the
+ * cross-file manifest path, gated well before reaching here).
  */
 export function relationNameRangeOf(sym: Sym): vscode.Range {
-	if (sym.kind === 'cte') {
+	if (sym.kind === 'cte' && (sym.modifiers.includes('declaration') || sym.alias !== undefined)) {
 		const { line, column } = sym.span;
 		return new vscode.Range(line - 1, column, line - 1, column + sym.name.length);
 	}

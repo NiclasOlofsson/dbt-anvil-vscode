@@ -60,10 +60,22 @@ describe('relationNameRangeOf', () => {
 		// Verified empirically: `FROM orders o` gives the relation Sym a span
 		// covering "orders o" (through the alias), not just "orders" — a CTE
 		// reference behaves the same way, e.g. "my_cte x" spanning col 5..13.
-		const ref = sym('cte', 'my_cte', 0, 5, { endCol: 13 });
+		// Narrowing is keyed on Sym.alias's presence, not just "is this a cte" —
+		// an unaliased reference is already name-only (see the next test).
+		const ref = sym('cte', 'my_cte', 0, 5, { endCol: 13, alias: { name: 'x', line: 0, col: 12 } });
 		const range = relationNameRangeOf(ref);
 		expect(range.start.character).toBe(5);
 		expect(range.end.character).toBe(5 + 'my_cte'.length);
+	});
+
+	it('does not narrow an unaliased CTE reference (already name-only, and narrowing via name.length would cut off a quoted name\'s closing delimiter)', () => {
+		// A quoted CTE name's raw token width (delimiters included) exceeds
+		// `Sym.name`'s length (delimiters stripped) — narrowing via name.length
+		// would wrongly shrink an already-correct span for this case.
+		const ref = sym('cte', 'My Cte', 0, 5, { endCol: 13 }); // e.g. `"My Cte"`, 8 raw chars, name.length 6
+		const range = relationNameRangeOf(ref);
+		expect(range.start.character).toBe(5);
+		expect(range.end.character).toBe(13); // unchanged — NOT 5 + 'My Cte'.length (11)
 	});
 
 	it('passes an unaliased CTE reference span through unchanged (already name-only)', () => {
