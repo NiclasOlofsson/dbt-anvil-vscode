@@ -311,6 +311,48 @@ describe('DbtCallHierarchyProvider', () => {
 			expect(calls[0].to.name).toBe('base');
 		});
 
+		it('outgoing: resolves the target CTE even when its declared name is dialect-folded but the reference Sym is not (Snowflake-style casing)', async () => {
+			// Regression: outgoing lookup used to match `cteNames.has(s.name)` — a folded
+			// CteInfo.name (extractCtes runs normName/foldIdentifier) against an unfolded
+			// Sym.name (displayName only strips delimiters, never folds case). On Snowflake
+			// (unquoted identifiers fold to uppercase) a lowercase-written reference like
+			// `from stg_orders` would never match `STG_ORDERS` in cteNames, so every outgoing
+			// call vanished. The fix (symMatchesCte) anchors structurally via Sym.definition,
+			// not by name, so casing can't break it.
+			const baseCte: CteInfo = { name: 'STG_ORDERS', line: 1, col: 5, endLine: 3, endCol: 1, columns: [] };
+			const finalCte: CteInfo = { name: 'final', line: 5, col: 5, endLine: 7, endCol: 1, columns: [] };
+			const docModel = makeDocumentModel({
+				ctes: [baseCte, finalCte],
+				symbols: [
+					// written lowercase in the SQL; declaration's own name is dialect-folded uppercase
+					sym('cte', 'stg_orders', 6, 14, { definitionOf: baseCte }),
+				],
+				refs: [],
+			});
+			const provider = new DbtCallHierarchyProvider(indexer, createMockLogger(), createMockParseService(docModel));
+			const sql = [
+				'with',
+				'  stg_orders as (select 1 as id),',
+				'  ',
+				'',
+				'',
+				'  final as (select * from stg_orders)',
+				'  ',
+				'',
+				'select * from final',
+			].join('\n');
+			const doc = createMockDocument(sql, '/project/models/customers.sql');
+			vi.mocked(vscode.workspace.openTextDocument).mockResolvedValue(doc);
+
+			const item = await provider.prepareCallHierarchy(doc, new vscode.Position(6, 0), mockToken);
+			expect(item).not.toBeNull();
+			expect(item!.name).toBe('final');
+
+			const calls = await provider.provideCallHierarchyOutgoingCalls(item!, mockToken);
+			expect(calls.length).toBe(1);
+			expect(calls[0].to.name).toBe('STG_ORDERS');
+		});
+
 		it('incoming: finds which CTEs read a given CTE', async () => {
 			const baseCte: CteInfo = { name: 'base', line: 1, col: 5, endLine: 3, endCol: 1, columns: [] };
 			const finalCte: CteInfo = { name: 'final', line: 5, col: 5, endLine: 7, endCol: 1, columns: [] };

@@ -349,29 +349,23 @@ export class DbtCallHierarchyProvider implements vscode.CallHierarchyProvider {
 		const cteDef = model.ctes.find(c => c.name === item.cteName);
 		if (!cteDef) return [];
 
-		const cteNames = new Set(model.ctes.map(c => c.name));
 		const calls: vscode.CallHierarchyOutgoingCall[] = [];
 
 		// reference syms inside this CTE's body that refer to another CTE
-		const tableRefs = (model.symbols ?? []).filter(s =>
+		const bodyRefs = (model.symbols ?? []).filter(s =>
 			isRelationSym(s) && s.modifiers.includes('reference') &&
-			(s.span.line - 1) >= cteDef.line && (s.span.line - 1) <= cteDef.endLine &&
-			cteNames.has(s.name),
+			(s.span.line - 1) >= cteDef.line && (s.span.line - 1) <= cteDef.endLine,
 		);
 
-		// Deduplicate by name — one outgoing item per target CTE, multiple fromRanges
-		const byName = new Map<string, vscode.Range[]>();
-		for (const s of tableRefs) {
-			const ranges = byName.get(s.name) ?? [];
-			ranges.push(relationNameRangeOf(s));
-			byName.set(s.name, ranges);
-		}
-
-		for (const [name, fromRanges] of byName) {
-			const targetCte = model.ctes.find(c => c.name === name);
-			if (!targetCte) continue;
+		// One outgoing item per target CTE, matched structurally (symMatchesCte, not
+		// by name — see its doc comment) so every reference resolves regardless of
+		// how it was cased, and multiple spellings of the same CTE still dedupe.
+		for (const targetCte of model.ctes) {
+			if (targetCte === cteDef) continue;
+			const refs = bodyRefs.filter(s => symMatchesCte(s, targetCte));
+			if (refs.length === 0) continue;
 			const targetItem = this._prepareCteItem(document, targetCte);
-			calls.push(new vscode.CallHierarchyOutgoingCall(targetItem, fromRanges));
+			calls.push(new vscode.CallHierarchyOutgoingCall(targetItem, refs.map(s => relationNameRangeOf(s))));
 		}
 
 		// Also emit ref() calls within the CTE body as model outgoing
@@ -395,23 +389,17 @@ export class DbtCallHierarchyProvider implements vscode.CallHierarchyProvider {
 		model: DocumentModel,
 	): vscode.CallHierarchyOutgoingCall[] {
 		const lastCteEnd = Math.max(...model.ctes.map(c => c.endLine));
-		const cteNames = new Set(model.ctes.map(c => c.name));
 		const calls: vscode.CallHierarchyOutgoingCall[] = [];
 
-		const byName = new Map<string, vscode.Range[]>();
-		for (const s of model.symbols ?? []) {
-			if (!isRelationSym(s) || !s.modifiers.includes('reference')) continue;
-			if ((s.span.line - 1) <= lastCteEnd) continue;
-			if (!cteNames.has(s.name)) continue;
-			const ranges = byName.get(s.name) ?? [];
-			ranges.push(relationNameRangeOf(s));
-			byName.set(s.name, ranges);
-		}
+		const finalRefs = (model.symbols ?? []).filter(s =>
+			isRelationSym(s) && s.modifiers.includes('reference') && (s.span.line - 1) > lastCteEnd,
+		);
 
-		for (const [name, fromRanges] of byName) {
-			const targetCte = model.ctes.find(c => c.name === name);
-			if (!targetCte) continue;
-			calls.push(new vscode.CallHierarchyOutgoingCall(this._prepareCteItem(document, targetCte), fromRanges));
+		// Matched structurally (symMatchesCte), same reasoning as _outgoingForCte above.
+		for (const targetCte of model.ctes) {
+			const refs = finalRefs.filter(s => symMatchesCte(s, targetCte));
+			if (refs.length === 0) continue;
+			calls.push(new vscode.CallHierarchyOutgoingCall(this._prepareCteItem(document, targetCte), refs.map(s => relationNameRangeOf(s))));
 		}
 		return calls;
 	}
