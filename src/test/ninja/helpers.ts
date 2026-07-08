@@ -273,10 +273,14 @@ export function model(
 }
 
 /**
- * Stub `DialectSymbols` for unit tests that want to exercise recasing
- * without running the full parser. Production always gets the real dialect-aware
- * sets from the active dialect — this fixture intentionally lives in test helpers
- * so no production code depends on hardcoded keyword/type lists.
+ * Stub `DialectSymbols` for unit tests that want to exercise the reflow engine's
+ * capitalisation LOGIC in isolation from a real dialect's actual keyword/function/
+ * type lists — a small curated set keeps assertions legible and stable regardless
+ * of what a given dialect happens to define. Real dialect-aware integration
+ * coverage (parsing real SQL, calling the real `getDialectSymbols()`) already
+ * exists in corpus-fixtures.test.ts / rule-fixtures.test.ts / format-roundtrip.test.ts;
+ * this fixture intentionally lives in test helpers, not production, so no
+ * production code depends on hardcoded keyword/type lists.
  *
  * Callers can override any of the three sets; defaults cover the common
  * shapes used across reflow unit tests (SELECT/FROM/WHERE keywords,

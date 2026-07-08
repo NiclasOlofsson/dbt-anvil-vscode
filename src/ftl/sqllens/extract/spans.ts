@@ -78,15 +78,19 @@ export function normName(raw: string, dialect: Dialect, kind: IdentKind = 'other
 /**
  * Recover the raw, delimiter-carrying form of an identifier for `normName`.
  *
- * sqllens's IR strips a DOUBLE-QUOTED identifier's delimiters from its `.name` /
- * `.parts` strings (it keeps backtick/bracket, but not `"…"`), so a `"Mixed"`
- * reaches `normName` looking unquoted — harmless for the case-INSENSITIVE dialects
- * (they fold quoted and unquoted the same way) but wrong for snowflake (would
- * uppercase a name meant to be preserved) and postgres (would lowercase it). The
- * lexer token always carries the delimiters, so where the IR string is fed to
- * `normName` we consult the identifier's source token: when it is a quoted form
- * whose stripped content matches the IR name (case-insensitively), use the token;
- * otherwise the IR string already carries whatever delimiters exist, so trust it.
+ * Only BigQuery's IR strips an identifier's delimiters from its `.name` / `.parts`
+ * strings — verified empirically (direct probes across all 8 dialects, matching
+ * sqllens's own measurement): snowflake/postgres/tsql/databricks all keep their
+ * quoting delimiters intact on `Projection.name` / `CteDef.name` / `ColumnRef.parts`
+ * alike. Only BigQuery's `My Alias` loses its backticks, reaching `normName` looking
+ * unquoted — wrong for a dialect whose quoted identifiers preserve case. The lexer
+ * token always carries the delimiters, so where the IR string is fed to `normName`
+ * we consult the identifier's source token: when it is a quoted form whose stripped
+ * content matches the IR name (case-insensitively), use the token; otherwise the IR
+ * string already carries whatever delimiters exist (every non-BigQuery case), so
+ * trust it unchanged. Dialect-agnostic by construction — this self-detects via the
+ * match, rather than branching on which dialect is active, so it stays correct
+ * regardless of which dialect(s) sqllens's IR strips delimiters for.
  */
 export function quotedRaw(irName: string, rawTok: string | undefined): string {
 	if (!rawTok || rawTok.length < 2) return irName;
