@@ -6,7 +6,6 @@ import type { DialectSymbols } from '../../ftl/sql-tokens';
 import { mergeSqlAndJinjaTokens } from '../../ftl/ninja-sql-tokens';
 import { MAIN_FRAME } from '../../ftl/sqllens/api';
 import type { PartSpan, Sym, SymbolModifier } from '../../ftl/sqllens/api';
-import type { SymbolBindings } from '../../ftl/sqllens/extract/symbols';
 import * as vscode from 'vscode';
 
 type ConfigOverride = Omit<Partial<NinjaConfig>, 'indentation' | 'layout' | 'capitalisation'> & {
@@ -76,7 +75,6 @@ export const emptyModel: DocumentModel = {
 	sources: [],
 	finalColumns: [],
 	symbols: [],
-	symbolBindings: { aliasOf: new Map(), sourceOf: new Map() },
 	timing: { parseMs: 0, totalMs: 0 },
 };
 
@@ -161,6 +159,9 @@ export function cte(name: string, line: number, endLine: number, columns: string
  * per sqllens's native `Sym.alias` field) — pass its 0-based `line`/`col`.
  * `relationNameRangeOf` (sym-spans.ts) checks this field's presence to decide
  * whether a reference needs narrowing at all.
+ *
+ * `source` wires up `Sym.source` (a column reference's bound relation, carried
+ * directly per sqllens's native field) — pass the relation Sym it resolves to.
  */
 export function sym(
 	kind: Sym['kind'],
@@ -174,6 +175,7 @@ export function sym(
 		endLine?: number;
 		definitionOf?: Sym | CteInfo;
 		alias?: { name: string; line: number; col: number; endCol?: number };
+		source?: Sym;
 	} = {},
 ): Sym {
 	const defSource = opts.definitionOf;
@@ -202,6 +204,7 @@ export function sym(
 		frame: opts.frame ?? MAIN_FRAME,
 		...(definition ? { definition } : {}),
 		...(aliasField ? { alias: aliasField } : {}),
+		...(opts.source ? { source: opts.source } : {}),
 	};
 }
 
@@ -211,11 +214,12 @@ export function sym(
  * sub-ranges sqllens itself would for a dotted column ref (`o.customer_id` →
  * one span for `o`, one for `customer_id`). `line` is 0-based, matching
  * `sym()` above; each part's `col` is that part's own 0-based start column.
+ * `source` wires up `Sym.source` (the relation Sym this column resolves to).
  */
 export function colSym(
 	line: number,
 	parts: Array<{ name: string; col: number }>,
-	opts: { modifiers?: SymbolModifier[]; frame?: string } = {},
+	opts: { modifiers?: SymbolModifier[]; frame?: string; source?: Sym } = {},
 ): Sym {
 	const partSpans: PartSpan[] = parts.map(p => ({
 		start: 0,
@@ -237,17 +241,7 @@ export function colSym(
 		},
 		frame: opts.frame ?? MAIN_FRAME,
 		partSpans,
-	};
-}
-
-/** Build a `SymbolBindings` from `[relation, alias]` and `[column, source]` pairs. */
-export function symbolBindings(overrides: {
-	aliasOf?: [Sym, Sym][];
-	sourceOf?: [Sym, Sym][];
-} = {}): SymbolBindings {
-	return {
-		aliasOf: new Map(overrides.aliasOf ?? []),
-		sourceOf: new Map(overrides.sourceOf ?? []),
+		...(opts.source ? { source: opts.source } : {}),
 	};
 }
 

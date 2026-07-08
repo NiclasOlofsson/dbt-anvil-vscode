@@ -34,7 +34,7 @@ export const tableAsRule: TokenRule = {
 		);
 
 		for (const ref of relationRefs) {
-			const alias = model.symbolBindings?.aliasOf.get(ref);
+			const alias = ref.alias;
 			if (!alias) continue;
 
 			const refLine = ref.span.line - 1;

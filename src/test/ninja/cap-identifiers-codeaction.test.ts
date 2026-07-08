@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mockDocument, cfg, model, sym, colSym, symbolBindings, applyEditsToText } from './helpers';
+import { mockDocument, cfg, model, sym, colSym, applyEditsToText } from './helpers';
 import { capIdentifiersRule } from '../../ninja/rules/cap-identifiers';
 import { filterAutoFixViolations } from '../../providers/sql/formatting-provider';
 import { FixAction } from '../../ninja/violation';
@@ -71,18 +71,14 @@ describe('cap-identifiers code-action integration', () => {
 		const sql = 'select OrdAlias.id from orders as OrdAlias';
 		const doc = mockDocument(sql);
 
-		const ordersRelation = sym('table', 'orders', 0, 24);
+		const ordersRelation = sym('table', 'orders', 0, 24, { alias: { name: 'OrdAlias', line: 0, col: 34 } });
 		// orders ends at col 30; ` as ` then alias starts at col 34, ends at 42.
 		const alias = sym('alias', 'OrdAlias', 0, 34, { modifiers: ['declaration'] });
 		// Qualifier `OrdAlias` spans col 7..15, name `id` spans col 16..18.
-		const colWithQualifier = colSym(0, [{ name: 'OrdAlias', col: 7 }, { name: 'id', col: 16 }]);
+		const colWithQualifier = colSym(0, [{ name: 'OrdAlias', col: 7 }, { name: 'id', col: 16 }], { source: ordersRelation });
 
 		const m = model({
 			symbols: [ordersRelation, alias, colWithQualifier],
-			symbolBindings: symbolBindings({
-				aliasOf: [[ordersRelation, alias]],
-				sourceOf: [[colWithQualifier, ordersRelation]],
-			}),
 		});
 
 		const violations = capIdentifiersRule.check({ model: m, document: doc, config: withStyle('snake_case') });

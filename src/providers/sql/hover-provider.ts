@@ -7,6 +7,7 @@ import type { Sym } from '../../ftl/sqllens/api';
 import { isLinePositionInComment } from '../common/comment-utils';
 import { SQL_KEYWORDS } from './sql-keywords';
 import { resolvePositionContext } from './position-context';
+import { relationForAlias } from './sym-spans';
 import { DbtMaterializationIcons, SqlIcons } from '../common/icons';
 
 /**
@@ -210,14 +211,6 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 
 	// ---- Sym-based hover (AST resolution already done by resolvePositionContext) ----
 
-	/** The relation Sym that `aliasSym` is the alias of, via the reverse of `symbolBindings.aliasOf`. */
-	private _relationForAlias(model: DocumentModel, aliasSym: Sym): Sym | undefined {
-		for (const [relation, alias] of model.symbolBindings?.aliasOf ?? []) {
-			if (alias === aliasSym) return relation;
-		}
-		return undefined;
-	}
-
 	// Returns:
 	//   Hover  — show this tooltip
 	//   null   — AST recognised the symbol but has nothing to show; suppress fallback
@@ -242,7 +235,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		// The old bridge resolved this against the SAME token as the table name itself; under
 		// Sym the alias is its own symbol, so look up the relation it belongs to first.
 		if (sym.kind === 'alias') {
-			const relation = this._relationForAlias(model, sym);
+			const relation = relationForAlias(sym, model.symbols ?? []);
 			if (!relation) return null;
 			const cte = ParseService.cteForRef(relation, model);
 			if (cte) return this._buildCteHover(cte, relation, model, docUri);
@@ -254,7 +247,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		// old 'column_def' — declaration site (e.g. in a CTE select list) — nothing to hover
 		if (sym.modifiers.includes('declaration')) return null;
 
-		const resolved = model.symbolBindings?.sourceOf.get(sym);
+		const resolved = sym.source;
 		const isQualifierPart = sym.partSpans !== undefined
 			&& partIndex !== undefined
 			&& partIndex < sym.partSpans.length - 1;
@@ -305,7 +298,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 			// this same value whenever resolution succeeded); fall back to the raw written
 			// qualifier text only when unresolved.
 			const displayQualifier = resolved
-				? (model.symbolBindings?.aliasOf.get(resolved)?.name ?? resolved.name)
+				? (resolved.alias?.name ?? resolved.name)
 				: sym.name.split('.').slice(0, -1).join('.');
 			const cols = resolved ? ParseService.columnsForRef(resolved, model) : undefined;
 			this.logger.trace(`Hover: column '${displayQualifier}.${bareName}' — resolved: ${resolved?.name ?? 'none'}, cols: ${cols ? `[${cols.join(', ')}]` : 'none'}`);
@@ -335,8 +328,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 			const cols = ParseService.columnsForRef(resolved, model);
 			if (cols && (cols.includes('*') || cols.some(c => c.toLowerCase() === bareName.toLowerCase()))) {
 				const chain = ParseService.traceCteLineage(resolved, model);
-				const aliasSym = model.symbolBindings?.aliasOf.get(resolved);
-				return this._buildColumnHover(bareName, aliasSym?.name ?? resolved.name, chain, model, docUri);
+				return this._buildColumnHover(bareName, resolved.alias?.name ?? resolved.name, chain, model, docUri);
 			}
 		}
 		return null;
@@ -366,13 +358,12 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 			&& s.name.split('.').pop()!.toLowerCase() === word.toLowerCase()
 			&& (s.span.line - 1) === position.line,
 		);
-		const resolved = colSym && model.symbolBindings?.sourceOf.get(colSym);
+		const resolved = colSym?.source;
 		if (resolved) {
 			const cols = ParseService.columnsForRef(resolved, model);
 			if (cols && (cols.includes('*') || cols.some(c => c.toLowerCase() === word.toLowerCase()))) {
 				const chain = ParseService.traceCteLineage(resolved, model);
-				const aliasSym = model.symbolBindings?.aliasOf.get(resolved);
-				return this._buildColumnHover(word, aliasSym?.name ?? resolved.name, chain, model, document.uri);
+				return this._buildColumnHover(word, resolved.alias?.name ?? resolved.name, chain, model, document.uri);
 			}
 		}
 

@@ -487,12 +487,11 @@ export class WorkspaceDiagnosticsScanner implements vscode.Disposable {
 				for (const sym of entry.symbols ?? []) {
 					if (sym.kind !== 'column' || !sym.modifiers.includes('reference')) continue;
 
-					// Resolved source (bare and qualified columns alike — mirrors the retired
-					// bridge's `.table` field, which was itself upgraded via bindingOf rather
-					// than read verbatim off the written qualifier; see extract/tokens.ts).
-					const resolved = entry.symbolBindings?.sourceOf.get(sym);
+					// Resolved source (bare and qualified columns alike — Sym.source resolves
+					// this natively, rather than reading verbatim off the written qualifier).
+					const resolved = sym.source;
 					if (!resolved) continue;
-					const qualifier = entry.symbolBindings?.aliasOf.get(resolved)?.name ?? resolved.name;
+					const qualifier = resolved.alias?.name ?? resolved.name;
 					if (qualifier.toLowerCase() !== aliasLc) continue;
 
 					const bareName = sym.name.split('.').pop()!;

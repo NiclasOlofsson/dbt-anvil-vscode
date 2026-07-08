@@ -25,7 +25,7 @@ import { splitStatementsFromTemplated, type StatementRange } from '../../dbt/sta
 import { decompose } from './decompose';
 import { traceColumnLineage, type LineageResult } from './lineage';
 import { extractCtes } from './extract/ctes';
-import { backfillSymAliases, extractSymbols, type SymbolBindings } from './extract/symbols';
+import { backfillSymAliases, extractSymbols } from './extract/symbols';
 import { extractFinalColumns, extractFinalSelect } from './extract/final-select';
 import { buildStarExpander } from './extract/star-expand';
 import { mapDiagnostics } from './extract/warnings';
@@ -260,13 +260,6 @@ export class SqllensDocumentParser implements DocumentParser {
 			cells.push(this._extract(masked, templated, dialect, schema, t0, cellMs));
 		}
 		const final = [...cells].reverse().find(c => c.finalSelect !== undefined);
-		// symbolBindings: union — each cell's Sym objects are distinct instances, so
-		// there is no key collision merging their Map entries directly (same as mergeModels).
-		const symbolBindings: SymbolBindings = { aliasOf: new Map(), sourceOf: new Map() };
-		for (const c of cells) {
-			for (const [k, v] of c.symbolBindings?.aliasOf ?? []) symbolBindings.aliasOf.set(k, v);
-			for (const [k, v] of c.symbolBindings?.sourceOf ?? []) symbolBindings.sourceOf.set(k, v);
-		}
 		const model: DocumentModel = {
 			refs: cells.flatMap(c => c.refs),
 			sources: cells.flatMap(c => c.sources),
@@ -275,7 +268,6 @@ export class SqllensDocumentParser implements DocumentParser {
 			finalColumns: final?.finalColumns ?? [],
 			finalSelect: final?.finalSelect,
 			symbols: cells.flatMap(c => c.symbols ?? []),
-			symbolBindings,
 			parseWarnings: cells.flatMap(c => c.parseWarnings ?? []),
 			timing: { parseMs: Math.round(parseMs), totalMs: Math.round(performance.now() - t0) },
 			jinjaTokens: cells.flatMap(c => c.jinjaTokens ?? []),
@@ -336,7 +328,7 @@ export class SqllensDocumentParser implements DocumentParser {
 			: undefined;
 
 		const ctes = extractCtes(result, expander);
-		const { symbols, bindings: symbolBindings } = extractSymbols(result.scopes, dialect, schemaObj, qualification, expander);
+		const symbols = extractSymbols(result.scopes, dialect, schemaObj, expander);
 		const finalColumns = extractFinalColumns(result, expander);
 		const finalSelect = extractFinalSelect(result, expander);
 		// refs + sources + macroCalls come from the R2 tag-AST (span-accurate; covers
@@ -346,7 +338,7 @@ export class SqllensDocumentParser implements DocumentParser {
 		const { refs, sources, macroCalls } = tagInfos(templated.tags);
 		// The tag-AST sees jinja tags but never SQL aliases; back-fill them from
 		// the matching relation Sym's own alias binding (position-matched).
-		backfillSymAliases(symbols, symbolBindings, refs, sources);
+		backfillSymAliases(symbols, refs, sources);
 
 		// parseTemplated's placeholder is length-preserving, so token offsets line up
 		// with `text` — mapTokens derives line starts from it.
@@ -362,7 +354,6 @@ export class SqllensDocumentParser implements DocumentParser {
 			finalColumns,
 			finalSelect,
 			symbols,
-			symbolBindings,
 			parseWarnings,
 			timing: { parseMs: Math.round(parseMs), totalMs: Math.round(performance.now() - t0) },
 			jinjaTokens,

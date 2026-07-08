@@ -88,7 +88,7 @@ function sym(
 	line: number,
 	col: number,
 	endCol: number,
-	opts: { modifiers?: Sym['modifiers']; frame?: string; endLine?: number } = {},
+	opts: { modifiers?: Sym['modifiers']; frame?: string; endLine?: number; alias?: Sym; source?: Sym } = {},
 ): Sym {
 	return {
 		kind,
@@ -96,6 +96,8 @@ function sym(
 		name,
 		span: { line: line + 1, column: col, endLine: (opts.endLine ?? line) + 1, endColumn: endCol },
 		frame: opts.frame ?? MAIN_FRAME,
+		...(opts.alias ? { alias: { name: opts.alias.name, span: opts.alias.span } } : {}),
+		...(opts.source ? { source: opts.source } : {}),
 	};
 }
 
@@ -130,7 +132,6 @@ describe('DbtHoverProvider — CTE hover via ParseService', () => {
 			// Line 8: "SELECT * FROM enriched" — the outermost query
 			sym('cte', 'enriched', 8, 14, 22, { frame: MAIN_FRAME }),
 		],
-		symbolBindings: { aliasOf: new Map(), sourceOf: new Map() },
 		timing: { parseMs: 5, totalMs: 10 },
 	};
 
@@ -199,7 +200,6 @@ describe('DbtHoverProvider — CTE hover via ParseService', () => {
 			ctes: [], refs: [], sources: [], finalColumns: [] as import('../services/parse-service').ColumnInfo[],
 			// Symbol exists but no matching CTE in the model
 			symbols: [sym('cte', 'base', 6, 7, 11)],
-			symbolBindings: { aliasOf: new Map(), sourceOf: new Map() },
 			timing: { parseMs: 1, totalMs: 2 },
 		};
 		const parseService = createMockParseService(emptyModel);
@@ -234,9 +234,9 @@ describe('DbtHoverProvider — wildcard column list (*)', () => {
 		'SELECT * FROM enriched',
 	].join('\n');
 
-	const addrCteSym = sym('cte', 'addr_cte', 5, 7, 22, { frame: 'enriched' });
 	const addrAliasSym = sym('alias', 'addr', 5, 23, 27, { modifiers: ['declaration'], frame: 'enriched' });
-	const streetColSym = sym('column', 'addr.street', 4, 9, 15, { frame: 'enriched' });
+	const addrCteSym = sym('cte', 'addr_cte', 5, 7, 22, { frame: 'enriched', alias: addrAliasSym });
+	const streetColSym = sym('column', 'addr.street', 4, 9, 15, { frame: 'enriched', source: addrCteSym });
 
 	const model: DocumentModel = {
 		ctes: [
@@ -247,10 +247,6 @@ describe('DbtHoverProvider — wildcard column list (*)', () => {
 		sources: [],
 		finalColumns: [],
 		symbols: [addrCteSym, addrAliasSym, streetColSym],
-		symbolBindings: {
-			aliasOf: new Map([[addrCteSym, addrAliasSym]]),
-			sourceOf: new Map([[streetColSym, addrCteSym]]),
-		},
 		timing: { parseMs: 1, totalMs: 2 },
 	};
 
@@ -296,7 +292,6 @@ describe('ParseService.traceCteLineage', () => {
 		sources: [],
 		finalColumns: [],
 		symbols: [goldAddressRef, addrCteRef],
-		symbolBindings: { aliasOf: new Map(), sourceOf: new Map() },
 		timing: { parseMs: 1, totalMs: 2 },
 	};
 
@@ -346,7 +341,6 @@ describe('ParseService.traceCteLineage', () => {
 			sources: [],
 			finalColumns: [],
 			symbols: [sourceRef, ctaARef],
-			symbolBindings: { aliasOf: new Map(), sourceOf: new Map() },
 			timing: { parseMs: 1, totalMs: 2 },
 		};
 		const cteBRef = sym('cte', 'cte_b', 8, 14, 18);

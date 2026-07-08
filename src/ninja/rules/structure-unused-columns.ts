@@ -6,13 +6,12 @@ import type { CteInfo } from '../../services/parse-service';
 import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 import type { SqlToken } from '../../ftl/sql-tokens';
 import type { Sym } from '../../ftl/sqllens/api';
-import type { SymbolBindings } from '../../ftl/sqllens/extract/symbols';
 
 /**
  * Flags columns defined in a CTE that are never referenced downstream.
  *
  * For each CTE, collects its defined columns and checks whether any
- * column Sym bound (via symbolBindings.sourceOf) to that CTE references them.
+ * column Sym bound (via `Sym.source`) to that CTE references them.
  *
  * Skips CTEs whose SELECT list contains a wildcard — either bare
  * (`select *`) or qualified (`select cp.*`). The Python `qualify()` pass
@@ -36,7 +35,7 @@ export const unusedColumnsRule: TokenRule = {
 		if (model.ctes.length === 0) return [];
 
 		// Build a map of CTE name (lower) → set of referenced column names (lower)
-		const referencedColumns = buildReferencedColumnsMap(model.ctes, model.symbols ?? [], model.symbolBindings);
+		const referencedColumns = buildReferencedColumnsMap(model.ctes, model.symbols ?? []);
 
 		const sqlTokens = sqlOnly(model.ninjaSqlTokens);
 
@@ -102,18 +101,16 @@ function cteHasWildcardSelect(cte: CteInfo, sqlTokens: SqlToken[]): boolean {
 /**
  * Build a map: CTE name (lowercase) → Set of column names (lowercase) referenced on it.
  *
- * A column Sym references a CTE when its bound source (symbolBindings.sourceOf)
- * resolves to a `kind: 'cte'` relation Sym matching a known CTE, and the
- * reference falls outside that CTE's own body (a genuine downstream use, not
- * a self-reference). sqllens's real `Qualification.bindingOf` (Phase 0, commit
- * 5b8640b) resolves both qualified and bare columns uniformly, so there is no
- * separate qualifier-string fallback tier here — a column with no resolvable
- * source (sourceOf has no entry) simply doesn't count as a reference.
+ * A column Sym references a CTE when its bound source (`Sym.source`) resolves to a
+ * `kind: 'cte'` relation Sym matching a known CTE, and the reference falls outside
+ * that CTE's own body (a genuine downstream use, not a self-reference). sqllens's
+ * real column resolution (`deriveSymbols`) resolves both qualified and bare columns
+ * uniformly, so there is no separate qualifier-string fallback tier here — a column
+ * with no resolvable source (`.source` absent) simply doesn't count as a reference.
  */
 function buildReferencedColumnsMap(
 	ctes: CteInfo[],
 	symbols: Sym[],
-	symbolBindings: SymbolBindings | undefined,
 ): Map<string, Set<string>> {
 	const result = new Map<string, Set<string>>();
 
@@ -124,7 +121,7 @@ function buildReferencedColumnsMap(
 	for (const colSym of symbols) {
 		if (colSym.kind !== 'column' || !colSym.modifiers.includes('reference')) continue;
 
-		const source = symbolBindings?.sourceOf.get(colSym);
+		const source = colSym.source;
 		if (!source || source.kind !== 'cte') continue;
 
 		const targetCte = cteByName.get(source.name.toLowerCase());

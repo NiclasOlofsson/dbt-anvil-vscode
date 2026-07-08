@@ -96,12 +96,11 @@ describe('SqllensDocumentParser — realistic dbt model (databricks)', () => {
 	});
 });
 
-describe('SqllensDocumentParser — Sym wave 2: symbols/symbolBindings wired end-to-end', () => {
-	it('populates model.symbols and model.symbolBindings with resolved links', async () => {
+describe('SqllensDocumentParser — Sym wave 2: symbols wired end-to-end', () => {
+	it('populates model.symbols with resolved links', async () => {
 		const model = await parser().parse(MODEL);
 		expect(model.symbols).toBeDefined();
 		expect(model.symbols!.length).toBeGreaterThan(0);
-		expect(model.symbolBindings).toBeDefined();
 
 		// The `AS customer_name` alias in the joined CTE is a column declaration site.
 		expect(model.symbols!.some(s => s.kind === 'column' && s.modifiers.includes('declaration') && s.name === 'customer_name')).toBe(true);
@@ -112,14 +111,14 @@ describe('SqllensDocumentParser — Sym wave 2: symbols/symbolBindings wired end
 		// The `orders` CTE reference in the `joined` CTE's FROM clause resolves its alias `o`.
 		const ordersRef = model.symbols!.find(s => s.kind === 'cte' && s.modifiers.includes('reference') && s.name === 'orders')!;
 		expect(ordersRef).toBeDefined();
-		expect(model.symbolBindings!.aliasOf.get(ordersRef)?.name).toBe('o');
+		expect(ordersRef.alias?.name).toBe('o');
 
 		// `o.order_id` appears twice (once inside the `orders` CTE's own body, aliasing
 		// the ref() source; once inside `joined`, aliasing the `orders` CTE reference
 		// this test is about) — disambiguate by frame.
 		const oOrderId = model.symbols!.find(s => s.kind === 'column' && s.modifiers.includes('reference') && s.name === 'o.order_id' && s.frame === 'joined');
 		expect(oOrderId).toBeDefined();
-		expect(model.symbolBindings!.sourceOf.get(oOrderId!)).toBe(ordersRef);
+		expect(oOrderId!.source).toBe(ordersRef);
 
 		// The column-name sub-span and qualifier sub-span are both correct (0-based).
 		const nameRange = nameRangeOf(oOrderId!);
@@ -147,10 +146,7 @@ describe('SqllensDocumentParser — column-ref per-part spans (1/2/3-part)', () 
 		const model = await parser().parse(SQL);
 		const col = (n: string) =>
 			(model.symbols ?? []).find(s => s.kind === 'column' && s.modifiers.includes('reference') && s.name.split('.').pop() === n)!;
-		const resolvedAlias = (sym: Sym) => {
-			const relation = model.symbolBindings?.sourceOf.get(sym!);
-			return relation && model.symbolBindings?.aliasOf.get(relation)?.name;
-		};
+		const resolvedAlias = (sym: Sym) => sym.source?.alias?.name;
 
 		// 1-part bare column: no qualifier IN SOURCE, but qualify binds it to the single FROM
 		// source `foo as a` — the qualifier resolves bare `bare` to the source alias `a`.
@@ -217,8 +213,7 @@ describe('SqllensDocumentParser — quoted per-part spans (partSpans adoption)',
 		const qualRange = qualifierRangeOf(col)!;
 		expect(qualRange.start.character).toBe(sql.indexOf('a.'));
 		expect(qualRange.end.character).toBe(sql.indexOf('a.') + 1);
-		const relation = model.symbolBindings?.sourceOf.get(col);
-		expect(model.symbolBindings?.aliasOf.get(relation!)?.name).toBe('a');
+		expect(col.source?.alias?.name).toBe('a');
 	});
 
 	it('places a bracket-quoted column + unquoted qualifier (tsql)', async () => {
@@ -229,8 +224,7 @@ describe('SqllensDocumentParser — quoted per-part spans (partSpans adoption)',
 		const range = nameRangeOf(col);
 		expect(range.start.character).toBe(q);
 		expect(range.end.character).toBe(q + '[My Col]'.length);
-		const relation = model.symbolBindings?.sourceOf.get(col);
-		expect(model.symbolBindings?.aliasOf.get(relation!)?.name).toBe('a');
+		expect(col.source?.alias?.name).toBe('a');
 	});
 
 	it('handles a quoted mixed-case QUALIFIER with a plain column (`"My Table".col`)', async () => {
@@ -253,8 +247,7 @@ describe('SqllensDocumentParser — quoted per-part spans (partSpans adoption)',
 		const qualRange = qualifierRangeOf(col)!;
 		expect(qualRange.start.character).toBe(tq);
 		expect(qualRange.end.character).toBe(tq + '`My Table`'.length);
-		const relation = model.symbolBindings?.sourceOf.get(col);
-		expect(relation?.name).toBe('t');
+		expect(col.source?.name).toBe('t');
 	});
 });
 

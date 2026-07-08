@@ -14,26 +14,30 @@ export const unusedAliasRule: TokenRule = {
 		const { model } = ctx;
 		const violations: NinjaViolation[] = [];
 
-		// aliasOf only ever pairs a relation-kind reference Sym (table/cte/subquery/lateral)
-		// with a real alias Sym written in source — nothing here to synthesize, unlike the
-		// old qualify()-based bridge which could invent aliases for ref/source tables.
-		const aliasOf = model.symbolBindings?.aliasOf ?? new Map();
-		if (aliasOf.size === 0) return [];
+		// A relation's `.alias` only ever comes from a real alias written in source —
+		// nothing here to synthesize, unlike the old qualify()-based bridge which could
+		// invent aliases for ref/source tables.
+		const aliasedRelations = (model.symbols ?? []).filter(
+			s => (s.kind === 'table' || s.kind === 'cte' || s.kind === 'subquery' || s.kind === 'lateral')
+				&& s.modifiers.includes('reference') && s.alias !== undefined,
+		);
+		if (aliasedRelations.length === 0) return [];
 
 		// Collect the qualifiers actually referenced by column reads, resolved via
-		// sourceOf (works uniformly for qualified AND bare columns — the same
-		// qualification.bindingOf-based resolution the old bridge's `.table` used).
+		// `.source` (works uniformly for qualified AND bare columns — the same
+		// resolution the old bridge's `.table` used).
 		const usedQualifiers = new Set<string>();
 		for (const s of model.symbols ?? []) {
 			if (s.kind !== 'column' || !s.modifiers.includes('reference')) continue;
-			const relation = model.symbolBindings?.sourceOf.get(s);
+			const relation = s.source;
 			if (!relation) continue;
-			const qualifier = aliasOf.get(relation)?.name ?? relation.name;
+			const qualifier = relation.alias?.name ?? relation.name;
 			usedQualifiers.add(qualifier.toLowerCase());
 		}
 
 		// Flag aliases not referenced in any column qualifier
-		for (const [relation, alias] of aliasOf) {
+		for (const relation of aliasedRelations) {
+			const alias = relation.alias!;
 			if (usedQualifiers.has(alias.name.toLowerCase())) continue;
 			const range = new vscode.Range(alias.span.line - 1, alias.span.column, alias.span.endLine - 1, alias.span.endColumn);
 			violations.push({

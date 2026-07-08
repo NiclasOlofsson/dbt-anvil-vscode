@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mockDocument, cfg, model, sym, symbolBindings } from './helpers';
+import { mockDocument, cfg, model, sym } from './helpers';
 import { capIdentifiersRule } from '../../ninja/rules/cap-identifiers';
 import { FixAction } from '../../ninja/violation';
 import type { DocumentModel } from '../../services/parse-service';
@@ -120,12 +120,11 @@ describe(RULE, () => {
 	// ── User-written table alias violations ──────────────────────────────
 
 	it('flags a table alias that violates the policy', () => {
-		const ordersRelation = sym('table', 'orders', 0, 0);
+		const ordersRelation = sym('table', 'orders', 0, 0, { alias: { name: 'OrdAlias', line: 0, col: 12 } });
 		const alias = sym('alias', 'OrdAlias', 0, 12, { modifiers: ['declaration'] });
 		const v = check(
 			[ordersRelation, alias],
 			withIdentifierStyle('snake_case'),
-			{ symbolBindings: symbolBindings({ aliasOf: [[ordersRelation, alias]] }) },
 		);
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('OrdAlias');

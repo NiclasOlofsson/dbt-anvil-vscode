@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mockDocument, cfg, model, cte, sym, symbolBindings, sqlTok } from './helpers';
+import { mockDocument, cfg, model, cte, sym, sqlTok } from './helpers';
 import { unusedColumnsRule } from '../../ninja/rules/structure-unused-columns';
 
 const RULE = 'ninja.structure.unused-columns';
@@ -15,12 +15,11 @@ describe(RULE, () => {
 	it('no violation when all columns are referenced', () => {
 		const sql = 'with cte_a as (\n  select id, name\n)\nselect id, name from cte_a';
 		const cteRef = sym('cte', 'cte_a', 3, 22);
-		const idCol = sym('column', 'id', 3, 7);
-		const nameCol = sym('column', 'name', 3, 11);
+		const idCol = sym('column', 'id', 3, 7, { source: cteRef });
+		const nameCol = sym('column', 'name', 3, 11, { source: cteRef });
 		const m = model({
 			ctes: [cte('cte_a', 0, 2, ['id', 'name'])],
 			symbols: [cteRef, idCol, nameCol],
-			symbolBindings: symbolBindings({ sourceOf: [[idCol, cteRef], [nameCol, cteRef]] }),
 		});
 		expect(check(sql, m)).toHaveLength(0);
 	});
@@ -28,11 +27,10 @@ describe(RULE, () => {
 	it('flags unused column in CTE', () => {
 		const sql = 'with cte_a as (\n  select id, name, email\n)\nselect id from cte_a';
 		const cteRef = sym('cte', 'cte_a', 3, 15);
-		const idCol = sym('column', 'id', 3, 7);
+		const idCol = sym('column', 'id', 3, 7, { source: cteRef });
 		const m = model({
 			ctes: [cte('cte_a', 0, 2, ['id', 'name', 'email'])],
 			symbols: [cteRef, idCol],
-			symbolBindings: symbolBindings({ sourceOf: [[idCol, cteRef]] }),
 		});
 		const v = check(sql, m);
 		expect(v).toHaveLength(2);
@@ -47,11 +45,10 @@ describe(RULE, () => {
 	it('skips CTEs with SELECT * (wildcard columns)', () => {
 		const sql = 'with cte_a as (\n  select *\n)\nselect id from cte_a';
 		const cteRef = sym('cte', 'cte_a', 3, 15);
-		const idCol = sym('column', 'id', 3, 7);
+		const idCol = sym('column', 'id', 3, 7, { source: cteRef });
 		const m = model({
 			ctes: [cte('cte_a', 0, 2, ['*'])],
 			symbols: [cteRef, idCol],
-			symbolBindings: symbolBindings({ sourceOf: [[idCol, cteRef]] }),
 		});
 		expect(check(sql, m)).toHaveLength(0);
 	});
@@ -81,7 +78,7 @@ describe(RULE, () => {
 		// (with broken positions — line 0, no col, just what the bug
 		// produces today). The token-stream check should still skip.
 		const cteRef = sym('cte', 'cte_a', 5, 15);
-		const idCol = sym('column', 'id', 5, 7);
+		const idCol = sym('column', 'id', 5, 7, { source: cteRef });
 		const m = model({
 			ctes: [{
 				name: 'cte_a',
@@ -97,7 +94,6 @@ describe(RULE, () => {
 			}],
 			sqlTokens,
 			symbols: [cteRef, idCol],
-			symbolBindings: symbolBindings({ sourceOf: [[idCol, cteRef]] }),
 		});
 		expect(check(sql, m)).toHaveLength(0);
 	});
@@ -123,7 +119,7 @@ describe(RULE, () => {
 			sqlTok('R_PAREN',  55, 55, 3, 1),      // CTE body close → depth 0
 		];
 		const cteRef = sym('cte', 'cte_a', 4, 14);
-		const aCol = sym('column', 'a', 4, 7);
+		const aCol = sym('column', 'a', 4, 7, { source: cteRef });
 		const m = model({
 			ctes: [{
 				name: 'cte_a',
@@ -138,7 +134,6 @@ describe(RULE, () => {
 			}],
 			sqlTokens,
 			symbols: [cteRef, aCol],
-			symbolBindings: symbolBindings({ sourceOf: [[aCol, cteRef]] }),
 		});
 		// Only 'b' is unused.
 		const v = check(sql, m);
@@ -165,7 +160,7 @@ describe(RULE, () => {
 			sqlTok('R_PAREN', 48, 48, 3, 1),
 		];
 		const cteRef = sym('cte', 'cte_a', 4, 14);
-		const aCol = sym('column', 'a', 4, 7);
+		const aCol = sym('column', 'a', 4, 7, { source: cteRef });
 		const m = model({
 			ctes: [{
 				name: 'cte_a',
@@ -180,7 +175,6 @@ describe(RULE, () => {
 			}],
 			sqlTokens,
 			symbols: [cteRef, aCol],
-			symbolBindings: symbolBindings({ sourceOf: [[aCol, cteRef]] }),
 		});
 		// Only 'b' is unused — multiplication STAR doesn't trigger skip.
 		const v = check(sql, m);
@@ -205,7 +199,7 @@ describe(RULE, () => {
 			sqlTok('R_PAREN', 40, 40, 2, 1),      // CTE body close
 		];
 		const cteRef = sym('cte', 'cte_a', 3, 14);
-		const aCol = sym('column', 'a', 3, 7);
+		const aCol = sym('column', 'a', 3, 7, { source: cteRef });
 		const m = model({
 			ctes: [{
 				name: 'cte_a',
@@ -221,7 +215,6 @@ describe(RULE, () => {
 			}],
 			sqlTokens,
 			symbols: [cteRef, aCol],
-			symbolBindings: symbolBindings({ sourceOf: [[aCol, cteRef]] }),
 		});
 		const v = check(sql, m);
 		// 'count' and 'b' unused; 'a' used.
@@ -249,11 +242,10 @@ describe(RULE, () => {
 	it('case-insensitive column matching', () => {
 		const sql = 'with cte_a as (\n  select ID\n)\nselect id from cte_a';
 		const cteRef = sym('cte', 'cte_a', 3, 15);
-		const idCol = sym('column', 'id', 3, 7);
+		const idCol = sym('column', 'id', 3, 7, { source: cteRef });
 		const m = model({
 			ctes: [cte('cte_a', 0, 2, ['ID'])],
 			symbols: [cteRef, idCol],
-			symbolBindings: symbolBindings({ sourceOf: [[idCol, cteRef]] }),
 		});
 		expect(check(sql, m)).toHaveLength(0);
 	});
@@ -262,15 +254,12 @@ describe(RULE, () => {
 		const sql = 'with a as (\n  select id, name\n),\nb as (\n  select code\n)\nselect id from a\njoin b on b.code = a.id';
 		const refA = sym('cte', 'a', 6, 15);
 		const refB = sym('cte', 'b', 7, 5);
-		const idCol1 = sym('column', 'id', 6, 7);
-		const codeCol = sym('column', 'code', 7, 7);
-		const idCol2 = sym('column', 'id', 7, 18);
+		const idCol1 = sym('column', 'id', 6, 7, { source: refA });
+		const codeCol = sym('column', 'code', 7, 7, { source: refB });
+		const idCol2 = sym('column', 'id', 7, 18, { source: refA });
 		const m = model({
 			ctes: [cte('a', 0, 2, ['id', 'name']), cte('b', 3, 5, ['code'])],
 			symbols: [refA, refB, idCol1, codeCol, idCol2],
-			symbolBindings: symbolBindings({
-				sourceOf: [[idCol1, refA], [codeCol, refB], [idCol2, refA]],
-			}),
 		});
 		const v = check(sql, m);
 		expect(v).toHaveLength(1);
@@ -282,11 +271,10 @@ describe(RULE, () => {
 		// column Sym on line 1 is inside CTE body (line 0 to 2), should be ignored
 		const sql = 'with cte_a as (\n  select id\n)\nselect 1';
 		const cteRef = sym('cte', 'cte_a', 1, 9);
-		const idCol = sym('column', 'id', 1, 9); // inside CTE body
+		const idCol = sym('column', 'id', 1, 9, { source: cteRef }); // inside CTE body
 		const m = model({
 			ctes: [cte('cte_a', 0, 2, ['id'])],
 			symbols: [cteRef, idCol],
-			symbolBindings: symbolBindings({ sourceOf: [[idCol, cteRef]] }),
 		});
 		const v = check(sql, m);
 		expect(v).toHaveLength(1);
@@ -299,16 +287,15 @@ describe(RULE, () => {
 	// 5b8640b) replaced that heuristic with sqllens's real `Qualification.bindingOf`,
 	// which resolves qualified *and* bare columns uniformly whenever the column is
 	// genuinely in scope — so that fallback tier has no equivalent under Sym: a
-	// column's bound source (symbolBindings.sourceOf) either resolves correctly or
-	// is genuinely unresolvable (out of scope / typo'd qualifier). This test now
+	// column's bound source (`Sym.source`) either resolves correctly or is
+	// genuinely unresolvable (out of scope / typo'd qualifier). This test now
 	// covers the latter — an unresolved column must not count as a reference.
 	it('unresolved column reference does not count as a downstream use', () => {
 		const sql = 'with cte_a as (\n  select id\n)\nselect other.id from cte_a';
 		const unresolvedCol = sym('column', 'other.id', 3, 7);
 		const m = model({
 			ctes: [cte('cte_a', 0, 2, ['id'])],
-			symbols: [sym('cte', 'cte_a', 3, 20), unresolvedCol],
-			symbolBindings: symbolBindings(), // no sourceOf entry — unresolved
+			symbols: [sym('cte', 'cte_a', 3, 20), unresolvedCol], // no .source — unresolved
 		});
 		const v = check(sql, m);
 		expect(v).toHaveLength(1);
@@ -353,13 +340,13 @@ describe(RULE, () => {
 		const refFinal = sym('cte', 'cte_final', 7, 14);
 
 		// qualify() expanded cte_final's SELECT * → explicit column syms bound to cte_interim_calcs
-		const gameId1 = sym('column', 'game_id', 4, 9);
-		const homeTeam1 = sym('column', 'home_team', 4, 18);
+		const gameId1 = sym('column', 'game_id', 4, 9, { source: refInterim });
+		const homeTeam1 = sym('column', 'home_team', 4, 18, { source: refInterim });
 		// home_score is explicitly selected in cte_final
-		const homeScore = sym('column', 'home_score', 7, 7);
+		const homeScore = sym('column', 'home_score', 7, 7, { source: refFinal });
 		// qualify() expanded outer SELECT * → explicit column syms bound to cte_final
-		const gameId2 = sym('column', 'game_id', 7, 16);
-		const homeTeam2 = sym('column', 'home_team', 7, 25);
+		const gameId2 = sym('column', 'game_id', 7, 16, { source: refFinal });
+		const homeTeam2 = sym('column', 'home_team', 7, 25, { source: refFinal });
 
 		const m = model({
 			ctes: [
@@ -367,15 +354,6 @@ describe(RULE, () => {
 				cte('cte_final', 3, 6, ['game_id', 'home_team', 'home_score']),
 			],
 			symbols: [refInterim, refFinal, gameId1, homeTeam1, homeScore, gameId2, homeTeam2],
-			symbolBindings: symbolBindings({
-				sourceOf: [
-					[gameId1, refInterim],
-					[homeTeam1, refInterim],
-					[homeScore, refFinal],
-					[gameId2, refFinal],
-					[homeTeam2, refFinal],
-				],
-			}),
 		});
 
 		expect(check(sql, m)).toHaveLength(0);

@@ -5,7 +5,7 @@ import type { ManifestIndexer, ManifestIndex, IndexedModel } from '../../indexin
 import type { DocumentModel, ParseService, RefInfo } from '../../services/parse-service';
 import type { DbtPathResolver } from '../../dbt/dbt-path-resolver';
 import { createMockLogger } from '../helpers';
-import { model, sym, symbolBindings } from './helpers';
+import { model, sym } from './helpers';
 
 /**
  * `_runCrossModelChecks` (the "column contract" check, part 4B) is private and only
@@ -15,10 +15,10 @@ import { model, sym, symbolBindings } from './helpers';
  * the method, then read back what it pushed onto `_contractsCollection`.
  *
  * Covers the Sym-based port (was: model.tokens' ColumnRefToken.table): a column
- * reference resolves to its FROM/JOIN source via `symbolBindings.sourceOf` regardless
- * of whether it was written qualified or bare (mirrors the retired bridge's `.table`,
- * itself resolution-based — see extract/tokens.ts's `qualification.bindingOf` note),
- * and the qualifier text used to match the ref's alias comes from `symbolBindings.aliasOf`.
+ * reference resolves to its FROM/JOIN source via `Sym.source` regardless of whether
+ * it was written qualified or bare (mirrors the retired bridge's `.table`, itself
+ * resolution-based), and the qualifier text used to match the ref's alias comes
+ * from `Sym.alias`.
  */
 interface ScannerInternals {
 	_parsedModelCache: Map<string, DocumentModel>;
@@ -94,19 +94,15 @@ function seedCaches(internals: ScannerInternals, downstream: DocumentModel): voi
 
 describe('WorkspaceDiagnosticsScanner — cross-model column contract (Sym port)', () => {
 	it('flags a qualified column reference not present in the upstream ref\'s finalColumns', () => {
-		const ordersTable = sym('table', 'orders', 4, 10);
+		const ordersTable = sym('table', 'orders', 4, 10, { alias: { name: 'o', line: 4, col: 17 } });
 		const oAlias = sym('alias', 'o', 4, 17);
-		const orderIdCol = sym('column', 'o.order_id', 5, 2);
-		const bogusCol = sym('column', 'o.bogus_col', 6, 2);
+		const orderIdCol = sym('column', 'o.order_id', 5, 2, { source: ordersTable });
+		const bogusCol = sym('column', 'o.bogus_col', 6, 2, { source: ordersTable });
 
 		const downstream = model({
 			status: 'ok',
 			refs: [ref],
 			symbols: [ordersTable, oAlias, orderIdCol, bogusCol],
-			symbolBindings: symbolBindings({
-				aliasOf: [[ordersTable, oAlias]],
-				sourceOf: [[orderIdCol, ordersTable], [bogusCol, ordersTable]],
-			}),
 		});
 
 		const internals = buildScanner(testIndex);
@@ -120,18 +116,14 @@ describe('WorkspaceDiagnosticsScanner — cross-model column contract (Sym port)
 	});
 
 	it('does not flag a qualified column reference that IS in the upstream finalColumns', () => {
-		const ordersTable = sym('table', 'orders', 4, 10);
+		const ordersTable = sym('table', 'orders', 4, 10, { alias: { name: 'o', line: 4, col: 17 } });
 		const oAlias = sym('alias', 'o', 4, 17);
-		const orderIdCol = sym('column', 'o.order_id', 5, 2);
+		const orderIdCol = sym('column', 'o.order_id', 5, 2, { source: ordersTable });
 
 		const downstream = model({
 			status: 'ok',
 			refs: [ref],
 			symbols: [ordersTable, oAlias, orderIdCol],
-			symbolBindings: symbolBindings({
-				aliasOf: [[ordersTable, oAlias]],
-				sourceOf: [[orderIdCol, ordersTable]],
-			}),
 		});
 
 		const internals = buildScanner(testIndex);
@@ -145,18 +137,14 @@ describe('WorkspaceDiagnosticsScanner — cross-model column contract (Sym port)
 		// bound to a DIFFERENT relation ('x', not the 'o' the orders ref is aliased as) —
 		// even though 'bogus_col' is unknown upstream, it's not a column read through
 		// this ref, so the contract check must not fire.
-		const otherTable = sym('table', 'other_thing', 4, 20);
+		const otherTable = sym('table', 'other_thing', 4, 20, { alias: { name: 'x', line: 4, col: 33 } });
 		const xAlias = sym('alias', 'x', 4, 33);
-		const bogusCol = sym('column', 'x.bogus_col', 6, 2);
+		const bogusCol = sym('column', 'x.bogus_col', 6, 2, { source: otherTable });
 
 		const downstream = model({
 			status: 'ok',
 			refs: [ref],
 			symbols: [otherTable, xAlias, bogusCol],
-			symbolBindings: symbolBindings({
-				aliasOf: [[otherTable, xAlias]],
-				sourceOf: [[bogusCol, otherTable]],
-			}),
 		});
 
 		const internals = buildScanner(testIndex);
@@ -171,18 +159,14 @@ describe('WorkspaceDiagnosticsScanner — cross-model column contract (Sym port)
 		// entirely from `sourceOf`, matching the retired bridge's behavior where `.table`
 		// was upgraded via `qualification.bindingOf` for bare columns too, not read off
 		// literal source text.
-		const ordersTable = sym('table', 'orders', 4, 10);
+		const ordersTable = sym('table', 'orders', 4, 10, { alias: { name: 'o', line: 4, col: 17 } });
 		const oAlias = sym('alias', 'o', 4, 17);
-		const bareBogusCol = sym('column', 'bogus_col', 6, 2);
+		const bareBogusCol = sym('column', 'bogus_col', 6, 2, { source: ordersTable });
 
 		const downstream = model({
 			status: 'ok',
 			refs: [ref],
 			symbols: [ordersTable, oAlias, bareBogusCol],
-			symbolBindings: symbolBindings({
-				aliasOf: [[ordersTable, oAlias]],
-				sourceOf: [[bareBogusCol, ordersTable]],
-			}),
 		});
 
 		const internals = buildScanner(testIndex);

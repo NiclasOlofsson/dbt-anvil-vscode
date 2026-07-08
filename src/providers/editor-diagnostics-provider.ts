@@ -532,7 +532,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 			if (s.kind !== 'column' || !s.modifiers.includes('reference')) continue;
 			if (!qualifierRangeOf(s)) continue; // unqualified — nothing to resolve a source against
 
-			const relation = model.symbolBindings?.sourceOf.get(s);
+			const relation = s.source;
 			if (!relation) continue;
 
 			const nameRange = nameRangeOf(s);
@@ -553,7 +553,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 			const bareName = s.name.split('.').pop()!;
 			if (cols.some(c => c.toLowerCase() === bareName.toLowerCase())) continue;
 
-			const qualifierName = model.symbolBindings?.aliasOf.get(relation)?.name ?? relation.name;
+			const qualifierName = relation.alias?.name ?? relation.name;
 			const diag = new vscode.Diagnostic(
 				nameRange,
 				`Column '${bareName}' not found in '${qualifierName}' (known columns: ${cols.slice(0, 5).join(', ')}${cols.length > 5 ? ', ...' : ''})`,

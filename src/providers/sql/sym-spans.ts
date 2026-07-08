@@ -64,6 +64,20 @@ export function isRelationSym(sym: Sym): sym is Sym & { kind: 'table' | 'cte' | 
 }
 
 /**
+ * The relation-kind Sym that `aliasSym` is the alias declaration for — the reverse of
+ * `Sym.alias` (a relation only points forward, to `{name, span}`; the standalone
+ * alias-kind Sym itself carries no back-pointer to its relation). Matched by span
+ * equality, not name — two distinct alias declarations can never share an exact span
+ * the way two same-named identifiers can share a string.
+ */
+export function relationForAlias(aliasSym: Sym, symbols: readonly Sym[]): Sym | undefined {
+	return symbols.find(s =>
+		isRelationSym(s) && s.modifiers.includes('reference') && s.alias !== undefined &&
+		s.alias.span.line === aliasSym.span.line && s.alias.span.column === aliasSym.span.column,
+	);
+}
+
+/**
  * The `vscode.Range` for a CTE Sym's own name — declaration (`WITH name AS
  * (body)`) or reference (`FROM name`/`JOIN name AS alias`). Two cases need
  * narrowing down from a wider `span`:
@@ -110,7 +124,7 @@ export function relationNameRangeOf(sym: Sym): vscode.Range {
  * to, via the real scope-tree walk — not a name lookup). `undefined` only for a
  * non-cte Sym or an unresolved reference.
  *
- * This is the SAME kind of structural identity `symbolBindings.sourceOf`/`aliasOf`
+ * This is the SAME kind of structural identity `Sym.source`/`Sym.alias`
  * already use elsewhere in this extension (object identity between Syms) — CTEs are
  * the one case that also needs to bridge to `CteInfo` (this extension's separate,
  * non-Sym CTE extraction), which carries no back-reference to any `Sym`. Position is

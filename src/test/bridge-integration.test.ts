@@ -180,7 +180,7 @@ select order_id, amount from orders`);
 			s.kind === 'column' && s.modifiers.includes('reference') && s.name === 'order_id' && s.frame === MAIN_FRAME,
 		);
 		expect(finalOrderId).toBeDefined();
-		const resolved = model.symbolBindings?.sourceOf.get(finalOrderId!);
+		const resolved = finalOrderId!.source;
 		expect(resolved?.name).toBe('orders');
 	}, 30_000);
 
@@ -529,7 +529,7 @@ describe('ftl parse_document – subquery alias resolution', () => {
 			s.kind === 'column' && s.modifiers.includes('reference') && s.name === 'x.col',
 		);
 		expect(colSym).toBeDefined();
-		const resolved = model.symbolBindings?.sourceOf.get(colSym!);
+		const resolved = colSym!.source;
 		expect(resolved).toBeDefined();
 		const cols = ParseService.columnsForRef(resolved!, model);
 		expect(cols).toContain('col');
@@ -550,7 +550,7 @@ SELECT * FROM cte`);
 			s.kind === 'column' && s.modifiers.includes('reference') && s.name === 'ctc.keepone',
 		);
 		expect(colSym).toBeDefined();
-		const resolved = colSym && model.symbolBindings?.sourceOf.get(colSym);
+		const resolved = colSym?.source;
 		if (resolved) {
 			const cols = ParseService.columnsForRef(resolved, model);
 			expect(cols).toContain('keepone');

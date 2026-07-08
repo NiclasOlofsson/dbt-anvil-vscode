@@ -38,12 +38,12 @@ describe('quoted-identifier spans — extract-boundary contract', () => {
 		expect(range.end.character).toBe(q + raw.length);
 
 		// The unquoted qualifier `o` — token-width based (identity case), resolved
-		// to the `orders o` relation via symbolBindings.sourceOf (never by name).
+		// to the `orders o` relation via Sym.source (never by name).
 		const qualRange = qualifierRangeOf(col)!;
 		expect(qualRange.start.character).toBe(sql.indexOf('o.'));
 		expect(qualRange.end.character).toBe(sql.indexOf('o.') + 1);
-		const relation = model.symbolBindings?.sourceOf.get(col);
-		expect(model.symbolBindings?.aliasOf.get(relation!)?.name).toBe('o');
+		const relation = col.source;
+		expect(relation?.alias?.name).toBe('o');
 	});
 
 	it('snowflake: double-quoted column covers the whole raw token', async () => {
@@ -84,7 +84,7 @@ describe('quoted-identifier spans — extract-boundary contract', () => {
 		// unquoted table name 'tbl' keeps its declared (lowercase) spelling here.
 		const tableSym = (model.symbols ?? []).find(s => s.kind === 'table' && s.modifiers.includes('reference') && s.name === 'tbl')!;
 		expect(tableSym).toBeDefined();
-		const alias = model.symbolBindings?.aliasOf.get(tableSym);
+		const alias = tableSym.alias;
 		expect(alias).toBeDefined();
 		expect(alias!.name).toBe('My Alias'); // delimiters stripped, case preserved
 		const aliasRange = rangeOfSpan(alias!.span);

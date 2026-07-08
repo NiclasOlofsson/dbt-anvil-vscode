@@ -140,7 +140,7 @@ describe('sample project DocumentModel (sqllens — live engine)', () => {
 // SELECT * expansion.
 //
 // Star expansion resolves `SELECT * FROM cte_interim_calcs` in cte_final into
-// column reference Syms (name=home_team) whose symbolBindings.sourceOf points at the
+// column reference Syms (name=home_team) whose `.source` points at the
 // cte_interim_calcs relation Sym. Downstream this is what keeps the unused-columns
 // ninja rule from false-flagging every star-consumed CTE column.
 // ---------------------------------------------------------------------------
@@ -162,8 +162,7 @@ describe('qualify() dialect regression (sqllens)', () => {
 		const columnRefs = (model.symbols ?? []).filter(s => s.kind === 'column' && s.modifiers.includes('reference'));
 		const homeTeamRefs = columnRefs.filter(s => {
 			if (s.name.split('.').pop()!.toLowerCase() !== 'home_team') return false;
-			const source = model.symbolBindings?.sourceOf.get(s);
-			return source?.name.toLowerCase() === 'cte_interim_calcs';
+			return s.source?.name.toLowerCase() === 'cte_interim_calcs';
 		});
 		expect(homeTeamRefs.length).toBeGreaterThan(0);
 	});

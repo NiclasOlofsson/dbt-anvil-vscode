@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import type { DocumentModel } from '../../services/parse-service';
 import type { Sym } from '../../ftl/sqllens/api';
 import { type FixOp, replaceOp } from '../../ninja/fix-op';
-import { isRelationSym, nameRangeOf, qualifierRangeOf, rangeOfSpan, relationNameRangeOf, symsMatchSameCte } from './sym-spans';
+import { isRelationSym, nameRangeOf, qualifierRangeOf, rangeOfSpan, relationForAlias, relationNameRangeOf, symsMatchSameCte } from './sym-spans';
 
 /**
  * Rename every occurrence of the alias `sym` names (or that `sym`'s qualifier
@@ -18,16 +18,14 @@ import { isRelationSym, nameRangeOf, qualifierRangeOf, rangeOfSpan, relationName
 function renameAlias(sym: Sym, model: DocumentModel, newName: string): FixOp[] {
 	const ops: FixOp[] = [];
 	const relation = sym.kind === 'alias'
-		? [...(model.symbolBindings?.aliasOf ?? [])].find(([, alias]) => alias === sym)?.[0]
-		: model.symbolBindings?.sourceOf.get(sym);
-	if (!relation) return ops;
-	const aliasSym = model.symbolBindings?.aliasOf.get(relation);
-	if (!aliasSym) return ops;
+		? relationForAlias(sym, model.symbols ?? [])
+		: sym.source;
+	if (!relation?.alias) return ops;
 
-	ops.push(replaceOp(rangeOfSpan(aliasSym.span), newName));
+	ops.push(replaceOp(rangeOfSpan(relation.alias.span), newName));
 	for (const s of model.symbols ?? []) {
 		if (s.kind !== 'column' || !s.modifiers.includes('reference')) continue;
-		if (model.symbolBindings?.sourceOf.get(s) !== relation) continue;
+		if (s.source !== relation) continue;
 		const qRange = qualifierRangeOf(s);
 		if (qRange) ops.push(replaceOp(qRange, newName));
 	}
@@ -40,7 +38,7 @@ function renameAlias(sym: Sym, model: DocumentModel, newName: string): FixOp[] {
  * rewriting every affected symbol consistently.
  *
  * Column rename is **scope-aware** when the source column has a resolved
- * binding (`symbolBindings.sourceOf`): only other column symbols whose
+ * binding (`Sym.source`): only other column symbols whose
  * binding points at the SAME relation symbol are rewritten. Same-named
  * columns from different tables are left untouched. This addresses the
  * conflation bug that the legacy `_applyTokenRename` had.
@@ -92,7 +90,7 @@ export function buildInFileRenameOps(
 	const ops: FixOp[] = [];
 	const bareName = sym.name.split('.').pop()!;
 	const isDeclaration = sym.modifiers.includes('declaration');
-	const sourceResolved = isDeclaration ? undefined : model.symbolBindings?.sourceOf.get(sym);
+	const sourceResolved = isDeclaration ? undefined : sym.source;
 	for (const s of model.symbols ?? []) {
 		if (s.kind !== 'column') continue;
 		if (s.modifiers.includes('reference') && s.name.split('.').pop() === bareName) {
@@ -101,10 +99,7 @@ export function buildInFileRenameOps(
 			// to rename; renaming through one would insert `newName` next to the `*`
 			// instead of touching anything, corrupting the file.
 			if (s.span.column === s.span.endColumn && s.span.line === s.span.endLine) continue;
-			if (sourceResolved !== undefined) {
-				const tResolved = model.symbolBindings?.sourceOf.get(s);
-				if (tResolved !== undefined && tResolved !== sourceResolved) continue;
-			}
+			if (sourceResolved !== undefined && s.source !== undefined && s.source !== sourceResolved) continue;
 			ops.push(replaceOp(nameRangeOf(s), newName));
 		} else if (s.modifiers.includes('declaration') && s.name === bareName) {
 			ops.push(replaceOp(nameRangeOf(s), newName));

@@ -29,16 +29,16 @@ export const unusedJoinRule: TokenRule = {
 		// All column qualifiers
 		const usedQualifiers = new Set<string>();
 		for (const col of columnRefs) {
-			const resolved = model.symbolBindings?.sourceOf.get(col);
+			const resolved = col.source;
 			if (!resolved) continue;
-			const qualifier = model.symbolBindings?.aliasOf.get(resolved)?.name ?? resolved.name;
+			const qualifier = resolved.alias?.name ?? resolved.name;
 			usedQualifiers.add(qualifier.toLowerCase());
 		}
 
 		// Skip the first table_ref (FROM source) — only check JOINed tables
 		for (let i = 1; i < tableRefs.length; i++) {
 			const tr = tableRefs[i];
-			const aliasSym = model.symbolBindings?.aliasOf.get(tr);
+			const aliasSym = tr.alias;
 			const label = aliasSym?.name ?? tr.name;
 			if (usedQualifiers.has(label.toLowerCase())) continue;
 

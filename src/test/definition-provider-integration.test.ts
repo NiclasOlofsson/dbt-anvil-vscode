@@ -9,7 +9,7 @@
  *   - Parser emitting correct CTE / ref / symbol data for a realistic SQL fixture
  *   - ParseService.symAtPosition / partIndexAtPosition: hit-testing a cursor position
  *     against the Sym stream
- *   - symbolBindings.aliasOf / sourceOf: mapping a relation/column Sym to its alias / source
+ *   - Sym.alias / Sym.source: mapping a relation/column Sym to its alias / source
  *   - DbtDefinitionProvider.provideDefinition: end-to-end navigation from cursor → location
  *
  * What is NOT covered here (known gaps):
@@ -178,7 +178,7 @@ describe('definition-provider integration (FTL)', () => {
 			expect(range.start.character).toBe(6);
 			expect(range.end.character).toBe(40);
 
-			const alias = model.symbolBindings?.aliasOf.get(tableSym!);
+			const alias = tableSym!.alias;
 			expect(alias).toBeDefined();
 			const aliasRange = rangeOfSpan(alias!.span);
 			expect(aliasRange.start.line).toBe(12);
@@ -219,7 +219,7 @@ describe('definition-provider integration (FTL)', () => {
 			expect(nameRange.start.character).toBe(11);
 			expect(nameRange.end.character).toBe(11 + 'address_with_country'.length);
 
-			const alias = model.symbolBindings?.aliasOf.get(cteSym!);
+			const alias = cteSym!.alias;
 			expect(alias).toBeDefined();
 			const aliasRange = rangeOfSpan(alias!.span);
 			expect(aliasRange.start.line).toBe(13);
@@ -253,9 +253,9 @@ describe('definition-provider integration (FTL)', () => {
 			expect(nameRange.start.character).toBe(2);
 			expect(nameRange.end.character).toBe(2 + 'city'.length);
 
-			const resolved = model.symbolBindings?.sourceOf.get(citySym!);
+			const resolved = citySym!.source;
 			expect(resolved).toBeDefined();
-			const alias = model.symbolBindings?.aliasOf.get(resolved!);
+			const alias = resolved!.alias;
 			expect(alias?.name).toBe('addr');
 		});
 
@@ -353,7 +353,7 @@ describe('definition-provider integration (FTL)', () => {
 
 		it('resolves addr alias definition (line 13) → alias sym', () => {
 			const cteSym = (model.symbols ?? []).find(s => s.kind === 'cte' && s.modifiers.includes('reference') && s.name === 'address_with_country');
-			const alias = model.symbolBindings?.aliasOf.get(cteSym!);
+			const alias = cteSym!.alias;
 			expect(alias).toBeDefined();
 			const aliasRange = rangeOfSpan(alias!.span);
 
@@ -364,7 +364,7 @@ describe('definition-provider integration (FTL)', () => {
 
 		it('resolves wh alias definition (line 12) → alias sym', () => {
 			const tableSym = (model.symbols ?? []).find(s => s.kind === 'table' && s.modifiers.includes('reference') && s.name === 'gold__warehouse');
-			const alias = model.symbolBindings?.aliasOf.get(tableSym!);
+			const alias = tableSym!.alias;
 			expect(alias).toBeDefined();
 			const aliasRange = rangeOfSpan(alias!.span);
 
@@ -382,8 +382,8 @@ describe('definition-provider integration (FTL)', () => {
 			expect(resolved?.kind).toBe('column');
 			const partIndex = ParseService.partIndexAtPosition(resolved!, qualRange.start.line, qualRange.start.character);
 			expect(partIndex).toBeLessThan(resolved!.partSpans!.length - 1);
-			const relation = model.symbolBindings?.sourceOf.get(resolved!);
-			expect(model.symbolBindings?.aliasOf.get(relation!)?.name).toBe('wh');
+			const relation = resolved!.source;
+			expect(relation!.alias?.name).toBe('wh');
 		});
 
 		it('resolves gold_warehousekey column (wh side, ON clause) → name part', () => {
@@ -395,8 +395,8 @@ describe('definition-provider integration (FTL)', () => {
 			expect(resolved?.kind).toBe('column');
 			const partIndex = ParseService.partIndexAtPosition(resolved!, nameRange.start.line, nameRange.start.character);
 			expect(partIndex).toBe(resolved!.partSpans!.length - 1);
-			const relation = model.symbolBindings?.sourceOf.get(resolved!);
-			expect(model.symbolBindings?.aliasOf.get(relation!)?.name).toBe('wh');
+			const relation = resolved!.source;
+			expect(relation!.alias?.name).toBe('wh');
 		});
 
 		it('resolves addr qualifier in addr.gold_warehousekey (ON clause) → qualifier part', () => {
@@ -408,8 +408,8 @@ describe('definition-provider integration (FTL)', () => {
 			expect(resolved?.kind).toBe('column');
 			const partIndex = ParseService.partIndexAtPosition(resolved!, qualRange.start.line, qualRange.start.character);
 			expect(partIndex).toBeLessThan(resolved!.partSpans!.length - 1);
-			const relation = model.symbolBindings?.sourceOf.get(resolved!);
-			expect(model.symbolBindings?.aliasOf.get(relation!)?.name).toBe('addr');
+			const relation = resolved!.source;
+			expect(relation!.alias?.name).toBe('addr');
 		});
 
 		it('resolves gold_warehousekey column (addr side, ON clause) → name part', () => {
@@ -421,8 +421,8 @@ describe('definition-provider integration (FTL)', () => {
 			expect(resolved?.kind).toBe('column');
 			const partIndex = ParseService.partIndexAtPosition(resolved!, nameRange.start.line, nameRange.start.character);
 			expect(partIndex).toBe(resolved!.partSpans!.length - 1);
-			const relation = model.symbolBindings?.sourceOf.get(resolved!);
-			expect(model.symbolBindings?.aliasOf.get(relation!)?.name).toBe('addr');
+			const relation = resolved!.source;
+			expect(relation!.alias?.name).toBe('addr');
 		});
 
 		it('resolves addr qualifier in addr.street (SELECT list) → qualifier part', () => {
@@ -434,8 +434,8 @@ describe('definition-provider integration (FTL)', () => {
 			expect(resolved?.kind).toBe('column');
 			const partIndex = ParseService.partIndexAtPosition(resolved!, qualRange.start.line, qualRange.start.character);
 			expect(partIndex).toBeLessThan(resolved!.partSpans!.length - 1);
-			const relation = model.symbolBindings?.sourceOf.get(resolved!);
-			expect(model.symbolBindings?.aliasOf.get(relation!)?.name).toBe('addr');
+			const relation = resolved!.source;
+			expect(relation!.alias?.name).toBe('addr');
 		});
 
 		it('resolves city (bare column, line 8) → column resolved to table addr', () => {
@@ -446,8 +446,8 @@ describe('definition-provider integration (FTL)', () => {
 
 			const resolved = ParseService.symAtPosition(model, nameRange.start.line, nameRange.start.character + 1);
 			expect(resolved?.kind).toBe('column');
-			const relation = model.symbolBindings?.sourceOf.get(resolved!);
-			expect(model.symbolBindings?.aliasOf.get(relation!)?.name).toBe('addr');
+			const relation = resolved!.source;
+			expect(relation!.alias?.name).toBe('addr');
 		});
 
 		it('resolves warehouse_address_street column declaration → declaration modifier', () => {
@@ -573,7 +573,7 @@ describe('definition-provider integration (FTL)', () => {
 			const qualRange = qualifierRangeOf(whQualCol)!;
 
 			const tableSym = (model.symbols ?? []).find(s => s.kind === 'table' && s.modifiers.includes('reference') && s.name === 'gold__warehouse')!;
-			const whAlias = model.symbolBindings?.aliasOf.get(tableSym)!;
+			const whAlias = tableSym.alias!;
 
 			// click on the qualifier part (the 'wh' before the dot)
 			const result = await makeProvider().provideDefinition(doc, new vscode.Position(qualRange.start.line, qualRange.start.character + 1), cancelToken);
@@ -591,7 +591,7 @@ describe('definition-provider integration (FTL)', () => {
 			const qualRange = qualifierRangeOf(addrQualCol)!;
 
 			const cteSym = (model.symbols ?? []).find(s => s.kind === 'cte' && s.modifiers.includes('reference') && s.name === 'address_with_country')!;
-			const addrAlias = model.symbolBindings?.aliasOf.get(cteSym)!;
+			const addrAlias = cteSym.alias!;
 
 			const result = await makeProvider().provideDefinition(doc, new vscode.Position(qualRange.start.line, qualRange.start.character + 1), cancelToken);
 
@@ -604,7 +604,7 @@ describe('definition-provider integration (FTL)', () => {
 		it('clicking on addr alias definition → undefined (no ctrl+click on definition site)', async () => {
 			const doc = makeDoc();
 			const cteSym = (model.symbols ?? []).find(s => s.kind === 'cte' && s.modifiers.includes('reference') && s.name === 'address_with_country')!;
-			const addrAlias = model.symbolBindings?.aliasOf.get(cteSym)!;
+			const addrAlias = cteSym.alias!;
 			expect(addrAlias).toBeDefined();
 			const aliasRange = rangeOfSpan(addrAlias.span);
 
@@ -616,7 +616,7 @@ describe('definition-provider integration (FTL)', () => {
 		it('clicking on wh alias definition (FROM driver) → undefined (no ctrl+click on definition site)', async () => {
 			const doc = makeDoc();
 			const tableSym = (model.symbols ?? []).find(s => s.kind === 'table' && s.modifiers.includes('reference') && s.name === 'gold__warehouse')!;
-			const whAlias = model.symbolBindings?.aliasOf.get(tableSym)!;
+			const whAlias = tableSym.alias!;
 			expect(whAlias).toBeDefined();
 			const aliasRange = rangeOfSpan(whAlias.span);
 

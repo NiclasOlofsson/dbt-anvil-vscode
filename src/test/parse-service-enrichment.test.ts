@@ -201,15 +201,11 @@ describe('ParseService — enrichment tier', () => {
 			const ordersRef: Sym = {
 				kind: 'cte', modifiers: ['reference'], name: 'orders',
 				span: { line: 2, column: 0, endLine: 2, endColumn: 6 }, frame: MAIN_FRAME,
-			};
-			const aliasSym: Sym = {
-				kind: 'alias', modifiers: [], name: 'o',
-				span: { line: 2, column: 7, endLine: 2, endColumn: 8 }, frame: MAIN_FRAME,
+				alias: { name: 'o', span: { line: 2, column: 7, endLine: 2, endColumn: 8 } },
 			};
 			const model = makeModel({
 				ctes: [{ name: 'orders', columns: [{ name: 'id', line: 0 }], line: 0, endLine: 5 }],
 				symbols: [ordersRef],
-				symbolBindings: { aliasOf: new Map([[ordersRef, aliasSym]]), sourceOf: new Map() },
 			});
 			expect(ParseService.resolveAliases(model)['o']).toEqual(['id']);
 		});

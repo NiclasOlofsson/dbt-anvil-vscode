@@ -21,7 +21,7 @@ export const selfAliasRule: TokenRule = {
 			if (relSym.kind !== 'table' && relSym.kind !== 'cte') continue;
 			if (!relSym.modifiers.includes('reference')) continue;
 
-			const aliasSym = model.symbolBindings?.aliasOf.get(relSym);
+			const aliasSym = relSym.alias;
 			if (!aliasSym) continue;
 			if (relSym.name.toLowerCase() !== aliasSym.name.toLowerCase()) continue;
 

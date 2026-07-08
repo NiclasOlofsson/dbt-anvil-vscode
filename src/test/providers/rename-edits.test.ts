@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as vscode from 'vscode';
 import { buildInFileRenameEdits } from '../../providers/sql/rename-edits';
-import { model, sym, colSym, symbolBindings } from '../ninja/helpers';
+import { model, sym, colSym } from '../ninja/helpers';
 
 const URI = vscode.Uri.file('/test.sql');
 
@@ -28,11 +28,10 @@ describe('buildInFileRenameEdits', () => {
 		// SELECT o.customer_id, u.customer_id ...
 		const ordersRelation = sym('table', 'orders', 1, 5);
 		const usersRelation = sym('table', 'users', 1, 15);
-		const orderCol = colSym(0, [{ name: 'o', col: 7 }, { name: 'customer_id', col: 9 }]);
-		const userCol = colSym(0, [{ name: 'u', col: 23 }, { name: 'customer_id', col: 25 }]);
+		const orderCol = colSym(0, [{ name: 'o', col: 7 }, { name: 'customer_id', col: 9 }], { source: ordersRelation });
+		const userCol = colSym(0, [{ name: 'u', col: 23 }, { name: 'customer_id', col: 25 }], { source: usersRelation });
 		const m = model({
 			symbols: [ordersRelation, usersRelation, orderCol, userCol],
-			symbolBindings: symbolBindings({ sourceOf: [[orderCol, ordersRelation], [userCol, usersRelation]] }),
 		});
 
 		const edit = buildInFileRenameEdits(orderCol, undefined, m, URI, 'customer_pk');
@@ -48,11 +47,10 @@ describe('buildInFileRenameEdits', () => {
 		// SELECT o.customer_id, customer_id ...
 		// (when both qualified and unqualified refs share the same resolution)
 		const ordersRelation = sym('table', 'orders', 1, 5);
-		const qualifiedRef = colSym(0, [{ name: 'o', col: 7 }, { name: 'customer_id', col: 9 }]);
-		const unqualifiedRef = colSym(0, [{ name: 'customer_id', col: 25 }]);
+		const qualifiedRef = colSym(0, [{ name: 'o', col: 7 }, { name: 'customer_id', col: 9 }], { source: ordersRelation });
+		const unqualifiedRef = colSym(0, [{ name: 'customer_id', col: 25 }], { source: ordersRelation });
 		const m = model({
 			symbols: [ordersRelation, qualifiedRef, unqualifiedRef],
-			symbolBindings: symbolBindings({ sourceOf: [[qualifiedRef, ordersRelation], [unqualifiedRef, ordersRelation]] }),
 		});
 
 		const edit = buildInFileRenameEdits(qualifiedRef, undefined, m, URI, 'customer_pk');
@@ -66,11 +64,10 @@ describe('buildInFileRenameEdits', () => {
 	it('does NOT rename a column with the same name but a different resolved source', () => {
 		const ordersRelation = sym('table', 'orders', 1, 5);
 		const usersRelation = sym('table', 'users', 1, 15);
-		const orderCol = colSym(0, [{ name: 'o', col: 7 }, { name: 'email', col: 9 }]);
-		const userCol = colSym(0, [{ name: 'u', col: 23 }, { name: 'email', col: 25 }]);
+		const orderCol = colSym(0, [{ name: 'o', col: 7 }, { name: 'email', col: 9 }], { source: ordersRelation });
+		const userCol = colSym(0, [{ name: 'u', col: 23 }, { name: 'email', col: 25 }], { source: usersRelation });
 		const m = model({
 			symbols: [ordersRelation, usersRelation, orderCol, userCol],
-			symbolBindings: symbolBindings({ sourceOf: [[orderCol, ordersRelation], [userCol, usersRelation]] }),
 		});
 
 		const edit = buildInFileRenameEdits(orderCol, undefined, m, URI, 'email_address');
@@ -85,7 +82,7 @@ describe('buildInFileRenameEdits', () => {
 		// Pure name fallback when the source column itself can't be resolved.
 		const col1 = colSym(0, [{ name: 'customer_id', col: 7 }]);
 		const col2 = colSym(1, [{ name: 'customer_id', col: 7 }]);
-		const m = model({ symbols: [col1, col2], symbolBindings: symbolBindings() });
+		const m = model({ symbols: [col1, col2] });
 
 		const edit = buildInFileRenameEdits(col1, undefined, m, URI, 'customer_pk');
 
@@ -101,7 +98,7 @@ describe('buildInFileRenameEdits', () => {
 		// the whole clause (which would delete "some_expr as ").
 		const colDecl = sym('column', 'customer_id', 0, 5, { modifiers: ['declaration', 'output'], endCol: 23 });
 		const colRef = colSym(1, [{ name: 'customer_id', col: 7 }]);
-		const m = model({ symbols: [colDecl, colRef], symbolBindings: symbolBindings() });
+		const m = model({ symbols: [colDecl, colRef] });
 
 		const edit = buildInFileRenameEdits(colDecl, undefined, m, URI, 'customer_pk');
 
@@ -117,7 +114,7 @@ describe('buildInFileRenameEdits', () => {
 		// right next to the `*` instead of touching anything, corrupting the file.
 		const colDecl = sym('column', 'old_name', 0, 5, { modifiers: ['declaration', 'output'], endCol: 13 });
 		const starSynthetic = sym('column', 'base.old_name', 5, 9, { endCol: 9 }); // zero-width, at the `*`
-		const m = model({ symbols: [colDecl, starSynthetic], symbolBindings: symbolBindings() });
+		const m = model({ symbols: [colDecl, starSynthetic] });
 
 		const edit = buildInFileRenameEdits(colDecl, undefined, m, URI, 'new_name');
 
@@ -130,16 +127,12 @@ describe('buildInFileRenameEdits', () => {
 	it('renames a table alias and all qualifier spans on column refs', () => {
 		// FROM orders o
 		// SELECT o.customer_id, o.email ...
-		const ordersRelation = sym('table', 'orders', 1, 5);
+		const ordersRelation = sym('table', 'orders', 1, 5, { alias: { name: 'o', line: 1, col: 12 } });
 		const ordersAlias = sym('alias', 'o', 1, 12, { modifiers: ['declaration'] });
-		const col1 = colSym(0, [{ name: 'o', col: 7 }, { name: 'customer_id', col: 9 }]);
-		const col2 = colSym(0, [{ name: 'o', col: 23 }, { name: 'email', col: 25 }]);
+		const col1 = colSym(0, [{ name: 'o', col: 7 }, { name: 'customer_id', col: 9 }], { source: ordersRelation });
+		const col2 = colSym(0, [{ name: 'o', col: 23 }, { name: 'email', col: 25 }], { source: ordersRelation });
 		const m = model({
 			symbols: [ordersRelation, ordersAlias, col1, col2],
-			symbolBindings: symbolBindings({
-				aliasOf: [[ordersRelation, ordersAlias]],
-				sourceOf: [[col1, ordersRelation], [col2, ordersRelation]],
-			}),
 		});
 
 		const edit = buildInFileRenameEdits(ordersAlias, undefined, m, URI, 'ord');
@@ -159,7 +152,7 @@ describe('buildInFileRenameEdits', () => {
 		const cteDecl = sym('cte', 'my_cte', 0, 5, { modifiers: ['declaration'], endCol: 30 });
 		const cteUse1 = sym('cte', 'my_cte', 1, 15, { definitionOf: cteDecl });
 		const cteUse2 = sym('cte', 'my_cte', 1, 27, { definitionOf: cteDecl });
-		const m = model({ symbols: [cteDecl, cteUse1, cteUse2], symbolBindings: symbolBindings() });
+		const m = model({ symbols: [cteDecl, cteUse1, cteUse2] });
 
 		const edit = buildInFileRenameEdits(cteDecl, undefined, m, URI, 'renamed_cte');
 
@@ -174,7 +167,7 @@ describe('buildInFileRenameEdits', () => {
 	it('returns empty edit when a qualifier part has no resolved source binding', () => {
 		// A column qualifier we can't correlate to any relation — no-op.
 		const orphan = colSym(0, [{ name: 'x', col: 0 }, { name: 'y', col: 2 }]);
-		const m = model({ symbols: [orphan], symbolBindings: symbolBindings() });
+		const m = model({ symbols: [orphan] });
 
 		const edit = buildInFileRenameEdits(orphan, 0, m, URI, 'new');
 

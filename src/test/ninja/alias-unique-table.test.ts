@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { model, sym, symbolBindings, run, violationsFor } from './helpers';
+import { model, sym, run, violationsFor } from './helpers';
 import type { NinjaViolation } from '../../ninja/violation';
 import type { Sym } from '../../ftl/sqllens/api';
 
@@ -9,17 +9,15 @@ const RULE = 'ninja.aliasing.unique-table';
 interface Ref { relSym: Sym; aliasSym?: Sym; }
 
 function tableSym(name: string, line: number, col: number, alias?: string, frame?: string): Ref {
-	const relSym = sym('table', name, line, col, { frame });
-	const aliasSym = alias ? sym('alias', alias, line, col + name.length + 1) : undefined;
+	const aliasCol = col + name.length + 1;
+	const relSym = sym('table', name, line, col, { frame, ...(alias ? { alias: { name: alias, line, col: aliasCol } } : {}) });
+	const aliasSym = alias ? sym('alias', alias, line, aliasCol) : undefined;
 	return { relSym, aliasSym };
 }
 
 function check(refs: Ref[]): NinjaViolation[] {
-	const symbols = refs.map(r => r.relSym);
-	const aliasOf: [Sym, Sym][] = refs
-		.filter((r): r is Required<Ref> => r.aliasSym !== undefined)
-		.map(r => [r.relSym, r.aliasSym]);
-	const m = model({ symbols, symbolBindings: symbolBindings({ aliasOf }) });
+	const symbols = refs.flatMap(r => r.aliasSym ? [r.relSym, r.aliasSym] : [r.relSym]);
+	const m = model({ symbols });
 	const result = run('select 1', {}, m);
 	return violationsFor(result, RULE);
 }

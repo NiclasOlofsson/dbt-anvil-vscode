@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mockDocument, cfg, model, sym, symbolBindings, applyEditsToText } from './helpers';
+import { mockDocument, cfg, model, sym, applyEditsToText } from './helpers';
 import { tableAsRule } from '../../ninja/rules/alias-table-as';
 import { FixAction } from '../../ninja/violation';
 
@@ -9,10 +9,10 @@ describe(RULE, () => {
 	it('flags alias without AS keyword', () => {
 		// "select * from orders o" — orders at col 14, alias 'o' at col 21
 		const sql = 'select * from orders o';
-		const ref = sym('table', 'orders', 0, 14);
+		const ref = sym('table', 'orders', 0, 14, { alias: { name: 'o', line: 0, col: 21 } });
 		const alias = sym('alias', 'o', 0, 21, { modifiers: ['declaration'] });
 		const doc = mockDocument(sql);
-		const m = model({ symbols: [ref, alias], symbolBindings: symbolBindings({ aliasOf: [[ref, alias]] }) });
+		const m = model({ symbols: [ref, alias] });
 		const v = tableAsRule.check({ model: m, document: doc, config: cfg() });
 		expect(v).toHaveLength(1);
 		expect(v[0].rule).toBe(RULE);
@@ -22,30 +22,30 @@ describe(RULE, () => {
 	it('no violation when alias uses AS keyword', () => {
 		// "select * from orders AS o" — orders at col 14, alias 'o' at col 24
 		const sql = 'select * from orders AS o';
-		const ref = sym('table', 'orders', 0, 14);
+		const ref = sym('table', 'orders', 0, 14, { alias: { name: 'o', line: 0, col: 24 } });
 		const alias = sym('alias', 'o', 0, 24, { modifiers: ['declaration'] });
 		const doc = mockDocument(sql);
-		const m = model({ symbols: [ref, alias], symbolBindings: symbolBindings({ aliasOf: [[ref, alias]] }) });
+		const m = model({ symbols: [ref, alias] });
 		const v = tableAsRule.check({ model: m, document: doc, config: cfg() });
 		expect(v).toHaveLength(0);
 	});
 
 	it('no violation when alias uses lowercase as keyword', () => {
 		const sql = 'select * from orders as o';
-		const ref = sym('table', 'orders', 0, 14);
+		const ref = sym('table', 'orders', 0, 14, { alias: { name: 'o', line: 0, col: 24 } });
 		const alias = sym('alias', 'o', 0, 24, { modifiers: ['declaration'] });
 		const doc = mockDocument(sql);
-		const m = model({ symbols: [ref, alias], symbolBindings: symbolBindings({ aliasOf: [[ref, alias]] }) });
+		const m = model({ symbols: [ref, alias] });
 		const v = tableAsRule.check({ model: m, document: doc, config: cfg() });
 		expect(v).toHaveLength(0);
 	});
 
 	it('autofix inserts AS before alias', () => {
 		const sql = 'select * from orders o';
-		const ref = sym('table', 'orders', 0, 14);
+		const ref = sym('table', 'orders', 0, 14, { alias: { name: 'o', line: 0, col: 21 } });
 		const alias = sym('alias', 'o', 0, 21, { modifiers: ['declaration'] });
 		const doc = mockDocument(sql);
-		const m = model({ symbols: [ref, alias], symbolBindings: symbolBindings({ aliasOf: [[ref, alias]] }) });
+		const m = model({ symbols: [ref, alias] });
 		const v = tableAsRule.check({ model: m, document: doc, config: cfg() });
 		expect(v[0].action?.type).toBe(FixAction.TYPE);
 		const fixed = applyEditsToText(sql, (v[0].action as FixAction).ops);
@@ -73,10 +73,10 @@ describe(RULE, () => {
 
 	it('disabled when explicitAs is false', () => {
 		const sql = 'select * from orders o';
-		const ref = sym('table', 'orders', 0, 14);
+		const ref = sym('table', 'orders', 0, 14, { alias: { name: 'o', line: 0, col: 21 } });
 		const alias = sym('alias', 'o', 0, 21, { modifiers: ['declaration'] });
 		const doc = mockDocument(sql);
-		const m = model({ symbols: [ref, alias], symbolBindings: symbolBindings({ aliasOf: [[ref, alias]] }) });
+		const m = model({ symbols: [ref, alias] });
 		const c = cfg({ convention: { ...cfg().convention, explicitAs: false } });
 		expect(tableAsRule.check({ model: m, document: doc, config: c })).toHaveLength(0);
 	});
@@ -95,19 +95,19 @@ describe(RULE, () => {
 		// between the (empty) name-to-alias gap.
 		const sql = 'select * from (select 1) as po';
 		// 'po' starts at col 28 (0-based).
-		const ref = sym('subquery', 'po', 0, 28);
+		const ref = sym('subquery', 'po', 0, 28, { alias: { name: 'po', line: 0, col: 28 } });
 		const alias = sym('alias', 'po', 0, 28, { modifiers: ['declaration'] });
 		const doc = mockDocument(sql);
-		const m = model({ symbols: [ref, alias], symbolBindings: symbolBindings({ aliasOf: [[ref, alias]] }) });
+		const m = model({ symbols: [ref, alias] });
 		expect(tableAsRule.check({ model: m, document: doc, config: cfg() })).toHaveLength(0);
 	});
 
 	it('flags subquery alias missing AS: ") po"', () => {
 		const sql = 'select * from (select 1) po';
-		const ref = sym('subquery', 'po', 0, 25);
+		const ref = sym('subquery', 'po', 0, 25, { alias: { name: 'po', line: 0, col: 25 } });
 		const alias = sym('alias', 'po', 0, 25, { modifiers: ['declaration'] });
 		const doc = mockDocument(sql);
-		const m = model({ symbols: [ref, alias], symbolBindings: symbolBindings({ aliasOf: [[ref, alias]] }) });
+		const m = model({ symbols: [ref, alias] });
 		expect(tableAsRule.check({ model: m, document: doc, config: cfg() })).toHaveLength(1);
 	});
 
@@ -116,10 +116,10 @@ describe(RULE, () => {
 		// regex anchors must reject that. Source: `views_as o`.
 		const sql = 'select * from views_as o';
 		// views_as at col 14, alias 'o' at col 23.
-		const ref = sym('table', 'views_as', 0, 14);
+		const ref = sym('table', 'views_as', 0, 14, { alias: { name: 'o', line: 0, col: 23 } });
 		const alias = sym('alias', 'o', 0, 23, { modifiers: ['declaration'] });
 		const doc = mockDocument(sql);
-		const m = model({ symbols: [ref, alias], symbolBindings: symbolBindings({ aliasOf: [[ref, alias]] }) });
+		const m = model({ symbols: [ref, alias] });
 		const v = tableAsRule.check({ model: m, document: doc, config: cfg() });
 		expect(v).toHaveLength(1);
 		expect(v[0].message).toContain('\'o\'');

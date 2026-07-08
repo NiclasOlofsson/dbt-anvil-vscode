@@ -6,7 +6,7 @@ import type { DocumentModel } from '../../services/parse-service';
 import type { Sym } from '../../ftl/sqllens/api';
 import { isLinePositionInComment, computeCommentRanges, isOffsetInComment } from '../common/comment-utils';
 import { SQL_KEYWORDS } from './sql-keywords';
-import { isRelationSym, qualifierRangeOf, rangeOfSpan, relationNameRangeOf, symMatchesCte } from './sym-spans';
+import { isRelationSym, qualifierRangeOf, rangeOfSpan, relationForAlias, relationNameRangeOf, symMatchesCte } from './sym-spans';
 
 /**
  * Find All References for ref('model'), source('src', 'table'), and column
@@ -64,7 +64,7 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 						// Qualifier `o` in `o.col` — find the relation it resolves to (identity-based:
 						// two nested scopes can share an alias name, so matching by name risks finding
 						// the wrong one). An unresolved qualifier yields no references.
-						const relation = model.symbolBindings?.sourceOf.get(sym);
+						const relation = sym.source;
 						if (relation) return this._findAliasReferences(document, relation, model);
 						return [];
 					}
@@ -84,7 +84,7 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 				}
 
 				if (sym.kind === 'alias') {
-					const relation = [...(model.symbolBindings?.aliasOf ?? [])].find(([, a]) => a === sym)?.[0];
+					const relation = relationForAlias(sym, model.symbols ?? []);
 					if (relation) return this._findAliasReferences(document, relation, model);
 				}
 
@@ -246,7 +246,7 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 
 	/**
 	 * `relation` is matched by identity (object === ), not by alias name — two nested
-	 * scopes can declare the same alias text, and only symbolBindings tells them apart.
+	 * scopes can declare the same alias text, and only object identity tells them apart.
 	 */
 	private _findAliasReferences(
 		document: vscode.TextDocument,
@@ -255,7 +255,7 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 	): vscode.Location[] {
 		const locations: vscode.Location[] = [];
 
-		const alias = model.symbolBindings?.aliasOf.get(relation);
+		const alias = relation.alias;
 		if (!alias) return locations;
 
 		// Alias definition site
@@ -264,7 +264,7 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 		// Every column reference bound to this SAME relation (identity, not name)
 		for (const s of model.symbols ?? []) {
 			if (s.kind !== 'column' || !s.modifiers.includes('reference')) continue;
-			if (model.symbolBindings?.sourceOf.get(s) !== relation) continue;
+			if (s.source !== relation) continue;
 			const qRange = qualifierRangeOf(s);
 			if (qRange) locations.push(new vscode.Location(document.uri, qRange));
 		}

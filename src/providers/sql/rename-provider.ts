@@ -228,8 +228,8 @@ export class DbtRenameProvider implements vscode.RenameProvider {
 			if (isQualifierPart) {
 				const qRange = qualifierRangeOf(sym);
 				if (!qRange) return null;
-				const resolved = model.symbolBindings?.sourceOf.get(sym);
-				const placeholder = (resolved && model.symbolBindings?.aliasOf.get(resolved)?.name)
+				const resolved = sym.source;
+				const placeholder = resolved?.alias?.name
 					?? sym.name.split('.').slice(0, -1).join('.');
 				return { range: qRange, placeholder };
 			}

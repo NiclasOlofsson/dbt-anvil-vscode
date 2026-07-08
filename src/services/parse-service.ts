@@ -10,7 +10,6 @@ import type { AstIndex } from '../ninja/reflow/ast-index';
 import { compositeAstIndex } from '../ftl/sqllens/ast-index';
 import type { NinjaSqlToken } from '../ftl/ninja-sql-tokens';
 import type { Span, Sym } from '../ftl/sqllens/api';
-import type { SymbolBindings } from '../ftl/sqllens/extract/symbols';
 
 export interface ColumnInfo {
 	name: string;
@@ -200,16 +199,12 @@ export interface DocumentModel {
 	/** Rich positional data for the final SELECT (replaces finalColumns over time). */
 	finalSelect?: FinalSelectInfo;
 	/**
-	 * sqllens's native symbol model. Absent only on synthetic / test fixture models
-	 * that hand-build a DocumentModel directly; real parser output always sets it
-	 * alongside `symbolBindings`.
+	 * sqllens's native symbol model — carries a relation's alias (`Sym.alias`) and a
+	 * column reference's bound source (`Sym.source`) directly. Absent only on
+	 * synthetic / test fixture models that hand-build a DocumentModel directly; real
+	 * parser output always sets it.
 	 */
 	symbols?: Sym[];
-	/**
-	 * The relation-alias and column-source correlations `Sym` itself doesn't carry
-	 * (see extract/symbols.ts) — computed once per parse, alongside `symbols`.
-	 */
-	symbolBindings?: SymbolBindings;
 	timing: { parseMs: number; totalMs: number };
 	/**
 	 * Parse status. 'syntax_error' means the model's structural data (ctes, symbols, etc.) is
@@ -347,19 +342,15 @@ export function mergeModels(models: DocumentModel[]): DocumentModel {
 		}
 	}
 
-	// symbols: dedup by kind:frame:span.
-	// symbolBindings: union — each variant's Sym objects are distinct instances, so
-	// there is no key collision merging their Map entries directly.
+	// symbols: dedup by kind:frame:span. A merged Sym is the same object reference
+	// carrying its own `.source`/`.alias`, so there is nothing separate to merge.
 	const symKeys = new Set<string>();
 	const symbols: Sym[] = [];
-	const symbolBindings: SymbolBindings = { aliasOf: new Map(), sourceOf: new Map() };
 	for (const m of models) {
 		for (const sym of m.symbols ?? []) {
 			const k = `${sym.kind}:${sym.frame}:${sym.span.line}:${sym.span.column}`;
 			if (!symKeys.has(k)) { symKeys.add(k); symbols.push(sym); }
 		}
-		for (const [k, v] of m.symbolBindings?.aliasOf ?? []) symbolBindings.aliasOf.set(k, v);
-		for (const [k, v] of m.symbolBindings?.sourceOf ?? []) symbolBindings.sourceOf.set(k, v);
 	}
 
 	// finalColumns: dedup by name
@@ -420,7 +411,6 @@ export function mergeModels(models: DocumentModel[]): DocumentModel {
 
 	return { ctes: [...cteMap.values()], refs, sources, macroCalls, finalColumns, finalSelect, timing, parseWarnings, aliases,
 		symbols,
-		symbolBindings,
 		jinjaTokens,
 		ninjaSqlTokens,
 		astIndex,
@@ -525,7 +515,7 @@ export class ParseService {
 	 */
 	static cteForRef(ref: Sym, model: DocumentModel): CteInfo | undefined {
 		const nameLc = ref.name.toLowerCase();
-		const alias = ref.kind === 'subquery' ? model.symbolBindings?.aliasOf.get(ref) : undefined;
+		const alias = ref.kind === 'subquery' ? ref.alias : undefined;
 		const line = (alias ?? ref).span.line - 1;
 		const candidates = model.ctes.filter(c =>
 			c.name.toLowerCase() === nameLc || c.alias?.toLowerCase() === nameLc,
@@ -643,10 +633,8 @@ export class ParseService {
 		// Resolve FROM/JOIN aliases that point to CTEs.
 		// e.g. `LEFT JOIN address_with_country AS addr` — `addr` maps to that CTE's columns.
 		for (const sym of model.symbols ?? []) {
-			if (!isRelationSym(sym)) continue;
-			const aliasSym = model.symbolBindings?.aliasOf.get(sym);
-			if (!aliasSym) continue;
-			const aliasLc = aliasSym.name.toLowerCase();
+			if (!isRelationSym(sym) || !sym.alias) continue;
+			const aliasLc = sym.alias.name.toLowerCase();
 			if (aliasLc in cteAliases) continue;
 			const targetCols = cteAliases[sym.name.toLowerCase()];
 			if (targetCols) cteAliases[aliasLc] = targetCols;

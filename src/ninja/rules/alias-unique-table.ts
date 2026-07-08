@@ -19,13 +19,13 @@ export const uniqueTableRule: TokenRule = {
 		// walk already assigns each FROM/JOIN reference the CTE/subquery/main-query
 		// scope it lives in, handling nesting (subqueries, set-op branches, pipe
 		// stages) correctly, so there is no need to re-derive scope from CTE line ranges.
-		const seenByFrame = new Map<string, Map<string, Sym>>();
+		const seenByFrame = new Map<string, Map<string, { span: Sym['span'] }>>();
 
 		for (const relSym of model.symbols ?? []) {
 			if (relSym.kind !== 'table' && relSym.kind !== 'cte') continue;
 			if (!relSym.modifiers.includes('reference')) continue;
 
-			const aliasSym = model.symbolBindings?.aliasOf.get(relSym);
+			const aliasSym = relSym.alias;
 			const label = aliasSym?.name ?? relSym.name;
 			const key = label.toLowerCase();
 

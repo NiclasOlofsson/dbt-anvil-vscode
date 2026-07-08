@@ -31,7 +31,7 @@ export const requireTableAliasRule: TokenRule = {
 		const violations: NinjaViolation[] = [];
 
 		for (const ref of fromRefs) {
-			if (model.symbolBindings!.aliasOf.get(ref)) continue;
+			if (ref.alias) continue;
 
 			const range = new vscode.Range(ref.span.line - 1, ref.span.column, ref.span.endLine - 1, ref.span.endColumn);
 			violations.push({

@@ -135,14 +135,14 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 		// old 'column_def' — the alias/computed declaration site itself has no target.
 		if (sym.modifiers.includes('declaration')) return undefined;
 
-		const resolved = model.symbolBindings?.sourceOf.get(sym);
+		const resolved = sym.source;
 		const isQualifierPart = sym.partSpans !== undefined
 			&& partIndex !== undefined
 			&& partIndex < sym.partSpans.length - 1;
 
 		if (isQualifierPart) {
 			// old 'table_qualifier'
-			const alias = resolved && model.symbolBindings?.aliasOf.get(resolved);
+			const alias = resolved?.alias;
 			if (alias) {
 				return new vscode.Location(document.uri, new vscode.Position(alias.span.line - 1, alias.span.column));
 			}
