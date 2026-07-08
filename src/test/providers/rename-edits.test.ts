@@ -110,6 +110,21 @@ describe('buildInFileRenameEdits', () => {
 		expect(edits.find(e => e.line === 0)).toEqual({ line: 0, col: 12, endCol: 23, newText: 'customer_pk' });
 	});
 
+	it('does not touch a synthetic star-expansion column sym (zero-width span) when renaming', () => {
+		// extractSymbols() emits a zero-width synthetic column sym for each column a
+		// `SELECT *` expands to, so structure-unused-columns.ts can see it as referenced.
+		// It carries no real source text — renaming through it used to insert `newName`
+		// right next to the `*` instead of touching anything, corrupting the file.
+		const colDecl = sym('column', 'old_name', 0, 5, { modifiers: ['declaration', 'output'], endCol: 13 });
+		const starSynthetic = sym('column', 'base.old_name', 5, 9, { endCol: 9 }); // zero-width, at the `*`
+		const m = model({ symbols: [colDecl, starSynthetic], symbolBindings: symbolBindings() });
+
+		const edit = buildInFileRenameEdits(colDecl, undefined, m, URI, 'new_name');
+
+		const edits = flatEdits(edit);
+		expect(edits).toEqual([{ line: 0, col: 5, endCol: 13, newText: 'new_name' }]);
+	});
+
 	// ── Table alias rename ─────────────────────────────────────────────
 
 	it('renames a table alias and all qualifier spans on column refs', () => {
