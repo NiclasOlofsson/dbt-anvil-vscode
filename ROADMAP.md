@@ -126,7 +126,7 @@ After that we investigate other client/server protocol. Everyone seem to have in
 Last step, make it a service that can be deployed. As an example, to azure function or similar.
 
 
-## Lineage bands
+## Lineage bands _(done)_
 
 Color the background of lineage graph so that level-1, -2 etc have different vertical bands so we can see what models belong to which depth. Will help identify stuff...
 
