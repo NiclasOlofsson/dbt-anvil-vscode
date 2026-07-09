@@ -6,7 +6,7 @@ If you work with TypeScript or Python in VS Code, you take column completions, g
 
 No configuration. Open a dbt project and everything works.
 
-![dbt Anvil demo](https://raw.githubusercontent.com/NiclasOlofsson/dbt-anvil/main/demo.webp)
+![dbt Anvil demo](docs/demo.webp)
 
 ## Column Intelligence
 
