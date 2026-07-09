@@ -1,0 +1,8 @@
+# Files kept in docs/ for GitHub's own raw/blob viewer (which doesn't run
+# Liquid) but not meant to be Jekyll pages. They contain literal `{{ }}` /
+# `{% %}` Jinja syntax as prose examples, which Jekyll's Liquid pass
+# misparses as its own template tags and fails to build.
+exclude:
+  - DEBUGGING.md
+  - ninja-linter.md
+  - STARTUP-BEHAVIOR.md
