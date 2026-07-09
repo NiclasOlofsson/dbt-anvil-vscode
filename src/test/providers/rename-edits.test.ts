@@ -92,11 +92,9 @@ describe('buildInFileRenameEdits', () => {
 	});
 
 	it('includes a declaration site in the rename when matching by name', () => {
-		// A declaration Sym's own span covers the WHOLE projection ("some_expr as
-		// customer_id"), not just the alias — matching what deriveSymbols actually
-		// emits. The rename must narrow to just the alias (col 12..23), not replace
-		// the whole clause (which would delete "some_expr as ").
-		const colDecl = sym('column', 'customer_id', 0, 5, { modifiers: ['declaration', 'output'], endCol: 23 });
+		// A declaration Sym's own span is just the alias itself (sqllens commit
+		// 04f9727 anchors it at Projection.aliasCst) — no narrowing needed.
+		const colDecl = sym('column', 'customer_id', 0, 12, { modifiers: ['declaration', 'output'] });
 		const colRef = colSym(1, [{ name: 'customer_id', col: 7 }]);
 		const m = model({ symbols: [colDecl, colRef] });
 
@@ -104,7 +102,7 @@ describe('buildInFileRenameEdits', () => {
 
 		const edits = flatEdits(edit);
 		expect(edits.length).toBe(2);
-		expect(edits.find(e => e.line === 0)).toEqual({ line: 0, col: 12, endCol: 23, newText: 'customer_pk' });
+		expect(edits.find(e => e.line === 0)).toEqual({ line: 0, col: 12, endCol: 12 + 'customer_id'.length, newText: 'customer_pk' });
 	});
 
 	it('does not touch a synthetic star-expansion column sym (zero-width span) when renaming', () => {
@@ -146,10 +144,9 @@ describe('buildInFileRenameEdits', () => {
 
 	it('renames a CTE name and all reference syms for it', () => {
 		// WITH my_cte AS (...) SELECT * FROM my_cte JOIN my_cte AS x ON ...
-		// The declaration Sym's own span covers the WHOLE "my_cte AS (...)" clause
-		// (the name comes first) — the rename must narrow to just the name (col
-		// 5..11), not replace the whole clause (which would delete the CTE body).
-		const cteDecl = sym('cte', 'my_cte', 0, 5, { modifiers: ['declaration'], endCol: 30 });
+		// The declaration Sym's own span is just the name itself (sqllens commit
+		// 04f9727 anchors it at CteDef.nameCst) — no narrowing needed.
+		const cteDecl = sym('cte', 'my_cte', 0, 5, { modifiers: ['declaration'] });
 		const cteUse1 = sym('cte', 'my_cte', 1, 15, { definitionOf: cteDecl });
 		const cteUse2 = sym('cte', 'my_cte', 1, 27, { definitionOf: cteDecl });
 		const m = model({ symbols: [cteDecl, cteUse1, cteUse2] });

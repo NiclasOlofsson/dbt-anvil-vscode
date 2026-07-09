@@ -1,6 +1,7 @@
 import { buildLineStarts } from '../ftl/line-index';
-import { deriveSymbols, parseTemplated, tokenize, toSqllensDialect, MAIN_FRAME } from '../ftl/sqllens/api';
-import type { Sym, Dialect, TagNode } from '../ftl/sqllens/api';
+import { deriveSymbols, parseTemplated, resolveScopes, tokenize, toSqllensDialect, MAIN_FRAME } from '../ftl/sqllens/api';
+import type { Sym, Dialect, ScopeTree, TagNode } from '../ftl/sqllens/api';
+import { allScopes, asCst } from '../ftl/sqllens/extract/spans';
 import { jinjaTokensFromStream } from '../ftl/sqllens/extract/jinja-stream';
 import type { JinjaToken } from '../ftl/jinja-tokenizer';
 
@@ -581,12 +582,39 @@ interface FrameRange {
 	endLine: number;
 }
 
+/** Each CTE's whole-clause (`name AS (body)`) 0-based line bounds, read straight off
+ *  the CST rather than a declaration Sym's own `span` — sqllens (commit 04f9727) now
+ *  anchors a declaration Sym's span at just the name identifier, not the whole clause,
+ *  so it can no longer bound a CTE body that carries no other Sym-bearing content of
+ *  its own (e.g. a bare unaliased literal projection: `with x as (select 1) ...`
+ *  produces zero column Syms inside `x`'s frame). `buildFrameRanges` needs the WHOLE
+ *  clause for that case. Keyed by the declaration's own start position (`line:column`,
+ *  the same 1-based-line/0-based-column pair `Sym.span` uses) rather than by name —
+ *  a CTE's `Sym.name` is `displayName`-derived and isn't guaranteed to match
+ *  `CteDef.name`'s raw spelling, and a name-string key risks the same identity bug
+ *  this codebase has hit before with CTEs (see sym-spans.ts's `cteAnchorOf`). The
+ *  declaration's own span always starts at the same position as the whole clause
+ *  (the name is the first thing in it), so this always finds an entry — verified
+ *  empirically. */
+function cteWholeClauseLineBounds(scopes: ScopeTree): Map<string, { start: number; end: number }> {
+	const bounds = new Map<string, { start: number; end: number }>();
+	for (const scope of allScopes(scopes)) {
+		for (const [, cteRef] of scope.ctes) {
+			const c = asCst(cteRef.def.cst);
+			if (!c.start || !c.stop) continue;
+			bounds.set(`${c.start.line}:${c.start.column}`, { start: c.start.line - 1, end: c.stop.line - 1 });
+		}
+	}
+	return bounds;
+}
+
 /** Per-frame line ranges derived from Sym.frame. A symbol's own frame bounds that
- *  frame; a CTE *declaration* additionally bounds the frame it names (so the
- *  opening `name AS (` line and any body-less boundary lines resolve correctly).
+ *  frame; a CTE *declaration* additionally bounds the frame it names, using the
+ *  whole clause's bounds (`cteBodyBounds`) rather than the declaration Sym's own
+ *  (now name-only) span — see `cteWholeClauseLineBounds`'s doc comment.
  *  Used only to attribute token-derived roles (keywords/star/literals) to a
  *  frame — ident/fn symbols carry Sym.frame directly. */
-function buildFrameRanges(symbols: Sym[]): FrameRange[] {
+function buildFrameRanges(symbols: Sym[], cteBodyBounds: Map<string, { start: number; end: number }>): FrameRange[] {
 	const map = new Map<string, { start: number; end: number }>();
 	const fold = (name: string, l0: number, l1: number): void => {
 		if (name === MAIN_FRAME) return; // _main_ is the fallback; never a bounded range
@@ -602,7 +630,10 @@ function buildFrameRanges(symbols: Sym[]): FrameRange[] {
 		const l0 = s.span.line - 1;
 		const l1 = s.span.endLine - 1;
 		fold(s.frame, l0, l1);
-		if (s.kind === 'cte' && s.modifiers.includes('declaration')) fold(s.name, l0, l1);
+		if (s.kind === 'cte' && s.modifiers.includes('declaration')) {
+			const wholeClause = cteBodyBounds.get(`${s.span.line}:${s.span.column}`);
+			fold(s.name, wholeClause ? wholeClause.start : l0, wholeClause ? wholeClause.end : l1);
+		}
 	}
 	return [...map].map(([name, r]) => ({ name, startLine: r.start, endLine: r.end }));
 }
@@ -627,14 +658,16 @@ function resolveFrame(line: number, ranges: FrameRange[]): string {
 function analyzeTemplated(
 	source: string,
 	dialect: Dialect,
-): { symbols: Sym[]; blanked: string; tags: TagNode[]; jinjaTokens: JinjaToken[] } | undefined {
+): { symbols: Sym[]; blanked: string; tags: TagNode[]; jinjaTokens: JinjaToken[]; cteBodyBounds: Map<string, { start: number; end: number }> } | undefined {
 	const templated = parseTemplated(source, dialect);
 	try {
+		const scopes = resolveScopes(templated.sql.ast, dialect);
 		return {
-			symbols: deriveSymbols(templated.sql.ast, undefined, { dialect }),
+			symbols: deriveSymbols(scopes, undefined, { dialect }),
 			blanked: templated.placeholder,
 			tags: templated.tags,
 			jinjaTokens: jinjaTokensFromStream(templated.tokens, templated.tags, source),
+			cteBodyBounds: cteWholeClauseLineBounds(scopes),
 		};
 	} catch {
 		// Preserve the old failure contract: the caller's undefined arm falls
@@ -662,14 +695,14 @@ export function emitDebugSymbols(
 	const sqllensDialect = toSqllensDialect(dialect);
 	const analyzed = analyzeTemplated(source, sqllensDialect);
 	if (!analyzed) return undefined;
-	const { symbols: syms, blanked, tags, jinjaTokens } = analyzed;
+	const { symbols: syms, blanked, tags, jinjaTokens, cteBodyBounds } = analyzed;
 
 	const lineStarts = buildLineStarts(source);
 	// Marker-exclusion regions straight off the tag-AST (the old private
 	// findJinjaSpans re-scan is token-path-only now).
 	const jinjaSpans: JinjaSpan[] = tags.map(t => ({ start: t.tagSpan.start, end: t.tagSpan.end }));
 	const inJinja = (offset: number): boolean => jinjaSpans.some(s => offset >= s.start && offset < s.end);
-	const frameRanges = buildFrameRanges(syms);
+	const frameRanges = buildFrameRanges(syms, cteBodyBounds);
 
 	// Candidate markers carry char offsets so we can drop any that overlap a kept
 	// one — injectMarkers assumes disjoint, single-line spans (it splices markers

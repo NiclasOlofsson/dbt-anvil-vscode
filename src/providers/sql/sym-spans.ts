@@ -23,25 +23,16 @@ export function rangeOfSpan(span: SpanLike): vscode.Range {
  * anchored at, regardless of whether the reference was written qualified
  * (`o.order_id`) or bare (`order_id`).
  *
- * A DECLARATION Sym (`AS alias` in a SELECT list) never carries `partSpans` —
- * sqllens's `deriveSymbols` builds it from the whole `Projection`, whose own
- * `span` covers the entire `expr AS alias` clause, not just the alias
- * identifier (the IR's `Projection.aliasCst` has the narrow span, but
- * `deriveSymbols` doesn't surface it on the `Sym`). Since `AS alias` is always
- * the last thing in a projection, the alias's own range is derived from the
- * span's end plus the (already quote-normalized) name's length — exact for an
- * unquoted alias; a quoted alias's source width includes delimiter chars
- * `name` doesn't, the same class of gap already tracked for other quoted
- * identifiers pending sqllens's delimiter-contract work. Filed on the
- * sqllens-anvil channel for a proper `aliasCst`-based fix upstream.
+ * A DECLARATION Sym (`AS alias` in a SELECT list) never carries `partSpans`, but
+ * no longer needs narrowing either: sqllens's `deriveSymbols` (sqllens commit
+ * 04f9727) now anchors a declaration's own `span` at `Projection.aliasCst` (the
+ * alias identifier itself, delimiters included for a quoted one), not the whole
+ * `expr AS alias` clause — verified empirically (quoted and unquoted). `sym.span`
+ * is passed through unchanged for that case now, same as any other Sym.
  */
 export function nameRangeOf(sym: Sym): vscode.Range {
 	if (sym.partSpans?.length) {
 		return rangeOfSpan(sym.partSpans[sym.partSpans.length - 1]);
-	}
-	if (sym.kind === 'column' && sym.modifiers.includes('declaration')) {
-		const { endLine, endColumn } = sym.span;
-		return new vscode.Range(endLine - 1, endColumn - sym.name.length, endLine - 1, endColumn);
 	}
 	return rangeOfSpan(sym.span);
 }
@@ -79,29 +70,29 @@ export function relationForAlias(aliasSym: Sym, symbols: readonly Sym[]): Sym | 
 
 /**
  * The `vscode.Range` for a CTE Sym's own name — declaration (`WITH name AS
- * (body)`) or reference (`FROM name`/`JOIN name AS alias`). Two cases need
- * narrowing down from a wider `span`:
- *   - A DECLARATION's span always covers the whole clause (`CteDef.nameCst`
- *     has the narrow span in the IR; `deriveSymbols` doesn't surface it).
- *   - An ALIASED reference's span extends through the trailing alias
- *     (verified empirically — `FROM orders o` gives the relation Sym a span
- *     covering "orders o", not just "orders"; `Sym.alias` carries the
- *     alias's own sub-span separately, and its presence is what signals
- *     narrowing is needed here).
- * An UNALIASED reference's span is already name-only — narrowing it via
- * `name.length` would be actively wrong for a QUOTED name (`Sym.name` has
- * its delimiters stripped, so its length undershoots the raw token's width,
- * cutting off the closing delimiter); passing it through unchanged is both
- * simpler and correct.
+ * (body)`) or reference (`FROM name`/`JOIN name AS alias`).
  *
- * A CTE name is always a literal SQL identifier (never a jinja tag, unlike a
- * `ref()`/`source()`-backed table Sym), so it's always the FIRST thing at the
- * span's start in both narrowing cases — derived from the span's start plus
- * the name's length. That arithmetic is exact for an UNQUOTED name; a QUOTED
- * declaration or aliased reference still undershoots the same way an
- * unaliased one would have (delimiter chars `name` doesn't carry) — the same
- * class of gap `nameRangeOf` has for a quoted column alias, tracked on the
- * sqllens-anvil channel, not solved here.
+ * A DECLARATION's `span` no longer needs narrowing: sqllens's `deriveSymbols`
+ * (sqllens commit 04f9727) now anchors it at `CteDef.nameCst` directly (the name
+ * identifier, delimiters included for a quoted one) — verified empirically,
+ * quoted and unquoted. Passed through unchanged, same as any other Sym.
+ *
+ * An ALIASED reference's span still needs narrowing, and remains unfixed
+ * upstream: it extends through the trailing alias (verified empirically —
+ * `FROM orders o` gives the relation Sym a span covering "orders o", not just
+ * "orders"; `Sym.alias` carries the alias's own sub-span separately, and its
+ * presence is what signals narrowing is needed here). A CTE name is always a
+ * literal SQL identifier (never a jinja tag, unlike a `ref()`/`source()`-backed
+ * table Sym), so it's always the FIRST thing at the span's start — derived from
+ * the span's start plus the name's length. That arithmetic is exact for an
+ * UNQUOTED name; a QUOTED aliased reference still undershoots (delimiter chars
+ * `name` doesn't carry) — the same class of gap `nameRangeOf` used to have for
+ * a quoted column alias (now fixed upstream), not yet fixed for this case,
+ * tracked on the sqllens-anvil channel.
+ *
+ * An UNALIASED reference's span is already name-only — narrowing it via
+ * `name.length` would be actively wrong for a QUOTED name for the same reason;
+ * passing it through unchanged is both simpler and correct.
  *
  * A `table`/`subquery`/`lateral` reference Sym is NOT narrowed at all — its
  * `name` may not match its source text width (a `ref()`/`source()` tag
@@ -111,7 +102,7 @@ export function relationForAlias(aliasSym: Sym, symbols: readonly Sym[]): Sym | 
  * cross-file manifest path, gated well before reaching here).
  */
 export function relationNameRangeOf(sym: Sym): vscode.Range {
-	if (sym.kind === 'cte' && (sym.modifiers.includes('declaration') || sym.alias !== undefined)) {
+	if (sym.kind === 'cte' && !sym.modifiers.includes('declaration') && sym.alias !== undefined) {
 		const { line, column } = sym.span;
 		return new vscode.Range(line - 1, column, line - 1, column + sym.name.length);
 	}

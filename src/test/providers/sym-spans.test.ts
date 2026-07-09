@@ -17,15 +17,15 @@ describe('nameRangeOf', () => {
 		expect(range.end.character).toBe(7 + 'customer_id'.length);
 	});
 
-	it('narrows a column DECLARATION span to just the alias, not the whole projection', () => {
-		// deriveSymbols emits a declaration's span over the WHOLE "expr AS alias"
-		// clause (no partSpans) — e.g. "some_expr as customer_id" spanning col
-		// 5..27. The alias comes LAST, so its own range must anchor on the span's
-		// END minus its own length, never on the span's start.
-		const decl = sym('column', 'customer_id', 0, 5, { modifiers: ['declaration', 'output'], endCol: 27 });
+	it('passes a column DECLARATION span through unchanged — already just the alias', () => {
+		// sqllens (commit 04f9727) anchors a declaration's own span at the alias
+		// identifier itself (Projection.aliasCst), not the whole "expr AS alias"
+		// clause — verified empirically, quoted and unquoted. No narrowing needed
+		// or attempted here anymore; a declaration Sym is just another Sym.
+		const decl = sym('column', 'customer_id', 0, 16, { modifiers: ['declaration', 'output'] });
 		const range = nameRangeOf(decl);
-		expect(range.start.character).toBe(27 - 'customer_id'.length);
-		expect(range.end.character).toBe(27);
+		expect(range.start.character).toBe(16);
+		expect(range.end.character).toBe(16 + 'customer_id'.length);
 	});
 });
 
@@ -45,12 +45,12 @@ describe('qualifierRangeOf', () => {
 });
 
 describe('relationNameRangeOf', () => {
-	it('narrows a CTE DECLARATION span to just the name, not the whole clause', () => {
-		// deriveSymbols emits a CTE declaration's span over the WHOLE "name AS
-		// (body)" clause — e.g. "my_cte as (select 1)" spanning col 5..26. The
-		// name comes FIRST, so its own range must anchor on the span's START,
-		// never on its end.
-		const decl = sym('cte', 'my_cte', 0, 5, { modifiers: ['declaration'], endCol: 26 });
+	it('passes a CTE DECLARATION span through unchanged — already just the name', () => {
+		// sqllens (commit 04f9727) anchors a CTE declaration's own span at
+		// CteDef.nameCst (the name identifier itself), not the whole "name AS
+		// (body)" clause — verified empirically, quoted and unquoted. No
+		// narrowing needed or attempted here anymore.
+		const decl = sym('cte', 'my_cte', 0, 5, { modifiers: ['declaration'] });
 		const range = relationNameRangeOf(decl);
 		expect(range.start.character).toBe(5);
 		expect(range.end.character).toBe(5 + 'my_cte'.length);

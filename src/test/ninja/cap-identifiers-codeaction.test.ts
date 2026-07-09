@@ -24,10 +24,9 @@ describe('cap-identifiers code-action integration', () => {
 		//                     ^^^^^^^ position 12..19
 		const sql = 'select 1 as orderId from t';
 		const doc = mockDocument(sql);
-		// Span covers the WHOLE "1 as orderId" projection (col 7..19), matching what
-		// deriveSymbols actually emits — narrowed to just "orderId" (col 12..19) by
-		// nameRangeOf.
-		const aliasSym = sym('column', 'orderId', 0, 7, { modifiers: ['declaration', 'output'], endCol: 19 });
+		// The declaration Sym's own span is just "orderId" (col 12..19) — sqllens
+		// commit 04f9727 anchors it at Projection.aliasCst, no narrowing needed.
+		const aliasSym = sym('column', 'orderId', 0, 12, { modifiers: ['declaration', 'output'] });
 		const m = model({ symbols: [aliasSym] });
 
 		const violations = capIdentifiersRule.check({ model: m, document: doc, config: withStyle('snake_case') });
@@ -44,14 +43,12 @@ describe('cap-identifiers code-action integration', () => {
 	it('renames a CTE definition and every reference atomically', () => {
 		// Source: with MyCte as (select 1) select * from MyCte
 		// Sym positions (line 0):
-		//   MyCte def:  span covers the WHOLE "MyCte as (select 1)" clause (col
-		//               5..24, matching what deriveSymbols actually emits — the
-		//               name comes first, not last), narrowed to col 5..10 by
-		//               relationNameRangeOf for both detection and the fix.
+		//   MyCte def:  span is just "MyCte" (col 5..10) — sqllens commit 04f9727
+		//               anchors it at CteDef.nameCst, no narrowing needed.
 		//   MyCte use:  col 39..44
 		const sql = 'with MyCte as (select 1) select * from MyCte';
 		const doc = mockDocument(sql);
-		const cteDef = sym('cte', 'MyCte', 0, 5, { modifiers: ['declaration'], endCol: 24 });
+		const cteDef = sym('cte', 'MyCte', 0, 5, { modifiers: ['declaration'] });
 		const cteUse = sym('cte', 'MyCte', 0, 39, { definitionOf: cteDef });
 		const m = model({ symbols: [cteDef, cteUse] });
 
