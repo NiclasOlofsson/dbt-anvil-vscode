@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dbt Anvil — demo preview</title>
+<style>
+  :root { --fps: 24; --bg:#0e1116; --panel:#161b22; --line:#2a3038; --fg:#e6edf3; --mut:#8b949e; --accent:#3fb950; }
+  * { box-sizing: border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+    font:14px/1.4 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  .wrap { max-width:1280px; margin:0 auto; padding:20px 16px 40px; }
+  h1 { font-size:15px; font-weight:600; margin:0 0 12px; color:var(--mut); letter-spacing:.02em; }
+  h1 b { color:var(--fg); }
+  .stage { background:#000; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  video { display:block; width:100%; height:auto; background:#000; }
+  .bar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:12px;
+    background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  button, select { background:#21262d; color:var(--fg); border:1px solid var(--line);
+    border-radius:7px; padding:7px 11px; font:inherit; cursor:pointer; }
+  button:hover, select:hover { border-color:#3d444d; background:#262c34; }
+  button:active { transform:translateY(1px); }
+  button.play { min-width:84px; font-weight:600; }
+  .sep { width:1px; align-self:stretch; background:var(--line); margin:0 4px; }
+  .spacer { flex:1; }
+  .rate { display:flex; align-items:center; gap:6px; color:var(--mut); }
+  .rate b { color:var(--fg); font-variant-numeric:tabular-nums; min-width:38px; text-align:right; }
+  .clock { color:var(--mut); font-variant-numeric:tabular-nums; }
+  .clock b { color:var(--fg); }
+  label.loop { display:flex; align-items:center; gap:6px; color:var(--mut); cursor:pointer; user-select:none; }
+  .keys { margin-top:14px; color:var(--mut); font-size:12.5px; }
+  .keys kbd { background:#21262d; border:1px solid var(--line); border-bottom-width:2px;
+    border-radius:5px; padding:1px 6px; font:inherit; font-size:11.5px; color:var(--fg); }
+  .keys span { display:inline-block; margin-right:16px; white-space:nowrap; }
+  .err { display:none; padding:18px; color:#f0883e; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><b>dbt Anvil</b> — demo preview</h1>
+  <div class="stage">
+    <video id="v" src="demo.mp4" preload="auto" playsinline></video>
+    <div class="err" id="err">Couldn't load <code>demo.mp4</code> — render it with <code>npm run demo:render:mp4</code>, then reload.</div>
+  </div>
+
+  <div class="bar">
+    <button id="restart" title="Restart (Home)">⏮ Restart</button>
+    <div class="sep"></div>
+    <button id="back" title="Frame back (←  /  ,)">◀ frame</button>
+    <button id="play" class="play" title="Play / Pause (Space)">▶ Play</button>
+    <button id="fwd" title="Frame forward (→  /  .)">frame ▶</button>
+    <div class="sep"></div>
+    <div class="rate">speed <b id="rateLbl">1×</b>
+      <select id="rate" title="Playback speed">
+        <option value="0.25">0.25×</option>
+        <option value="0.5">0.5×</option>
+        <option value="1" selected>1×</option>
+        <option value="1.5">1.5×</option>
+        <option value="2">2×</option>
+      </select>
+    </div>
+    <div class="spacer"></div>
+    <label class="loop"><input type="checkbox" id="loop" checked> loop</label>
+    <div class="sep"></div>
+    <div class="clock"><b id="t">0:00.000</b> / <span id="d">0:00.000</span> · frame <b id="fr">0</b></div>
+  </div>
+
+  <div class="keys">
+    <span><kbd>Space</kbd> play/pause</span>
+    <span><kbd>←</kbd><kbd>→</kbd> step 1 frame</span>
+    <span><kbd>Shift</kbd>+<kbd>←</kbd><kbd>→</kbd> jump 1s</span>
+    <span><kbd>Home</kbd> restart</span>
+    <span><kbd>↑</kbd><kbd>↓</kbd> speed</span>
+    <span><kbd>F</kbd> fullscreen</span>
+  </div>
+</div>
+
+<script>
+  const FPS = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--fps')) || 24;
+  const v = document.getElementById('v');
+  const $ = id => document.getElementById(id);
+  const rates = [0.25, 0.5, 1, 1.5, 2];
+
+  const fmt = s => {
+    if (!isFinite(s)) return '0:00.000';
+    const m = Math.floor(s / 60), sec = Math.floor(s % 60), ms = Math.round((s % 1) * 1000);
+    return `${m}:${String(sec).padStart(2,'0')}.${String(ms).padStart(3,'0')}`;
+  };
+  const render = () => {
+    $('t').textContent = fmt(v.currentTime);
+    $('fr').textContent = Math.round(v.currentTime * FPS);
+  };
+  const setRate = r => { v.playbackRate = r; $('rate').value = String(r); $('rateLbl').textContent = r + '×'; };
+  const step = frames => { v.pause(); v.currentTime = Math.min(v.duration || 1e9, Math.max(0, v.currentTime + frames / FPS)); };
+
+  v.addEventListener('loadedmetadata', () => { $('d').textContent = fmt(v.duration); render(); });
+  v.addEventListener('timeupdate', render);
+  v.addEventListener('seeked', render);
+  v.addEventListener('play', () => $('play').textContent = '❚❚ Pause');
+  v.addEventListener('pause', () => $('play').textContent = '▶ Play');
+  v.addEventListener('error', () => { $('err').style.display = 'block'; });
+
+  $('play').onclick = () => v.paused ? v.play() : v.pause();
+  $('restart').onclick = () => { v.currentTime = 0; v.play(); };
+  $('back').onclick = () => step(-1);
+  $('fwd').onclick = () => step(1);
+  $('rate').onchange = e => setRate(parseFloat(e.target.value));
+  $('loop').onchange = e => v.loop = e.target.checked;
+  v.loop = $('loop').checked;
+
+  addEventListener('keydown', e => {
+    if (e.target.tagName === 'SELECT') return;
+    const big = e.shiftKey ? FPS : 1; // Shift = ~1 second
+    switch (e.key) {
+      case ' ': e.preventDefault(); v.paused ? v.play() : v.pause(); break;
+      case 'ArrowLeft': e.preventDefault(); step(-big); break;
+      case 'ArrowRight': e.preventDefault(); step(big); break;
+      case ',': e.preventDefault(); step(-1); break;
+      case '.': e.preventDefault(); step(1); break;
+      case 'Home': e.preventDefault(); v.currentTime = 0; break;
+      case 'ArrowUp': e.preventDefault(); setRate(rates[Math.min(rates.length-1, rates.indexOf(v.playbackRate)+1)] ?? v.playbackRate); break;
+      case 'ArrowDown': e.preventDefault(); setRate(rates[Math.max(0, rates.indexOf(v.playbackRate)-1)] ?? v.playbackRate); break;
+      case 'f': case 'F': (document.fullscreenElement ? document.exitFullscreen() : v.requestFullscreen()); break;
+    }
+  });
+</script>
+</body>
+</html>
