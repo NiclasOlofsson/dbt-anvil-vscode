@@ -342,13 +342,17 @@ export function mergeModels(models: DocumentModel[]): DocumentModel {
 		}
 	}
 
-	// symbols: dedup by kind:frame:span. A merged Sym is the same object reference
-	// carrying its own `.source`/`.alias`, so there is nothing separate to merge.
+	// symbols: dedup by kind:frame:span:name. A merged Sym is the same object
+	// reference carrying its own `.source`/`.alias`, so there is nothing separate
+	// to merge. `name` is part of the key (not just kind:frame:span) because a
+	// resolved `SELECT *`'s expanded per-column Syms (sqllens commit 9c87f55) all
+	// share one zero-width span at the star's position — omitting name would
+	// collapse N distinct columns down to one.
 	const symKeys = new Set<string>();
 	const symbols: Sym[] = [];
 	for (const m of models) {
 		for (const sym of m.symbols ?? []) {
-			const k = `${sym.kind}:${sym.frame}:${sym.span.line}:${sym.span.column}`;
+			const k = `${sym.kind}:${sym.frame}:${sym.span.line}:${sym.span.column}:${sym.name}`;
 			if (!symKeys.has(k)) { symKeys.add(k); symbols.push(sym); }
 		}
 	}

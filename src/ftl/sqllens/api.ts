@@ -75,6 +75,7 @@ export type {
 	SetOpExpr,
 	Source,
 	Span,
+	StarExpansion,
 	StatementCell,
 	StatementCellSpan,
 	TableResolver,

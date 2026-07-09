@@ -94,10 +94,13 @@ export function buildInFileRenameOps(
 	for (const s of model.symbols ?? []) {
 		if (s.kind !== 'column') continue;
 		if (s.modifiers.includes('reference') && s.name.split('.').pop() === bareName) {
-			// Skip the zero-width synthetic Syms extractSymbols() emits for a `SELECT *`'s
-			// expanded columns (see its own doc comment) — they have no real source text
-			// to rename; renaming through one would insert `newName` next to the `*`
-			// instead of touching anything, corrupting the file.
+			// Skip a `SELECT *`'s expanded per-column Syms (sqllens commit 9c87f55,
+			// modifiers:['reference','star']) — they have no real source text to
+			// rename; renaming through one would insert `newName` next to the `*`
+			// instead of touching anything, corrupting the file. Zero-width span is
+			// a defensive second check (sqllens guarantees it for these Syms too),
+			// not the primary signal — the modifier is the intended one.
+			if (s.modifiers.includes('star')) continue;
 			if (s.span.column === s.span.endColumn && s.span.line === s.span.endLine) continue;
 			if (sourceResolved !== undefined && s.source !== undefined && s.source !== sourceResolved) continue;
 			ops.push(replaceOp(nameRangeOf(s), newName));

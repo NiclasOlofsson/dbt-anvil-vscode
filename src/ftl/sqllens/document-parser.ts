@@ -328,7 +328,7 @@ export class SqllensDocumentParser implements DocumentParser {
 			: undefined;
 
 		const ctes = extractCtes(result, expander);
-		const symbols = extractSymbols(result.scopes, dialect, schemaObj, expander);
+		const symbols = extractSymbols(result.scopes, dialect, schemaObj, qualification?.expandStarOf);
 		const finalColumns = extractFinalColumns(result, expander);
 		const finalSelect = extractFinalSelect(result, expander);
 		// refs + sources + macroCalls come from the R2 tag-AST (span-accurate; covers
