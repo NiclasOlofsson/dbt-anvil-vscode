@@ -1,0 +1,38 @@
+{
+  "_note": "Composition recipes — playlists over features.json. A composition owns no footage; it selects features (by explicit `order`, or by `include`/`groupBy` rules) and applies per-video `settings`. One capture run feeds every composition. `settings.captions`: 'full' uses feature.render.caption, 'keyword' uses feature.title. `settings.zoom`: 'tight' keeps per-feature focus zooms; 'off' ignores them. Only `filmed: true` features can appear (render errors on a selected feature with no footage).",
+
+  "compositions": [
+    {
+      "id": "full",
+      "title": "Full walkthrough",
+      "purpose": "walkthrough",
+      "description": "Every feature, grouped by ring, caret → file → project → data. The complete tour.",
+      "output": "docs/demo.webp",
+      "select": { "include": "filmed", "order": "byRing", "groupBy": "ring" },
+      "settings": {
+        "captions": "full",
+        "sectionCards": true,
+        "zoom": "tight",
+        "width": 1280,
+        "watermark": true
+      }
+    },
+    {
+      "id": "teaser",
+      "title": "Flash teaser",
+      "purpose": "teaser",
+      "description": "Six punchy differentiators, fast 1.4s cuts, tight zooms, keyword captions, logo/CTA end card. For distribution, flyers, socials.",
+      "output": "docs/teaser.webp",
+      "select": { "order": ["hover-column", "lineage", "rename-symbol", "call-hierarchy", "query-results", "profiler"] },
+      "settings": {
+        "captions": "keyword",
+        "sectionCards": false,
+        "zoom": "tight",
+        "perClipMs": 1400,
+        "endCard": "logo-cta",
+        "width": 1080,
+        "watermark": false
+      }
+    }
+  ]
+}

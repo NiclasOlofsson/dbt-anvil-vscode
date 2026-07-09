@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dbt Anvil — Demo Feature Map</title>
+<style>
+  :root {
+    --bg:#0e1116; --panel:#161b22; --panel2:#1b222c; --line:#2a3038; --fg:#e6edf3; --mut:#8b949e;
+    --accent:#3fb950; --film:#e3b341; --caret:#58a6ff; --file:#3fb9a8; --project:#bc8cff; --data:#e3b341;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f6f8fa; --panel:#fff; --panel2:#f0f3f6; --line:#d0d7de; --fg:#1f2328; --mut:#59636e; }
+  }
+  :root[data-theme="dark"]  { --bg:#0e1116; --panel:#161b22; --panel2:#1b222c; --line:#2a3038; --fg:#e6edf3; --mut:#8b949e; }
+  :root[data-theme="light"] { --bg:#f6f8fa; --panel:#fff; --panel2:#f0f3f6; --line:#d0d7de; --fg:#1f2328; --mut:#59636e; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+    font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  .wrap { max-width:1180px; margin:0 auto; padding:28px 18px 64px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  h1 b { color:var(--accent); }
+  .sub { color:var(--mut); margin:0 0 16px; max-width:70ch; }
+  .axes { display:flex; gap:18px; flex-wrap:wrap; margin:0 0 18px; font-size:12.5px; color:var(--mut); }
+  .axes b { color:var(--fg); }
+  .stats { display:flex; gap:10px; flex-wrap:wrap; margin:0 0 20px; }
+  .stat { background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:8px 12px; }
+  .stat b { font-size:18px; }
+  .stat span { color:var(--mut); margin-left:6px; font-size:12.5px; }
+  .toolbar { display:flex; gap:8px; flex-wrap:wrap; margin:0 0 24px; align-items:center; }
+  .toolbar button { background:var(--panel); color:var(--fg); border:1px solid var(--line);
+    border-radius:7px; padding:6px 11px; font:inherit; cursor:pointer; }
+  .toolbar button.on { border-color:var(--accent); color:var(--accent); }
+  .ring { margin:0 0 30px; }
+  .ring-head { display:flex; align-items:center; gap:10px; border-bottom:1px solid var(--line); padding-bottom:8px; }
+  .ring-head h2 { font-size:17px; margin:0; }
+  .ring-count { margin-left:auto; color:var(--mut); font-size:12.5px; font-variant-numeric:tabular-nums; }
+  .ring-blurb { color:var(--mut); margin:8px 0 14px; }
+  .ring-dot { width:11px; height:11px; border-radius:50%; display:inline-block; }
+  .ring-caret,.ring-dot.ring-caret { background:var(--caret); }
+  .ring-file,.ring-dot.ring-file { background:var(--file); }
+  .ring-project,.ring-dot.ring-project { background:var(--project); }
+  .ring-data,.ring-dot.ring-data { background:var(--data); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:12px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:11px; padding:14px 15px; }
+  .card.diff { border-color:color-mix(in srgb, var(--accent) 45%, var(--line)); }
+  .card.tofilm { border-left:3px solid var(--film); }
+  .card.roadmap { opacity:.6; border-style:dashed; }
+  .card-head { display:flex; align-items:flex-start; gap:8px; margin-bottom:9px; }
+  .card-head h3 { font-size:15px; margin:0; }
+  .badges { margin-left:auto; display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+  .badge { font-size:10.5px; padding:2px 7px; border-radius:20px; white-space:nowrap; }
+  .badge.diff { color:var(--accent); border:1px solid color-mix(in srgb,var(--accent) 50%,transparent); }
+  .badge.tofilm { color:var(--film); border:1px solid color-mix(in srgb,var(--film) 55%,transparent); }
+  .badge.roadmap { color:var(--mut); border:1px solid var(--line); }
+  .chips { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:10px; }
+  .chip { font-size:11px; padding:2px 8px; border-radius:6px; background:var(--panel2); border:1px solid var(--line); color:var(--mut); }
+  .chip.prov { color:var(--fg); border-color:color-mix(in srgb,var(--fg) 25%,var(--line)); }
+  .chip.sym { color:var(--accent); }
+  .chip.meta { opacity:.8; }
+  .pitch { margin:0 0 6px; font-weight:500; }
+  .pain { margin:0; color:var(--mut); font-size:13px; }
+  .comps { margin-top:40px; }
+  .comps > h2 { font-size:18px; border-bottom:1px solid var(--line); padding-bottom:8px; }
+  .comp { background:var(--panel); border:1px solid var(--line); border-radius:11px; padding:16px 17px; margin:16px 0; }
+  .comp-head { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; }
+  .comp-head h3 { margin:0; font-size:16px; }
+  .purpose { font-size:11px; color:var(--accent); border:1px solid color-mix(in srgb,var(--accent) 50%,transparent); padding:1px 7px; border-radius:20px; margin-left:4px; }
+  .comp-head code { margin-left:auto; color:var(--mut); font-size:12.5px; background:var(--panel2); padding:3px 8px; border-radius:6px; }
+  .comp-desc { color:var(--mut); margin:9px 0 12px; }
+  .reel { list-style:none; display:flex; flex-wrap:wrap; gap:7px; padding:0; margin:6px 0 12px; counter-reset:step; }
+  .reel li { position:relative; padding:6px 11px 6px 24px; border-radius:7px; background:var(--panel2);
+    border:1px solid var(--line); border-left-width:3px; font-size:13px; }
+  .reel li.ring-caret { border-left-color:var(--caret); }
+  .reel li.ring-file { border-left-color:var(--file); }
+  .reel li.ring-project { border-left-color:var(--project); }
+  .reel li.ring-data { border-left-color:var(--data); }
+  .reel li::before { counter-increment:step; content:counter(step); position:absolute; left:8px; top:50%;
+    transform:translateY(-50%); color:var(--mut); font-size:10.5px; font-variant-numeric:tabular-nums; }
+  .comp-meta { color:var(--mut); font-size:12.5px; }
+  body.only-diff .card:not(.diff) { display:none; }
+  body.only-tofilm .card:not(.tofilm) { display:none; }
+  footer { color:var(--mut); font-size:12px; margin-top:40px; border-top:1px solid var(--line); padding-top:14px; }
+  code.k { background:var(--panel2); padding:1px 5px; border-radius:5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><b>dbt Anvil</b> — Demo Feature Map</h1>
+  <p class="sub">Features are the reusable atoms; compositions are playlists over them. One capture films every feature; each video is a selection.</p>
+
+  <div class="axes">
+    <span><b>shipped</b> — in the product today (build status)</span>
+    <span><b>filmed</b> — has demo footage (demo status)</span>
+    <span><span class="badge tofilm">▶ ready to film</span> = shipped, no footage yet — a filming TODO, not roadmap</span>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><b>22</b><span>features</span></div>
+    <div class="stat"><b>17</b><span>filmed</span></div>
+    <div class="stat"><b>5</b><span>ready&nbsp;to&nbsp;film</span></div>
+    
+    <div class="stat"><b>13</b><span>beyond&nbsp;LSP</span></div>
+    <div class="stat"><b>2</b><span>videos</span></div>
+  </div>
+
+  <div class="toolbar">
+    <button id="f-all" class="on">All features</button>
+    <button id="f-diff">◆ Beyond-LSP only</button>
+    <button id="f-tofilm">▶ Needs filming</button>
+    <span style="margin-left:auto;color:var(--mut);font-size:12.5px">Rings:
+      <span class="ring-dot ring-caret"></span> caret
+      <span class="ring-dot ring-file"></span> file
+      <span class="ring-dot ring-project"></span> project
+      <span class="ring-dot ring-data"></span> data
+    </span>
+  </div>
+
+  
+	<section class="ring" data-ring="caret">
+		<div class="ring-head">
+			<span class="ring-dot ring-caret"></span>
+			<h2>At the caret</h2>
+			<span class="ring-count">4/6 filmed</span>
+		</div>
+		<p class="ring-blurb">The statement under your cursor — the editor already understands it.</p>
+		<div class="grid">
+	<article class="card tofilm diff"
+	         data-ring="caret" data-diff="true" data-state="tofilm">
+		<div class="card-head">
+			<h3>Comprehension inside Jinja</h3>
+			<span class="badges">
+				<span class="badge diff" title="Hard or impossible with a plain LSP">◆ beyond LSP</span>
+				<span class="badge tofilm" title="Shipped in the product — no demo footage yet">▶ ready to film</span>
+			</span>
+		</div>
+		<div class="chips"><span class="chip prov">parser</span><span class="chip sym">ref</span><span class="chip sym">column</span><span class="chip sym">macro</span><span class="chip meta">video</span></div>
+		<p class="pitch">Cursor inside a {% if %}, a loop, or a macro — hover, completion, go-to-def and diagnostics all keep working. We parse the SQL through the Jinja, not around it.</p>
+		<p class="pain">Most SQL tooling treats Jinja as noise and breaks the moment it hits a {% %} block.</p>
+	</article>
+	<article class="card filmed"
+	         data-ring="caret" data-diff="false" data-state="filmed">
+		<div class="card-head">
+			<h3>Hover a ref()</h3>
+			<span class="badges">
+				
+				
+			</span>
+		</div>
+		<div class="chips"><span class="chip prov">hover</span><span class="chip sym">ref</span><span class="chip sym">model</span><span class="chip meta">video</span></div>
+		<p class="pitch">See a model without opening it — preview, columns, and docs inline on the ref().</p>
+		<p class="pain">Following a ref() means leaving your file and losing your place.</p>
+	</article>
+	<article class="card filmed diff"
+	         data-ring="caret" data-diff="true" data-state="filmed">
+		<div class="card-head">
+			<h3>Hover a column</h3>
+			<span class="badges">
+				<span class="badge diff" title="Hard or impossible with a plain LSP">◆ beyond LSP</span>
+				
+			</span>
+		</div>
+		<div class="chips"><span class="chip prov">hover</span><span class="chip sym">column</span><span class="chip meta">video</span></div>
+		<p class="pitch">Point at any column and see where its value actually comes from — traced through CTEs and refs.</p>
+		<p class="pain">You inherit a 400-line model and have no idea where a column originates.</p>
+	</article>
+	<article class="card filmed"
+	         data-ring="caret" data-diff="false" data-state="filmed">
+		<div class="card-head">
+			<h3>Completions</h3>
+			<span class="badges">
+				
+				
+			</span>
+		</div>
+		<div class="chips"><span class="chip prov">completion</span><span class="chip sym">ref</span><span class="chip sym">model</span><span class="chip sym">column</span><span class="chip meta">video</span></div>
+		<p class="pitch">Your whole model catalog and their columns, autocompleted inside ref() and SELECT.</p>
+		<p class="pain">Model and column names are guesswork you verify by grepping the repo.</p>
+	</article>
+	<article class="card filmed diff"
+	         data-ring="caret" data-diff="true" data-state="filmed">
+		<div class="card-head">
+			<h3>Diagnostics</h3>
+			<span class="badges">
+				<span class="badge diff" title="Hard or impossible with a plain LSP">◆ beyond LSP</span>
+				
+			</span>
+		</div>
+		<div class="chips"><span class="chip prov">diagnostics</span><span class="chip sym">ref</span><span class="chip sym">column</span><span class="chip meta">video</span></div>
+		<p class="pitch">Broken ref() and unknown columns flagged in the editor, before you save.</p>
+		<p class="pain">A typo'd ref() only surfaces as a red dbt run in CI, minutes later.</p>
+	</article>
+	<article class="card tofilm"
+	         data-ring="caret" data-diff="false" data-state="tofilm">
+		<div class="card-head">
+			<h3>Signature Help</h3>
+			<span class="badges">
+				
+				<span class="badge tofilm" title="Shipped in the product — no demo footage yet">▶ ready to film</span>
+			</span>
+		</div>
+		<div class="chips"><span class="chip prov">signatureHelp</span><span class="chip sym">ref</span><span class="chip sym">source</span><span class="chip sym">macro</span><span class="chip meta">video</span></div>
+		<p class="pitch">Argument hints inside ref(), source(), and macros as you type.</p>
+		<p class="pain">You remember macro signatures or go read the macro.</p>
+	</article></div>
+	</section>
+	<section class="ring" data-ring="file">
+		<div class="ring-head">
+			<span class="ring-dot ring-file"></span>
+			<h2>The current file</h2>
+			<span class="ring-count">2/4 filmed</span>
+		</div>
+		<p class="ring-blurb">Comprehend the whole file you're in.</p>
+		<div class="grid">
+	<article class="card filmed"
+	         data-ring="file" data-diff="false" data-state="filmed">
+		<div class="card-head">
+			<h3>Editor buttons (CodeLens)</h3>
+			<span class="badges">
+				
+				
+			</span>
+		</div>
+		<div class="chips"><span class="chip prov">codelens</span><span class="chip sym">model</span><span class="chip meta">still</span><span class="chip meta">zoom</span></div>
+		<p class="pitch">Run · Test · Compile · Query · Profile · Lineage — one click above every model. No terminal.</p>
+		<p class="pain">Every dbt action is a context switch to a terminal and a remembered command.</p>
+	</article>
+	<article class="card filmed"
+	         data-ring="file" data-diff="false" data-state="filmed">
+		<div class="card-head">
+			<h3>Document Outline</h3>
+			<span class="badges">
+				
+				
+			</span>
+		</div>
+		<div class="chips"><span class="chip prov">documentSymbol</span><span class="chip sym">cte</span><span class="chip sym">column</span><span class="chip meta">still</span><span class="chip meta">zoom</span></div>
+		<p class="pitch">The whole file as an outline — every CTE and its columns. Jump without scrolling.</p>
+		<p class="pain">Navigating a long model means scrolling and Ctrl-F for the CTE you want.</p>
+	</article>
+	<article class="card tofilm diff"
+	         data-ring="file" data-diff="true" data-state="tofilm">
+		<div class="card-head">
+			<h3>CTE Step Debugger</h3>
+			<span class="badges">
+				<span class="badge diff" title="Hard or impossible with a plain LSP">◆ beyond LSP</span>
+				<span class="badge tofilm" title="Shipped in the product — no demo footage yet">▶ ready to film</span>
+			</span>
+		</div>
+		<div class="chips"><span class="chip prov">debugger</span><span class="chip sym">cte</span><span class="chip sym">column</span><span class="chip meta">video</span></div>
+		<p class="pitch">A real debugger for SQL — step CTE by CTE, see each one's rows, step back for free.</p>
+		<p class="pain">Debugging dbt SQL is dbt run, read a wall of terminal text, guess, repeat.</p>
+	</article>
+	<article class="card tofilm"
+	         data-ring="file" data-diff="false" data-state="tofilm">
+		<div class="card-head">
+			<h3>Ninja Linter</h3>
+			<span class="badges">
+				
+				<span class="badge tofilm" title="Shipped in the product — no demo footage yet">▶ ready to film</span>
+			</span>
+		</div>
+		<div class="chips"><span class="chip prov">linter</span><span class="chip sym">statement</span><span class="chip meta">video</span></div>
+		<p class="pitch">~40 SQL style and correctness rules, in-editor, with one-click fixes.</p>
+		<p class="pain">Style drift and SQL footguns slip through review.</p>
+	</article></div>
+	</section>
+	<section class="ring" data-ring="project">
+		<div class="ring-head">
+			<span class="ring-dot ring-project"></span>
+			<h2>The project</h2>
+			<span class="ring-count">7/8 filmed</span>
+		</div>
+		<p class="ring-blurb">Follow the threads out to every other model.</p>
+		<div class="grid">
+	<article class="card filmed"
+	         data-ring="project" data-diff="false" data-state="filmed">
+		<div class="card-head">
+			<h3>Go to Definition</h3>
+			<span class="badges">
+				
+				
+			</span>
+		</div>
+		<div class="chips"><span class="chip prov">definition</span><span class="chip sym">ref</span><span class="chip sym">cte</span><span class="chip sym">column</span><span class="chip meta">video</span></div>
+		<p class="pitch">Ctrl+Click any ref(), CTE, or column and land on its definition — across files.</p>
+		<p class="pain">Finding where something is defined is a manual file hunt.</p>
+	</article>
+	<article class="card filmed diff"
+	         data-ring="project" data-diff="true" data-state="filmed">
+		<div class="card-head">
+			<h3>Find All References</h3>
+			<span class="badges">
+				<span class="badge diff" title="Hard or impossible with a plain LSP">◆ beyond LSP</span>
+				
+			</span>
+		</div>
+		<div class="chips"><span class="chip prov">references</span><span class="chip sym">model</span><span class="chip sym">column</span><span class="chip meta">video</span></div>
+		<p class="pitch">Every place a model or column is used, across the whole project.</p>
+		<p class="pain">Before you change a column you have no safe way to see who depends on it.</p>
+	</article>
+	<article class="card filmed diff"
+	         data-ring="project" data-diff="true" data-state="filmed">
+		<div class="card-head">
+			<h3>Call Hierarchy</h3>
+			<span class="badges">
+				<span class="badge diff" title="Hard or impossible with a plain LSP">◆ beyond LSP</span>
+				
+			</span>
+		</div>
+		<div class="chips"><span class="chip prov">callHierarchy</span><span class="chip sym">model</span><span class="chip meta">video</span></div>
+		<p class="pitch">Every model that calls this one, and every model it calls — walk it both ways.</p>
+		<p class="pain">The DAG around a model is invisible from inside the file.</p>
+	</article>
+	<article class="card filmed diff"
+	         data-ring="project" data-diff="true" data-state="filmed">
+		<div class="card-head">
+			<h3>Rename</h3>
+			<span class="badges">
+				<span class="badge diff" title="Hard or impossible with a plain LSP">◆ beyond LSP</span>
+				
+			</span>
+		</div>
+		<div class="chips"><span class="chip prov">rename</span><span class="chip sym">model</span><span class="chip sym">cte</span><span class="chip sym">column</span><span class="chip sym">alias</span><span class="chip meta">video</span></div>
+		<p class="pitch">F2 on a model, CTE, column, or alias and every reference updates project-wide.</p>
+		<p class="pain">Renaming means find-and-replace and praying you didn't miss a usage.</p>
+	</article>
+	<article class="card filmed"
+	         data-ring="project" data-diff="false" data-state="filmed">
+		<div class="card-head">
+			<h3>Workspace Symbols (Ctrl+T)</h3>
+			<span class="badges">
+				
+				
+			</span>
+		</div>
+		<div class="chips"><span class="chip prov">workspaceSymbol</span><span class="chip sym">model</span><span class="chip sym">source</span><span class="chip meta">still</span></div>
+		<p class="pitch">Ctrl+T to fuzzy-jump to any model or source. No file browsing.</p>
+		<p class="pain">Opening the right model means digging through the folder tree.</p>
+	</article>
+	<article class="card filmed diff"
+	         data-ring="project" data-diff="true" data-state="filmed">
+		<div class="card-head">
+			<h3>Model Explorer</h3>
+			<span class="badges">
+				<span class="badge diff" title="Hard or impossible with a plain LSP">◆ beyond LSP</span>
+				
+			</span>
+		</div>
+		<div class="chips"><span class="chip prov">treeView</span><span class="chip sym">model</span><span class="chip sym">source</span><span class="chip sym">project</span><span class="chip meta">still</span><span class="chip meta">zoom</span></div>
+		<p class="pitch">Your whole project — models, sources, tags — in one browsable tree.</p>
+		<p class="pain">The project's shape lives only in your head and the folder structure.</p>
+	</article>
+	<article class="card filmed diff"
+	         data-ring="project" data-diff="true" data-state="filmed">
+		<div class="card-head">
+			<h3>Lineage graph</h3>
+			<span class="badges">
+				<span class="badge diff" title="Hard or impossible with a plain LSP">◆ beyond LSP</span>
+				
+			</span>
+		</div>
+		<div class="chips"><span class="chip prov">lineageGraph</span><span class="chip sym">model</span><span class="chip sym">column</span><span class="chip meta">video</span><span class="chip meta">zoom</span></div>
+		<p class="pitch">An interactive DAG that follows your editor, down to column-level traces.</p>
+		<p class="pain">dbt docs' lineage is static and disconnected from where you're working.</p>
+	</article>
+	<article class="card tofilm"
+	         data-ring="project" data-diff="false" data-state="tofilm">
+		<div class="card-head">
+			<h3>Test Explorer</h3>
+			<span class="badges">
+				
+				<span class="badge tofilm" title="Shipped in the product — no demo footage yet">▶ ready to film</span>
+			</span>
+		</div>
+		<div class="chips"><span class="chip prov">testExplorer</span><span class="chip sym">model</span><span class="chip meta">video</span></div>
+		<p class="pitch">dbt tests in VS Code's Testing panel — pass/fail/warn grouped, real errors inline.</p>
+		<p class="pain">Test results are buried in dbt's terminal output.</p>
+	</article></div>
+	</section>
+	<section class="ring" data-ring="data">
+		<div class="ring-head">
+			<span class="ring-dot ring-data"></span>
+			<h2>The data</h2>
+			<span class="ring-count">4/4 filmed</span>
+		</div>
+		<p class="ring-blurb">Leave the code — hit the warehouse, real rows and real numbers.</p>
+		<div class="grid">
+	<article class="card filmed diff"
+	         data-ring="data" data-diff="true" data-state="filmed">
+		<div class="card-head">
+			<h3>Query Results (F5)</h3>
+			<span class="badges">
+				<span class="badge diff" title="Hard or impossible with a plain LSP">◆ beyond LSP</span>
+				
+			</span>
+		</div>
+		<div class="chips"><span class="chip prov">query</span><span class="chip sym">statement</span><span class="chip meta">video</span></div>
+		<p class="pitch">Press F5 — Jinja compiles, the query runs, results appear inline.</p>
+		<p class="pain">Ad-hoc SQL means copy to a separate client, compile Jinja by hand, run.</p>
+	</article>
+	<article class="card filmed diff"
+	         data-ring="data" data-diff="true" data-state="filmed">
+		<div class="card-head">
+			<h3>Query Model</h3>
+			<span class="badges">
+				<span class="badge diff" title="Hard or impossible with a plain LSP">◆ beyond LSP</span>
+				
+			</span>
+		</div>
+		<div class="chips"><span class="chip prov">query</span><span class="chip sym">model</span><span class="chip meta">video</span></div>
+		<p class="pitch">One click compiles and runs a whole model — results right there.</p>
+		<p class="pain">Seeing a model's output means a full dbt run and a warehouse console.</p>
+	</article>
+	<article class="card filmed diff"
+	         data-ring="data" data-diff="true" data-state="filmed">
+		<div class="card-head">
+			<h3>Query CTE</h3>
+			<span class="badges">
+				<span class="badge diff" title="Hard or impossible with a plain LSP">◆ beyond LSP</span>
+				
+			</span>
+		</div>
+		<div class="chips"><span class="chip prov">query</span><span class="chip sym">cte</span><span class="chip meta">video</span></div>
+		<p class="pitch">Run a single CTE in isolation and see exactly what it returns.</p>
+		<p class="pain">You can't see a CTE's output without hand-editing the query to select it.</p>
+	</article>
+	<article class="card filmed diff"
+	         data-ring="data" data-diff="true" data-state="filmed">
+		<div class="card-head">
+			<h3>CTE Profiler</h3>
+			<span class="badges">
+				<span class="badge diff" title="Hard or impossible with a plain LSP">◆ beyond LSP</span>
+				
+			</span>
+		</div>
+		<div class="chips"><span class="chip prov">profiler</span><span class="chip sym">cte</span><span class="chip meta">video</span><span class="chip meta">2.5×</span><span class="chip meta">zoom</span></div>
+		<p class="pitch">Row counts and timing per CTE — find the one scanning 40M rows.</p>
+		<p class="pain">A slow model gives no clue which CTE is the culprit.</p>
+	</article></div>
+	</section>
+
+  <div class="comps">
+    <h2>Compositions — the videos</h2>
+    
+	<section class="comp">
+		<div class="comp-head">
+			<h3>Full walkthrough <span class="purpose">walkthrough</span></h3>
+			<code>docs/demo.webp</code>
+		</div>
+		<p class="comp-desc">Every feature, grouped by ring, caret → file → project → data. The complete tour.</p>
+		<div class="chips"><span class="chip set">captions: full</span><span class="chip set">sectionCards: true</span><span class="chip set">zoom: tight</span><span class="chip set">width: 1280</span><span class="chip set">watermark: true</span></div>
+		<ol class="reel"><li class="ring-caret" title="caret">Hover a ref()</li><li class="ring-caret" title="caret">Hover a column</li><li class="ring-caret" title="caret">Completions</li><li class="ring-caret" title="caret">Diagnostics</li><li class="ring-file" title="file">Editor buttons (CodeLens)</li><li class="ring-file" title="file">Document Outline</li><li class="ring-project" title="project">Go to Definition</li><li class="ring-project" title="project">Find All References</li><li class="ring-project" title="project">Call Hierarchy</li><li class="ring-project" title="project">Rename</li><li class="ring-project" title="project">Workspace Symbols (Ctrl+T)</li><li class="ring-project" title="project">Model Explorer</li><li class="ring-project" title="project">Lineage graph</li><li class="ring-data" title="data">Query Results (F5)</li><li class="ring-data" title="data">Query Model</li><li class="ring-data" title="data">Query CTE</li><li class="ring-data" title="data">CTE Profiler</li></ol>
+		<div class="comp-meta">17 features · 17 clips</div>
+	</section>
+	<section class="comp">
+		<div class="comp-head">
+			<h3>Flash teaser <span class="purpose">teaser</span></h3>
+			<code>docs/teaser.webp</code>
+		</div>
+		<p class="comp-desc">Six punchy differentiators, fast 1.4s cuts, tight zooms, keyword captions, logo/CTA end card. For distribution, flyers, socials.</p>
+		<div class="chips"><span class="chip set">captions: keyword</span><span class="chip set">sectionCards: false</span><span class="chip set">zoom: tight</span><span class="chip set">perClipMs: 1400</span><span class="chip set">endCard: logo-cta</span><span class="chip set">width: 1080</span><span class="chip set">watermark: false</span></div>
+		<ol class="reel"><li class="ring-caret" title="caret">Hover a column</li><li class="ring-project" title="project">Lineage graph</li><li class="ring-project" title="project">Rename</li><li class="ring-project" title="project">Call Hierarchy</li><li class="ring-data" title="data">Query Results (F5)</li><li class="ring-data" title="data">CTE Profiler</li></ol>
+		<div class="comp-meta">6 features · ≈ 10.4s</div>
+	</section>
+  </div>
+
+  <footer>
+    Generated from <code class="k">scripts/demo/features.json</code> + <code class="k">scripts/demo/compositions.json</code>
+    by <code class="k">node scripts/demo/build-feature-map.mjs</code>. Edit the JSON, re-run to refresh.
+  </footer>
+</div>
+<script>
+  const b = document.body, btn = (id) => document.getElementById(id);
+  function setMode(mode) {
+    b.classList.toggle('only-diff', mode === 'diff');
+    b.classList.toggle('only-tofilm', mode === 'tofilm');
+    btn('f-all').classList.toggle('on', mode === 'all');
+    btn('f-diff').classList.toggle('on', mode === 'diff');
+    btn('f-tofilm').classList.toggle('on', mode === 'tofilm');
+  }
+  btn('f-all').onclick = () => setMode('all');
+  btn('f-diff').onclick = () => setMode(b.classList.contains('only-diff') ? 'all' : 'diff');
+  btn('f-tofilm').onclick = () => setMode(b.classList.contains('only-tofilm') ? 'all' : 'tofilm');
+</script>
+</body>
+</html>

@@ -1,0 +1,349 @@
+{
+  "_note": "Feature catalog for the demo pipeline. Features are the reusable ATOMS — video-agnostic. compositions.json selects and orders them into specific videos. Capture films each `captured: true` feature once (keyed by capture.frame / capture.events); render resolves a composition against this catalog. `context` is the analytical core: `ring` drives section grouping, `symbolKinds` proves the 'not just ref()' thesis, `differentiator` (beyond-LSP) drives teaser selection, `pitch`/`pain` are the marketing-copy + caption source.",
+  "recordingFile": "temp_auto/demo-recording.json",
+  "splash": { "enabled": true, "durationMs": 2000 },
+
+  "rings": [
+    { "id": "caret",   "title": "At the caret",       "blurb": "The statement under your cursor — the editor already understands it." },
+    { "id": "file",    "title": "The current file",   "blurb": "Comprehend the whole file you're in." },
+    { "id": "project", "title": "The project",         "blurb": "Follow the threads out to every other model." },
+    { "id": "data",    "title": "The data",            "blurb": "Leave the code — hit the warehouse, real rows and real numbers." }
+  ],
+
+  "features": [
+    {
+      "id": "jinja-comprehension",
+      "title": "Comprehension inside Jinja",
+      "context": {
+        "ring": "caret",
+        "symbolKinds": ["ref", "column", "macro"],
+        "provider": "parser",
+        "differentiator": true,
+        "pitch": "Cursor inside a {% if %}, a loop, or a macro — hover, completion, go-to-def and diagnostics all keep working. We parse the SQL through the Jinja, not around it.",
+        "pain": "Most SQL tooling treats Jinja as noise and breaks the moment it hits a {% %} block."
+      },
+      "capture": { "frame": "jinja-comprehension", "useVideo": true, "playbackSpeed": 1, "choreography": "jinja-comprehension", "events": { "from": "jinja-comprehension.demo", "to": "jinja-comprehension.post-demo" } },
+      "render": { "caption": "Jinja ninja — hover, completion, and go-to-def keep working inside {% if %} blocks and macros.", "focus": null },
+      "shipped": true, "filmed": false
+    },
+    {
+      "id": "hover-ref",
+      "title": "Hover a ref()",
+      "context": {
+        "ring": "caret",
+        "symbolKinds": ["ref", "model"],
+        "provider": "hover",
+        "differentiator": false,
+        "pitch": "See a model without opening it — preview, columns, and docs inline on the ref().",
+        "pain": "Following a ref() means leaving your file and losing your place."
+      },
+      "capture": { "frame": "hover-ref", "useVideo": true, "playbackSpeed": 1, "choreography": "hover-ref", "events": { "from": "hover-ref.demo", "to": "hover-ref.post-demo" } },
+      "render": { "caption": "Hover a ref() — model preview, columns, docs. Without opening a single file.", "focus": null },
+      "shipped": true, "filmed": true
+    },
+    {
+      "id": "hover-column",
+      "title": "Hover a column",
+      "context": {
+        "ring": "caret",
+        "symbolKinds": ["column"],
+        "provider": "hover",
+        "differentiator": true,
+        "pitch": "Point at any column and see where its value actually comes from — traced through CTEs and refs.",
+        "pain": "You inherit a 400-line model and have no idea where a column originates."
+      },
+      "capture": { "frame": "hover-column", "useVideo": true, "playbackSpeed": 1, "choreography": "hover-column", "events": { "from": "hover-column.demo", "to": "hover-column.post-demo" } },
+      "render": { "caption": "Hover a column — see exactly where it comes from, through refs and CTEs.", "focus": null },
+      "shipped": true, "filmed": true
+    },
+    {
+      "id": "completion",
+      "title": "Completions",
+      "context": {
+        "ring": "caret",
+        "symbolKinds": ["ref", "model", "column"],
+        "provider": "completion",
+        "differentiator": false,
+        "pitch": "Your whole model catalog and their columns, autocompleted inside ref() and SELECT.",
+        "pain": "Model and column names are guesswork you verify by grepping the repo."
+      },
+      "capture": { "frame": "completion", "useVideo": true, "playbackSpeed": 1, "choreography": "completion", "events": { "from": "completion.demo", "to": "completion.post-demo" } },
+      "render": { "caption": "Completions — your whole model catalog, autocompleted inside ref().", "focus": null },
+      "shipped": true, "filmed": true
+    },
+    {
+      "id": "diagnostics",
+      "title": "Diagnostics",
+      "context": {
+        "ring": "caret",
+        "symbolKinds": ["ref", "column"],
+        "provider": "diagnostics",
+        "differentiator": true,
+        "pitch": "Broken ref() and unknown columns flagged in the editor, before you save.",
+        "pain": "A typo'd ref() only surfaces as a red dbt run in CI, minutes later."
+      },
+      "capture": { "frame": "diagnostics", "useVideo": true, "playbackSpeed": 1, "choreography": "diagnostics", "events": { "from": "diagnostics.demo", "to": "diagnostics.post-demo" } },
+      "render": { "caption": "Diagnostics — broken ref() caught before you hit save. No surprises in CI.", "focus": null },
+      "shipped": true, "filmed": true
+    },
+
+    {
+      "id": "codelens",
+      "title": "Editor buttons (CodeLens)",
+      "context": {
+        "ring": "file",
+        "symbolKinds": ["model"],
+        "provider": "codelens",
+        "differentiator": false,
+        "pitch": "Run · Test · Compile · Query · Profile · Lineage — one click above every model. No terminal.",
+        "pain": "Every dbt action is a context switch to a terminal and a remembered command."
+      },
+      "capture": { "frame": "codelens", "useVideo": false, "playbackSpeed": 1, "choreography": "codelens", "events": { "from": "codelens.demo", "to": "codelens.post-demo" } },
+      "render": { "caption": "Editor buttons — Lineage · Run · Test · Compile · Query · Profile. No terminal needed.", "focus": { "x": 0.78, "y": 0.03, "w": 0.21, "h": 0.08, "zoom": 2.0, "zoomMs": 450, "holdFullMs": 350 } },
+      "shipped": true, "filmed": true
+    },
+    {
+      "id": "document-symbols",
+      "title": "Document Outline",
+      "context": {
+        "ring": "file",
+        "symbolKinds": ["cte", "column"],
+        "provider": "documentSymbol",
+        "differentiator": false,
+        "pitch": "The whole file as an outline — every CTE and its columns. Jump without scrolling.",
+        "pain": "Navigating a long model means scrolling and Ctrl-F for the CTE you want."
+      },
+      "capture": { "frame": "document-symbols", "useVideo": false, "playbackSpeed": 1, "choreography": "document-symbols", "events": { "from": "document-symbols.demo", "to": "document-symbols.post-demo" } },
+      "render": { "caption": "Document Outline — every CTE and its columns. Navigate without scrolling.", "focus": { "x": 0.03, "y": 0.09, "w": 0.19, "h": 0.87, "zoomMs": 450, "holdFullMs": 350 } },
+      "shipped": true, "filmed": true
+    },
+
+    {
+      "id": "go-to-definition",
+      "title": "Go to Definition",
+      "context": {
+        "ring": "project",
+        "symbolKinds": ["ref", "cte", "column"],
+        "provider": "definition",
+        "differentiator": false,
+        "pitch": "Ctrl+Click any ref(), CTE, or column and land on its definition — across files.",
+        "pain": "Finding where something is defined is a manual file hunt."
+      },
+      "capture": { "frame": "go-to-definition", "useVideo": true, "playbackSpeed": 1, "choreography": "go-to-definition", "events": { "from": "go-to-definition.demo", "to": "go-to-definition.post-demo" } },
+      "render": { "caption": "Go to Definition — Ctrl+Click any ref() and land in that model. Instantly.", "focus": null },
+      "shipped": true, "filmed": true
+    },
+    {
+      "id": "find-all-references",
+      "title": "Find All References",
+      "context": {
+        "ring": "project",
+        "symbolKinds": ["model", "column"],
+        "provider": "references",
+        "differentiator": true,
+        "pitch": "Every place a model or column is used, across the whole project.",
+        "pain": "Before you change a column you have no safe way to see who depends on it."
+      },
+      "capture": { "frame": "find-all-references", "useVideo": true, "playbackSpeed": 1, "choreography": "find-all-references", "events": { "from": "find-all-references.demo", "to": "find-all-references.post-demo" } },
+      "render": { "caption": "Find All References — see everywhere this model is used across the project.", "focus": null },
+      "shipped": true, "filmed": true
+    },
+    {
+      "id": "call-hierarchy",
+      "title": "Call Hierarchy",
+      "context": {
+        "ring": "project",
+        "symbolKinds": ["model"],
+        "provider": "callHierarchy",
+        "differentiator": true,
+        "pitch": "Every model that calls this one, and every model it calls — walk it both ways.",
+        "pain": "The DAG around a model is invisible from inside the file."
+      },
+      "capture": { "frame": "call-hierarchy", "useVideo": true, "playbackSpeed": 1, "choreography": "call-hierarchy", "events": { "from": "call-hierarchy.demo", "to": "call-hierarchy.post-demo" } },
+      "render": { "caption": "Call Hierarchy — every model that calls this one, and every model it calls. Toggle both ways.", "focus": null },
+      "shipped": true, "filmed": true
+    },
+    {
+      "id": "rename-symbol",
+      "title": "Rename",
+      "context": {
+        "ring": "project",
+        "symbolKinds": ["model", "cte", "column", "alias"],
+        "provider": "rename",
+        "differentiator": true,
+        "pitch": "F2 on a model, CTE, column, or alias and every reference updates project-wide.",
+        "pain": "Renaming means find-and-replace and praying you didn't miss a usage."
+      },
+      "capture": { "frame": "rename-symbol", "useVideo": true, "playbackSpeed": 1, "choreography": "rename-symbol", "events": { "from": "rename-symbol.demo", "to": "rename-symbol.post-demo" } },
+      "render": { "caption": "Rename — press F2, every reference updates. Models, CTEs, columns, aliases.", "focus": null },
+      "shipped": true, "filmed": true
+    },
+    {
+      "id": "workspace-symbols",
+      "title": "Workspace Symbols (Ctrl+T)",
+      "context": {
+        "ring": "project",
+        "symbolKinds": ["model", "source"],
+        "provider": "workspaceSymbol",
+        "differentiator": false,
+        "pitch": "Ctrl+T to fuzzy-jump to any model or source. No file browsing.",
+        "pain": "Opening the right model means digging through the folder tree."
+      },
+      "capture": { "frame": "workspace-symbols", "useVideo": false, "playbackSpeed": 1, "choreography": "workspace-symbols", "events": { "from": "workspace-symbols.demo", "to": "workspace-symbols.post-demo" } },
+      "render": { "caption": "Ctrl+T — fuzzy jump to any model or source in the project. No file browsing.", "focus": null },
+      "shipped": true, "filmed": true
+    },
+    {
+      "id": "model-explorer",
+      "title": "Model Explorer",
+      "context": {
+        "ring": "project",
+        "symbolKinds": ["model", "source", "project"],
+        "provider": "treeView",
+        "differentiator": true,
+        "pitch": "Your whole project — models, sources, tags — in one browsable tree.",
+        "pain": "The project's shape lives only in your head and the folder structure."
+      },
+      "capture": { "frame": "model-explorer", "useVideo": false, "playbackSpeed": 1, "choreography": "model-explorer", "events": { "from": "model-explorer.demo", "to": "model-explorer.post-demo" } },
+      "render": { "caption": "Model Explorer — models, sources, tags. Your whole project, right there.", "focus": { "x": 0.03, "y": 0.08, "w": 0.19, "h": 0.85, "zoomMs": 450, "holdFullMs": 350 } },
+      "shipped": true, "filmed": true
+    },
+    {
+      "id": "lineage",
+      "title": "Lineage graph",
+      "context": {
+        "ring": "project",
+        "symbolKinds": ["model", "column"],
+        "provider": "lineageGraph",
+        "differentiator": true,
+        "pitch": "An interactive DAG that follows your editor, down to column-level traces.",
+        "pain": "dbt docs' lineage is static and disconnected from where you're working."
+      },
+      "capture": { "frame": "lineage", "useVideo": true, "playbackSpeed": 1, "choreography": "lineage", "events": { "from": "lineage.demo", "to": "lineage.post-demo" } },
+      "render": { "caption": "Lineage — interactive DAG that follows your editor. Drill into column-level traces.", "focus": { "x": 0.42, "y": 0.70, "w": 0.55, "h": 0.28, "zoom": 1.5, "zoomMs": 600, "holdFullMs": 500 } },
+      "shipped": true, "filmed": true
+    },
+
+    {
+      "id": "query-results",
+      "title": "Query Results (F5)",
+      "context": {
+        "ring": "data",
+        "symbolKinds": ["statement"],
+        "provider": "query",
+        "differentiator": true,
+        "pitch": "Press F5 — Jinja compiles, the query runs, results appear inline.",
+        "pain": "Ad-hoc SQL means copy to a separate client, compile Jinja by hand, run."
+      },
+      "capture": { "frame": "query-results", "useVideo": true, "playbackSpeed": 1, "choreography": "query-results", "events": { "from": "query-results.demo", "to": "query-results.post-demo" } },
+      "render": { "caption": "Query Results — F5 to run, results appear inline. Jinja compiles first. Just works.", "focus": null },
+      "shipped": true, "filmed": true
+    },
+    {
+      "id": "query-model",
+      "title": "Query Model",
+      "context": {
+        "ring": "data",
+        "symbolKinds": ["model"],
+        "provider": "query",
+        "differentiator": true,
+        "pitch": "One click compiles and runs a whole model — results right there.",
+        "pain": "Seeing a model's output means a full dbt run and a warehouse console."
+      },
+      "capture": { "frame": "query-model", "useVideo": true, "playbackSpeed": 1, "choreography": "query-model", "events": { "from": "query-model.demo", "to": "query-model.post-demo" } },
+      "render": { "caption": "Query Model — one click. Compiles the Jinja, runs it, results right there.", "focus": null },
+      "shipped": true, "filmed": true
+    },
+    {
+      "id": "query-cte",
+      "title": "Query CTE",
+      "context": {
+        "ring": "data",
+        "symbolKinds": ["cte"],
+        "provider": "query",
+        "differentiator": true,
+        "pitch": "Run a single CTE in isolation and see exactly what it returns.",
+        "pain": "You can't see a CTE's output without hand-editing the query to select it."
+      },
+      "capture": { "frame": "query-cte", "useVideo": true, "playbackSpeed": 1, "choreography": "query-cte", "events": { "from": "query-cte.demo", "to": "query-cte.post-demo" } },
+      "render": { "caption": "Query CTE — run one CTE in isolation. Find out what it actually returns.", "focus": null },
+      "shipped": true, "filmed": true
+    },
+    {
+      "id": "profiler",
+      "title": "CTE Profiler",
+      "context": {
+        "ring": "data",
+        "symbolKinds": ["cte"],
+        "provider": "profiler",
+        "differentiator": true,
+        "pitch": "Row counts and timing per CTE — find the one scanning 40M rows.",
+        "pain": "A slow model gives no clue which CTE is the culprit."
+      },
+      "capture": { "frame": "profiler", "useVideo": true, "playbackSpeed": 2.5, "choreography": "profiler", "events": { "from": "profiler.demo", "to": "profiler.post-demo" } },
+      "render": { "caption": "Profiler — row counts and timing per CTE. Find which one is scanning 40M rows.", "focus": { "x": 0.03, "y": 0.12, "w": 0.19, "h": 0.84, "zoomMs": 500, "holdFullMs": 400 } },
+      "shipped": true, "filmed": true
+    },
+
+    {
+      "id": "signature-help",
+      "title": "Signature Help",
+      "context": {
+        "ring": "caret",
+        "symbolKinds": ["ref", "source", "macro"],
+        "provider": "signatureHelp",
+        "differentiator": false,
+        "pitch": "Argument hints inside ref(), source(), and macros as you type.",
+        "pain": "You remember macro signatures or go read the macro."
+      },
+      "capture": { "frame": "signature-help", "useVideo": true, "playbackSpeed": 1, "choreography": "signature-help", "events": { "from": "signature-help.demo", "to": "signature-help.post-demo" } },
+      "render": { "caption": "Signature Help — argument hints inside ref(), source(), and macros.", "focus": null },
+      "shipped": true, "filmed": false
+    },
+    {
+      "id": "cte-step-debug",
+      "title": "CTE Step Debugger",
+      "context": {
+        "ring": "file",
+        "symbolKinds": ["cte", "column"],
+        "provider": "debugger",
+        "differentiator": true,
+        "pitch": "A real debugger for SQL — step CTE by CTE, see each one's rows, step back for free.",
+        "pain": "Debugging dbt SQL is dbt run, read a wall of terminal text, guess, repeat."
+      },
+      "capture": { "frame": "cte-step-debug", "useVideo": true, "playbackSpeed": 1, "choreography": "cte-step-debug", "events": { "from": "cte-step-debug.demo", "to": "cte-step-debug.post-demo" } },
+      "render": { "caption": "SQL Debugger — step through each CTE, inspect its rows, step back for free.", "focus": null },
+      "shipped": true, "filmed": false
+    },
+    {
+      "id": "test-explorer",
+      "title": "Test Explorer",
+      "context": {
+        "ring": "project",
+        "symbolKinds": ["model"],
+        "provider": "testExplorer",
+        "differentiator": false,
+        "pitch": "dbt tests in VS Code's Testing panel — pass/fail/warn grouped, real errors inline.",
+        "pain": "Test results are buried in dbt's terminal output."
+      },
+      "capture": { "frame": "test-explorer", "useVideo": true, "playbackSpeed": 1, "choreography": "test-explorer", "events": { "from": "test-explorer.demo", "to": "test-explorer.post-demo" } },
+      "render": { "caption": "Test Explorer — dbt tests in the Testing panel. Pass, fail, warn, grouped.", "focus": null },
+      "shipped": true, "filmed": false
+    },
+    {
+      "id": "ninja-lint",
+      "title": "Ninja Linter",
+      "context": {
+        "ring": "file",
+        "symbolKinds": ["statement"],
+        "provider": "linter",
+        "differentiator": false,
+        "pitch": "~40 SQL style and correctness rules, in-editor, with one-click fixes.",
+        "pain": "Style drift and SQL footguns slip through review."
+      },
+      "capture": { "frame": "ninja-lint", "useVideo": true, "playbackSpeed": 1, "choreography": "ninja-lint", "events": { "from": "ninja-lint.demo", "to": "ninja-lint.post-demo" } },
+      "render": { "caption": "Ninja — ~40 SQL style and correctness rules, right in the editor.", "focus": null },
+      "shipped": true, "filmed": false
+    }
+  ]
+}
