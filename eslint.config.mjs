@@ -1,7 +1,8 @@
 import typescriptEslint from '@typescript-eslint/eslint-plugin';
 import stylisticEslint from '@stylistic/eslint-plugin';
 import tsParser from '@typescript-eslint/parser';
-import importEslint from 'eslint-plugin-import';
+import importX from 'eslint-plugin-import-x';
+import { createTypeScriptImportResolver } from 'eslint-import-resolver-typescript';
 import jsdocEslint from 'eslint-plugin-jsdoc';
 
 export default [
@@ -24,7 +25,7 @@ export default [
 		plugins: {
 			'@typescript-eslint': typescriptEslint,
 			'@stylistic': stylisticEslint,
-			import: importEslint,
+			'import-x': importX,
 			jsdoc: jsdocEslint,
 		},
 		languageOptions: {
@@ -35,11 +36,9 @@ export default [
 			},
 		},
 		settings: {
-			'import/resolver': {
-				typescript: {
-					alwaysTryTypes: true,
-				},
-			},
+			'import-x/resolver-next': [
+				createTypeScriptImportResolver({ alwaysTryTypes: true }),
+			],
 		},
 		rules: {
 			// TypeScript rules
@@ -71,8 +70,8 @@ export default [
 			'@stylistic/eol-last': 'error',
 
 			// Import rules
-			'import/no-unresolved': 'error',
-			'import/no-duplicates': 'error',
+			'import-x/no-unresolved': 'error',
+			'import-x/no-duplicates': 'error',
 
 			// JsDoc rules
 			'jsdoc/no-types': 'error',

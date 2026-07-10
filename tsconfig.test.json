@@ -17,11 +17,7 @@
 		"types": [
 			"node"
 		],
-		"noEmit": true,
-		"paths": {
-			"sqllens": ["../sql-dialect-grammars/src/index.ts"],
-			"sqllens/minijinja": ["../sql-dialect-grammars/src/minijinja/index.ts"]
-		}
+		"noEmit": true
 	},
 	"include": [
 		"src/**/*"

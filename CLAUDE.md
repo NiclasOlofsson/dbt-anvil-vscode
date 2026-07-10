@@ -65,7 +65,7 @@ Both are bundled by esbuild (`.esbuild.ts`) into `dist/`.
 |---|---|---|
 | **Python bridge** | `src/dbt/bridge-runner.ts`, `src/dbt/execution-service.ts` | Single persistent Python process. `DbtExecutionService` wraps it in a 4-level priority queue (background < provider < tool < user) with deduplication for idempotent jobs |
 | **Manifest & indexing** | `src/indexing/` | Loads `manifest.json`, builds DAG, tracks file hashes to avoid redundant re-indexes |
-| **SQL parsing (FTL)** | `src/ftl/sqllens/`, `src/ftl/` | sqllens, the native TypeScript parser from the sibling `../sql-dialect-grammars` repo (consumed as source via the `sqllens` alias; `npm run gen` there is a build precondition). One `parseTemplated` pass handles jinja + SQL with raw-source spans; error-tolerant, never a fallback cascade |
+| **SQL parsing (FTL)** | `src/ftl/sqllens/`, `src/ftl/` | [sqllens](https://github.com/NiclasOlofsson/sqllens), the native TypeScript SQL parser, consumed as a regular npm dependency. One `parseTemplated` pass handles jinja + SQL with raw-source spans; error-tolerant, never a fallback cascade |
 | **Language providers** | `src/providers/sql/`, `src/providers/yaml/` | All VS Code language features (completion, hover, definition, rename, diagnostics, code lens). Providers are re-registered dynamically when project paths change |
 | **Ninja linter** | `src/ninja/` | ~40 built-in SQL style/quality rules; full-workspace scanner; separate editor panel |
 | **Views & UI** | `src/views/` | Model Explorer, interactive lineage graph (D3/dagre), test explorer, profiler results, query result panel |
@@ -90,3 +90,5 @@ esbuild bundles two targets from `.esbuild.ts`:
 - `src/mcp/proxy/index.ts` → `dist/mcp-proxy.js` (Node 18, CJS, fully self-contained — no externals, no `vscode` import)
 
 Externals (extension only): `vscode`, `@duckdb/*`, `*.node`. The MCP proxy bundles everything so it runs as a standalone subprocess outside the extension host.
+
+sqllens resolves from node_modules like any other dependency. To develop against a local sqllens checkout instead, temporarily point `sqllens` / `sqllens/minijinja` at `../sql-dialect-grammars/src/` via an esbuild `alias` in `.esbuild.ts`, `paths` in `tsconfig.json` + `tsconfig.test.json`, and an `alias` in `vitest.config.ts` (run `npm run gen` there first) — local-only edits, never committed.
