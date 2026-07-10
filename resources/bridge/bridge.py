@@ -73,8 +73,10 @@ def run_command(
     Returns a __bridge__ sentinel dict so bridge-runner can distinguish the completion
     marker from the dbt log lines.
     """
-    # Always inject --target-path unless caller provided it
-    if "--target-path" not in args and (len(args) == 0 or args[0] not in ("deps",)):
+    # Always inject --target-path unless caller provided it. `deps` and `debug`
+    # are excluded: neither declares --target-path (dbt's CLI rejects it with
+    # "No such option", failing the command regardless of what it's doing).
+    if "--target-path" not in args and (len(args) == 0 or args[0] not in ("deps", "debug")):
         args = [*args, "--target-path", extension_target_path]
     # Use JSON log format for all commands except deps (which doesn't support --log-format)
     if "--log-format" not in args:
