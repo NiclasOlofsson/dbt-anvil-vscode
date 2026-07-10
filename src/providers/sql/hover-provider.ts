@@ -35,7 +35,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		const model = await this.parseService.getDocumentModel(document);
 		if (token.isCancellationRequested || !model) return undefined;
 
-		const ctx = resolvePositionContext(model, line, position);
+		const ctx = resolvePositionContext(model, position, document.offsetAt(position));
 
 		if (ctx?.kind === 'ref') {
 			const hover = this._hoverRef(ctx.ref.model);

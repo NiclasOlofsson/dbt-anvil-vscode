@@ -21,6 +21,8 @@ export type PositionContext =
 /**
  * Classify what is under the cursor in a SQL document, given an already-parsed
  * DocumentModel. Returns null when the cursor is not over a navigable token.
+ * `offset` is the cursor's absolute char offset (`document.offsetAt(position)`)
+ * — the coordinate the Sym hit-testing speaks natively.
  *
  * Order of precedence:
  *  1. ref()  / source() — matched by the model's jinja span (most precise)
@@ -29,8 +31,8 @@ export type PositionContext =
  */
 export function resolvePositionContext(
 	model: DocumentModel,
-	_line: string,
 	position: { line: number; character: number },
+	offset: number,
 ): PositionContext {
 	// ref — full {{ ref('...') }} jinja span
 	const ref = model.refs.find(r =>
@@ -69,9 +71,9 @@ export function resolvePositionContext(
 	}
 
 	// Sym
-	const sym = ParseService.symAtPosition(model, position.line, position.character);
+	const sym = ParseService.symAtPosition(model, offset);
 	if (sym) {
-		const partIndex = ParseService.partIndexAtPosition(sym, position.line, position.character);
+		const partIndex = ParseService.partIndexAtPosition(sym, offset);
 		return { kind: 'sym', sym, ...(partIndex !== undefined ? { partIndex } : {}) };
 	}
 

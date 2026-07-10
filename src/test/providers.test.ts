@@ -13,6 +13,7 @@ import type { ManifestIndexer, ManifestIndex, IndexedModel, IndexedSource, Index
 import type { ManifestLoader } from '../dbt/manifest-loader';
 import type { DbtPathResolver, DbtFileCategory } from '../dbt/dbt-path-resolver';
 import type { ParseService, DocumentModel } from '../services/parse-service';
+import type { Sym } from '../ftl/sqllens/api';
 
 function createMockParseService(): ParseService {
 	return { getDocumentModel: vi.fn().mockResolvedValue(null) } as unknown as ParseService;
@@ -181,6 +182,38 @@ const mockToken: vscode.CancellationToken = {
 	onCancellationRequested: vi.fn(),
 };
 
+/**
+ * `sym()`/`colSym()` (`./ninja/helpers`) derive `Span.start`/`.end` (and, for `colSym`,
+ * each `PartSpan.start`/`.end`) from `column`/`endColumn` alone — correct only for a
+ * fixture on line 0, where the raw column IS the absolute char offset. `ParseService.
+ * symAtPosition`/`partIndexAtPosition` hit-test the REAL absolute offset into the
+ * document (`span.start <= offset < span.end`), so any fixture below whose symbol
+ * doesn't sit on line 0 needs `start`/`end` recomputed from ITS OWN fixture text before
+ * that comparison means anything. `lineStartsOf` is the same prefix-sum
+ * `createMockDocument`'s own `offsetAt`/`positionAt` use, so a `Sym` corrected against it
+ * lands on the exact offset the mock document reports for the symbol's `line`/`column`.
+ */
+function lineStartsOf(text: string): number[] {
+	const lines = text.split('\n');
+	const starts: number[] = [0];
+	for (let i = 0; i < lines.length - 1; i++) starts.push(starts[i] + lines[i].length + 1);
+	return starts;
+}
+
+/** Recompute a `sym()`/`colSym()` fixture's `start`/`end` (top-level span, and any
+ *  `partSpans`) as true absolute offsets into `lineStarts`'s source text. */
+function withOffsets(s: Sym, lineStarts: number[]): Sym {
+	const fix = (span: { line: number; column: number; endLine: number; endColumn: number }) => ({
+		start: lineStarts[span.line - 1] + span.column,
+		end: lineStarts[span.endLine - 1] + span.endColumn,
+	});
+	return {
+		...s,
+		span: { ...s.span, ...fix(s.span) },
+		...(s.partSpans ? { partSpans: s.partSpans.map(p => ({ ...p, ...fix(p) })) } : {}),
+	};
+}
+
 // --------------- ReferenceProvider ---------------
 
 describe('DbtReferenceProvider', () => {
@@ -234,19 +267,19 @@ describe('DbtReferenceProvider', () => {
 		// Syms: 'base' reference at line 1 col 26 (used inside final's body)
 		const baseCte = { name: 'base', line: 0, col: 5, endLine: 0, endCol: 20, columns: [] };
 		const finalCte = { name: 'final', line: 1, col: 5, endLine: 1, endCol: 50, columns: [] };
+		const text = 'with base as (select 1 id),\n     final as (select * from base)\nselect * from final';
+		const ls = lineStartsOf(text);
 		const mockModel: Partial<DocumentModel> = {
 			ctes: [baseCte, finalCte],
 			symbols: [
-				sym('cte', 'base', 1, 26, { definitionOf: baseCte }),
-				sym('cte', 'final', 2, 14, { definitionOf: finalCte }),
+				withOffsets(sym('cte', 'base', 1, 26, { definitionOf: baseCte }), ls),
+				withOffsets(sym('cte', 'final', 2, 14, { definitionOf: finalCte }), ls),
 			],
 			refs: [],
 		};
 		const ps = createMockParseServiceWithModel(mockModel);
 		const localProvider = new DbtReferenceProvider(indexer, createMockLogger(), ps);
-		const doc = createMockDocument(
-			'with base as (select 1 id),\n     final as (select * from base)\nselect * from final',
-		);
+		const doc = createMockDocument(text);
 		// Cursor on the 'base' table_ref token on line 1 col 28 (inside [26,30))
 		const pos = new vscode.Position(1, 28);
 		const result = await localProvider.provideReferences(doc, pos, { includeDeclaration: true }, mockToken);
@@ -265,17 +298,19 @@ describe('DbtReferenceProvider', () => {
 		// "MYCTE". A name-string comparison between the two silently fails; the provider
 		// must match by structural anchor (symMatchesCte) instead.
 		const myCte = { name: 'MYCTE', line: 0, col: 5, endLine: 0, endCol: 20, columns: [] };
+		const text = 'with MyCte as (select 1 id)\nselect * from MyCte';
+		const ls = lineStartsOf(text);
 		const mockModel: Partial<DocumentModel> = {
 			ctes: [myCte],
 			symbols: [
-				sym('cte', 'MyCte', 0, 5, { modifiers: ['declaration'] }),
-				sym('cte', 'MyCte', 1, 14, { definitionOf: myCte }),
+				withOffsets(sym('cte', 'MyCte', 0, 5, { modifiers: ['declaration'] }), ls),
+				withOffsets(sym('cte', 'MyCte', 1, 14, { definitionOf: myCte }), ls),
 			],
 			refs: [],
 		};
 		const ps = createMockParseServiceWithModel(mockModel);
 		const localProvider = new DbtReferenceProvider(indexer, createMockLogger(), ps);
-		const doc = createMockDocument('with MyCte as (select 1 id)\nselect * from MyCte');
+		const doc = createMockDocument(text);
 		const pos = new vscode.Position(1, 16); // cursor on the 'MyCte' reference
 		const result = await localProvider.provideReferences(doc, pos, { includeDeclaration: true }, mockToken);
 
@@ -287,10 +322,12 @@ describe('DbtReferenceProvider', () => {
 
 	it('finds table alias references and its column qualifiers', async () => {
 		// FROM orders o  →  o.id, o.amount
-		const ordersRelation = sym('table', 'orders', 1, 5, { alias: { name: 'o', line: 1, col: 12 } });
-		const ordersAlias = sym('alias', 'o', 1, 12, { modifiers: ['declaration'] });
-		const idCol = colSym(0, [{ name: 'o', col: 5 }, { name: 'id', col: 7 }], { source: ordersRelation });
-		const amountCol = colSym(0, [{ name: 'o', col: 13 }, { name: 'amount', col: 15 }], { source: ordersRelation });
+		const text = 'select o.id, o.amount\nfrom orders o';
+		const ls = lineStartsOf(text);
+		const ordersRelation = withOffsets(sym('table', 'orders', 1, 5, { alias: { name: 'o', line: 1, col: 12 } }), ls);
+		const ordersAlias = withOffsets(sym('alias', 'o', 1, 12, { modifiers: ['declaration'] }), ls);
+		const idCol = withOffsets(colSym(0, [{ name: 'o', col: 5 }, { name: 'id', col: 7 }], { source: ordersRelation }), ls);
+		const amountCol = withOffsets(colSym(0, [{ name: 'o', col: 13 }, { name: 'amount', col: 15 }], { source: ordersRelation }), ls);
 		const mockModel: Partial<DocumentModel> = {
 			ctes: [],
 			refs: [],
@@ -298,7 +335,7 @@ describe('DbtReferenceProvider', () => {
 		};
 		const ps = createMockParseServiceWithModel(mockModel);
 		const localProvider = new DbtReferenceProvider(indexer, createMockLogger(), ps);
-		const doc = createMockDocument('select o.id, o.amount\nfrom orders o');
+		const doc = createMockDocument(text);
 		// Cursor on the alias definition 'o' at line 1 col 12
 		const pos = new vscode.Position(1, 12);
 		const result = await localProvider.provideReferences(doc, pos, { includeDeclaration: true }, mockToken);
@@ -312,9 +349,11 @@ describe('DbtReferenceProvider', () => {
 	});
 
 	it('finds alias references when cursor is on a qualifier (o.col)', async () => {
-		const ordersRelation = sym('table', 'orders', 1, 5, { alias: { name: 'o', line: 1, col: 12 } });
-		const ordersAlias = sym('alias', 'o', 1, 12, { modifiers: ['declaration'] });
-		const idCol = colSym(0, [{ name: 'o', col: 5 }, { name: 'id', col: 7 }], { source: ordersRelation });
+		const text = 'select o.id\nfrom orders o';
+		const ls = lineStartsOf(text);
+		const ordersRelation = withOffsets(sym('table', 'orders', 1, 5, { alias: { name: 'o', line: 1, col: 12 } }), ls);
+		const ordersAlias = withOffsets(sym('alias', 'o', 1, 12, { modifiers: ['declaration'] }), ls);
+		const idCol = withOffsets(colSym(0, [{ name: 'o', col: 5 }, { name: 'id', col: 7 }], { source: ordersRelation }), ls);
 		const mockModel: Partial<DocumentModel> = {
 			ctes: [],
 			refs: [],
@@ -322,7 +361,7 @@ describe('DbtReferenceProvider', () => {
 		};
 		const ps = createMockParseServiceWithModel(mockModel);
 		const localProvider = new DbtReferenceProvider(indexer, createMockLogger(), ps);
-		const doc = createMockDocument('select o.id\nfrom orders o');
+		const doc = createMockDocument(text);
 		// Cursor on the qualifier 'o' in 'o.id' — tableCol=5, tableEndCol=6, so col 5
 		const pos = new vscode.Position(0, 5);
 		const result = await localProvider.provideReferences(doc, pos, { includeDeclaration: true }, mockToken);
@@ -396,15 +435,17 @@ describe('DbtRenameProvider', () => {
 	});
 
 	it('prepareRename returns alias range for an alias sym', async () => {
+		const text = 'select o.id\nfrom orders o';
+		const ls = lineStartsOf(text);
 		const mockModel: Partial<DocumentModel> = {
 			symbols: [
-				sym('table', 'orders', 1, 5),
-				sym('alias', 'o', 1, 12, { modifiers: ['declaration'] }),
+				withOffsets(sym('table', 'orders', 1, 5), ls),
+				withOffsets(sym('alias', 'o', 1, 12, { modifiers: ['declaration'] }), ls),
 			],
 		};
 		const ps = createMockParseServiceWithModel(mockModel);
 		const localProvider = new DbtRenameProvider(indexer, createMockLoader(), createMockLogger(), ps);
-		const doc = createMockDocument('select o.id\nfrom orders o');
+		const doc = createMockDocument(text);
 		const pos = new vscode.Position(1, 12); // cursor on alias 'o'
 
 		const result = await localProvider.prepareRename(doc, pos, mockToken) as { range: vscode.Range; placeholder: string };
@@ -413,15 +454,17 @@ describe('DbtRenameProvider', () => {
 	});
 
 	it('prepareRename returns alias range for a column qualifier part', async () => {
-		const ordersRelation = sym('table', 'orders', 1, 5, { alias: { name: 'o', line: 1, col: 12 } });
-		const ordersAlias = sym('alias', 'o', 1, 12, { modifiers: ['declaration'] });
-		const idCol = colSym(0, [{ name: 'o', col: 7 }, { name: 'id', col: 9 }], { source: ordersRelation });
+		const text = 'select o.id\nfrom orders o';
+		const ls = lineStartsOf(text);
+		const ordersRelation = withOffsets(sym('table', 'orders', 1, 5, { alias: { name: 'o', line: 1, col: 12 } }), ls);
+		const ordersAlias = withOffsets(sym('alias', 'o', 1, 12, { modifiers: ['declaration'] }), ls);
+		const idCol = withOffsets(colSym(0, [{ name: 'o', col: 7 }, { name: 'id', col: 9 }], { source: ordersRelation }), ls);
 		const mockModel: Partial<DocumentModel> = {
 			symbols: [ordersRelation, ordersAlias, idCol],
 		};
 		const ps = createMockParseServiceWithModel(mockModel);
 		const localProvider = new DbtRenameProvider(indexer, createMockLoader(), createMockLogger(), ps);
-		const doc = createMockDocument('select o.id\nfrom orders o');
+		const doc = createMockDocument(text);
 		const pos = new vscode.Position(0, 7); // cursor on qualifier 'o' in 'o.id'
 
 		const result = await localProvider.prepareRename(doc, pos, mockToken) as { range: vscode.Range; placeholder: string };
@@ -430,13 +473,15 @@ describe('DbtRenameProvider', () => {
 
 	it('prepareRename returns CTE name range for a cte reference sym', async () => {
 		const baseCte = { name: 'base', line: 0, col: 5, endLine: 0, endCol: 9, columns: [] };
+		const text = 'with base as (select 1),\nselect * from base';
+		const ls = lineStartsOf(text);
 		const mockModel: Partial<DocumentModel> = {
 			ctes: [baseCte],
-			symbols: [sym('cte', 'base', 1, 14, { definitionOf: baseCte })],
+			symbols: [withOffsets(sym('cte', 'base', 1, 14, { definitionOf: baseCte }), ls)],
 		};
 		const ps = createMockParseServiceWithModel(mockModel);
 		const localProvider = new DbtRenameProvider(indexer, createMockLoader(), createMockLogger(), ps);
-		const doc = createMockDocument('with base as (select 1),\nselect * from base');
+		const doc = createMockDocument(text);
 		const pos = new vscode.Position(1, 16); // cursor on 'base' table_ref
 
 		const result = await localProvider.prepareRename(doc, pos, mockToken) as { range: vscode.Range; placeholder: string };
@@ -466,16 +511,18 @@ describe('DbtRenameProvider', () => {
 	});
 
 	it('provideRenameEdits renames alias definition and all qualifier spans', async () => {
-		const ordersRelation = sym('table', 'orders', 1, 5, { alias: { name: 'o', line: 1, col: 12 } });
-		const ordersAlias = sym('alias', 'o', 1, 12, { modifiers: ['declaration'] });
-		const idCol = colSym(0, [{ name: 'o', col: 7 }, { name: 'id', col: 9 }], { source: ordersRelation });
-		const amountCol = colSym(0, [{ name: 'o', col: 12 }, { name: 'amount', col: 14 }], { source: ordersRelation });
+		const text = 'select o.id, o.amount\nfrom orders o';
+		const ls = lineStartsOf(text);
+		const ordersRelation = withOffsets(sym('table', 'orders', 1, 5, { alias: { name: 'o', line: 1, col: 12 } }), ls);
+		const ordersAlias = withOffsets(sym('alias', 'o', 1, 12, { modifiers: ['declaration'] }), ls);
+		const idCol = withOffsets(colSym(0, [{ name: 'o', col: 7 }, { name: 'id', col: 9 }], { source: ordersRelation }), ls);
+		const amountCol = withOffsets(colSym(0, [{ name: 'o', col: 12 }, { name: 'amount', col: 14 }], { source: ordersRelation }), ls);
 		const mockModel: Partial<DocumentModel> = {
 			symbols: [ordersRelation, ordersAlias, idCol, amountCol],
 		};
 		const ps = createMockParseServiceWithModel(mockModel);
 		const localProvider = new DbtRenameProvider(indexer, createMockLoader(), createMockLogger(), ps);
-		const doc = createMockDocument('select o.id, o.amount\nfrom orders o');
+		const doc = createMockDocument(text);
 		const pos = new vscode.Position(1, 12); // cursor on alias 'o'
 
 		const result = await localProvider.provideRenameEdits(doc, pos, 'ord', mockToken);
@@ -490,17 +537,19 @@ describe('DbtRenameProvider', () => {
 		// endLine/endCol represent the closing paren of the CTE body — on a
 		// different line from the name. The rename must NOT use endCol as the name
 		// end (Bug #2 regression guard).
-		const baseCteDecl = sym('cte', 'base', 0, 5, { modifiers: ['declaration'] });
+		const text = 'with base as (\n  select 1\n),\nselect * from base';
+		const ls = lineStartsOf(text);
+		const baseCteDecl = withOffsets(sym('cte', 'base', 0, 5, { modifiers: ['declaration'] }), ls);
 		const mockModel: Partial<DocumentModel> = {
 			ctes: [{ name: 'base', line: 0, col: 5, endLine: 2, endCol: 1, columns: [] }],
 			symbols: [
 				baseCteDecl, // cte declaration
-				sym('cte', 'base', 3, 14, { definitionOf: baseCteDecl }), // usage in FROM
+				withOffsets(sym('cte', 'base', 3, 14, { definitionOf: baseCteDecl }), ls), // usage in FROM
 			],
 		};
 		const ps = createMockParseServiceWithModel(mockModel);
 		const localProvider = new DbtRenameProvider(indexer, createMockLoader(), createMockLogger(), ps);
-		const doc = createMockDocument('with base as (\n  select 1\n),\nselect * from base');
+		const doc = createMockDocument(text);
 		const pos = new vscode.Position(3, 16); // cursor on usage 'base'
 
 		const result = await localProvider.provideRenameEdits(doc, pos, 'foundation', mockToken);

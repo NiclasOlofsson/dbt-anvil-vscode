@@ -315,7 +315,7 @@ describe('definition-provider integration (FTL)', () => {
 
 	// ---- ParseService.symAtPosition ----
 	//
-	// Tests the hit-testing layer: given a (line, col) cursor position, symAtPosition
+	// Tests the hit-testing layer: given an absolute char offset cursor position, symAtPosition
 	// must return the right Sym (or undefined), and partIndexAtPosition must report
 	// which dotted part the cursor sits on. This is the only way the VS Code
 	// providers know what the user clicked on.
@@ -346,7 +346,7 @@ describe('definition-provider integration (FTL)', () => {
 			expect(cteSym).toBeDefined();
 			const range = rangeOfSpan(cteSym!.span);
 
-			const resolved = ParseService.symAtPosition(model, range.start.line, range.start.character);
+			const resolved = ParseService.symAtPosition(model, offsetOf(SQL, range.start));
 			expect(resolved?.kind).toBe('cte');
 			expect(resolved?.name).toBe('address_with_country');
 		});
@@ -357,7 +357,7 @@ describe('definition-provider integration (FTL)', () => {
 			expect(alias).toBeDefined();
 			const aliasRange = rangeOfSpan(alias!.span);
 
-			const resolved = ParseService.symAtPosition(model, aliasRange.start.line, aliasRange.start.character);
+			const resolved = ParseService.symAtPosition(model, offsetOf(SQL, aliasRange.start));
 			expect(resolved?.kind).toBe('alias');
 			expect(resolved?.name).toBe('addr');
 		});
@@ -368,7 +368,7 @@ describe('definition-provider integration (FTL)', () => {
 			expect(alias).toBeDefined();
 			const aliasRange = rangeOfSpan(alias!.span);
 
-			const resolved = ParseService.symAtPosition(model, aliasRange.start.line, aliasRange.start.character);
+			const resolved = ParseService.symAtPosition(model, offsetOf(SQL, aliasRange.start));
 			expect(resolved?.kind).toBe('alias');
 			expect(resolved?.name).toBe('wh');
 		});
@@ -378,9 +378,9 @@ describe('definition-provider integration (FTL)', () => {
 			expect(whQualCol).toBeDefined();
 			const qualRange = qualifierRangeOf(whQualCol!)!;
 
-			const resolved = ParseService.symAtPosition(model, qualRange.start.line, qualRange.start.character);
+			const resolved = ParseService.symAtPosition(model, offsetOf(SQL, qualRange.start));
 			expect(resolved?.kind).toBe('column');
-			const partIndex = ParseService.partIndexAtPosition(resolved!, qualRange.start.line, qualRange.start.character);
+			const partIndex = ParseService.partIndexAtPosition(resolved!, offsetOf(SQL, qualRange.start));
 			expect(partIndex).toBeLessThan(resolved!.partSpans!.length - 1);
 			const relation = resolved!.source;
 			expect(relation!.alias?.name).toBe('wh');
@@ -391,9 +391,9 @@ describe('definition-provider integration (FTL)', () => {
 			expect(whQualCol).toBeDefined();
 			const nameRange = nameRangeOf(whQualCol!);
 
-			const resolved = ParseService.symAtPosition(model, nameRange.start.line, nameRange.start.character);
+			const resolved = ParseService.symAtPosition(model, offsetOf(SQL, nameRange.start));
 			expect(resolved?.kind).toBe('column');
-			const partIndex = ParseService.partIndexAtPosition(resolved!, nameRange.start.line, nameRange.start.character);
+			const partIndex = ParseService.partIndexAtPosition(resolved!, offsetOf(SQL, nameRange.start));
 			expect(partIndex).toBe(resolved!.partSpans!.length - 1);
 			const relation = resolved!.source;
 			expect(relation!.alias?.name).toBe('wh');
@@ -404,9 +404,9 @@ describe('definition-provider integration (FTL)', () => {
 			expect(addrQualCol).toBeDefined();
 			const qualRange = qualifierRangeOf(addrQualCol!)!;
 
-			const resolved = ParseService.symAtPosition(model, qualRange.start.line, qualRange.start.character);
+			const resolved = ParseService.symAtPosition(model, offsetOf(SQL, qualRange.start));
 			expect(resolved?.kind).toBe('column');
-			const partIndex = ParseService.partIndexAtPosition(resolved!, qualRange.start.line, qualRange.start.character);
+			const partIndex = ParseService.partIndexAtPosition(resolved!, offsetOf(SQL, qualRange.start));
 			expect(partIndex).toBeLessThan(resolved!.partSpans!.length - 1);
 			const relation = resolved!.source;
 			expect(relation!.alias?.name).toBe('addr');
@@ -417,9 +417,9 @@ describe('definition-provider integration (FTL)', () => {
 			expect(addrQualCol).toBeDefined();
 			const nameRange = nameRangeOf(addrQualCol!);
 
-			const resolved = ParseService.symAtPosition(model, nameRange.start.line, nameRange.start.character);
+			const resolved = ParseService.symAtPosition(model, offsetOf(SQL, nameRange.start));
 			expect(resolved?.kind).toBe('column');
-			const partIndex = ParseService.partIndexAtPosition(resolved!, nameRange.start.line, nameRange.start.character);
+			const partIndex = ParseService.partIndexAtPosition(resolved!, offsetOf(SQL, nameRange.start));
 			expect(partIndex).toBe(resolved!.partSpans!.length - 1);
 			const relation = resolved!.source;
 			expect(relation!.alias?.name).toBe('addr');
@@ -430,9 +430,9 @@ describe('definition-provider integration (FTL)', () => {
 			expect(streetCol).toBeDefined();
 			const qualRange = qualifierRangeOf(streetCol!)!;
 
-			const resolved = ParseService.symAtPosition(model, qualRange.start.line, qualRange.start.character);
+			const resolved = ParseService.symAtPosition(model, offsetOf(SQL, qualRange.start));
 			expect(resolved?.kind).toBe('column');
-			const partIndex = ParseService.partIndexAtPosition(resolved!, qualRange.start.line, qualRange.start.character);
+			const partIndex = ParseService.partIndexAtPosition(resolved!, offsetOf(SQL, qualRange.start));
 			expect(partIndex).toBeLessThan(resolved!.partSpans!.length - 1);
 			const relation = resolved!.source;
 			expect(relation!.alias?.name).toBe('addr');
@@ -444,7 +444,7 @@ describe('definition-provider integration (FTL)', () => {
 			expect(citySym).toBeDefined();
 			const nameRange = nameRangeOf(citySym!);
 
-			const resolved = ParseService.symAtPosition(model, nameRange.start.line, nameRange.start.character + 1);
+			const resolved = ParseService.symAtPosition(model, offsetOf(SQL, nameRange.start) + 1);
 			expect(resolved?.kind).toBe('column');
 			const relation = resolved!.source;
 			expect(relation!.alias?.name).toBe('addr');
@@ -455,7 +455,7 @@ describe('definition-provider integration (FTL)', () => {
 			expect(declSym).toBeDefined();
 			const nameRange = nameRangeOf(declSym!);
 
-			const resolved = ParseService.symAtPosition(model, nameRange.start.line, nameRange.start.character + 1);
+			const resolved = ParseService.symAtPosition(model, offsetOf(SQL, nameRange.start) + 1);
 			expect(resolved?.kind).toBe('column');
 			expect(resolved?.modifiers.includes('declaration')).toBe(true);
 		});
@@ -467,7 +467,7 @@ describe('definition-provider integration (FTL)', () => {
 			// "nothing here" position under Sym. Line 26 ("select * from
 			// warehouses_enriched"), column 0 (the 's' of the SELECT keyword) is:
 			// no Sym starts before the '*' at col 7.
-			const resolved = ParseService.symAtPosition(model, 26, 0);
+			const resolved = ParseService.symAtPosition(model, offsetOf(SQL, { line: 26, character: 0 }));
 			expect(resolved).toBeUndefined();
 		});
 	});
@@ -559,6 +559,7 @@ describe('definition-provider integration (FTL)', () => {
 				getText: () => SQL,
 				lineAt: (n: number) => ({ text: lines[n] ?? '', range: new vscode.Range(n, 0, n, (lines[n] ?? '').length) }),
 				positionAt: () => new vscode.Position(0, 0),
+				offsetAt: (p: vscode.Position) => offsetOf(SQL, p),
 				getWordRangeAtPosition: () => undefined,
 				lineCount: lines.length,
 				uri: vscode.Uri.file('/project/models/mart.sql'),
@@ -710,6 +711,13 @@ describe('definition-provider integration (FTL)', () => {
 		});
 	});
 });
+
+/** { line, character } (0-based) → absolute char offset into `text`. */
+function offsetOf(text: string, pos: { line: number; character: number }): number {
+	let offset = 0;
+	for (let l = 0; l < pos.line; l++) offset = text.indexOf('\n', offset) + 1;
+	return offset + pos.character;
+}
 
 /** Find a column reference Sym by bare name, 0-based line, and qualifier text. */
 function findColumnSym(model: DocumentModel, bareName: string, line: number, qualifier: string): Sym | undefined {

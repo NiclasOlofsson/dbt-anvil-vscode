@@ -31,6 +31,7 @@ export {
 	dialectSymbols,
 	resolveDialect,
 	foldIdentifier,
+	symbolAt,
 	displayName,
 	DefaultTemplateProvider,
 	Schema,

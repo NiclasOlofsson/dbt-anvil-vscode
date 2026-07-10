@@ -45,9 +45,10 @@ export class DbtRenameProvider implements vscode.RenameProvider {
 		if (this.parseService) {
 			const model = await this.parseService.getDocumentModel(document);
 			if (model) {
-				const sym = ParseService.symAtPosition(model, position.line, position.character);
+				const offset = document.offsetAt(position);
+				const sym = ParseService.symAtPosition(model, offset);
 				if (sym) {
-					const partIndex = ParseService.partIndexAtPosition(sym, position.line, position.character);
+					const partIndex = ParseService.partIndexAtPosition(sym, offset);
 					const r = this._tokenRenameRange(sym, partIndex, model);
 					if (r) return r;
 				}
@@ -126,9 +127,10 @@ export class DbtRenameProvider implements vscode.RenameProvider {
 		if (this.parseService) {
 			const docModel = await this.parseService.getDocumentModel(document);
 			if (docModel) {
-				const sym = ParseService.symAtPosition(docModel, position.line, position.character);
+				const offset = document.offsetAt(position);
+				const sym = ParseService.symAtPosition(docModel, offset);
 				if (sym) {
-					const partIndex = ParseService.partIndexAtPosition(sym, position.line, position.character);
+					const partIndex = ParseService.partIndexAtPosition(sym, offset);
 					return buildInFileRenameEdits(sym, partIndex, docModel, document.uri, newName);
 				}
 			}

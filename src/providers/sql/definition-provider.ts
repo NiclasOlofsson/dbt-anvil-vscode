@@ -35,7 +35,7 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 		const model = await this.parseService.getDocumentModel(document);
 		if (token.isCancellationRequested || !model) return undefined;
 
-		const ctx = resolvePositionContext(model, line, position);
+		const ctx = resolvePositionContext(model, position, document.offsetAt(position));
 
 		if (ctx?.kind === 'ref') {
 			const def = this._resolveRef(ctx.ref.model);

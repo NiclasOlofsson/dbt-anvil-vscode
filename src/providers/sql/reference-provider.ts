@@ -52,11 +52,12 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 				if (src) return this._findSourceUsages(src.sourceName, src.tableName, token);
 
 				// Sym-based dispatch using resolved position
-				const sym = ParseService.symAtPosition(model, position.line, position.character);
+				const offset = document.offsetAt(position);
+				const sym = ParseService.symAtPosition(model, offset);
 				if (!sym) return [];
 
 				if (sym.kind === 'column') {
-					const partIndex = ParseService.partIndexAtPosition(sym, position.line, position.character);
+					const partIndex = ParseService.partIndexAtPosition(sym, offset);
 					const isQualifierPart = sym.partSpans !== undefined
 						&& partIndex !== undefined
 						&& partIndex < sym.partSpans.length - 1;

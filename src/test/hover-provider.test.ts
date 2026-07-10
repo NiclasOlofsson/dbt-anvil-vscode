@@ -39,6 +39,11 @@ function createMockDocument(content: string): vscode.TextDocument {
 			}
 			return new vscode.Position(lines.length - 1, 0);
 		}),
+		offsetAt: vi.fn((pos: vscode.Position) => {
+			let offset = 0;
+			for (let i = 0; i < pos.line; i++) offset += (lines[i] ?? '').length + 1;
+			return offset + pos.character;
+		}),
 		getWordRangeAtPosition: vi.fn((pos: vscode.Position, pattern?: RegExp) => {
 			const line = lines[pos.line] ?? '';
 			const re = pattern ?? /[a-zA-Z_]\w*/g;
@@ -80,21 +85,41 @@ const mockToken: vscode.CancellationToken = {
 	onCancellationRequested: vi.fn(),
 };
 
+/** Prefix-sum of char offsets at the start of each line of `text` — matches exactly
+ *  what `createMockDocument`'s `offsetAt`/`positionAt` compute, so a `sym()` fixture
+ *  built against the same `lineStarts` lands on the same absolute offset the mock
+ *  document would report for that line/column. */
+function lineStartsOf(text: string): number[] {
+	const lines = text.split('\n');
+	const starts: number[] = [0];
+	for (let i = 0; i < lines.length - 1; i++) starts.push(starts[i] + lines[i].length + 1);
+	return starts;
+}
+
 /** Build a `Sym` stub. `line`/`endLine` are 0-based (VS Code convention, matching every
- *  position elsewhere in this file) — converted internally to Sym.span's 1-based line. */
+ *  position elsewhere in this file) — converted internally to Sym.span's 1-based line.
+ *  `lineStarts` (from `lineStartsOf`) turns `col`/`endCol` into TRUE absolute char
+ *  offsets for `span.start`/`span.end` — required wherever the symbol is hit-tested via
+ *  `ParseService.symAtPosition` against a real mock document (multi-line fixtures: a
+ *  bare `col` is NOT an absolute offset once the symbol isn't on line 0). Omitted for
+ *  the `traceCteLineage` fixtures below, which never go through `symAtPosition` — those
+ *  keep the pre-existing (dead) `start: col, end: endCol` values unchanged. */
 function sym(
 	kind: Sym['kind'],
 	name: string,
 	line: number,
 	col: number,
 	endCol: number,
-	opts: { modifiers?: Sym['modifiers']; frame?: string; endLine?: number; alias?: Sym; source?: Sym } = {},
+	opts: { modifiers?: Sym['modifiers']; frame?: string; endLine?: number; alias?: Sym; source?: Sym; lineStarts?: number[] } = {},
 ): Sym {
+	const endLine = opts.endLine ?? line;
+	const start = opts.lineStarts ? opts.lineStarts[line] + col : col;
+	const end = opts.lineStarts ? opts.lineStarts[endLine] + endCol : endCol;
 	return {
 		kind,
 		modifiers: opts.modifiers ?? ['reference'],
 		name,
-		span: { start: col, end: endCol, line: line + 1, column: col, endLine: (opts.endLine ?? line) + 1, endColumn: endCol },
+		span: { start, end, line: line + 1, column: col, endLine: endLine + 1, endColumn: endCol },
 		frame: opts.frame ?? MAIN_FRAME,
 		...(opts.alias ? { alias: { name: opts.alias.name, span: opts.alias.span } } : {}),
 		...(opts.source ? { source: opts.source } : {}),
@@ -115,6 +140,7 @@ describe('DbtHoverProvider — CTE hover via ParseService', () => {
 		')',
 		'SELECT * FROM enriched',
 	].join('\n');
+	const ls = lineStartsOf(sql);
 
 	const model: DocumentModel = {
 		ctes: [
@@ -126,11 +152,11 @@ describe('DbtHoverProvider — CTE hover via ParseService', () => {
 		finalColumns: [{ name: 'id', line: 8 }, { name: 'name', line: 8 }],
 		symbols: [
 			// Line 2: "  FROM raw_customers" — inside `base`'s own body
-			sym('table', 'raw_customers', 2, 7, 21, { frame: 'base' }),
+			sym('table', 'raw_customers', 2, 7, 21, { frame: 'base', lineStarts: ls }),
 			// Line 6: "  FROM base" — inside `enriched`'s own body
-			sym('cte', 'base', 6, 7, 11, { frame: 'enriched' }),
+			sym('cte', 'base', 6, 7, 11, { frame: 'enriched', lineStarts: ls }),
 			// Line 8: "SELECT * FROM enriched" — the outermost query
-			sym('cte', 'enriched', 8, 14, 22, { frame: MAIN_FRAME }),
+			sym('cte', 'enriched', 8, 14, 22, { frame: MAIN_FRAME, lineStarts: ls }),
 		],
 		timing: { parseMs: 5, totalMs: 10 },
 	};

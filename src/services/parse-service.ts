@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { DescribeCache } from '../dbt/describe-cache';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import { templateVariants, toSqllensDialect } from '../ftl/sqllens/api';
+import { symbolAt, templateVariants, toSqllensDialect } from '../ftl/sqllens/api';
 import { makeTemplateProvider } from '../ftl/sqllens/template-shape';
 import type { ILogger } from '../types/logger';
 import type { DocumentParser, ParseOptions } from './document-parser';
@@ -9,7 +9,7 @@ import type { JinjaToken } from '../ftl/sql-tokens';
 import type { AstIndex } from '../ninja/reflow/ast-index';
 import { compositeAstIndex } from '../ftl/sqllens/ast-index';
 import type { NinjaSqlToken } from '../ftl/ninja-sql-tokens';
-import type { Span, Sym } from '../ftl/sqllens/api';
+import type { Sym } from '../ftl/sqllens/api';
 
 export interface ColumnInfo {
 	name: string;
@@ -261,22 +261,6 @@ export interface EnrichmentConfig {
 interface CacheEntry {
 	version: number;
 	model: DocumentModel;
-}
-
-/**
- * Whether (line, col) — 0-based, the extension's convention — falls inside a
- * sqllens `Span` (1-based line, 0-based column, end-exclusive). Returns a
- * comparable "width" when it does (smaller = a more specific match — used by
- * `ParseService.symAtPosition` to prefer the innermost covering symbol),
- * `undefined` when it doesn't.
- */
-function symSpanContains(span: Span, line: number, col: number): number | undefined {
-	const startLine = span.line - 1;
-	const endLine = span.endLine - 1;
-	if (line < startLine || line > endLine) return undefined;
-	if (line === startLine && col < span.column) return undefined;
-	if (line === endLine && col >= span.endColumn) return undefined;
-	return (endLine - startLine) * 1_000_000 + (span.endColumn - span.column);
 }
 
 /** A `Sym` kind that `relationSymbol` (sqllens's own symbol emitter) can produce for a
@@ -720,36 +704,35 @@ export class ParseService {
 	}
 
 	/**
-	 * Resolve a cursor position against sqllens's native symbols. Returns the
-	 * smallest-span `Sym` covering the position — a column/table/cte/alias/function
-	 * symbol, whichever is most specific — or `undefined` when nothing covers it.
+	 * Resolve a cursor OFFSET (absolute 0-based char index — what
+	 * `TextDocument.offsetAt(position)` yields, same UTF-16 units sqllens spans
+	 * carry) against sqllens's native symbols, via sqllens's own `symbolAt`:
+	 * the narrowest covering `Sym` by true character width, or `undefined`.
+	 * A zero-width span (schema-expanded star column) never matches — its
+	 * designed contract.
 	 *
 	 * No alias-priority pass is needed: sqllens's Sym spans always come from real
 	 * CST nodes (frozen IR, never synthesized), so a real alias span and a real
 	 * column span never legitimately overlap the way the legacy qualify()'s
 	 * synthetic star-expansion tokens once could.
 	 */
-	static symAtPosition(model: DocumentModel, line: number, col: number): Sym | undefined {
-		let best: Sym | undefined;
-		let bestWidth = Infinity;
-		for (const sym of model.symbols ?? []) {
-			const width = symSpanContains(sym.span, line, col);
-			if (width !== undefined && width < bestWidth) { best = sym; bestWidth = width; }
-		}
-		return best;
+	static symAtPosition(model: DocumentModel, offset: number): Sym | undefined {
+		return symbolAt(model.symbols ?? [], offset);
 	}
 
 	/**
 	 * For a column-reference `Sym` (whose span covers the WHOLE dotted reference,
-	 * e.g. all of `o.order_id`), which dotted part the cursor sits on — 0 for the
-	 * first part, `parts.length - 1` for the column name itself. `undefined` when
-	 * the symbol carries no `partSpans` (a single-part reference, or a synthesized
-	 * part sqllens couldn't give its own span) or the cursor isn't on any part.
+	 * e.g. all of `o.order_id`), which dotted part the cursor OFFSET sits on — 0
+	 * for the first part, `parts.length - 1` for the column name itself.
+	 * `undefined` when the symbol carries no `partSpans` (a single-part
+	 * reference, or a synthesized part sqllens couldn't give its own span) or
+	 * the cursor isn't on any part (e.g. the dot between parts).
 	 */
-	static partIndexAtPosition(sym: Sym, line: number, col: number): number | undefined {
+	static partIndexAtPosition(sym: Sym, offset: number): number | undefined {
 		if (!sym.partSpans) return undefined;
 		for (let i = 0; i < sym.partSpans.length; i++) {
-			if (symSpanContains(sym.partSpans[i], line, col) !== undefined) return i;
+			const p = sym.partSpans[i];
+			if (p.start <= offset && offset < p.end) return i;
 		}
 		return undefined;
 	}
