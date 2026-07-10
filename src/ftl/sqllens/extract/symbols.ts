@@ -31,49 +31,61 @@ export function extractSymbols(
 	return deriveSymbols(scopes, schema, { dialect }, expandStarOf);
 }
 
+/** One arm's join surface for `backfillSymAliases`: the arm's own analyzed
+ *  symbols (arm-local `Sym.node` identities), its realization's tags, and its
+ *  guaranteed tag→node join. */
+export interface AliasBackfillArm {
+	symbols: Sym[];
+	tags: TagNode[];
+	nodeOf: (tag: TagNode) => object | undefined;
+}
+
 /**
- * Back-fill `alias` onto ref/source infos (built from the R2 tag-AST, which sees
- * jinja tags but never SQL aliases) from the matching relation Sym's own alias
- * binding — the Sym-native replacement for extract/tokens.ts's
- * `backfillTagAliases`.
+ * Back-fill `alias` onto ref/source infos (built from the PRIMARY tag-AST,
+ * which sees jinja tags but never SQL aliases) from the matching relation
+ * Sym's own alias binding.
  *
- * Joined by IDENTITY, not position (stage-1 Of-accessors): `nodeOf(tag)` gives
- * the IR node the tag filled, `Sym.node` carries the node a relation Sym
- * describes — one Map lookup joins them. Tag→info correlation is by INDEX:
- * `tagInfos` produces refs/sources 1:1 in tag order from this same `tags`
- * array, so the i-th ref tag IS `refs[i]` (invariant shared with tag-infos.ts).
- * A self-named alias (`orders as orders`) is not an alias — same rule the old
- * position probe applied.
+ * Joined by IDENTITY within each ARM (variant-wave A2): an arm's
+ * `nodeOf(tag)` → `Sym.node` join is guaranteed in that arm's own parse,
+ * where the primary's is only best-effort under conflicting arms. Arm tags
+ * correlate to primary infos by the tag's OPENING OFFSET (`tagSpan.start`):
+ * realizations are coordinate-preserving, so the same tag opens at the same
+ * offset in every arm — an exact shared key, not a heuristic. Primary
+ * tag→info correlation is by INDEX (`tagInfos` produces refs/sources 1:1 in
+ * tag order — invariant shared with tag-infos.ts). First arm to answer an
+ * alias wins; a self-named alias (`orders as orders`) is not an alias — same
+ * rule the old position probe applied.
  */
 export function backfillSymAliases(
-	symbols: Sym[],
 	refs: RefInfo[],
 	sources: SourceInfo[],
-	tags: TagNode[],
-	nodeOf: (tag: TagNode) => object | undefined,
+	primaryTags: TagNode[],
+	arms: AliasBackfillArm[],
 ): void {
-	const symByNode = new Map<object, Sym>();
-	for (const s of symbols) {
-		if (RELATION_KINDS.has(s.kind) && s.modifiers.includes('reference') && s.node !== undefined) {
-			symByNode.set(s.node, s);
-		}
-	}
-	const aliasOf = (tag: TagNode): string | undefined => {
-		const node = nodeOf(tag);
-		return node ? symByNode.get(node)?.alias?.name : undefined;
-	};
-
+	const infoByStart = new Map<number, RefInfo | SourceInfo>();
 	let refIdx = 0;
 	let srcIdx = 0;
-	for (const tag of tags) {
-		if (tag.kind === 'ref') {
-			const info = refs[refIdx++];
-			const alias = aliasOf(tag);
-			if (alias && alias !== info.model) info.alias = alias;
-		} else if (tag.kind === 'source') {
-			const info = sources[srcIdx++];
-			const alias = aliasOf(tag);
-			if (alias && alias !== info.tableName) info.alias = alias;
+	for (const tag of primaryTags) {
+		if (tag.kind === 'ref') infoByStart.set(tag.tagSpan.start, refs[refIdx++]);
+		else if (tag.kind === 'source') infoByStart.set(tag.tagSpan.start, sources[srcIdx++]);
+	}
+
+	for (const arm of arms) {
+		const symByNode = new Map<object, Sym>();
+		for (const s of arm.symbols) {
+			if (RELATION_KINDS.has(s.kind) && s.modifiers.includes('reference') && s.node !== undefined) {
+				symByNode.set(s.node, s);
+			}
+		}
+		for (const tag of arm.tags) {
+			if (tag.kind !== 'ref' && tag.kind !== 'source') continue;
+			const info = infoByStart.get(tag.tagSpan.start);
+			if (!info || info.alias !== undefined) continue;
+			const node = arm.nodeOf(tag);
+			const alias = node ? symByNode.get(node)?.alias?.name : undefined;
+			if (!alias) continue;
+			const selfName = 'model' in info ? info.model : info.tableName;
+			if (alias !== selfName) info.alias = alias;
 		}
 	}
 }

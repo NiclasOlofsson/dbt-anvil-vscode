@@ -9,11 +9,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import * as path from 'node:path';
-import { MAIN_FRAME, templateVariants } from '../ftl/sqllens/api';
+import { MAIN_FRAME } from '../ftl/sqllens/api';
 import { BridgeRunner } from '../dbt/bridge-runner';
 import { detectPythonEnvironment, type PythonEnvironment } from '../dbt/env-detector';
 import { SqllensDocumentParser, type AdapterContext } from '../ftl/sqllens/document-parser';
-import { mergeModels, ParseService } from '../services/parse-service';
+import { ParseService } from '../services/parse-service';
 import type { DocumentModel } from '../services/parse-service';
 import { isRelationSym, rangeOfSpan } from '../providers/sql/sym-spans';
 import { createMockLogger } from './helpers';
@@ -379,25 +379,18 @@ describe('ftl parse_document – conditional branches', () => {
 		parser = new SqllensDocumentParser(ANSI_CONTEXT);
 	});
 
-	async function parseWithBranches(source: string): Promise<DocumentModel> {
-		const variants = templateVariants(source, 'duckdb');
-		const models: DocumentModel[] = [];
-		for (const variant of variants) {
-			try {
-				models.push(await parser.parse(variant.text()));
-			} catch {
-				// skip failed variants
-			}
-		}
-		if (models.length === 0) throw new Error('all variants failed to parse');
-		return mergeModels(models);
+	/** ONE parser call — the variant-aware SqlDocument inside the adapter owns
+	 *  branch-arm fan-out and the cross-arm unions (the variant wave retired the
+	 *  consumer-side templateVariants + mergeModels loop this helper used to run;
+	 *  every assertion below is unchanged and now binds the adapter directly). */
+	function parseWithBranches(source: string): Promise<DocumentModel> {
+		return parser.parse(source);
 	}
 
-	it('mergeModels preserves ninjaSqlTokens (regression: comment masking broken for Jinja conditional files)', async () => {
-		// When a file has {% if %} blocks, templateVariants produces multiple variants and
-		// mergeModels is called. The original mergeModels dropped its token stream, so
-		// layout rules had no comment spans to mask — causing false-positive violations
-		// inside -- comments.
+	it('a conditional model keeps its ninjaSqlTokens (regression: comment masking broken for Jinja conditional files)', async () => {
+		// When a file has {% if %} blocks, the merged model used to drop its token
+		// stream, so layout rules had no comment spans to mask — causing
+		// false-positive violations inside -- comments.
 		const source = [
 			'select',
 			'    {% if is_incremental() %}count (*){% else %}coalesce(id, 0){% endif %}  -- count (comment)',

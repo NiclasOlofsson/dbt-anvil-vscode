@@ -530,16 +530,21 @@ describe('SqllensDocumentParser — schema-fed SELECT * expansion', () => {
 	});
 
 	it('expands a CTE-chain wildcard by inference once a schema is supplied for the base table', async () => {
-		// `b` is a pure `select *` CTE — legacy keeps its `*` (wildcardCtes side-channel),
-		// but the TOP-level `select * from b` still expands via the inferred CTE columns.
-		// A schema only for the base `t` is enough — the CTE columns are inferred from it.
+		// A schema only for the base `t` is enough — every CTE in the chain infers
+		// its columns from it, INCLUDING the pure `select *` CTE `b`. The legacy
+		// engine kept a literal `*` sentinel for a sole-bare-star CTE (wildcardCtes
+		// side-channel — a limitation, not intent); the union-view pipeline resolves
+		// the chain, and every `*`-sentinel consumer is equal-or-better with real
+		// columns: unknown-column validation engages instead of skipping, hover
+		// matches truthfully instead of matching anything, completions offer real
+		// names. (Contract change adopted with the variant wave, 2026-07-10 —
+		// same class as the schema-resolved-star lineage edges.)
 		const sql = 'with a as (select x, y from t),\nb as (select * from a)\nselect * from b';
 		const model = await parser('databricks').parse(sql, { schema: { t: { x: 'int', y: 'int' } } });
 
 		expect(model.finalColumns.map(c => c.name)).toEqual(['x', 'y']);
 		expect(model.ctes.find(c => c.name === 'a')!.columns.map(c => c.name)).toEqual(['x', 'y']);
-		// The sole-bare-star CTE keeps its wildcard entry, matching the legacy path.
-		expect(model.ctes.find(c => c.name === 'b')!.columns.map(c => c.name)).toEqual(['*']);
+		expect(model.ctes.find(c => c.name === 'b')!.columns.map(c => c.name)).toEqual(['x', 'y']);
 	});
 
 	it('expands a mixed `*, extra` CTE body (not a sole bare star) into real columns', async () => {

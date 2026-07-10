@@ -1,13 +1,12 @@
 import * as vscode from 'vscode';
 import type { DescribeCache } from '../dbt/describe-cache';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import { symbolAt, templateVariants, toSqllensDialect } from '../ftl/sqllens/api';
+import { symbolAt } from '../ftl/sqllens/api';
 import { makeTemplateProvider } from '../ftl/sqllens/template-shape';
 import type { ILogger } from '../types/logger';
 import type { DocumentParser, ParseOptions } from './document-parser';
 import type { JinjaToken } from '../ftl/sql-tokens';
 import type { AstIndex } from '../ninja/reflow/ast-index';
-import { compositeAstIndex } from '../ftl/sqllens/ast-index';
 import type { NinjaSqlToken } from '../ftl/ninja-sql-tokens';
 import type { Sym } from '../ftl/sqllens/api';
 
@@ -242,16 +241,17 @@ export interface DocumentModel {
 	 * layout decisions (comma-position, indented_on, CTE body break) instead
 	 * of inferring structure from token-stream heuristics.
 	 *
-	 * When a file has Jinja conditionals, `mergeModels` composes the variants'
+	 * When a file has Jinja conditionals, the parser composes the per-arm
 	 * indexes so each branch keeps structural coverage at its own bytes.
 	 */
 	astIndex?: AstIndex;
 }
 
 /**
- * Optional dependencies for schema-aware parsing.
- * When provided, ParseService will describe upstream tables before calling
- * the bridge, so the bridge can resolve alias → column mappings in a single pass.
+ * Optional dependencies for schema-aware parsing. When provided, ParseService
+ * builds the enriched template provider from them per parse — manifest lookups
+ * plus the describe-backed relation answers the parser's analysis resolves
+ * against.
  */
 export interface EnrichmentConfig {
 	describeCache: DescribeCache;
@@ -268,141 +268,6 @@ interface CacheEntry {
 function isRelationSym(sym: Sym): boolean {
 	return (sym.kind === 'table' || sym.kind === 'cte' || sym.kind === 'subquery' || sym.kind === 'lateral')
 		&& sym.modifiers.includes('reference');
-}
-
-/**
- * Merge N DocumentModels produced by separate bridge parse calls (one per SQL
- * variant) into a single model. All positions in each model are expressed in
- * original-source coordinates (variant realization is length-preserving), so
- * tokens from different variants can be combined without any remapping.
- */
-export function mergeModels(models: DocumentModel[]): DocumentModel {
-	if (models.length === 1) return models[0];
-
-	// CTEs: union by name; within the same CTE merge column lists by name
-	const cteMap = new Map<string, CteInfo>();
-	for (const m of models) {
-		for (const cte of m.ctes) {
-			const existing = cteMap.get(cte.name);
-			if (!existing) {
-				cteMap.set(cte.name, { ...cte, columns: [...cte.columns] });
-			} else {
-				const known = new Set(existing.columns.map(c => c.name));
-				for (const col of cte.columns) {
-					if (!known.has(col.name)) {
-						existing.columns.push(col);
-						known.add(col.name);
-					}
-				}
-			}
-		}
-	}
-
-	// refs: dedup by model:line:col
-	const refKeys = new Set<string>();
-	const refs: RefInfo[] = [];
-	for (const m of models) {
-		for (const ref of m.refs) {
-			const k = ref.model + ':' + ref.line + ':' + ref.col;
-			if (!refKeys.has(k)) { refKeys.add(k); refs.push(ref); }
-		}
-	}
-
-	// sources: dedup by sourceName:tableName:line:col
-	const srcKeys = new Set<string>();
-	const sources: SourceInfo[] = [];
-	for (const m of models) {
-		for (const src of m.sources) {
-			const k = src.sourceName + ':' + src.tableName + ':' + src.line + ':' + src.col;
-			if (!srcKeys.has(k)) { srcKeys.add(k); sources.push(src); }
-		}
-	}
-
-	// macroCalls: dedup by name:line:col (packageName included to keep
-	// `dbt_utils.pivot` distinct from a same-named bare `pivot`)
-	const macroKeys = new Set<string>();
-	const macroCalls: MacroCallInfo[] = [];
-	for (const m of models) {
-		for (const mc of (m.macroCalls ?? [])) {
-			const k = (mc.packageName ?? '') + ':' + mc.name + ':' + mc.line + ':' + mc.col;
-			if (!macroKeys.has(k)) { macroKeys.add(k); macroCalls.push(mc); }
-		}
-	}
-
-	// symbols: dedup by kind:frame:span:name. A merged Sym is the same object
-	// reference carrying its own `.source`/`.alias`, so there is nothing separate
-	// to merge. `name` is part of the key (not just kind:frame:span) because a
-	// resolved `SELECT *`'s expanded per-column Syms (sqllens commit 9c87f55) all
-	// share one zero-width span at the star's position — omitting name would
-	// collapse N distinct columns down to one.
-	const symKeys = new Set<string>();
-	const symbols: Sym[] = [];
-	for (const m of models) {
-		for (const sym of m.symbols ?? []) {
-			const k = `${sym.kind}:${sym.frame}:${sym.span.line}:${sym.span.column}:${sym.name}`;
-			if (!symKeys.has(k)) { symKeys.add(k); symbols.push(sym); }
-		}
-	}
-
-	// finalColumns: dedup by name
-	const finalNames = new Set<string>();
-	const finalColumns: ColumnInfo[] = [];
-	for (const m of models) {
-		for (const col of m.finalColumns) {
-			if (!finalNames.has(col.name)) { finalNames.add(col.name); finalColumns.push(col); }
-		}
-	}
-
-	// relationColumns: first-hit per relation — every variant parses the same tags
-	// against the same provider, so answers are identical; union covers the branch
-	// whose ref only appears in one arm.
-	const relationColumns: Record<string, string[]> = {};
-	for (const m of models) {
-		for (const [name, cols] of Object.entries(m.relationColumns ?? {})) {
-			relationColumns[name] ??= cols;
-		}
-	}
-
-	// parseWarnings: dedup by message
-	const warnMessages = new Set<string>();
-	const parseWarnings: ParseWarning[] = [];
-	for (const m of models) {
-		for (const w of (m.parseWarnings ?? [])) {
-			if (!warnMessages.has(w.message)) { warnMessages.add(w.message); parseWarnings.push(w); }
-		}
-	}
-
-	const timing = {
-		parseMs: models.reduce((s, m) => s + m.timing.parseMs, 0),
-		totalMs: models.reduce((s, m) => s + m.timing.totalMs, 0),
-	};
-
-	// finalSelect: take the first model that has one (variants produce the same select)
-	const finalSelect = models.find(m => m.finalSelect)?.finalSelect;
-
-	// jinjaTokens / ninjaSqlTokens: all variants are parsed from the same raw source
-	// (variant realization is length-preserving), so every variant's token streams carry
-	// the same positions. Take the first model that has them. Dropping them here
-	// causes comment-span masking in layout rules to silently stop working for any
-	// file that contains Jinja conditionals.
-	const jinjaTokens = models.find(m => m.jinjaTokens)?.jinjaTokens;
-	const ninjaSqlTokens = models.find(m => m.ninjaSqlTokens)?.ninjaSqlTokens;
-
-	// astIndex: first-hit composite over the variants' indexes. Each variant's
-	// index covers the shared bytes (outside any Jinja conditional) PLUS its
-	// own active branches — non-active branches are blanked to spaces and
-	// contribute nothing. Composing gives structural coverage for every
-	// branch: shared bytes answer identically from any variant, branch bytes
-	// answer only from the variant that parsed them.
-	const indexes = models.map(m => m.astIndex).filter((i): i is AstIndex => i !== undefined);
-	const astIndex = indexes.length > 0 ? compositeAstIndex(indexes) : undefined;
-
-	return { ctes: [...cteMap.values()], refs, sources, macroCalls, finalColumns, finalSelect, timing, parseWarnings, relationColumns,
-		symbols,
-		jinjaTokens,
-		ninjaSqlTokens,
-		astIndex,
-	};
 }
 
 /**
@@ -756,39 +621,16 @@ export class ParseService {
 			: undefined;
 		const options: ParseOptions | undefined = provider ? { templateProvider: provider } : undefined;
 
-		// One realized text per branch arm (sqllens templateVariants: variant 0 is
-		// all-defaults plus one variant per non-default arm — linear in arm count,
-		// and coverage-complete for mergeModels' byte-range union: every arm's
-		// bytes are active in at least one variant). realize() is length-preserving,
-		// so all positions in the returned models are in original-source coordinates.
-		const parseOnce = async (): Promise<DocumentModel> => {
-			const variants = templateVariants(rawText, toSqllensDialect(this._enrichment?.indexer.adapterType));
-			if (variants.length <= 1) {
-				// Fast path: no Jinja conditionals, single parser call.
-				return this._parser.parse(rawText, options);
-			}
-			// Multi-variant path: parse each branch combination and merge.
-			const variantModels: DocumentModel[] = [];
-			for (const variant of variants) {
-				try {
-					variantModels.push(await this._parser.parse(variant.text(), options));
-				} catch {
-					// silently skip failed variants — individual branch failures are expected
-				}
-			}
-			if (variantModels.length === 0) {
-				throw new Error(`all ${variants.length} Jinja variants failed to parse for ${document.fileName}`);
-			}
-			return mergeModels(variantModels);
-		};
-
-		let model = await parseOnce();
+		// ONE parser call — the variant-aware SqlDocument inside the adapter owns
+		// branch-arm fan-out and the cross-arm unions (the variant wave). This
+		// layer stopped knowing variants exist.
+		let model = await this._parser.parse(rawText, options);
 		// Cold-start warm cycle: the parse recorded a describe miss for every
 		// resolvable-but-cold ref/source; prime() drains them through the describe
 		// cache (async, coalesced) and the single re-parse reads warm. Steady state
 		// (warm cache) records no misses and prime() is a no-op.
 		if (provider && await provider.prime()) {
-			model = await parseOnce();
+			model = await this._parser.parse(rawText, options);
 		}
 
 		const hasSyntaxError = model.parseWarnings?.some(w => w.type === 'syntax_error') ?? false;

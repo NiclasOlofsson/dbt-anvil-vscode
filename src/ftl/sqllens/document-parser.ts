@@ -10,11 +10,11 @@
  * throw and never a fallback.
  *
  */
-import type { DocumentModel } from '../../services/parse-service';
+import type { DocumentModel, ParseWarning } from '../../services/parse-service';
 import type { DocumentParser, ParseOptions } from '../../services/document-parser';
 import type { DialectSymbols } from '../sql-tokens';
 import { performance } from 'node:perf_hooks';
-import { dialectSymbols, parseTemplated, qualify, resolveScopes, Schema, toSqllensDialect, type Dialect, type Qualification, type SchemaMapping, type SchemaProvider, type Scope, type ScopeTree, type TemplatedParseOptions, type TemplatedParseResult, type TemplateProvider } from './api';
+import { dialectSymbols, minijinja, Schema, SqlDocument, toSqllensDialect, type Dialect, type Qualification, type SchemaMapping, type SchemaProvider, type Scope, type Sym, type TagNode, type TemplateProvider } from './api';
 import { keywordTokenTypesFor, mapTokens } from './token-mapper';
 import { mergeSqlAndJinjaTokens } from '../ninja-sql-tokens';
 import { tagInfos } from './extract/tag-infos';
@@ -43,6 +43,20 @@ import type { SqllensParse } from './extract/spans';
 export interface AdapterContext {
 	readonly adapterType: string | undefined;
 	readonly templateProvider?: TemplateProvider;
+}
+
+/** The one engine instance. Stateless strategy object (providers are passed per
+ *  document at create), and sqllens keys its cross-edit cell cache on the engine
+ *  name — a module singleton keeps that key stable across parses. */
+const MINIJINJA = minijinja();
+
+/** The per-arm documents of a templated doc, with each arm's realized text —
+ *  the union views' own `arms()` rule: the real variants when they exist, else
+ *  the document itself as the sole arm. */
+function docArms(doc: SqlDocument, text: string): { doc: SqlDocument; text: string }[] {
+	return doc.variants.length === 0
+		? [{ doc, text }]
+		: doc.variants.map(v => ({ doc: v.doc(), text: v.text() }));
 }
 
 /**
@@ -172,47 +186,40 @@ export class SqllensDocumentParser implements DocumentParser {
 	private _parse(rawSql: string, schema?: Record<string, Record<string, string>>, enrichedProvider?: TemplateProvider): DocumentModel {
 		const t0 = performance.now();
 		const dialect = toSqllensDialect(this._context.adapterType);
-		// The one parse: parseTemplated segments the jinja (inc1 unified stream + inc2
-		// R3 tag-applied ast), runs the SQL grammar over a length/newline-preserving
-		// placeholder (all spans stay in raw-source coordinates), and its ast carries
-		// templated ref/source relations as first-class sources named after the REAL
-		// model (`template` marker set), so the extractors + scope/qualify/lineage bind
-		// under real names. No-output builtins (config/docs/...) placeholder to
-		// whitespace, so config-topped models parse. A residual syntax error yields a
-		// partial ast + diagnostics (mapped to syntax_error warnings below) — sqllens
-		// is error-tolerant by design; the legacy blank/render cascade is gone.
+		// ONE door (sqllens stage 3/variant wave): SqlDocument.create runs the
+		// minijinja engine (length/newline-preserving fills, tag-AST, unified
+		// stream), parses the primary all-text-live realization, and owns the
+		// per-arm variant documents + the four union views the extractors below
+		// consume. Templated ref/source relations are first-class sources named
+		// after the REAL model, so scope/qualify/lineage bind under real names.
+		// sqllens is error-tolerant — a residual syntax error yields a partial
+		// ast + diagnostics, never a throw and never a fallback.
 		//
 		// provider (4e1b18b): statement/conjunct/CTE-body macro placeholders fill
-		// shape-valid so macro-generated bodies parse natively; builtins keep the
-		// default provider's answers. Undefined -> the engine's shipped default.
-		// Read ONCE per document — every statement cell shares the same warm cache.
+		// shape-valid so macro-generated bodies parse natively, AND the provider
+		// doubles as the SchemaProvider every analyze()/union view resolves
+		// against — one object, both seams. Read ONCE per document.
 		const provider = enrichedProvider ?? this._context.templateProvider;
-		const opts: TemplatedParseOptions | undefined = provider ? { provider } : undefined;
+		const schemaProvider: SchemaProvider = provider ?? new Schema((schema ?? {}) as SchemaMapping);
 		const tp0 = performance.now();
-		const templated = parseTemplated(rawSql, dialect, opts);
-		const templatedMs = performance.now() - tp0;
+		const doc = SqlDocument.create(rawSql, dialect, { templating: MINIJINJA, ...(provider ? { provider } : {}) });
+		const parseMs = performance.now() - tp0;
 
-		// A `;`-separated batch lowers to a flagged compound STUB (statement 1's
-		// span, empty body — see the dialect lowerers' `flagged`), so whole-doc
+		// A `;`-separated batch lowers to a flagged compound STUB, so whole-doc
 		// extraction over it sees nothing. Split into statement cells with the
 		// query editor's own jinja-aware splitter (ONE statement notion
-		// extension-wide) and run the same pipeline per cell (`_parseCells`).
-		// The `errors > 0` arm exists because a broken statement collapses the
-		// batch in ANTLR recovery — the root then reports ONE element (`query`,
-		// never `compound`) and the healthy statements after the `;` would be
-		// silently dropped; with a split, each cell is error-tolerant on its own.
-		// A clean single statement never enters (no compound flag, no errors), so
-		// the hot path is untouched. A `BEGIN…END` scripting compound also flags
-		// `compound`: with no top-level `;` it stays one cell and falls through
-		// to the whole-doc stub (unchanged behavior); with inner `;`s the
-		// splitter over-splits it into error-tolerant fragment parses — the same
-		// view the query editor takes, and strictly more signal than the stub.
-		if (templated.sql.ast.statement === 'compound' || templated.sql.errors > 0) {
-			const ranges = splitStatementsFromTemplated(rawSql, templated);
-			if (ranges.length > 1) return this._parseCells(rawSql, ranges, dialect, opts, schema, t0, templatedMs, provider);
+		// extension-wide) and run the same pipeline per cell (`_parseCells`) —
+		// this remains OUR path because templated multi-statement cell-splitting
+		// is sqllens's ledgered follow-up, not yet theirs. The `errors > 0` arm
+		// exists because a broken statement collapses the batch in ANTLR
+		// recovery; with a split, each cell is error-tolerant on its own. A
+		// clean single statement (every dbt model) never enters.
+		if (doc.ast.statement === 'compound' || doc.errors > 0) {
+			const ranges = splitStatementsFromTemplated(rawSql, doc.templated!);
+			if (ranges.length > 1) return this._parseCells(rawSql, ranges, dialect, provider, schemaProvider, t0, parseMs);
 		}
 
-		return this._extract(rawSql, templated, dialect, schema, t0, templatedMs, provider);
+		return this._extract(rawSql, doc, dialect, schemaProvider, t0, parseMs);
 	}
 
 	/**
@@ -235,11 +242,10 @@ export class SqllensDocumentParser implements DocumentParser {
 		rawSql: string,
 		ranges: StatementRange[],
 		dialect: Dialect,
-		opts: TemplatedParseOptions | undefined,
-		schema: Record<string, Record<string, string>> | undefined,
+		provider: TemplateProvider | undefined,
+		schemaProvider: SchemaProvider,
 		t0: number,
 		wholeDocParseMs: number,
-		provider: TemplateProvider | undefined,
 	): DocumentModel {
 		let parseMs = wholeDocParseMs;
 		const cells: DocumentModel[] = [];
@@ -257,10 +263,10 @@ export class SqllensDocumentParser implements DocumentParser {
 				+ rawSql.slice(r.startOffset, end)
 				+ rawSql.slice(end).replace(/[^\r\n]/g, ' ');
 			const tp0 = performance.now();
-			const templated = parseTemplated(masked, dialect, opts);
+			const cellDoc = SqlDocument.create(masked, dialect, { templating: MINIJINJA, ...(provider ? { provider } : {}) });
 			const cellMs = performance.now() - tp0;
 			parseMs += cellMs;
-			cells.push(this._extract(masked, templated, dialect, schema, t0, cellMs, provider));
+			cells.push(this._extract(masked, cellDoc, dialect, schemaProvider, t0, cellMs));
 		}
 		const final = [...cells].reverse().find(c => c.finalSelect !== undefined);
 		const model: DocumentModel = {
@@ -281,87 +287,136 @@ export class SqllensDocumentParser implements DocumentParser {
 		return model;
 	}
 
-	/** The single-statement extraction pipeline over one `parseTemplated` result.
-	 *  `text` is the source the parse's spans are keyed to — the raw document, or
-	 *  a statement cell's masked view of it (`_parseCells`). */
+	/** The single-statement extraction pipeline over one `SqlDocument`.
+	 *  `text` is the source the doc's spans are keyed to — the raw document, or
+	 *  a statement cell's masked view of it (`_parseCells`). Cross-arm facts come
+	 *  from the document's UNION VIEWS (never our own merge — the variant wave's
+	 *  contract); rich single-parse projections (finalSelect detail, CTE body
+	 *  ranges, the reflow index) come from the primary parse and the per-arm
+	 *  documents. */
 	private _extract(
 		text: string,
-		templated: TemplatedParseResult,
+		doc: SqlDocument,
 		dialect: Dialect,
-		schema: Record<string, Record<string, string>> | undefined,
+		schemaProvider: SchemaProvider,
 		t0: number,
-		templatedMs: number,
-		provider: TemplateProvider | undefined,
+		docMs: number,
 	): DocumentModel {
 		const ts0 = performance.now();
-		const scopes = resolveScopes(templated.sql.ast, dialect);
-		const parseMs = templatedMs + (performance.now() - ts0);
-		const result: SqllensParse = {
-			ast: templated.sql.ast,
-			dialect,
-			errors: templated.sql.errors,
-			diagnostics: templated.sql.diagnostics,
-			scopes,
-			tokens: templated.sql.tokens,
-		};
+		const primary = sqllensParseOf(doc, dialect);
+		const arms = docArms(doc, text);
 		// jinjaTokens come from the SAME unified stream the SQL parse used (channel-2
 		// minijinja island tokens), not a second independent lex.
-		const jinjaTokens = jinjaTokensFromStream(templated.tokens, templated.tags, text);
+		const jinjaTokens = jinjaTokensFromStream(doc.templated!.tokens, doc.templated!.tags, text);
 
-		// `SELECT *` expansion, UNGATED for every extractor (the cold-star middle
-		// path): the expander runs qualify() (read-only; it never disturbs the
-		// other extractors) over the parse's scopes. With a catalog it expands
-		// table-sourced stars; with an EMPTY schema it still expands stars sourced
-		// from CTEs / subqueries whose columns are structurally inferable — the
-		// exact scope legacy's `infer_schema=True` covered without a catalog. What
-		// changes vs legacy is the ANCHORING: expanded columns anchor star-exact
-		// `[starCol, starEnd)` (star-expand.ts) instead of legacy's invented
-		// `endCol - name.length` positions — a highlight covers the star
-		// character, never text synthesized around it. A bare-table star with no
-		// catalog entry stays unexpanded on both paths. Star diagnostics are NOT
-		// mapped into warnings: nothing consumes a per-column star warning, so
-		// surfacing them would be pure noise. The expander is undefined if qualify
-		// throws — then every extractor falls back to unexpanded output.
-		// The provider IS a SchemaProvider (duck-typed by design, channel 2026-07-10):
-		// passing it to qualify() is what lets relationColumns/tableSourceColumns resolve
-		// templated ref()/source() sources to real warehouse columns, and what scopes the
-		// unknown-column diagnostics to positive answers only (open world, never-wrong).
-		// The plain-Schema arm serves the compiled-SQL paths that pass `schema` without
-		// a provider (lineage tool, decompose).
-		const schemaObj: SchemaProvider = provider ?? new Schema((schema ?? {}) as SchemaMapping);
-		// sqllens qualify is read-only — it never rewrites a bare column to add the qualifier
-		// the legacy qualify did. extractTokens consumes this column→source binding to
-		// resolve bare columns to their table. Fail-soft (undefined) to match the expander.
+		// The schema-dependent tier, fail-soft exactly like the old direct
+		// qualify() call: `analyze()` runs qualify + deriveSymbols per arm
+		// (memoized on provider identity+version); a throw degrades to
+		// structural-only extraction, never a failed parse. The provider IS the
+		// SchemaProvider (duck-typed by design), so templated ref()/source()
+		// sources resolve real warehouse columns and unknown-column diagnostics
+		// fire on positive answers only.
 		let qualification: Qualification | undefined;
-		try { qualification = qualify(result.scopes, schemaObj); } catch { /* alias-only resolution */ }
+		try { qualification = doc.analyze(schemaProvider).qualification; } catch { /* structural-only */ }
+		// `SELECT *` expansion for the rich primary projections (finalSelect
+		// spans, CTE body extraction). Star-exact anchoring unchanged
+		// (star-expand.ts). Union views run their own expansion per arm.
 		const expander = qualification
-			? buildStarExpander(result.scopes, schemaObj, qualification)
+			? buildStarExpander(doc.scopes, schemaProvider, qualification)
 			: undefined;
 
-		const ctes = extractCtes(result, expander);
-		const symbols = extractSymbols(result.scopes, dialect, schemaObj, qualification?.expandStarOf);
-		const finalColumns = extractFinalColumns(result, expander);
-		const finalSelect = extractFinalSelect(result, expander);
-		// refs + sources + macroCalls come from the R2 tag-AST (span-accurate; covers
-		// the 2-arg `ref('pkg','model')` form; macroCalls carry nested calls since
-		// sqllens `af1170c` — the expression `macro` node's `calls: MacroCall[]` is
-		// symmetric to `control.calls`).
-		const { refs, sources, macroCalls } = tagInfos(templated.tags);
-		// The tag-AST sees jinja tags but never SQL aliases; back-fill them from
-		// the matching relation Sym's own alias binding, joined by node identity
-		// (nodeOf(tag) ↔ Sym.node — the stage-1 accessors).
-		backfillSymAliases(symbols, refs, sources, templated.tags, t => templated.nodeOf(t));
+		// Symbols and diagnostics: the document's cross-arm union views, deduped
+		// by span+identity(+name) upstream — computed over the VARIANT docs only,
+		// so conflicting-arm junk from the all-text-live primary never leaks in.
+		// Degraded (qualification threw): structural symbols from the primary.
+		let symbols: Sym[];
+		let parseWarnings: ParseWarning[];
+		if (qualification) {
+			symbols = doc.unionSymbols(schemaProvider);
+			const mixed = doc.unionDiagnostics(schemaProvider);
+			const syntax = mixed.filter(d => !('kind' in d)) as Parameters<typeof mapDiagnostics>[0];
+			const semantic = mixed.filter(d => 'kind' in d) as Parameters<typeof mapQualifyDiagnostics>[0];
+			// Scope warnings only over a CLEAN parse: a qualify verdict on a broken
+			// statement is noise on top of the syntax error that explains it.
+			parseWarnings = [
+				...mapDiagnostics([...syntax]),
+				...(doc.errors === 0 ? mapQualifyDiagnostics(semantic) : []),
+			];
+		} else {
+			symbols = extractSymbols(doc.scopes, dialect, schemaProvider, undefined);
+			parseWarnings = mapDiagnostics(primary.diagnostics);
+		}
 
-		// parseTemplated's placeholder is length-preserving, so token offsets line up
+		// CTEs: the RICH projection (body ranges, aliases, subquery entries) from
+		// the primary parse; the cross-arm COLUMN union from `unionCtes` joined in
+		// by name — the union view is authoritative for which columns exist, the
+		// primary parse for everything else. A CTE visible only in a non-default
+		// arm (conflicting arms broke its primary declaration) is recovered richly
+		// from the first arm document that parses it.
+		const ctes = extractCtes(primary, expander);
+		if (qualification) {
+			const richByName = new Map(ctes.map(c => [c.name.toLowerCase(), c]));
+			for (const u of doc.unionCtes(schemaProvider)) {
+				const columns = u.columns.map(col => ({ name: col.name, line: col.span.line - 1, col: col.span.column }));
+				// An EMPTY union answer means the CTE's outputs are unresolvable
+				// (a bare star over an undescribed relation, or a ledgered gap) —
+				// keep the primary projection, whose literal `*` sentinel is
+				// load-bearing: it is go-to-definition's jump target and the
+				// "can't validate" marker for diagnostics/hover. Union authority
+				// applies only where the union actually knows.
+				if (columns.length === 0) continue;
+				const rich = richByName.get(u.name.toLowerCase());
+				if (rich) {
+					rich.columns = columns;
+					continue;
+				}
+				for (const arm of arms.slice(doc.variants.length === 0 ? 1 : 0)) {
+					const armCtes = extractCtes(sqllensParseOf(arm.doc, dialect), undefined);
+					const found = armCtes.find(c => c.name.toLowerCase() === u.name.toLowerCase());
+					if (found) {
+						found.columns = columns;
+						ctes.push(found);
+						richByName.set(u.name.toLowerCase(), found);
+						break;
+					}
+				}
+			}
+		}
+
+		// Final SELECT: output-column names from the cross-arm union view; the
+		// rich per-column detail (expression/alias spans, complexity flags the
+		// ninja rules consume) from the primary parse, falling back to the first
+		// arm whose parse produced one when conflicting arms broke the primary's.
+		// Same empty-answer rule as the CTE join: an unresolvable root star (or a
+		// ledgered union-view gap) keeps the primary projection's `*` sentinel.
+		const unionOutputs = qualification ? doc.unionOutputColumns(schemaProvider) : [];
+		const finalColumns = unionOutputs.length > 0
+			? unionOutputs.map(c => ({ name: c.name, line: c.span.line - 1, col: c.span.column }))
+			: extractFinalColumns(primary, expander);
+		let finalSelect = extractFinalSelect(primary, expander);
+		if (!finalSelect && doc.variants.length > 0) {
+			for (const arm of arms) {
+				finalSelect = extractFinalSelect(sqllensParseOf(arm.doc, dialect), undefined);
+				if (finalSelect) break;
+			}
+		}
+
+		// refs + sources + macroCalls from the PRIMARY tag-AST — segmentation is
+		// text-level, so it carries EVERY arm's tags (variant-wave A1); no union
+		// needed. The tag-AST sees jinja tags but never SQL aliases; back-fill
+		// them from each ARM's own guaranteed nodeOf ↔ Sym.node identity joins
+		// (the primary's joins are best-effort under conflicting arms).
+		const { refs, sources, macroCalls } = tagInfos(doc.templated!.tags);
+		backfillSymAliases(refs, sources, doc.templated!.tags, arms.map(a => ({
+			symbols: armSymbolsOf(a.doc, schemaProvider, dialect),
+			tags: a.doc.templated!.tags,
+			nodeOf: (t: TagNode) => a.doc.templated!.nodeOf(t),
+		})));
+
+		// The engine's placeholder is length-preserving, so token offsets line up
 		// with `text` — mapTokens derives line starts from it.
-		const sqlTokens = mapTokens(result.tokens, text, dialect);
+		const sqlTokens = mapTokens(primary.tokens, text, dialect);
 		const ninjaSqlTokens = mergeSqlAndJinjaTokens(sqlTokens, jinjaTokens);
-		// Scope warnings only over a CLEAN parse: a qualify verdict on a broken
-		// statement is noise on top of the syntax error that explains it.
-		const parseWarnings = [
-			...mapDiagnostics(result.diagnostics),
-			...(result.errors === 0 && qualification ? mapQualifyDiagnostics(qualification.diagnostics) : []),
-		];
 
 		const model: DocumentModel = {
 			refs,
@@ -371,51 +426,81 @@ export class SqllensDocumentParser implements DocumentParser {
 			finalColumns,
 			finalSelect,
 			symbols,
-			relationColumns: qualification ? collectRelationColumns(result.scopes, qualification) : {},
+			relationColumns: qualification ? collectRelationColumns(arms, schemaProvider, dialect) : {},
 			parseWarnings,
-			timing: { parseMs: Math.round(parseMs), totalMs: Math.round(performance.now() - t0) },
+			timing: { parseMs: Math.round(docMs + (performance.now() - ts0)), totalMs: Math.round(performance.now() - t0) },
 			jinjaTokens,
 			ninjaSqlTokens,
 		};
 
-		// Build the reflow index straight off the parse's IR — the placeholder is
-		// length-preserving, so IR char offsets align with `text` and the printer's
-		// token stream. Multi-statement documents never reach this line as one
-		// parse: `_parseCells` extracts per statement and composes the per-cell
-		// indexes, so every statement keeps AST-index precision. The one residual
-		// stub case is a `BEGIN…END` scripting compound with no top-level `;`
-		// (single cell, flagged body) — its index carries the lone flagged-Select
-		// entry and the printer falls back to token-stream passes inside it.
-		model.astIndex = createSqllensAstIndex(result, text);
+		// The reflow index: one per ARM document over that arm's realized text
+		// (coordinate-preserving, so all indexes share document bytes), composed
+		// byte-first — every arm's bytes keep AST precision, the same composition
+		// mergeModels used to do across variant models.
+		model.astIndex = compositeAstIndex(
+			arms.map(a => createSqllensAstIndex(sqllensParseOf(a.doc, dialect), a.text)),
+		);
 
 		return model;
 	}
 }
 
+/** The `SqllensParse` view of one document — the shape the rich single-parse
+ *  extractors (ctes/final-select/ast-index) have always consumed. Token stream
+ *  is the SQL-side stream (`templated.sql.tokens`), byte-identical to the
+ *  pre-door pipeline's, so the ninja/reflow token behavior is unchanged. */
+function sqllensParseOf(doc: SqlDocument, dialect: Dialect): SqllensParse {
+	return {
+		ast: doc.ast,
+		dialect,
+		errors: doc.errors,
+		diagnostics: [...doc.diagnostics],
+		scopes: doc.scopes,
+		tokens: doc.templated!.sql.tokens,
+	};
+}
+
+/** An arm's own analyzed symbols (arm-local `Sym.node` identities — the ones
+ *  the arm's `nodeOf` joins are guaranteed against). Fail-soft to structural
+ *  symbols, mirroring `_extract`'s degraded path. */
+function armSymbolsOf(doc: SqlDocument, schemaProvider: SchemaProvider, dialect: Dialect): Sym[] {
+	try { return doc.analyze(schemaProvider).symbols; } catch {
+		return extractSymbols(doc.scopes, dialect, schemaProvider, undefined);
+	}
+}
+
 /**
  * Per-relation column lists via sqllens's own `Qualification.columnsOfSource`
- * (stage-1 Of-accessor) — the first-class read that retired the interim
- * tag-consult map. Walks every scope's TABLE sources and keys each by the
- * relation's own name (lowercased; dotted for multi-part names): the model
- * name for a `{{ ref() }}` marker, `source.table` for `{{ source() }}`, the
- * written name for a plain physical table — the same name the relation Sym
- * carries, so consumers (`ParseService.columnsForRef`) look up by `Sym.name`.
- * "unknown" answers contribute nothing — never a fabricated list. CTE-kind
- * sources are skipped on purpose: `model.ctes` already carries them, and a CTE
- * shadows a same-named relation in `columnsForRef`'s lookup order anyway.
+ * (stage-1 Of-accessor), walked over EVERY arm document so a relation living
+ * only inside a non-default `{% else %}` arm still lands. Keys: the relation's
+ * own name (lowercased; dotted for multi-part names) — the same name the
+ * relation Sym carries, so consumers (`ParseService.columnsForRef`) look up by
+ * `Sym.name`. First arm wins per key; "unknown" answers contribute nothing —
+ * never a fabricated list. CTE-kind sources are skipped on purpose:
+ * `model.ctes` already carries them, and a CTE shadows a same-named relation
+ * in `columnsForRef`'s lookup order anyway.
  */
-function collectRelationColumns(scopes: ScopeTree, q: Qualification): Record<string, string[]> {
+function collectRelationColumns(
+	arms: { doc: SqlDocument }[],
+	schemaProvider: SchemaProvider,
+	dialect: Dialect,
+): Record<string, string[]> {
 	const out: Record<string, string[]> = {};
-	const visit = (scope: Scope): void => {
-		for (const src of scope.sources.values()) {
-			if (src.kind !== 'table') continue;
-			const key = src.name.join('.').toLowerCase();
-			if (out[key]) continue;
-			const cols = q.columnsOfSource(scope, src);
-			if (cols !== 'unknown') out[key] = cols.map(c => c.name);
-		}
-		for (const child of scope.children) visit(child);
-	};
-	visit(scopes.root);
+	for (const arm of arms) {
+		let q: Qualification;
+		try { q = arm.doc.analyze(schemaProvider).qualification; } catch { continue; }
+		const visit = (scope: Scope): void => {
+			for (const src of scope.sources.values()) {
+				if (src.kind !== 'table') continue;
+				const key = src.name.join('.').toLowerCase();
+				if (out[key]) continue;
+				const cols = q.columnsOfSource(scope, src);
+				if (cols !== 'unknown') out[key] = cols.map(c => c.name);
+			}
+			for (const child of scope.children) visit(child);
+		};
+		visit(arm.doc.scopes.root);
+	}
+	void dialect;
 	return out;
 }

@@ -40,6 +40,7 @@ export {
 } from 'sqllens';
 
 export {
+	minijinja,
 	parseTemplated,
 	tokenizeTemplated,
 	templateVariants,
@@ -50,6 +51,11 @@ export type {
 	MacroCall,
 	TemplateVariant,
 } from 'sqllens/minijinja';
+
+export type {
+	DocumentVariant,
+	UnionCte,
+} from 'sqllens';
 
 export type {
 	Analysis,
