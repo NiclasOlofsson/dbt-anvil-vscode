@@ -2,16 +2,17 @@
  * Unit tests for get-column-lineage.ts
  *
  * Covers:
- * - mapAdapterToDialect adapter name normalisation
  * - GetColumnLineageTool invoke() response shape (new namespaced transformation format)
  * - via_ctes derived from cte-type transformations
  * - downstream response shape (returns usages array)
  * - column-not-found error message format
  * - dependency_count present in upstream response
+ *
+ * (Adapter → dialect routing is pinned end-to-end in
+ * src/test/ftl/sqllens/to-sqllens-dialect.test.ts.)
  */
 import { describe, it, expect, vi } from 'vitest';
 import type { ManifestIndexer, ManifestIndex, IndexedModel, IndexedSource } from '../../indexing/manifest-indexer';
-import { mapAdapterToDialect } from '../../ftl/dialect-map';
 import { GetColumnLineageTool } from '../../tools/get-column-lineage';
 import type { DocumentParser } from '../../services/document-parser';
 import { createMockLogger, createMockCompileCache } from '../helpers';
@@ -143,48 +144,6 @@ function makeFtlParser(colsResponse: string[], lineageData?: Record<string, unkn
 		}),
 	} as unknown as DocumentParser;
 }
-
-// ---------------------------------------------------------------------------
-// mapAdapterToDialect
-// ---------------------------------------------------------------------------
-
-describe('mapAdapterToDialect', () => {
-	it('maps databricks to databricks', () => {
-		expect(mapAdapterToDialect('databricks')).toBe('databricks');
-	});
-
-	it('maps postgres to postgres', () => {
-		expect(mapAdapterToDialect('postgres')).toBe('postgres');
-	});
-
-	it('maps postgresql to postgres (alias)', () => {
-		expect(mapAdapterToDialect('postgresql')).toBe('postgres');
-	});
-
-	it('maps synapse to tsql', () => {
-		expect(mapAdapterToDialect('synapse')).toBe('tsql');
-	});
-
-	it('maps sqlserver to tsql', () => {
-		expect(mapAdapterToDialect('sqlserver')).toBe('tsql');
-	});
-
-	it('maps fabricspark to spark', () => {
-		expect(mapAdapterToDialect('fabricspark')).toBe('spark');
-	});
-
-	it('maps glue to spark', () => {
-		expect(mapAdapterToDialect('glue')).toBe('spark');
-	});
-
-	it('maps bigquery to bigquery', () => {
-		expect(mapAdapterToDialect('bigquery')).toBe('bigquery');
-	});
-
-	it('passes through unknown adapter lowercased', () => {
-		expect(mapAdapterToDialect('MyUnknownDb')).toBe('myunknowndb');
-	});
-});
 
 // ---------------------------------------------------------------------------
 // GetColumnLineageTool — upstream response shape

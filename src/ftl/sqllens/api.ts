@@ -14,7 +14,6 @@
  * TemplateEngine result/options contract and the TemplateProvider seam — stays
  * on the main barrel.
  */
-import { mapAdapterToDialect } from '../dialect-map';
 import { resolveDialect } from 'sqllens';
 import type { Dialect } from 'sqllens';
 
@@ -106,42 +105,35 @@ export type {
 	TokenRole,
 } from 'sqllens';
 
-/** The eight dialects sqllens implements, as the extension routes them. */
-export const SQLLENS_DIALECTS = [
-	'databricks', 'tsql', 'snowflake', 'bigquery', 'redshift', 'postgres', 'duckdb', 'trino',
-] as const;
-
 /**
- * Close-relative remaps sqllens's own `resolveDialect()` deliberately refuses
- * ("never guesses" — only corpus-gated engines are mapped upstream; the dbt
- * ADAPTER vocabulary is ours to own since sqllens fc7ec4f de-dbt'd its map). The
- * extension accepts a best-effort parse for near-identical SQL surfaces rather
- * than dropping intelligence entirely.
+ * The ONE dialect mapping the extension owns: dbt ADAPTER constants → sqllens
+ * Dialect constants, for the adapters sqllens's own `resolveDialect()`
+ * deliberately refuses ("never guesses" — only corpus-gated engines are mapped
+ * upstream). Two kinds of entry, same shape: renames (`postgresql` is dbt's
+ * spelling of postgres) and close relatives (hive's SQL surface is near-enough
+ * Spark SQL that a best-effort parse beats dropping intelligence). Everything
+ * else dialect-shaped lives in sqllens; new dialects route through with zero
+ * changes here unless their dbt adapter name differs from the dialect name.
  */
-const RELATIVE_DIALECTS: Record<string, Dialect> = {
+const DBT_ADAPTER_DIALECTS: Record<string, Dialect> = {
+	postgresql: 'postgres',
 	hive: 'databricks',
 	spark2: 'databricks',
 	fabricspark: 'databricks',
 	materialize: 'postgres',
 	risingwave: 'postgres',
-	postgresql: 'postgres',
 };
 
 /**
  * Resolve a dbt adapter type to the sqllens `Dialect` gate value: sqllens's
- * own adapter map first, then the relatives layer (accepting alternate
- * dialect names as input too), finally `databricks` — the fallback keeps the
- * shadow/test paths total; the ParseService wiring decides whether an unmapped
- * adapter should instead degrade to no SQL intelligence.
+ * own engine map first, then the dbt-adapter mapping above, finally
+ * `databricks` — the fallback keeps the parse paths total; the ParseService
+ * wiring decides whether an unmapped adapter should instead degrade to no SQL
+ * intelligence.
  */
 export function toSqllensDialect(adapterType: string | undefined): Dialect {
 	if (!adapterType) return 'databricks';
-	const direct = adapterDialectOrRelative(adapterType);
-	if (direct) return direct;
-	const mapped = mapAdapterToDialect(adapterType);
-	return (mapped && adapterDialectOrRelative(mapped)) || 'databricks';
-}
-
-function adapterDialectOrRelative(name: string): Dialect | undefined {
-	return resolveDialect(name) ?? RELATIVE_DIALECTS[name.trim().toLowerCase()];
+	return resolveDialect(adapterType)
+		?? DBT_ADAPTER_DIALECTS[adapterType.trim().toLowerCase()]
+		?? 'databricks';
 }

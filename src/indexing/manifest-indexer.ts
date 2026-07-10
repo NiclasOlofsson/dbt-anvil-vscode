@@ -6,8 +6,6 @@ import { classifyLayer, type LayerConfig, type LayerInfo } from './layer-classif
 import { makeTemplateProvider } from '../ftl/sqllens/template-shape';
 import type { TemplateProvider } from '../ftl/sqllens/api';
 
-export { mapAdapterToDialect } from '../ftl/dialect-map';
-
 export interface LineageNode {
 	uniqueId: string;
 	name: string;
