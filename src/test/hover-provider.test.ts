@@ -94,7 +94,7 @@ function sym(
 		kind,
 		modifiers: opts.modifiers ?? ['reference'],
 		name,
-		span: { line: line + 1, column: col, endLine: (opts.endLine ?? line) + 1, endColumn: endCol },
+		span: { start: col, end: endCol, line: line + 1, column: col, endLine: (opts.endLine ?? line) + 1, endColumn: endCol },
 		frame: opts.frame ?? MAIN_FRAME,
 		...(opts.alias ? { alias: { name: opts.alias.name, span: opts.alias.span } } : {}),
 		...(opts.source ? { source: opts.source } : {}),

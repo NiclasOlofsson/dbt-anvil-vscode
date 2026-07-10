@@ -181,10 +181,15 @@ export function sym(
 	const defSource = opts.definitionOf;
 	const definition = defSource === undefined ? undefined
 		: 'span' in defSource ? defSource.span
-			: { line: defSource.line + 1, column: defSource.col ?? 0, endLine: defSource.line + 1, endColumn: (defSource.col ?? 0) + name.length };
+			: {
+				start: defSource.col ?? 0, end: (defSource.col ?? 0) + name.length,
+				line: defSource.line + 1, column: defSource.col ?? 0, endLine: defSource.line + 1, endColumn: (defSource.col ?? 0) + name.length,
+			};
 	const aliasField = opts.alias === undefined ? undefined : {
 		name: opts.alias.name,
 		span: {
+			start: opts.alias.col,
+			end: opts.alias.endCol ?? opts.alias.col + opts.alias.name.length,
 			line: opts.alias.line + 1,
 			column: opts.alias.col,
 			endLine: opts.alias.line + 1,
@@ -196,6 +201,8 @@ export function sym(
 		modifiers: opts.modifiers ?? ['reference'],
 		name,
 		span: {
+			start: col,
+			end: opts.endCol ?? col + name.length,
 			line: line + 1,
 			column: col,
 			endLine: (opts.endLine ?? line) + 1,
@@ -234,6 +241,8 @@ export function colSym(
 		modifiers: opts.modifiers ?? ['reference'],
 		name: parts.map(p => p.name).join('.'),
 		span: {
+			start: parts[0].col,
+			end: partSpans[partSpans.length - 1].endColumn,
 			line: line + 1,
 			column: parts[0].col,
 			endLine: line + 1,

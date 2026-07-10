@@ -62,9 +62,9 @@ function makeAliasSym(name: string, alias: string): Sym {
 		kind: 'table',
 		modifiers: ['reference'],
 		name,
-		span: { line: 1, column: 0, endLine: 1, endColumn: name.length },
+		span: { start: 0, end: name.length, line: 1, column: 0, endLine: 1, endColumn: name.length },
 		frame: MAIN_FRAME,
-		alias: { name: alias, span: { line: 1, column: name.length + 1, endLine: 1, endColumn: name.length + 1 + alias.length } },
+		alias: { name: alias, span: { start: name.length + 1, end: name.length + 1 + alias.length, line: 1, column: name.length + 1, endLine: 1, endColumn: name.length + 1 + alias.length } },
 	};
 }
 

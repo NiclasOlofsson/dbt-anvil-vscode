@@ -206,8 +206,8 @@ describe('ParseService — enrichment tier', () => {
 		it('resolves FROM/JOIN alias pointing to a CTE', () => {
 			const ordersRef: Sym = {
 				kind: 'cte', modifiers: ['reference'], name: 'orders',
-				span: { line: 2, column: 0, endLine: 2, endColumn: 6 }, frame: MAIN_FRAME,
-				alias: { name: 'o', span: { line: 2, column: 7, endLine: 2, endColumn: 8 } },
+				span: { start: 0, end: 6, line: 2, column: 0, endLine: 2, endColumn: 6 }, frame: MAIN_FRAME,
+				alias: { name: 'o', span: { start: 7, end: 8, line: 2, column: 7, endLine: 2, endColumn: 8 } },
 			};
 			const model = makeModel({
 				ctes: [{ name: 'orders', columns: [{ name: 'id', line: 0 }], line: 0, endLine: 5 }],
