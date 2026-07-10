@@ -8,11 +8,11 @@
 	"icon": "resources/icons/dbt-anvil-128.png",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/NiclasOlofsson/dbt-anvil"
+		"url": "https://github.com/NiclasOlofsson/dbt-anvil-vscode"
 	},
-	"homepage": "https://niclasolofsson.github.io/dbt-anvil/",
+	"homepage": "https://niclasolofsson.github.io/dbt-anvil-vscode/",
 	"bugs": {
-		"url": "https://github.com/NiclasOlofsson/dbt-anvil/issues"
+		"url": "https://github.com/NiclasOlofsson/dbt-anvil-vscode/issues"
 	},
 	"enabledApiProposals": [
 		"contribLanguageModelToolSets"

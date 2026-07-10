@@ -6,7 +6,7 @@
 
 2. **Clone the repository:**
    ```bash
-   git clone https://github.com/NiclasOlofsson/dbt-anvil.git
+   git clone https://github.com/NiclasOlofsson/dbt-anvil-vscode.git
    cd dbt-anvil
    ```
 
