@@ -1,0 +1,70 @@
+name: Release
+
+# Publishes to the VS Code Marketplace and creates a matching GitHub release.
+# Trigger manually from the Actions tab. Requires the VSCE_PAT repo secret:
+# an Azure DevOps personal access token with the Marketplace > Manage scope
+# (create at dev.azure.com > User settings > Personal access tokens, with
+# "All accessible organizations").
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump before publishing (none = publish the version already in package.json)'
+        type: choice
+        options: [patch, minor, major, none]
+        default: patch
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: astral-sh/setup-uv@v8
+
+      - run: npm ci
+
+      # Same gates as CI — a release never skips them.
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+
+      - name: Bump version
+        if: inputs.bump != 'none'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          npm version ${{ inputs.bump }}
+
+      # vsce runs vscode:prepublish (the production esbuild) during package.
+      # The same .vsix then goes to the Marketplace and the GitHub release.
+      - name: Package
+        run: npx vsce package --allow-proposed-apis contribLanguageModelToolSets
+
+      - name: Publish to Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx vsce publish --packagePath ./*.vsix --allow-proposed-apis contribLanguageModelToolSets
+
+      # Only after a successful publish: push the version commit + tag and
+      # create the GitHub release. A failed publish leaves the repo untouched,
+      # so the run can simply be retried.
+      - name: Push version commit and tag
+        if: inputs.bump != 'none'
+        run: git push --follow-tags
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          gh release create "v$VERSION" ./*.vsix --title "v$VERSION" --generate-notes

@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      # The bridge integration tests run real dbt (dbt-duckdb) against the
+      # jaffle_shop sample, which is a uv project — `uv run` bootstraps its
+      # venv from the committed lockfile on first use.
+      - uses: astral-sh/setup-uv@v8
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
