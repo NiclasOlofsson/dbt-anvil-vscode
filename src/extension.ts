@@ -489,7 +489,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	context.subscriptions.push(modelProfiler);
 
 	// -------- Diagnostics provider --------
-	const diagnosticsProvider = new EditorDiagnosticsProvider(executionService, manifestIndexer, statusBar, projectDir, logger, parseService, parseService.onAliasesReady, manifestWatcher.onIndexRebuild, parseService.onParseWarnings, startupReady);
+	const diagnosticsProvider = new EditorDiagnosticsProvider(executionService, manifestIndexer, statusBar, projectDir, logger, parseService, manifestWatcher.onIndexRebuild, parseService.onParseWarnings, startupReady);
 	context.subscriptions.push(diagnosticsProvider);
 
 	// -------- Set workspaceHasDBT context --------

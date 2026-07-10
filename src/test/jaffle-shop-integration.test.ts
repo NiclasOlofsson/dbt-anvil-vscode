@@ -102,30 +102,4 @@ describe('jaffle_shop integration', () => {
 		expect(source?.sourceName).toBe('jaffle_shop');
 	});
 
-	it('should build schema mapping from documented columns', () => {
-		const loader = new ManifestLoader(JAFFLE_SHOP);
-		const indexer = new ManifestIndexer(loader, mockLogger);
-		indexer.build();
-
-		const mapping = indexer.buildSchemaMapping();
-
-		// Sources have documented columns (jaffle_shop.customers has id, first_name, last_name)
-		const hasSourceColumns = Object.values(mapping).some(db =>
-			Object.values(db).some(schema =>
-				Object.keys(schema).some(table =>
-					table === 'customers' && Object.keys(schema[table]).length > 0,
-				),
-			),
-		);
-		expect(hasSourceColumns).toBe(true);
-
-		// customers model has 6 documented columns
-		const hasModelColumns = Object.values(mapping).some(db =>
-			Object.values(db).some(schema => {
-				const cols = schema['customers'];
-				return cols && Object.keys(cols).length >= 6;
-			}),
-		);
-		expect(hasModelColumns).toBe(true);
-	});
 });

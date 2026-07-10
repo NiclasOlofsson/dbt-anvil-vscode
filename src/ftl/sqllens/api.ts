@@ -8,7 +8,7 @@
  * migration consumes more of the API.
  */
 import { mapAdapterToDialect } from '../dialect-map';
-import { adapterDialect } from 'sqllens';
+import { resolveDialect } from 'sqllens';
 import type { Dialect } from 'sqllens';
 
 export {
@@ -21,7 +21,7 @@ export {
 	referencesAt,
 	resolveScopes,
 	dialectSymbols,
-	adapterDialect,
+	resolveDialect,
 	foldIdentifier,
 	displayName,
 	parseTemplated,
@@ -57,6 +57,7 @@ export type {
 	TemplateCall,
 	TemplateProvider,
 	ResolvedExpansion,
+	ResolvedRelation,
 	ExpansionShape,
 	TagNode,
 	MacroCall,
@@ -95,8 +96,9 @@ export const SQLLENS_DIALECTS = [
 ] as const;
 
 /**
- * Close-relative remaps sqllens's own `adapterDialect()` deliberately refuses
- * ("never guesses" — only corpus-gated adapters are mapped upstream). The
+ * Close-relative remaps sqllens's own `resolveDialect()` deliberately refuses
+ * ("never guesses" — only corpus-gated engines are mapped upstream; the dbt
+ * ADAPTER vocabulary is ours to own since sqllens fc7ec4f de-dbt'd its map). The
  * extension accepts a best-effort parse for near-identical SQL surfaces rather
  * than dropping intelligence entirely.
  */
@@ -125,5 +127,5 @@ export function toSqllensDialect(adapterType: string | undefined): Dialect {
 }
 
 function adapterDialectOrRelative(name: string): Dialect | undefined {
-	return adapterDialect(name) ?? RELATIVE_DIALECTS[name.trim().toLowerCase()];
+	return resolveDialect(name) ?? RELATIVE_DIALECTS[name.trim().toLowerCase()];
 }

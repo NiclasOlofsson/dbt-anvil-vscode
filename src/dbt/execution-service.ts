@@ -14,7 +14,7 @@ export type DbtExecutionEvent =
 export type DbtJobType =
 	| 'parse' | 'compile' | 'compile_inline' | 'run' | 'test' | 'build'
 	| 'seed' | 'snapshot' | 'deps' | 'show' | 'debug'
-	| 'describe' | 'scope_columns' | 'get_columns' | 'column_lineage'
+	| 'describe'
 	| 'generate_cte_tests' | 'run_cte_test';
 
 export type DbtJobOrigin = 'user' | 'copilot' | 'provider' | 'background';
@@ -55,7 +55,7 @@ interface DbtJob extends DbtJobInfo {
 }
 
 const CANCELLABLE_TYPES = new Set<DbtJobType>([
-	'parse', 'compile', 'compile_inline', 'describe', 'scope_columns', 'get_columns', 'column_lineage', 'generate_cte_tests', 'run_cte_test', 'debug',
+	'parse', 'compile', 'compile_inline', 'describe', 'generate_cte_tests', 'run_cte_test', 'debug',
 ]);
 
 /**
@@ -77,7 +77,7 @@ const HARD_CANCEL_TYPES = new Set<DbtJobType>([
 const STRICT_DEDUP_TYPES = new Set<DbtJobType>(['parse', 'compile']);
 
 const SUPPRESS_WATCHER_TYPES = new Set<DbtJobType>([
-	'describe', 'scope_columns', 'get_columns', 'column_lineage', 'show', 'run_cte_test',
+	'describe', 'show', 'run_cte_test',
 ]);
 
 const SAVE_STATE_TYPES = new Set<DbtJobType>(['run', 'build', 'seed']);

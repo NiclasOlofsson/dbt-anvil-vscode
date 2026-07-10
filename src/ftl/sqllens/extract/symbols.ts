@@ -36,11 +36,10 @@ export function extractSymbols(
  * jinja tags but never SQL aliases) from the matching relation Sym's own alias
  * binding — the Sym-native replacement for extract/tokens.ts's
  * `backfillTagAliases`. Matched by POSITION alone (line + the tag's own start
- * column): a templated relation's Sym.name is the length-preserving
- * placeholder's own displayName (sqllens has no template awareness), never the
- * canonical model/source name, so name matching — which the old TokenInfo
- * bridge could do because it substituted the canonical name in for templated
- * refs — doesn't carry over; position is the only anchor both sides share.
+ * column): a templated relation's Sym.name is now the real model name / dotted
+ * `source.table` name, not a placeholder displayName. Position remains the
+ * anchor for this backfill regardless — the tag's own start line/column is
+ * still the only field both sides share to match on.
  */
 export function backfillSymAliases(symbols: Sym[], refs: RefInfo[], sources: SourceInfo[]): void {
 	const relationSyms = symbols.filter(s => RELATION_KINDS.has(s.kind) && s.modifiers.includes('reference'));

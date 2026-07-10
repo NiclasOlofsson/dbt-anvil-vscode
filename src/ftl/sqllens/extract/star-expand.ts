@@ -13,7 +13,7 @@
  * subqueries whose columns are structurally inferable.
  */
 import type { ColumnInfo, FinalSelectColumnInfo } from '../../../services/parse-service';
-import type { Dialect, Projection, Qualification, Schema, Scope, ScopeTree } from '../api';
+import type { Dialect, Projection, Qualification, SchemaProvider, Scope, ScopeTree } from '../api';
 import { qualify } from '../api';
 import { asCst, normName } from './spans';
 
@@ -43,7 +43,7 @@ export interface StarExpander {
  * an unresolvable source makes a single star return `undefined`, leaving just that
  * star unexpanded.
  */
-export function buildStarExpander(scopes: ScopeTree, schema: Schema, prebuilt?: Qualification): StarExpander | undefined {
+export function buildStarExpander(scopes: ScopeTree, schema: SchemaProvider, prebuilt?: Qualification): StarExpander | undefined {
 	let q: Qualification;
 	if (prebuilt) {
 		q = prebuilt;

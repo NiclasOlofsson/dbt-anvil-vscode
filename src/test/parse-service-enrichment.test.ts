@@ -39,7 +39,7 @@ function createMockParser(opts?: {
 	refs?: unknown[];
 	sources?: unknown[];
 	finalColumns?: import('../services/parse-service').ColumnInfo[];
-	aliases?: Record<string, string[]>;
+	relationColumns?: Record<string, string[]>;
 }): DocumentParser {
 	return {
 		parse: vi.fn().mockResolvedValue({
@@ -47,7 +47,7 @@ function createMockParser(opts?: {
 			refs: opts?.refs ?? [],
 			sources: opts?.sources ?? [],
 			finalColumns: opts?.finalColumns ?? [],
-			aliases: opts?.aliases ?? {},
+			relationColumns: opts?.relationColumns ?? {},
 			timing: { parseMs: 1, totalMs: 2 },
 		}),
 	} as unknown as DocumentParser;
@@ -61,6 +61,7 @@ function createMockIndexer(overrides?: Partial<ManifestIndexer>): ManifestIndexe
 		getRawNode: vi.fn().mockReturnValue(null),
 		getColumns: vi.fn().mockReturnValue(null),
 		setColumns: vi.fn(),
+		findMacroByName: vi.fn().mockReturnValue(undefined),
 		...overrides,
 	} as unknown as ManifestIndexer;
 }
@@ -76,7 +77,7 @@ function createMockDescribeCache(
 
 /**
  * Create an EnrichmentConfig with just describeCache + indexer.
- * Aliases now come from the bridge response, not from a scope columns cache.
+ * Relation columns come from the parse itself, via a per-parse template provider built over these.
  */
 function createEnrichment(
 	describeColumns?: string[],
@@ -104,24 +105,24 @@ describe('ParseService — enrichment tier', () => {
 	// ---- getDocumentModel --------------------------------------------------
 
 	describe('getDocumentModel', () => {
-		it('returns parsed model with empty aliases when enrichment not configured', async () => {
+		it('returns parsed model with empty relation columns when enrichment not configured', async () => {
 			const parser = createMockParser();
 			const service = new ParseService(parser, mockLogger);
 
 			const model = await service.getDocumentModel(createMockDocument('SELECT 1'));
 
 			expect(model).not.toBeNull();
-			expect(model!.aliases).toEqual({});
+			expect(model!.relationColumns).toEqual({});
 		});
 
-		it('returns parsed model with aliases from parser when enrichment configured', async () => {
-			const parser = createMockParser({ aliases: { orders: ['id', 'amount'] } });
+		it('returns parsed model with relation columns from parser when enrichment configured', async () => {
+			const parser = createMockParser({ relationColumns: { orders: ['id', 'amount'] } });
 			const service = new ParseService(parser, mockLogger, createEnrichment());
 
 			const model = await service.getDocumentModel(createMockDocument('SELECT 1'));
 
 			expect(model).not.toBeNull();
-			expect(model!.aliases).toEqual({ orders: ['id', 'amount'] });
+			expect(model!.relationColumns).toEqual({ orders: ['id', 'amount'] });
 		});
 
 		it('caches result and does not re-parse on same version', async () => {
@@ -148,21 +149,26 @@ describe('ParseService — enrichment tier', () => {
 			expect(parser.parse).toHaveBeenCalledTimes(2);
 		});
 
-		it('calls describeCache before parsing when enrichment configured', async () => {
-			const parser = createMockParser({ refs: [{ model: 'orders', line: 0 }] });
-			const describeCache = createMockDescribeCache(['id', 'amount']);
-			const MODEL_UNIQUE_ID = 'model.project.orders';
-			const indexer = createMockIndexer({
-				findModelsByName: vi.fn().mockReturnValue([{ uniqueId: MODEL_UNIQUE_ID }]),
-				getRawNode: vi.fn().mockReturnValue({ name: 'orders', alias: 'orders', schema: 'main' }),
-			});
+		it('passes a templateProvider in ParseOptions when enrichment is configured', async () => {
+			const parser = createMockParser();
+			const service = new ParseService(parser, mockLogger, createEnrichment(['id', 'amount']));
 
-			const service = new ParseService(parser, mockLogger, { describeCache, indexer });
-			await service.getDocumentModel(
-				createMockDocument('SELECT id FROM {{ ref("orders") }}'),
-			);
+			await service.getDocumentModel(createMockDocument('SELECT 1'));
 
-			expect(describeCache.columns).toHaveBeenCalled();
+			expect(parser.parse).toHaveBeenCalled();
+			const options = (parser.parse as ReturnType<typeof vi.fn>).mock.calls[0][1];
+			expect(options?.templateProvider).toBeDefined();
+		});
+
+		it('omits templateProvider in ParseOptions when enrichment is not configured', async () => {
+			const parser = createMockParser();
+			const service = new ParseService(parser, mockLogger);
+
+			await service.getDocumentModel(createMockDocument('SELECT 1'));
+
+			expect(parser.parse).toHaveBeenCalled();
+			const options = (parser.parse as ReturnType<typeof vi.fn>).mock.calls[0][1];
+			expect(options?.templateProvider).toBeUndefined();
 		});
 	});
 
@@ -176,7 +182,7 @@ describe('ParseService — enrichment tier', () => {
 				sources: [],
 				finalColumns: [],
 				timing: { parseMs: 0, totalMs: 0 },
-				aliases: {},
+				relationColumns: {},
 				...overrides,
 			};
 		}
@@ -185,8 +191,8 @@ describe('ParseService — enrichment tier', () => {
 			expect(ParseService.resolveAliases(makeModel())).toEqual({});
 		});
 
-		it('includes bridge-resolved upstream aliases', () => {
-			const model = makeModel({ aliases: { customers: ['id', 'name'] } });
+		it('includes relation columns for described upstream refs/sources', () => {
+			const model = makeModel({ relationColumns: { customers: ['id', 'name'] } });
 			expect(ParseService.resolveAliases(model)).toEqual({ customers: ['id', 'name'] });
 		});
 
@@ -211,7 +217,7 @@ describe('ParseService — enrichment tier', () => {
 		});
 
 		it('is a pure function — repeated calls return equal results', () => {
-			const model = makeModel({ aliases: { t: ['id'] } });
+			const model = makeModel({ relationColumns: { t: ['id'] } });
 			expect(ParseService.resolveAliases(model)).toEqual(ParseService.resolveAliases(model));
 		});
 	});

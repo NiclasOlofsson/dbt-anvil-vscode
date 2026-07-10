@@ -5,6 +5,8 @@ import type { DocumentModel } from '../services/parse-service';
 
 import { DbtCompletionProvider } from '../providers/sql/completion-provider';
 import { createMockLogger } from './helpers';
+import { MAIN_FRAME } from '../ftl/sqllens/api';
+import type { Sym } from '../ftl/sqllens/api';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -34,19 +36,36 @@ function makeIndexer(): ManifestIndexer {
 	} as unknown as ManifestIndexer;
 }
 
-function makeParseServiceWithAliases(aliases: Record<string, string[]>): ParseService {
+function makeParseServiceWithRelationColumns(relationColumns: Record<string, string[]>, symbols: Sym[] = []): ParseService {
 	const model = {
 		ctes: [],
 		refs: [],
 		sources: [],
 		finalColumns: [],
-		aliases,
+		relationColumns,
+		symbols,
 		timing: { parseMs: 0, totalMs: 0 },
 	} as unknown as DocumentModel;
 	return {
 		getDocumentModel: vi.fn().mockResolvedValue(model),
 		evict: vi.fn(),
 	} as unknown as ParseService;
+}
+
+/**
+ * A relation-reference Sym carrying a FROM/JOIN alias — lets a relationColumns
+ * entry resolve through an alias the way `ParseService.resolveAliases` does for
+ * a real parse (an alias key never appears in relationColumns directly).
+ */
+function makeAliasSym(name: string, alias: string): Sym {
+	return {
+		kind: 'table',
+		modifiers: ['reference'],
+		name,
+		span: { line: 1, column: 0, endLine: 1, endColumn: name.length },
+		frame: MAIN_FRAME,
+		alias: { name: alias, span: { line: 1, column: name.length + 1, endLine: 1, endColumn: name.length + 1 + alias.length } },
+	};
 }
 
 
@@ -58,13 +77,13 @@ const CTX = {};
 describe('DbtCompletionProvider — bare column completions', () => {
 	let provider: DbtCompletionProvider;
 
-	const aliases = {
+	const relationColumns = {
 		customers: ['id', 'name', 'email'],
 		orders: ['id', 'order_date', 'amount'],
 	};
 
 	beforeEach(() => {
-		provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), makeParseServiceWithAliases(aliases));
+		provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), makeParseServiceWithRelationColumns(relationColumns));
 	});
 
 	it('returns merged column list when typing a bare word in SELECT', async () => {
@@ -142,7 +161,7 @@ describe('DbtCompletionProvider — bare column completions', () => {
 	});
 
 	it('returns [] (not undefined) when no aliases resolved', async () => {
-		const p = new DbtCompletionProvider(makeIndexer(), createMockLogger(), makeParseServiceWithAliases({}));
+		const p = new DbtCompletionProvider(makeIndexer(), createMockLogger(), makeParseServiceWithRelationColumns({}));
 
 		const linePrefix = 'SELECT na';
 		const doc = mockDocument([linePrefix]);
@@ -157,8 +176,11 @@ describe('DbtCompletionProvider — bare column completions', () => {
 
 describe('DbtCompletionProvider — alias.column completions (existing)', () => {
 	it('still works for alias. prefix', async () => {
-		const aliases = { c: ['id', 'name'] };
-		const provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), makeParseServiceWithAliases(aliases));
+		const provider = new DbtCompletionProvider(
+			makeIndexer(),
+			createMockLogger(),
+			makeParseServiceWithRelationColumns({ customers: ['id', 'name'] }, [makeAliasSym('customers', 'c')]),
+		);
 
 		const linePrefix = 'SELECT c.';
 		const doc = mockDocument([linePrefix]);
@@ -361,8 +383,11 @@ describe('DbtCompletionProvider — FQN completions', () => {
 	});
 
 	it('does not pollute alias.column path for non-FROM context', async () => {
-		const aliases = { c: ['id', 'name'] };
-		const provider = new DbtCompletionProvider(makeIndexerWithFqnModels(), createMockLogger(), makeParseServiceWithAliases(aliases));
+		const provider = new DbtCompletionProvider(
+			makeIndexerWithFqnModels(),
+			createMockLogger(),
+			makeParseServiceWithRelationColumns({ customers: ['id', 'name'] }, [makeAliasSym('customers', 'c')]),
+		);
 		// "SELECT c." — should still give column completions, not FQN
 		const linePrefix = 'SELECT c.';
 		const doc = mockDocument([linePrefix]);

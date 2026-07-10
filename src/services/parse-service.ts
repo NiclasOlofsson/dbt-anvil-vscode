@@ -1,10 +1,10 @@
 import * as vscode from 'vscode';
 import type { DescribeCache } from '../dbt/describe-cache';
 import type { ManifestIndexer } from '../indexing/manifest-indexer';
-import { parseTemplated, templateVariants, toSqllensDialect } from '../ftl/sqllens/api';
-import { resolveTagRelations } from '../providers/common/jinja-utils';
+import { templateVariants, toSqllensDialect } from '../ftl/sqllens/api';
+import { makeTemplateProvider } from '../ftl/sqllens/template-shape';
 import type { ILogger } from '../types/logger';
-import type { DocumentParser } from './document-parser';
+import type { DocumentParser, ParseOptions } from './document-parser';
 import type { JinjaToken } from '../ftl/sql-tokens';
 import type { AstIndex } from '../ninja/reflow/ast-index';
 import { compositeAstIndex } from '../ftl/sqllens/ast-index';
@@ -214,11 +214,14 @@ export interface DocumentModel {
 	/** Structural warnings from parsing and scope analysis. */
 	parseWarnings?: ParseWarning[];
 	/**
-	 * Alias → column-name map returned by the bridge after schema-aware parsing.
-	 * `undefined` only when enrichment is not configured; otherwise always a dict
-	 * (empty when schema_mapping had no entries for the upstream tables).
+	 * Upstream relation → column-name map, keyed by the relation's in-scope name
+	 * (lowercased): the model name for `{{ ref(...) }}`, the table name for
+	 * `{{ source(...) }}`. Produced by the parse itself from the template
+	 * provider's positive relation answers (described warehouse columns) — only
+	 * relations the provider actually resolved appear; a cold or unknown relation
+	 * contributes nothing. Absent only on synthetic / test fixture models.
 	 */
-	aliases?: Record<string, string[]>;
+	relationColumns?: Record<string, string[]>;
 	/**
 	 * Flat fine-grained jinja token stream. Used by jinja-aware extractors
 	 * and by the debug adapter to emit ref/source/macro markers.
@@ -366,16 +369,13 @@ export function mergeModels(models: DocumentModel[]): DocumentModel {
 		}
 	}
 
-	// aliases: union per key
-	const aliases: Record<string, string[]> = {};
+	// relationColumns: first-hit per relation — every variant parses the same tags
+	// against the same provider, so answers are identical; union covers the branch
+	// whose ref only appears in one arm.
+	const relationColumns: Record<string, string[]> = {};
 	for (const m of models) {
-		for (const [alias, cols] of Object.entries(m.aliases ?? {})) {
-			if (!(alias in aliases)) {
-				aliases[alias] = [...cols];
-			} else {
-				const seen = new Set(aliases[alias]);
-				for (const c of cols) { if (!seen.has(c)) { aliases[alias].push(c); seen.add(c); } }
-			}
+		for (const [name, cols] of Object.entries(m.relationColumns ?? {})) {
+			relationColumns[name] ??= cols;
 		}
 	}
 
@@ -413,7 +413,7 @@ export function mergeModels(models: DocumentModel[]): DocumentModel {
 	const indexes = models.map(m => m.astIndex).filter((i): i is AstIndex => i !== undefined);
 	const astIndex = indexes.length > 0 ? compositeAstIndex(indexes) : undefined;
 
-	return { ctes: [...cteMap.values()], refs, sources, macroCalls, finalColumns, finalSelect, timing, parseWarnings, aliases,
+	return { ctes: [...cteMap.values()], refs, sources, macroCalls, finalColumns, finalSelect, timing, parseWarnings, relationColumns,
 		symbols,
 		jinjaTokens,
 		ninjaSqlTokens,
@@ -435,9 +435,6 @@ export function mergeModels(models: DocumentModel[]): DocumentModel {
 export class ParseService {
 	private readonly _cache = new Map<string, CacheEntry>();
 	private readonly _inflight = new Map<string, Promise<DocumentModel | null>>();
-
-	private readonly _onAliasesReady = new vscode.EventEmitter<vscode.Uri>();
-	readonly onAliasesReady = this._onAliasesReady.event;
 
 	private readonly _onParseWarnings = new vscode.EventEmitter<{ uri: vscode.Uri; warnings: ParseWarning[] }>();
 	/** Fired after each parse when structural warnings are detected (e.g. Aliases node type). */
@@ -531,15 +528,16 @@ export class ParseService {
 
 	/**
 	 * Return the column list for the table that `ref` points to.
-	 * Checks CTE projections first, then manifest-enriched aliases.
-	 * Returns `undefined` when the table is not locally defined (e.g. an
-	 * externally-defined CTE passed in by the macro caller).
+	 * Checks CTE projections first (a CTE shadows a same-named table in-file),
+	 * then the parse's own upstream relation columns (described ref/source
+	 * tables). Returns `undefined` when neither knows the relation (e.g. an
+	 * externally-defined CTE passed in by the macro caller, or an undescribed
+	 * upstream table — never-wrong, no fabricated list).
 	 */
 	static columnsForRef(ref: Sym, model: DocumentModel): string[] | undefined {
-		const nameLc = ref.name.toLowerCase();
 		const cte = ParseService.cteForRef(ref, model);
 		if (cte) return cte.columns.map(c => c.name);
-		return model.aliases?.[ref.name] ?? model.aliases?.[nameLc];
+		return model.relationColumns?.[ref.name.toLowerCase()];
 	}
 
 	/**
@@ -623,27 +621,32 @@ export class ParseService {
 	}
 
 	/**
-	 * Compute the combined alias → column-name map from a parsed model.
-	 * Merges bridge-resolved upstream aliases (model.aliases) with CTE aliases
-	 * and any FROM/JOIN aliases that point to CTEs.
+	 * Compute the combined alias → column-name map from a parsed model: CTE
+	 * names/aliases, the parse's upstream relation columns (described ref/source
+	 * tables), and any FROM/JOIN alias pointing at either.
 	 */
 	static resolveAliases(model: DocumentModel): Record<string, string[]> {
-		const cteAliases: Record<string, string[]> = {};
+		const aliases: Record<string, string[]> = {};
 		for (const cte of model.ctes) {
 			const cols = cte.columns.map(c => c.name);
-			cteAliases[cte.name] = cols;
-			if (cte.alias) cteAliases[cte.alias] = cols;
+			aliases[cte.name] = cols;
+			if (cte.alias) aliases[cte.alias] = cols;
 		}
-		// Resolve FROM/JOIN aliases that point to CTEs.
-		// e.g. `LEFT JOIN address_with_country AS addr` — `addr` maps to that CTE's columns.
+		// Upstream relations by their in-scope name. A same-named CTE wins — it
+		// shadows the table inside the file, matching SQL scoping.
+		for (const [name, cols] of Object.entries(model.relationColumns ?? {})) {
+			aliases[name] ??= cols;
+		}
+		// Resolve FROM/JOIN aliases that point to a CTE or an upstream relation.
+		// e.g. `{{ ref('orders') }} as o` — `o` maps to orders' described columns.
 		for (const sym of model.symbols ?? []) {
 			if (!isRelationSym(sym) || !sym.alias) continue;
 			const aliasLc = sym.alias.name.toLowerCase();
-			if (aliasLc in cteAliases) continue;
-			const targetCols = cteAliases[sym.name.toLowerCase()];
-			if (targetCols) cteAliases[aliasLc] = targetCols;
+			if (aliasLc in aliases) continue;
+			const targetCols = aliases[sym.name.toLowerCase()];
+			if (targetCols) aliases[aliasLc] = targetCols;
 		}
-		return { ...cteAliases, ...(model.aliases ?? {}) };
+		return aliases;
 	}
 
 	/**
@@ -693,10 +696,10 @@ export class ParseService {
 	 * Evict cache entries that were parsed before the manifest loaded.
 	 *
 	 * Detectable symptom: the model has ref() calls (model.refs.length > 0) but
-	 * aliases is an empty dict — enrichment ran but the indexer had no models yet,
-	 * so no schema was passed to the bridge. These entries will never be corrected
-	 * by OnAliasesReady (same version → cache hit) so they need explicit eviction
-	 * when the index becomes available.
+	 * no relation resolved any columns — the provider had no manifest to resolve
+	 * unique_ids against (or every describe failed), so the parse stayed cold.
+	 * A cached entry never re-parses on its own (same version → cache hit), so
+	 * these need explicit eviction when the index becomes available.
 	 *
 	 * Called by extension.ts on each onIndexRebuild so the next getDocumentModel()
 	 * call triggers a fresh enriched parse.
@@ -706,7 +709,7 @@ export class ParseService {
 		const toEvict: string[] = [];
 		for (const [key, entry] of this._cache) {
 			const { model } = entry;
-			if (model.refs.length > 0 && model.aliases !== undefined && Object.keys(model.aliases).length === 0) {
+			if (model.refs.length > 0 && Object.keys(model.relationColumns ?? {}).length === 0) {
 				toEvict.push(key);
 			}
 		}
@@ -758,51 +761,29 @@ export class ParseService {
 	): Promise<DocumentModel | null> {
 		const rawText = document.getText();
 
-		// Build qualify schema hint from indexer columns (synchronous, fast path).
-		// Then describe all upstream refs so the bridge receives a full schema_mapping
-		// and can resolve alias → column mappings in a single round-trip.
-		const schema: Record<string, Record<string, string>> = {};
-		const schemaMapping: Record<string, Record<string, Record<string, Record<string, object>>>> = {};
-
-		if (this._enrichment && !skipEnrichment) {
-			const { indexer, describeCache } = this._enrichment;
-			const refs = resolveTagRelations(
-				rawText,
-				parseTemplated(rawText, toSqllensDialect(indexer.adapterType)).tags,
-				indexer,
-			);
-
-			const mapping = indexer.buildSchemaMapping();
-			await Promise.all([...refs].map(async ([tableName, uniqueId]) => {
-				const cols = await describeCache.columns(uniqueId);
-				if (cols && cols.length > 0) {
-					schema[tableName.toLowerCase()] = Object.fromEntries(cols.map(c => [c.toLowerCase(), 'varchar']));
-					const schDb = (mapping['__described__'] ??= {});
-					const schSch = (schDb['__described__'] ??= {});
-					schSch[tableName.toLowerCase()] = Object.fromEntries(cols.map(c => [c, {}]));
-				}
-			}));
-
-			Object.assign(schemaMapping, mapping);
-		}
-
-		const options = {
-			schema: Object.keys(schema).length > 0 ? schema : undefined,
-			schemaMapping: Object.keys(schemaMapping).length > 0 ? schemaMapping : undefined,
-		};
+		// ONE enriched provider per parse cycle (manifest-shape classification +
+		// warehouse-backed ref/source relation answers). Every variant shares it, so
+		// describe misses accumulate across variants and one prime() warms them all.
+		// The provider doubles as qualify()'s SchemaProvider inside the parser, which
+		// is what resolves templated sources to real columns and scopes the
+		// unknown-column diagnostics to positively-described relations only.
+		const enrichment = skipEnrichment ? undefined : this._enrichment;
+		const provider = enrichment
+			? makeTemplateProvider(name => enrichment.indexer.findMacroByName(name)?.macroSql, enrichment)
+			: undefined;
+		const options: ParseOptions | undefined = provider ? { templateProvider: provider } : undefined;
 
 		// One realized text per branch arm (sqllens templateVariants: variant 0 is
 		// all-defaults plus one variant per non-default arm — linear in arm count,
 		// and coverage-complete for mergeModels' byte-range union: every arm's
 		// bytes are active in at least one variant). realize() is length-preserving,
 		// so all positions in the returned models are in original-source coordinates.
-		const variants = templateVariants(rawText, toSqllensDialect(this._enrichment?.indexer.adapterType));
-		let model: DocumentModel;
-
-		if (variants.length <= 1) {
-			// Fast path: no Jinja conditionals, single parser call.
-			model = await this._parser.parse(rawText, options);
-		} else {
+		const parseOnce = async (): Promise<DocumentModel> => {
+			const variants = templateVariants(rawText, toSqllensDialect(this._enrichment?.indexer.adapterType));
+			if (variants.length <= 1) {
+				// Fast path: no Jinja conditionals, single parser call.
+				return this._parser.parse(rawText, options);
+			}
 			// Multi-variant path: parse each branch combination and merge.
 			const variantModels: DocumentModel[] = [];
 			for (const variant of variants) {
@@ -815,7 +796,16 @@ export class ParseService {
 			if (variantModels.length === 0) {
 				throw new Error(`all ${variants.length} Jinja variants failed to parse for ${document.fileName}`);
 			}
-			model = mergeModels(variantModels);
+			return mergeModels(variantModels);
+		};
+
+		let model = await parseOnce();
+		// Cold-start warm cycle: the parse recorded a describe miss for every
+		// resolvable-but-cold ref/source; prime() drains them through the describe
+		// cache (async, coalesced) and the single re-parse reads warm. Steady state
+		// (warm cache) records no misses and prime() is a no-op.
+		if (provider && await provider.prime()) {
+			model = await parseOnce();
 		}
 
 		const hasSyntaxError = model.parseWarnings?.some(w => w.type === 'syntax_error') ?? false;
@@ -835,14 +825,13 @@ export class ParseService {
 		this._cache.set(key, entry);
 		this._logger.trace(
 			`[parse-service] parsed ${document.fileName} — ${model.ctes.length} CTEs, `
-			+ `${model.refs.length} refs, ${Object.keys(model.aliases ?? {}).length} aliases in ${model.timing.totalMs}ms`,
+			+ `${model.refs.length} refs, ${Object.keys(model.relationColumns ?? {}).length} resolved relations in ${model.timing.totalMs}ms`,
 		);
 
 		if (model.parseWarnings && model.parseWarnings.length > 0) {
 			this._logger.debug(`[parse-service] ${model.parseWarnings.length} parse warning(s) in ${document.fileName}`);
 		}
 		this._onParseWarnings.fire({ uri: document.uri, warnings: model.parseWarnings ?? [] });
-		this._onAliasesReady.fire(document.uri);
 
 		return model;
 	}

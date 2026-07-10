@@ -462,37 +462,6 @@ export class ManifestIndexer {
 		}
 		return results;
 	}
-	/**
-	 * Build a schema mapping for all models and sources with documented columns.
-	 * Shape: {database: {schema: {table: {column: {}}}}}
-	 */
-	buildSchemaMapping(): Record<string, Record<string, Record<string, Record<string, object>>>> {
-		const mapping: Record<string, Record<string, Record<string, Record<string, object>>>> = {};
-		const { manifest } = this.loader.load();
-
-		const addNode = (raw: { database?: string; schema?: string; name: string; columns: Record<string, unknown> }) => {
-			if (!raw.columns || Object.keys(raw.columns).length === 0) return;
-			const db = (raw.database ?? '__default__').toLowerCase();
-			const schema = (raw.schema ?? '__default__').toLowerCase();
-			const table = raw.name.toLowerCase();
-			mapping[db] ??= {};
-			mapping[db][schema] ??= {};
-			mapping[db][schema][table] = Object.fromEntries(
-				Object.keys(raw.columns).map(col => [col, {}]),
-			);
-		};
-
-		for (const node of Object.values(manifest.nodes)) {
-			if (isIndexableNode(node.resource_type)) {
-				addNode(node);
-			}
-		}
-		for (const source of Object.values(manifest.sources)) {
-			addNode({ database: source.database, schema: source.schema, name: source.identifier ?? source.name, columns: source.columns });
-		}
-
-		return mapping;
-	}
 
 	// -----------------------------------------------------------------------
 	// Global column store — lazy-populated, DAG-aware invalidation

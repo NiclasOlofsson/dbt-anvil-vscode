@@ -1,19 +1,22 @@
 import type { DocumentModel } from './parse-service';
 import type { DialectSymbols } from '../ftl/sql-tokens';
 import type { LineageResult } from '../ftl/sqllens/lineage';
+import type { TemplateProvider } from '../ftl/sqllens/api';
 
 /**
  * Options passed to a DocumentParser.parse() call.
- * Both fields are enrichment hints that implementations may use or ignore
- * depending on how their backend resolves column information.
  */
 export interface ParseOptions {
-	/** Schema passed to qualify() — enables star-selector expansion and column typing. */
+	/** Schema passed to qualify() — enables star-selector expansion and column typing
+	 *  for PLAIN (physical-name) table references. Compiled-SQL paths use this. */
 	schema?: Record<string, Record<string, string>>;
 	/**
-	 * Schema mapping for alias resolution. Implementations may use or ignore it.
+	 * The enriched per-parse template provider (ParseService builds it from the
+	 * manifest + describe cache). When present it wins over the AdapterContext's
+	 * shape-only provider AND serves as qualify()'s SchemaProvider, so templated
+	 * ref()/source() sources resolve real warehouse columns.
 	 */
-	schemaMapping?: Record<string, Record<string, Record<string, Record<string, object>>>>;
+	templateProvider?: TemplateProvider;
 }
 
 /**

@@ -10,11 +10,11 @@
  * throw and never a fallback.
  *
  */
-import type { DocumentModel } from '../../services/parse-service';
+import type { DocumentModel, RefInfo, SourceInfo } from '../../services/parse-service';
 import type { DocumentParser, ParseOptions } from '../../services/document-parser';
 import type { DialectSymbols } from '../sql-tokens';
 import { performance } from 'node:perf_hooks';
-import { dialectSymbols, parseTemplated, qualify, resolveScopes, Schema, toSqllensDialect, type Dialect, type Qualification, type SchemaMapping, type TemplatedParseOptions, type TemplatedParseResult, type TemplateProvider } from './api';
+import { dialectSymbols, parseTemplated, qualify, resolveScopes, Schema, toSqllensDialect, type Dialect, type Qualification, type SchemaMapping, type SchemaProvider, type TemplateCall, type TemplatedParseOptions, type TemplatedParseResult, type TemplateProvider } from './api';
 import { keywordTokenTypesFor, mapTokens } from './token-mapper';
 import { mergeSqlAndJinjaTokens } from '../ninja-sql-tokens';
 import { tagInfos } from './extract/tag-infos';
@@ -28,7 +28,7 @@ import { extractCtes } from './extract/ctes';
 import { backfillSymAliases, extractSymbols } from './extract/symbols';
 import { extractFinalColumns, extractFinalSelect } from './extract/final-select';
 import { buildStarExpander } from './extract/star-expand';
-import { mapDiagnostics } from './extract/warnings';
+import { mapDiagnostics, mapQualifyDiagnostics } from './extract/warnings';
 import type { SqllensParse } from './extract/spans';
 
 /**
@@ -161,13 +161,15 @@ export class SqllensDocumentParser implements DocumentParser {
 		// sqllens is synchronous; the Promise-returning signature matches the
 		// DocumentParser seam. `options.schema` (the qualify hint, a 2-level
 		// `{ table: { column: type } }` map — assignable directly to sqllens's nested
-		// `SchemaMapping`) feeds `SELECT *` expansion; when absent, an EMPTY schema still
-		// expands CTE/subquery-sourced stars, which is all the legacy path does without an
-		// external catalog anyway.
-		return Promise.resolve(this._parse(sql, options?.schema));
+		// `SchemaMapping`) feeds `SELECT *` expansion for PLAIN table names; when absent,
+		// an EMPTY schema still expands CTE/subquery-sourced stars.
+		// `options.templateProvider` (the enriched per-parse provider) wins over the
+		// context's shape-only provider and doubles as qualify()'s SchemaProvider, so
+		// templated ref()/source() sources resolve real warehouse columns.
+		return Promise.resolve(this._parse(sql, options?.schema, options?.templateProvider));
 	}
 
-	private _parse(rawSql: string, schema?: Record<string, Record<string, string>>): DocumentModel {
+	private _parse(rawSql: string, schema?: Record<string, Record<string, string>>, enrichedProvider?: TemplateProvider): DocumentModel {
 		const t0 = performance.now();
 		const dialect = toSqllensDialect(this._context.adapterType);
 		// The one parse: parseTemplated segments the jinja (inc1 unified stream + inc2
@@ -184,7 +186,7 @@ export class SqllensDocumentParser implements DocumentParser {
 		// shape-valid so macro-generated bodies parse natively; builtins keep the
 		// default provider's answers. Undefined -> the engine's shipped default.
 		// Read ONCE per document — every statement cell shares the same warm cache.
-		const provider = this._context.templateProvider;
+		const provider = enrichedProvider ?? this._context.templateProvider;
 		const opts: TemplatedParseOptions | undefined = provider ? { provider } : undefined;
 		const tp0 = performance.now();
 		const templated = parseTemplated(rawSql, dialect, opts);
@@ -207,10 +209,10 @@ export class SqllensDocumentParser implements DocumentParser {
 		// view the query editor takes, and strictly more signal than the stub.
 		if (templated.sql.ast.statement === 'compound' || templated.sql.errors > 0) {
 			const ranges = splitStatementsFromTemplated(rawSql, templated);
-			if (ranges.length > 1) return this._parseCells(rawSql, ranges, dialect, opts, schema, t0, templatedMs);
+			if (ranges.length > 1) return this._parseCells(rawSql, ranges, dialect, opts, schema, t0, templatedMs, provider);
 		}
 
-		return this._extract(rawSql, templated, dialect, schema, t0, templatedMs);
+		return this._extract(rawSql, templated, dialect, schema, t0, templatedMs, provider);
 	}
 
 	/**
@@ -237,6 +239,7 @@ export class SqllensDocumentParser implements DocumentParser {
 		schema: Record<string, Record<string, string>> | undefined,
 		t0: number,
 		wholeDocParseMs: number,
+		provider: TemplateProvider | undefined,
 	): DocumentModel {
 		let parseMs = wholeDocParseMs;
 		const cells: DocumentModel[] = [];
@@ -257,7 +260,7 @@ export class SqllensDocumentParser implements DocumentParser {
 			const templated = parseTemplated(masked, dialect, opts);
 			const cellMs = performance.now() - tp0;
 			parseMs += cellMs;
-			cells.push(this._extract(masked, templated, dialect, schema, t0, cellMs));
+			cells.push(this._extract(masked, templated, dialect, schema, t0, cellMs, provider));
 		}
 		const final = [...cells].reverse().find(c => c.finalSelect !== undefined);
 		const model: DocumentModel = {
@@ -268,6 +271,7 @@ export class SqllensDocumentParser implements DocumentParser {
 			finalColumns: final?.finalColumns ?? [],
 			finalSelect: final?.finalSelect,
 			symbols: cells.flatMap(c => c.symbols ?? []),
+			relationColumns: Object.assign({}, ...cells.map(c => c.relationColumns ?? {})) as Record<string, string[]>,
 			parseWarnings: cells.flatMap(c => c.parseWarnings ?? []),
 			timing: { parseMs: Math.round(parseMs), totalMs: Math.round(performance.now() - t0) },
 			jinjaTokens: cells.flatMap(c => c.jinjaTokens ?? []),
@@ -287,6 +291,7 @@ export class SqllensDocumentParser implements DocumentParser {
 		schema: Record<string, Record<string, string>> | undefined,
 		t0: number,
 		templatedMs: number,
+		provider: TemplateProvider | undefined,
 	): DocumentModel {
 		const ts0 = performance.now();
 		const scopes = resolveScopes(templated.sql.ast, dialect);
@@ -317,7 +322,13 @@ export class SqllensDocumentParser implements DocumentParser {
 		// mapped into warnings: nothing consumes a per-column star warning, so
 		// surfacing them would be pure noise. The expander is undefined if qualify
 		// throws — then every extractor falls back to unexpanded output.
-		const schemaObj = new Schema((schema ?? {}) as SchemaMapping);
+		// The provider IS a SchemaProvider (duck-typed by design, channel 2026-07-10):
+		// passing it to qualify() is what lets relationColumns/tableSourceColumns resolve
+		// templated ref()/source() sources to real warehouse columns, and what scopes the
+		// unknown-column diagnostics to positive answers only (open world, never-wrong).
+		// The plain-Schema arm serves the compiled-SQL paths that pass `schema` without
+		// a provider (lineage tool, decompose).
+		const schemaObj: SchemaProvider = provider ?? new Schema((schema ?? {}) as SchemaMapping);
 		// sqllens qualify is read-only — it never rewrites a bare column to add the qualifier
 		// the legacy qualify did. extractTokens consumes this column→source binding to
 		// resolve bare columns to their table. Fail-soft (undefined) to match the expander.
@@ -344,7 +355,12 @@ export class SqllensDocumentParser implements DocumentParser {
 		// with `text` — mapTokens derives line starts from it.
 		const sqlTokens = mapTokens(result.tokens, text, dialect);
 		const ninjaSqlTokens = mergeSqlAndJinjaTokens(sqlTokens, jinjaTokens);
-		const parseWarnings = mapDiagnostics(result.diagnostics);
+		// Scope warnings only over a CLEAN parse: a qualify verdict on a broken
+		// statement is noise on top of the syntax error that explains it.
+		const parseWarnings = [
+			...mapDiagnostics(result.diagnostics),
+			...(result.errors === 0 && qualification ? mapQualifyDiagnostics(qualification.diagnostics) : []),
+		];
 
 		const model: DocumentModel = {
 			refs,
@@ -354,12 +370,11 @@ export class SqllensDocumentParser implements DocumentParser {
 			finalColumns,
 			finalSelect,
 			symbols,
+			relationColumns: provider ? collectRelationColumns(refs, sources, provider) : {},
 			parseWarnings,
 			timing: { parseMs: Math.round(parseMs), totalMs: Math.round(performance.now() - t0) },
 			jinjaTokens,
 			ninjaSqlTokens,
-			// `ast` stays undefined (no longer needed) — the reflow
-			// printer instead reads `astIndex`, built directly from the sqllens IR.
 		};
 
 		// Build the reflow index straight off the parse's IR — the placeholder is
@@ -374,4 +389,26 @@ export class SqllensDocumentParser implements DocumentParser {
 
 		return model;
 	}
+}
+
+/**
+ * Per-relation column lists from the provider's ref()/source() answers, keyed by
+ * the templated source's IN-SCOPE name (lowercased) — the name the relation Sym
+ * carries, so consumers (`ParseService.columnsForRef`) look up by `Sym.name`.
+ * That name is the tag MARKER's logical name (sqllens apply-tags): the model
+ * name for ref(), the dotted `source.table` pair for source(). Only POSITIVE
+ * provider answers land — a cold or unresolvable relation contributes nothing,
+ * never a fabricated list.
+ */
+function collectRelationColumns(refs: RefInfo[], sources: SourceInfo[], provider: TemplateProvider): Record<string, string[]> {
+	const out: Record<string, string[]> = {};
+	const put = (key: string, call: TemplateCall): void => {
+		const lc = key.toLowerCase();
+		if (out[lc]) return;
+		const cols = provider.expansion(call)?.relation?.columns;
+		if (cols) out[lc] = cols.map(c => c.name);
+	};
+	for (const r of refs) put(r.model, { name: 'ref', args: [r.model] });
+	for (const s of sources) put(`${s.sourceName}.${s.tableName}`, { name: 'source', args: [s.sourceName, s.tableName] });
+	return out;
 }

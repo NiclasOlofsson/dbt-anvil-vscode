@@ -1,14 +1,16 @@
 /**
- * Map sqllens syntax diagnostics to the extension's `ParseWarning[]`.
+ * Map sqllens diagnostics to the extension's `ParseWarning[]`.
  *
- * Only `syntax_error` is produced. The legacy `scope_warning` ("SQL parsed
- * but a CTE scope can't be analysed") doesn't apply to sqllens — `resolveScopes()`
- * is total and always builds a scope for a valid IR; schema-fed problems surface
- * later as qualify diagnostics (unknown-table/column), a materially different
- * concept the structural DocumentModel does not carry.
+ * Two sources, two warning types:
+ * - `syntax_error` ← `parse().diagnostics` (`SyntaxDiagnostic`) — outright parse failures.
+ * - `scope_warning` ← `qualify().diagnostics` — schema-fed column-resolution problems
+ *   (unknown / ambiguous column, unknown struct field). Column kinds only: unknown-table
+ *   never fires against our open-world provider, and the call-signature kinds
+ *   (wrong-arity / wrong-argument-type) are a different editor surface, deliberately
+ *   not mapped here.
  */
 import type { ParseWarning } from '../../../services/parse-service';
-import type { SyntaxDiagnostic } from '../api';
+import type { Diagnostic, SyntaxDiagnostic } from '../api';
 
 export function mapDiagnostics(diagnostics: SyntaxDiagnostic[]): ParseWarning[] {
 	return diagnostics.map(d => ({
@@ -19,4 +21,22 @@ export function mapDiagnostics(diagnostics: SyntaxDiagnostic[]): ParseWarning[] 
 		col: d.column,
 		endCol: d.column + d.length,
 	}));
+}
+
+const COLUMN_KINDS: ReadonlySet<Diagnostic['kind']> = new Set(
+	['unknown-column', 'ambiguous-column', 'unknown-field'] as const,
+);
+
+/** sqllens qualify positions: `line`/`endLine` 1-based, `column`/`endColumn` 0-based
+ *  end-exclusive — carried straight through to the 0-based single-line ParseWarning. */
+export function mapQualifyDiagnostics(diagnostics: readonly Diagnostic[]): ParseWarning[] {
+	return diagnostics
+		.filter(d => COLUMN_KINDS.has(d.kind))
+		.map(d => ({
+			type: 'scope_warning' as const,
+			message: d.message,
+			line: d.line - 1,
+			col: d.column,
+			endCol: d.endColumn,
+		}));
 }

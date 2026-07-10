@@ -1,12 +1,30 @@
 import { describe, expect, it } from 'vitest';
 import type { Diagnostic, SyntaxDiagnostic } from 'sqllens';
-import { collectWarnings, mapQualifyDiagnostics, mapSyntaxDiagnostics } from '../../../ftl/sqllens/warnings';
+import type { ParseWarning } from '../../../services/parse-service';
+import { mapDiagnostics, mapQualifyDiagnostics } from '../../../ftl/sqllens/extract/warnings';
+import { parse, qualify, resolveScopes, Schema } from '../../../ftl/sqllens/api';
+import type { Dialect, SchemaMapping } from '../../../ftl/sqllens/api';
 
-describe('mapSyntaxDiagnostics', () => {
+/**
+ * Local stand-in for the parse+qualify composition the extension actually runs
+ * (`src/ftl/sqllens/document-parser.ts`): parse, then — only over a clean parse —
+ * resolveScopes + qualify. Kept local to this test; nothing production-side needs
+ * this exact composition as a named helper.
+ */
+function collectWarnings(sql: string, dialect: Dialect, schema?: SchemaMapping): ParseWarning[] {
+	const parsed = parse(sql, dialect);
+	const syntax = mapDiagnostics(parsed.diagnostics);
+	if (parsed.errors > 0) return syntax;
+	const tree = resolveScopes(parsed.ast, dialect);
+	const q = qualify(tree, new Schema(schema ?? {}));
+	return [...syntax, ...mapQualifyDiagnostics(q.diagnostics)];
+}
+
+describe('mapDiagnostics', () => {
 	it('converts sqllens (1-based line / 0-based col) to the ParseWarning 0-based convention', () => {
 		// A synthetic diagnostic pinned to a hand-computed position.
 		const diag: SyntaxDiagnostic = { message: 'extraneous input \'orders\'', line: 1, column: 13, offset: 13, length: 6 };
-		expect(mapSyntaxDiagnostics([diag])).toEqual([
+		expect(mapDiagnostics([diag])).toEqual([
 			{ type: 'syntax_error', message: 'extraneous input \'orders\'', line: 0, col: 13, endCol: 19 },
 		]);
 	});

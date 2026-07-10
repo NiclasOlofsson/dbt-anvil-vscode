@@ -16,7 +16,7 @@ export interface DbtCommandResult {
 	stdout: string;
 	stderr: string;
 	error?: Error;
-	/** Parsed JSON payload from the bridge response (for structured commands like get_columns). */
+	/** Parsed JSON payload from the bridge response (for structured commands like describe_table). */
 	data?: Record<string, unknown>;
 	/** Streaming log events captured during the command (--log-format json). */
 	events?: DbtLogEvent[];

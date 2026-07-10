@@ -17,7 +17,6 @@ import { runNinja } from '../ninja/engine';
 import type { NinjaResult } from '../ninja/engine';
 import { loadConfig } from '../ninja/config-loader';
 import { coarseJinjaTokens, coarseJinjaTokensFromText } from '../ftl/sqllens/extract/coarse-jinja';
-import { nameRangeOf, qualifierRangeOf } from './sql/sym-spans';
 
 interface DbtErrorLocation {
 	filePath: string;
@@ -28,7 +27,6 @@ interface DbtErrorLocation {
 export class EditorDiagnosticsProvider implements vscode.Disposable {
 	private readonly _parseCollection: vscode.DiagnosticCollection;
 	private readonly _refCollection: vscode.DiagnosticCollection;
-	private readonly _columnCollection: vscode.DiagnosticCollection;
 	/** Structural SQL warnings from parsing (e.g. Aliases node type from a dangling identifier). */
 	private readonly _sqlWarningCollection: vscode.DiagnosticCollection;
 	/** Warning shown on dbt_project.yml when SQLFluff is active alongside dbt Anvil. */
@@ -49,9 +47,6 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 	private readonly _syntaxErrorDimRanges = new Map<string, vscode.Range>();
 	private readonly _disposables: vscode.Disposable[] = [];
 	private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
-	// Per-document maps so one file's validation never cancels another file's timer/request.
-	private readonly _columnDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
-	private readonly _columnCtsSources = new Map<string, vscode.CancellationTokenSource>();
 
 	constructor(
 		service: DbtExecutionService,
@@ -60,7 +55,6 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		private readonly projectDir: string,
 		private readonly logger: ILogger,
 		private readonly parseService?: ParseService,
-		onAliasesReady?: vscode.Event<vscode.Uri>,
 		onIndexRebuild?: vscode.Event<{ indexer: ManifestIndexer; pivots: vscode.Uri[] }>,
 		onParseWarnings?: vscode.Event<{ uri: vscode.Uri; warnings: ParseWarning[] }>,
 		startupReady = true,
@@ -68,7 +62,6 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		this._startupReady = startupReady;
 		this._parseCollection = vscode.languages.createDiagnosticCollection('dbt-anvil');
 		this._refCollection = vscode.languages.createDiagnosticCollection('dbt-anvil-refs');
-		this._columnCollection = vscode.languages.createDiagnosticCollection('dbt-anvil-columns');
 		this._sqlWarningCollection = vscode.languages.createDiagnosticCollection('dbt-anvil-sql');
 		this._sqlfluffCollection = vscode.languages.createDiagnosticCollection('dbt-anvil-sqlfluff');
 		this._autoSaveCollection = vscode.languages.createDiagnosticCollection('dbt-anvil-autosave');
@@ -167,25 +160,8 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 			}),
 		);
 
-		// Re-validate column diagnostics when background enrichment completes.
-		// Enrichment runs asynchronously after parse — without this, column
-		// diagnostics stay stale until the user edits the file again.
-		if (onAliasesReady && this.parseService) {
-			this._disposables.push(
-				onAliasesReady((uri) => {
-					if (!vscode.workspace.getConfiguration('dbt-anvil').get('providers.sql.diagnostics', true)) return;
-					const doc = vscode.workspace.textDocuments.find(d => d.uri.toString() === uri.toString());
-					if (doc) this._validateColumnsDebounced(doc);
-				}),
-			);
-		}
-
 		// Re-validate ref/source diagnostics when the manifest index is rebuilt.
 		// Without this, stale "unknown ref/source" errors linger until the user edits the file.
-		// NOTE: _columnCollection is intentionally NOT touched here — column diagnostics are
-		// managed independently by the onAliasesReady path (fast SQL parse + enrichment).
-		// Clearing columns here would wipe correctly-set diagnostics and the single debounce
-		// timer means only the last document in the loop would ever get them restored.
 		if (onIndexRebuild) {
 			this._disposables.push(
 				onIndexRebuild(() => {
@@ -202,9 +178,11 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 					});
 					for (const uri of staleRefUris) this._refCollection.delete(uri);
 					for (const doc of openSqlDocs) {
-						void this._validateRefsOnly(doc);					// Re-validate column diagnostics too — per-doc debounce ensures
-						// each file gets its own timer, so no file cancels another.
-						if (this.parseService) this._validateColumnsDebounced(doc);
+						void this._validateRefsOnly(doc);
+						// Re-parse so scope warnings (unknown-column etc.) refresh against the
+						// new index — evicted cold entries get a fresh enriched parse, and the
+						// onParseWarnings listener above renders whatever comes back.
+						if (this.parseService) void this.parseService.getDocumentModel(doc);
 					}
 					this._updateStatusBar();
 				}),
@@ -248,7 +226,6 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 				for (const uri of e.files) {
 					this._parseCollection.delete(uri);
 					this._refCollection.delete(uri);
-					this._columnCollection.delete(uri);
 					this._sqlWarningCollection.delete(uri);
 					this._ninjaCollection.delete(uri);
 					this._ninjaResults.delete(uri.toString());
@@ -305,9 +282,11 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		this._refCollection.set(document.uri, diagnostics);
 		this._updateStatusBar();
 
-		// Async column validation (longer debounce, separate collection)
+		// Kick a (version-cached, inflight-deduped) parse so the onParseWarnings
+		// listener refreshes syntax errors AND qualify's scope warnings — the
+		// unknown-column surface now comes from the parse itself.
 		if (this.parseService) {
-			this._validateColumnsDebounced(document);
+			void this.parseService.getDocumentModel(document);
 		}
 	}
 
@@ -490,85 +469,6 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		return this._ninjaResults.get(uri.toString());
 	}
 
-	// ---- Column validation (async) ----
-
-	private _validateColumnsDebounced(document: vscode.TextDocument): void {
-		if (!this._startupReady) return;
-		const key = document.uri.toString();
-		const existing = this._columnDebounceTimers.get(key);
-		if (existing) clearTimeout(existing);
-		const timer = setTimeout(() => {
-			this._columnDebounceTimers.delete(key);
-			this._validateColumnsAsync(document).catch(err => {
-				this.logger.debug(`Column validation error: ${err}`);
-			});
-		}, 500);
-		this._columnDebounceTimers.set(key, timer);
-	}
-
-	private async _validateColumnsAsync(document: vscode.TextDocument): Promise<void> {
-		if (!this._startupReady) return;
-		if (!this.parseService) return;
-
-		const key = document.uri.toString();
-		this._columnCtsSources.get(key)?.cancel();
-		const cts = new vscode.CancellationTokenSource();
-		this._columnCtsSources.set(key, cts);
-		const token = cts.token;
-
-		const model = await this.parseService.getDocumentModel(document);
-		if (token.isCancellationRequested) return;
-
-		if (!model) {
-			this._columnCollection.delete(document.uri);
-			this._updateStatusBar();
-			return;
-		}
-
-		const diagnostics: vscode.Diagnostic[] = [];
-		const docLines = document.getText().split('\n');
-
-		for (const s of model.symbols ?? []) {
-			if (s.kind !== 'column' || !s.modifiers.includes('reference')) continue;
-			if (!qualifierRangeOf(s)) continue; // unqualified — nothing to resolve a source against
-
-			const relation = s.source;
-			if (!relation) continue;
-
-			const nameRange = nameRangeOf(s);
-
-			// Skip column refs that originated inside a Jinja {{ }} expression. The
-			// blanker is length-preserving, so this position maps to the same offset
-			// in the original source. If the original character there is '{' the
-			// identifier came from a macro call (e.g. {{ my_macro(...) }}) and is not
-			// a real column reference.
-			const origChar = (docLines[nameRange.start.line] ?? '')[nameRange.start.character];
-			if (origChar === '{') continue;
-
-			const cols = ParseService.columnsForRef(relation, model);
-			// Skip if: no columns resolved, or list contains '*' (unresolved SELECT *
-			// — can't validate without knowing what * expands to)
-			if (!cols || cols.length === 0 || cols.includes('*')) continue;
-
-			const bareName = s.name.split('.').pop()!;
-			if (cols.some(c => c.toLowerCase() === bareName.toLowerCase())) continue;
-
-			const qualifierName = relation.alias?.name ?? relation.name;
-			const diag = new vscode.Diagnostic(
-				nameRange,
-				`Column '${bareName}' not found in '${qualifierName}' (known columns: ${cols.slice(0, 5).join(', ')}${cols.length > 5 ? ', ...' : ''})`,
-				vscode.DiagnosticSeverity.Error,
-			);
-			diag.source = 'dbt';
-			diag.code = 'unknown-column';
-			diagnostics.push(diag);
-		}
-
-		this._columnCollection.set(document.uri, diagnostics);
-		this.logger.trace(`[diagnostics] column validation: ${diagnostics.length} issues in ${path.basename(document.fileName)}`);
-		this._updateStatusBar();
-	}
-
 	private _handleParseOutput(output: string, success: boolean): void {
 		const errors = this._parseErrors(output);
 
@@ -636,20 +536,18 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 	}
 
 	private _updateStatusBar(): void {
-		// let parseCount = 0, refCount = 0, colCount = 0, warningCount = 0, ninjaCount = 0;
+		// let parseCount = 0, refCount = 0, warningCount = 0, ninjaCount = 0;
 		// this._parseCollection.forEach((_, diags) => { parseCount += diags.length; });
 		// this._refCollection.forEach((_, diags) => { refCount += diags.length; });
-		// this._columnCollection.forEach((_, diags) => { colCount += diags.length; });
 		// this._sqlWarningCollection.forEach((_, diags) => { warningCount += diags.length; });
 		// this._ninjaCollection.forEach((_, diags) => { ninjaCount += diags.length; });
-		// const total = parseCount + refCount + colCount + warningCount + ninjaCount;
-		// this.logger.trace(`[diagnostics] counts — parse:${parseCount} refs:${refCount} columns:${colCount} warnings:${warningCount} ninja:${ninjaCount} total:${total}`);
+		// const total = parseCount + refCount + warningCount + ninjaCount;
+		// this.logger.trace(`[diagnostics] counts — parse:${parseCount} refs:${refCount} warnings:${warningCount} ninja:${ninjaCount} total:${total}`);
 	}
 
 	clearAll(): void {
 		this._parseCollection.clear();
 		this._refCollection.clear();
-		this._columnCollection.clear();
 		this._sqlWarningCollection.clear();
 		this._sqlfluffCollection.clear();
 		this._autoSaveCollection.clear();
@@ -664,13 +562,10 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 
 	dispose(): void {
 		if (this._debounceTimer) clearTimeout(this._debounceTimer);
-		for (const timer of this._columnDebounceTimers.values()) clearTimeout(timer);
 		for (const timer of this._ninjaDebounceTimers.values()) clearTimeout(timer);
-		for (const cts of this._columnCtsSources.values()) cts.cancel();
 		for (const d of this._disposables) d.dispose();
 		this._parseCollection.dispose();
 		this._refCollection.dispose();
-		this._columnCollection.dispose();
 		this._sqlWarningCollection.dispose();
 		this._sqlfluffCollection.dispose();
 		this._autoSaveCollection.dispose();
