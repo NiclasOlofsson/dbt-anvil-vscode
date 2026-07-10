@@ -21,7 +21,8 @@
 		// (esbuild has the matching alias in .esbuild.ts). Its src/generated/ must
 		// exist — run `npm run gen` there after a fresh clone.
 		"paths": {
-			"sqllens": ["../sql-dialect-grammars/src/index.ts"]
+			"sqllens": ["../sql-dialect-grammars/src/index.ts"],
+			"sqllens/minijinja": ["../sql-dialect-grammars/src/minijinja/index.ts"]
 		}
 	},
 	"include": [

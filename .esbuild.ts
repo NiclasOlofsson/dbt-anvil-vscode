@@ -28,8 +28,12 @@ const commonOptions: esbuild.BuildOptions = {
 	external: ['vscode', '@duckdb/*', '*.node'],
 	// sqllens is consumed as TS source from the sibling repo (no build/emit there).
 	// Its src/generated/ (ANTLR output) is gitignored — run `npm run gen` in
-	// ../sql-dialect-grammars before building here.
-	alias: { sqllens: '../sql-dialect-grammars/src/index.ts' },
+	// ../sql-dialect-grammars before building here. The minijinja subpath entry
+	// must precede the bare one so the longer specifier wins prefix resolution.
+	alias: {
+		'sqllens/minijinja': '../sql-dialect-grammars/src/minijinja/index.ts',
+		sqllens: '../sql-dialect-grammars/src/index.ts',
+	},
 };
 
 async function main(): Promise<void> {

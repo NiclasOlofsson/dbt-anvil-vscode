@@ -31,7 +31,7 @@
  * Expression snippets are sliced from the ORIGINAL sql at the CST span of the producing
  * expression — never reconstructed from the IR.
  */
-import { foldIdentifier, lineage as sqllensLineage, lineageOf, parseTemplated, resolveScopes, Schema } from 'sqllens';
+import { foldIdentifier, lineage as sqllensLineage, lineageOf, parseTemplated, resolveScopes, Schema } from './api';
 import type {
 	Dialect,
 	IdentKind,
@@ -42,7 +42,7 @@ import type {
 	Scope,
 	SchemaMapping,
 	ScopeTree,
-} from 'sqllens';
+} from './api';
 
 /** The `via` trail's element type (ITEM 13 `ViaStep`), derived off `LineageHop` so it tracks
  *  sqllens's shape without a deep import: `{ scope, kind: 'rename' | 'expand' }`. */

@@ -10,11 +10,11 @@
  * throw and never a fallback.
  *
  */
-import type { DocumentModel, RefInfo, SourceInfo } from '../../services/parse-service';
+import type { DocumentModel } from '../../services/parse-service';
 import type { DocumentParser, ParseOptions } from '../../services/document-parser';
 import type { DialectSymbols } from '../sql-tokens';
 import { performance } from 'node:perf_hooks';
-import { dialectSymbols, parseTemplated, qualify, resolveScopes, Schema, toSqllensDialect, type Dialect, type Qualification, type SchemaMapping, type SchemaProvider, type TemplateCall, type TemplatedParseOptions, type TemplatedParseResult, type TemplateProvider } from './api';
+import { dialectSymbols, parseTemplated, qualify, resolveScopes, Schema, toSqllensDialect, type Dialect, type Qualification, type SchemaMapping, type SchemaProvider, type Scope, type ScopeTree, type TemplatedParseOptions, type TemplatedParseResult, type TemplateProvider } from './api';
 import { keywordTokenTypesFor, mapTokens } from './token-mapper';
 import { mergeSqlAndJinjaTokens } from '../ninja-sql-tokens';
 import { tagInfos } from './extract/tag-infos';
@@ -348,8 +348,9 @@ export class SqllensDocumentParser implements DocumentParser {
 		// symmetric to `control.calls`).
 		const { refs, sources, macroCalls } = tagInfos(templated.tags);
 		// The tag-AST sees jinja tags but never SQL aliases; back-fill them from
-		// the matching relation Sym's own alias binding (position-matched).
-		backfillSymAliases(symbols, refs, sources);
+		// the matching relation Sym's own alias binding, joined by node identity
+		// (nodeOf(tag) ↔ Sym.node — the stage-1 accessors).
+		backfillSymAliases(symbols, refs, sources, templated.tags, t => templated.nodeOf(t));
 
 		// parseTemplated's placeholder is length-preserving, so token offsets line up
 		// with `text` — mapTokens derives line starts from it.
@@ -370,7 +371,7 @@ export class SqllensDocumentParser implements DocumentParser {
 			finalColumns,
 			finalSelect,
 			symbols,
-			relationColumns: provider ? collectRelationColumns(refs, sources, provider) : {},
+			relationColumns: qualification ? collectRelationColumns(result.scopes, qualification) : {},
 			parseWarnings,
 			timing: { parseMs: Math.round(parseMs), totalMs: Math.round(performance.now() - t0) },
 			jinjaTokens,
@@ -392,23 +393,29 @@ export class SqllensDocumentParser implements DocumentParser {
 }
 
 /**
- * Per-relation column lists from the provider's ref()/source() answers, keyed by
- * the templated source's IN-SCOPE name (lowercased) — the name the relation Sym
+ * Per-relation column lists via sqllens's own `Qualification.columnsOfSource`
+ * (stage-1 Of-accessor) — the first-class read that retired the interim
+ * tag-consult map. Walks every scope's TABLE sources and keys each by the
+ * relation's own name (lowercased; dotted for multi-part names): the model
+ * name for a `{{ ref() }}` marker, `source.table` for `{{ source() }}`, the
+ * written name for a plain physical table — the same name the relation Sym
  * carries, so consumers (`ParseService.columnsForRef`) look up by `Sym.name`.
- * That name is the tag MARKER's logical name (sqllens apply-tags): the model
- * name for ref(), the dotted `source.table` pair for source(). Only POSITIVE
- * provider answers land — a cold or unresolvable relation contributes nothing,
- * never a fabricated list.
+ * "unknown" answers contribute nothing — never a fabricated list. CTE-kind
+ * sources are skipped on purpose: `model.ctes` already carries them, and a CTE
+ * shadows a same-named relation in `columnsForRef`'s lookup order anyway.
  */
-function collectRelationColumns(refs: RefInfo[], sources: SourceInfo[], provider: TemplateProvider): Record<string, string[]> {
+function collectRelationColumns(scopes: ScopeTree, q: Qualification): Record<string, string[]> {
 	const out: Record<string, string[]> = {};
-	const put = (key: string, call: TemplateCall): void => {
-		const lc = key.toLowerCase();
-		if (out[lc]) return;
-		const cols = provider.expansion(call)?.relation?.columns;
-		if (cols) out[lc] = cols.map(c => c.name);
+	const visit = (scope: Scope): void => {
+		for (const src of scope.sources.values()) {
+			if (src.kind !== 'table') continue;
+			const key = src.name.join('.').toLowerCase();
+			if (out[key]) continue;
+			const cols = q.columnsOfSource(scope, src);
+			if (cols !== 'unknown') out[key] = cols.map(c => c.name);
+		}
+		for (const child of scope.children) visit(child);
 	};
-	for (const r of refs) put(r.model, { name: 'ref', args: [r.model] });
-	for (const s of sources) put(`${s.sourceName}.${s.tableName}`, { name: 'source', args: [s.sourceName, s.tableName] });
+	visit(scopes.root);
 	return out;
 }

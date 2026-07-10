@@ -9,7 +9,7 @@
  * way to do that half itself since it has no jinja-tag awareness.
  */
 import { deriveSymbols } from '../api';
-import type { Dialect, ScopeTree, SchemaProvider, StarExpansion, Sym } from '../api';
+import type { Dialect, ScopeTree, SchemaProvider, StarExpansion, Sym, TagNode } from '../api';
 import type { RefInfo, SourceInfo } from '../../../services/parse-service';
 
 /** The `SymbolKind` values `relationSymbol` (sqllens symbols.ts) produces — everything
@@ -35,27 +35,45 @@ export function extractSymbols(
  * Back-fill `alias` onto ref/source infos (built from the R2 tag-AST, which sees
  * jinja tags but never SQL aliases) from the matching relation Sym's own alias
  * binding — the Sym-native replacement for extract/tokens.ts's
- * `backfillTagAliases`. Matched by POSITION alone (line + the tag's own start
- * column): a templated relation's Sym.name is now the real model name / dotted
- * `source.table` name, not a placeholder displayName. Position remains the
- * anchor for this backfill regardless — the tag's own start line/column is
- * still the only field both sides share to match on.
+ * `backfillTagAliases`.
+ *
+ * Joined by IDENTITY, not position (stage-1 Of-accessors): `nodeOf(tag)` gives
+ * the IR node the tag filled, `Sym.node` carries the node a relation Sym
+ * describes — one Map lookup joins them. Tag→info correlation is by INDEX:
+ * `tagInfos` produces refs/sources 1:1 in tag order from this same `tags`
+ * array, so the i-th ref tag IS `refs[i]` (invariant shared with tag-infos.ts).
+ * A self-named alias (`orders as orders`) is not an alias — same rule the old
+ * position probe applied.
  */
-export function backfillSymAliases(symbols: Sym[], refs: RefInfo[], sources: SourceInfo[]): void {
-	const relationSyms = symbols.filter(s => RELATION_KINDS.has(s.kind) && s.modifiers.includes('reference'));
-	const symAt = (line: number, col: number): Sym | undefined =>
-		relationSyms.find(s => s.span.line - 1 === line && s.span.column === col);
-
-	for (const ref of refs) {
-		if (ref.jinjaCol === undefined) continue;
-		const sym = symAt(ref.line, ref.jinjaCol);
-		const alias = sym?.alias?.name;
-		if (alias && alias !== ref.model) ref.alias = alias;
+export function backfillSymAliases(
+	symbols: Sym[],
+	refs: RefInfo[],
+	sources: SourceInfo[],
+	tags: TagNode[],
+	nodeOf: (tag: TagNode) => object | undefined,
+): void {
+	const symByNode = new Map<object, Sym>();
+	for (const s of symbols) {
+		if (RELATION_KINDS.has(s.kind) && s.modifiers.includes('reference') && s.node !== undefined) {
+			symByNode.set(s.node, s);
+		}
 	}
-	for (const src of sources) {
-		if (src.jinjaCol === undefined) continue;
-		const sym = symAt(src.line, src.jinjaCol);
-		const alias = sym?.alias?.name;
-		if (alias && alias !== src.tableName) src.alias = alias;
+	const aliasOf = (tag: TagNode): string | undefined => {
+		const node = nodeOf(tag);
+		return node ? symByNode.get(node)?.alias?.name : undefined;
+	};
+
+	let refIdx = 0;
+	let srcIdx = 0;
+	for (const tag of tags) {
+		if (tag.kind === 'ref') {
+			const info = refs[refIdx++];
+			const alias = aliasOf(tag);
+			if (alias && alias !== info.model) info.alias = alias;
+		} else if (tag.kind === 'source') {
+			const info = sources[srcIdx++];
+			const alias = aliasOf(tag);
+			if (alias && alias !== info.tableName) info.alias = alias;
+		}
 	}
 }

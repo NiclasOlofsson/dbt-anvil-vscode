@@ -1,11 +1,18 @@
 /**
  * Single import point for sqllens (the native TS SQL parser from the sibling
- * sql-dialect-grammars repo, resolved via the `sqllens` alias in .esbuild.ts /
- * tsconfig paths / vitest.config.ts).
+ * sql-dialect-grammars repo, resolved via the `sqllens` and `sqllens/minijinja`
+ * aliases in .esbuild.ts / tsconfig(.test) paths / vitest.config.ts).
  *
  * Everything in the extension imports sqllens through this module so the alias
  * and the consumed surface stay visible in one place. Add re-exports as the
  * migration consumes more of the API.
+ *
+ * Two barrels since sqllens 0d51d95 (the engine-subpath cut, absorbed here as
+ * the agreed clean cut): the jinja entry points (parseTemplated /
+ * tokenizeTemplated / templateVariants and the TagNode/MacroCall tag-AST types)
+ * live on `sqllens/minijinja`; everything engine-neutral — including the
+ * TemplateEngine result/options contract and the TemplateProvider seam — stays
+ * on the main barrel.
  */
 import { mapAdapterToDialect } from '../dialect-map';
 import { resolveDialect } from 'sqllens';
@@ -17,6 +24,7 @@ export {
 	tokenize,
 	qualify,
 	lineage,
+	lineageOf,
 	deriveSymbols,
 	referencesAt,
 	resolveScopes,
@@ -24,15 +32,24 @@ export {
 	resolveDialect,
 	foldIdentifier,
 	displayName,
-	parseTemplated,
-	tokenizeTemplated,
-	templateVariants,
 	DefaultTemplateProvider,
 	Schema,
 	CallbackSchema,
 	SqlDocument,
 	MAIN_FRAME,
 } from 'sqllens';
+
+export {
+	parseTemplated,
+	tokenizeTemplated,
+	templateVariants,
+} from 'sqllens/minijinja';
+
+export type {
+	TagNode,
+	MacroCall,
+	TemplateVariant,
+} from 'sqllens/minijinja';
 
 export type {
 	Analysis,
@@ -47,20 +64,18 @@ export type {
 	IdentKind,
 	Join,
 	JoinKind,
+	LineageHop,
 	Origin,
 	ParseResultIR,
 	PartSpan,
 	Projection,
 	TemplatedParseResult,
 	TemplatedParseOptions,
-	TemplateVariant,
 	TemplateCall,
 	TemplateProvider,
 	ResolvedExpansion,
 	ResolvedRelation,
 	ExpansionShape,
-	TagNode,
-	MacroCall,
 	Qualification,
 	QueryBody,
 	QueryExpr,

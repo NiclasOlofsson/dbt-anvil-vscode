@@ -12,6 +12,9 @@ export default defineConfig({
 		maxWorkers: 2,
 		alias: {
 			vscode: resolve(import.meta.dirname, './src/test/__mocks__/vscode.ts'),
+			// Subpath first: vite alias keys prefix-match in order, so the longer
+			// specifier must win before the bare `sqllens` entry rewrites it.
+			'sqllens/minijinja': resolve(import.meta.dirname, '../sql-dialect-grammars/src/minijinja/index.ts'),
 			sqllens: resolve(import.meta.dirname, '../sql-dialect-grammars/src/index.ts'),
 		},
 	},
