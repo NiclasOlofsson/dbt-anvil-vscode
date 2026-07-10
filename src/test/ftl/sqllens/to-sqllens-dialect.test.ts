@@ -30,22 +30,22 @@ describe('toSqllensDialect (dbt adapter → sqllens dialect, end to end)', () =>
 		expect(toSqllensDialect('presto')).toBe('trino');
 	});
 
-	it('close-relative adapters sqllens refuses route to their nearest gated dialect', () => {
-		expect(toSqllensDialect('hive')).toBe('databricks');
-		expect(toSqllensDialect('spark2')).toBe('databricks');
-		expect(toSqllensDialect('fabricspark')).toBe('databricks');
+	it('postgres-compatible adapters route to postgres while their upstream admission is pending', () => {
 		expect(toSqllensDialect('materialize')).toBe('postgres');
 		expect(toSqllensDialect('risingwave')).toBe('postgres');
 	});
 
-	it('unknown adapters and absent adapter fall back to databricks (total function)', () => {
+	it('unknown and unmapped adapters and absent adapter fall back to databricks (total function)', () => {
+		expect(toSqllensDialect('hive')).toBe('databricks');
+		expect(toSqllensDialect('spark2')).toBe('databricks');
+		expect(toSqllensDialect('fabricspark')).toBe('databricks');
 		expect(toSqllensDialect('clickhouse')).toBe('databricks');
 		expect(toSqllensDialect('MyUnknownDb')).toBe('databricks');
 		expect(toSqllensDialect(undefined)).toBe('databricks');
 	});
 
-	it('is case- and whitespace-insensitive on the adapter name', () => {
+	it('is case- and whitespace-insensitive on the adapter name (both resolution layers)', () => {
 		expect(toSqllensDialect('Synapse')).toBe('tsql');
-		expect(toSqllensDialect(' HIVE ')).toBe('databricks');
+		expect(toSqllensDialect(' MATERIALIZE ')).toBe('postgres');
 	});
 });

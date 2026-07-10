@@ -106,20 +106,18 @@ export type {
 } from 'sqllens';
 
 /**
- * The ONE dialect mapping the extension owns: dbt ADAPTER constants → sqllens
- * Dialect constants, for the adapters sqllens's own `resolveDialect()`
- * deliberately refuses ("never guesses" — only corpus-gated engines are mapped
- * upstream). Two kinds of entry, same shape: renames (`postgresql` is dbt's
- * spelling of postgres) and close relatives (hive's SQL surface is near-enough
- * Spark SQL that a best-effort parse beats dropping intelligence). Everything
- * else dialect-shaped lives in sqllens; new dialects route through with zero
- * changes here unless their dbt adapter name differs from the dialect name.
+ * TOMBSTONE-BOUND: dbt adapter constants → sqllens Dialect constants, only for
+ * entries whose upstream admission is pending (channel: sqllens-anvil
+ * 2026-07-10 18:17 — materialize/risingwave/postgresql requested into
+ * DERIVED_DIALECTS; delete each entry as upstream admits or refuses it; the
+ * table dies empty). Entries whose target equals the fallback are deliberately
+ * absent — the fallback already routes them. The only durable dialect
+ * knowledge the extension keeps is the fallback constant in
+ * `toSqllensDialect`: parse unknown adapters as databricks rather than
+ * dropping SQL intelligence — a consumer UX policy, not engine knowledge.
  */
 const DBT_ADAPTER_DIALECTS: Record<string, Dialect> = {
 	postgresql: 'postgres',
-	hive: 'databricks',
-	spark2: 'databricks',
-	fabricspark: 'databricks',
 	materialize: 'postgres',
 	risingwave: 'postgres',
 };
