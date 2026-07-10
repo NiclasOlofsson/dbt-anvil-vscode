@@ -1,7 +1,15 @@
 import * as esbuild from 'esbuild';
+import { resolve } from 'node:path';
 
 const isDev = process.argv.includes('--dev');
 const isWatch = process.argv.includes('--watch');
+
+/** Anchor every path to THIS FILE's directory, not process.cwd() — esbuild
+ *  resolves relative entry points, outfiles, and alias targets against the
+ *  working directory, so a build invoked from anywhere else (VS Code task,
+ *  packaging pipeline, another agent's tooling) silently breaks otherwise.
+ *  `__dirname`, not `import.meta.dirname`: tsx compiles this file as CJS. */
+const here = (p: string): string => resolve(__dirname, p);
 
 /** Mark the `vscode` module as external so esbuild doesn't bundle it. */
 const vscodeExternalPlugin: esbuild.Plugin = {
@@ -31,16 +39,16 @@ const commonOptions: esbuild.BuildOptions = {
 	// ../sql-dialect-grammars before building here. The minijinja subpath entry
 	// must precede the bare one so the longer specifier wins prefix resolution.
 	alias: {
-		'sqllens/minijinja': '../sql-dialect-grammars/src/minijinja/index.ts',
-		sqllens: '../sql-dialect-grammars/src/index.ts',
+		'sqllens/minijinja': here('../sql-dialect-grammars/src/minijinja/index.ts'),
+		sqllens: here('../sql-dialect-grammars/src/index.ts'),
 	},
 };
 
 async function main(): Promise<void> {
 	const extensionContext = await esbuild.context({
 		...commonOptions,
-		entryPoints: ['src/extension.ts'],
-		outfile: 'dist/extension.js',
+		entryPoints: [here('src/extension.ts')],
+		outfile: here('dist/extension.js'),
 		sourcemap: isDev,
 		minify: !isDev,
 	});
@@ -54,8 +62,8 @@ async function main(): Promise<void> {
 		target: 'node18',
 		format: 'cjs',
 		keepNames: true,
-		entryPoints: ['src/mcp/proxy/index.ts'],
-		outfile: 'dist/mcp-proxy.js',
+		entryPoints: [here('src/mcp/proxy/index.ts')],
+		outfile: here('dist/mcp-proxy.js'),
 		sourcemap: isDev,
 		minify: !isDev,
 	});
