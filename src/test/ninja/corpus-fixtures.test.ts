@@ -69,11 +69,16 @@ describe('corpus fixture regression', () => {
 					const violationModel = await documentParser.parse(sql);
 					const violationDoc   = mockDocument(sql);
 					const reflow = reflowDocument(violationDoc, violationModel, variant.config, symbols);
-					expect(
-						reflow.edit,
-						`reflowDocument returned null on ${label} (reason: ${reflow.reason ?? 'unknown'})`,
-					).not.toBeNull();
-					const formatted = reflow.edit!.newText;
+					// A fixture that already satisfies the policy is a legitimate fixed
+					// point — reflow returns a null edit for exactly that reason. Any
+					// other null reason is a formatter failure.
+					if (reflow.edit === null) {
+						expect(
+							reflow.reason,
+							`reflowDocument returned null on ${label}`,
+						).toBe('document already matches policy');
+					}
+					const formatted = reflow.edit?.newText ?? sql;
 
 					const outputModel = await documentParser.parse(formatted);
 					const outputDoc   = mockDocument(formatted);
