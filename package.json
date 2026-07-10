@@ -331,6 +331,79 @@
 			{
 				"command": "dbt-anvil.suppressFormatterWarning",
 				"title": "Suppress Formatter Warning"
+			},
+			{
+				"command": "dbt-anvil.debugConnection",
+				"title": "Test Warehouse Connection (dbt debug)",
+				"icon": "$(plug)"
+			},
+			{
+				"command": "dbt-anvil.getStarted",
+				"title": "dbt Anvil: Getting Started"
+			}
+		],
+		"walkthroughs": [
+			{
+				"id": "dbtAnvilSetup",
+				"title": "Set up dbt Anvil",
+				"description": "Get dbt language intelligence — lineage, completion, hover and lint — running for your project.",
+				"steps": [
+					{
+						"id": "project",
+						"title": "Open your dbt project",
+						"description": "dbt Anvil activates when the workspace contains a dbt_project.yml.\n\nIf this step is unchecked, open the folder that holds your dbt_project.yml.",
+						"media": {
+							"markdown": "resources/walkthroughs/project.md"
+						},
+						"completionEvents": [
+							"onContext:dbt-anvil.projectReady"
+						]
+					},
+					{
+						"id": "env",
+						"title": "Python & dbt ready",
+						"description": "Anvil finds your Python environment (venv, uv, poetry, pipenv or conda) and the dbt install inside it, bootstrapping from your lockfile when it can.\n\nIf this stays unchecked, fix the environment, then reload.\n[Reload Window](command:workbench.action.reloadWindow)\n[Show Output](command:dbt-anvil.showOutputChannel)",
+						"media": {
+							"markdown": "resources/walkthroughs/env.md"
+						},
+						"completionEvents": [
+							"onContext:dbt-anvil.envReady"
+						]
+					},
+					{
+						"id": "deps",
+						"title": "Install dbt packages",
+						"description": "Anvil runs dbt deps to fetch the packages your project depends on.\n[Install Dependencies](command:dbt-anvil.runDeps)",
+						"media": {
+							"markdown": "resources/walkthroughs/deps.md"
+						},
+						"completionEvents": [
+							"onContext:dbt-anvil.depsReady"
+						]
+					},
+					{
+						"id": "parse",
+						"title": "Parse the project",
+						"description": "Anvil runs dbt parse to build manifest.json, then indexes it into the DAG that powers lineage, completion, hover and lint.\n[Parse Project](command:dbt-anvil.parseProject)",
+						"media": {
+							"markdown": "resources/walkthroughs/parse.md"
+						},
+						"completionEvents": [
+							"onContext:dbt-anvil.manifestReady"
+						]
+					},
+					{
+						"id": "connection",
+						"title": "Connect to your warehouse",
+						"description": "Column metadata, previews and profiling read from your warehouse. Test the connection defined in your profiles.yml.\n[Test Connection](command:dbt-anvil.debugConnection)",
+						"media": {
+							"markdown": "resources/walkthroughs/connection.md"
+						},
+						"completionEvents": [
+							"onContext:dbt-anvil.connectionOk"
+						]
+					}
+				]
 			}
 		],
 		"viewsContainers": {

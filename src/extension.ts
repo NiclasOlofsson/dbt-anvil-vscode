@@ -253,6 +253,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	container.setManifestLoader(manifestLoader);
 	container.setManifestIndexer(manifestIndexer);
 
+	// -------- Walkthrough / setup context keys --------
+	// Publish the setup pipeline's state as context keys so the "Get Started"
+	// walkthrough ticks each step off as the extension clears the gate, whether
+	// that happens automatically (background deps/parse) or via a manual command.
+	// envReady/initError are read from the activation closure; deps/manifest come
+	// straight from the filesystem. connectionOk is transient per session.
+	let connectionOk = false;
+	const updateSetupContext = (conn?: boolean): void => {
+		if (conn !== undefined) connectionOk = conn;
+		void vscode.commands.executeCommand('setContext', 'dbt-anvil.projectReady', hasDbtProject);
+		void vscode.commands.executeCommand('setContext', 'dbt-anvil.envReady', envReady && !initError);
+		void vscode.commands.executeCommand('setContext', 'dbt-anvil.depsReady', dbtPackagesExist(projectDir));
+		void vscode.commands.executeCommand('setContext', 'dbt-anvil.manifestReady', manifestLoader.manifestExists());
+		void vscode.commands.executeCommand('setContext', 'dbt-anvil.connectionOk', connectionOk);
+	};
+	// Baseline every completion key to false synchronously, before any real value.
+	// The Get Started service completes an onContext step only on a false->true
+	// transition it observes while listening. A key already true at activation (a
+	// warm project) is missed, so we emit false here and let the post-async
+	// updateSetupContext calls below publish the real values as observed transitions.
+	for (const key of ['projectReady', 'envReady', 'depsReady', 'manifestReady', 'connectionOk']) {
+		void vscode.commands.executeCommand('setContext', `dbt-anvil.${key}`, false);
+	}
+
 	// -------- Column store persistence --------
 	const columnStorePersistence = new ColumnStorePersistence(context, logger);
 	// Restore before first build so _diffAndInvalidate only evicts changed nodes
@@ -413,6 +437,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			}
 		}
 
+		// Env validation has settled — publish env readiness (and refresh deps/manifest).
+		updateSetupContext();
+
 		if (initError) {
 			statusBar.setError(initError);
 			return;
@@ -428,6 +455,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			}).then((result) => {
 				if (result.success) {
 					void vscode.window.showInformationMessage('dbt deps: success');
+					updateSetupContext();
 					if (!manifestLoader.manifestExists()) {
 						void runStartupBootstrapParse?.();
 					}
@@ -573,6 +601,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			testExplorerProvider.refresh();
 			lineageGraphProvider.refreshGraph();
 			columnStorePersistence.save(manifestIndexer);
+			updateSetupContext();
 			void dbtBridgeRunner.invalidateManifestCache();
 		}),
 	);
@@ -611,6 +640,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				modelExplorerProvider.refresh();
 				lineageGraphProvider.refreshGraph();
 				columnStorePersistence.save(manifestIndexer);
+				updateSetupContext();
 				logger.info('Startup parse completed and manifest index rebuilt');
 			} catch (err) {
 				const msg = `Startup parse succeeded but manifest rebuild failed: ${err}`;
@@ -985,6 +1015,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			});
 			if (result.success) {
 				void vscode.window.showInformationMessage('dbt deps: success');
+				updateSetupContext();
 				if (!manifestLoader.manifestExists()) {
 					void runStartupBootstrapParse?.();
 				}
@@ -1008,9 +1039,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 					// Index rebuild may fail if manifest is still invalid
 				}
 				void vscode.window.showInformationMessage('dbt parse: success');
+				updateSetupContext();
 			} else {
 				void vscode.window.showErrorMessage(`dbt parse: failed — ${result.stdout.trim() || result.stderr.trim() || 'no output'}`);
 			}
+		}),
+
+		vscode.commands.registerCommand('dbt-anvil.debugConnection', async () => {
+			if (!requireEnv()) return;
+			const result = await executionService.submit({
+				type: 'debug', args: ['debug'],
+				priority: Priority.User, origin: 'user', label: 'debug',
+			});
+			if (result.success) {
+				updateSetupContext(true);
+				void vscode.window.showInformationMessage('dbt debug: connection OK');
+			} else {
+				void vscode.window.showErrorMessage(`dbt debug: failed — ${result.stdout.trim() || result.stderr.trim() || 'no output'}`);
+			}
+		}),
+
+		vscode.commands.registerCommand('dbt-anvil.getStarted', () => {
+			void vscode.commands.executeCommand('workbench.action.openWalkthrough', 'nickeolofsson.dbt-anvil#dbtAnvilSetup');
 		}),
 
 		vscode.commands.registerCommand('dbt-anvil.createModelFile', async (modelName: string) => {

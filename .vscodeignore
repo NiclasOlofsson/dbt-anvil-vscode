@@ -29,6 +29,8 @@ eslint.config.mjs
 *.md
 !README.md
 !CHANGELOG.md
+# Walkthrough step panels are shipped media, not docs
+!resources/walkthroughs/**
 
 # Plan files
 plan-*.md
