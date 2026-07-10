@@ -19,7 +19,7 @@ jobs:
       # The bridge integration tests run real dbt (dbt-duckdb) against the
       # jaffle_shop sample, which is a uv project — `uv run` bootstraps its
       # venv from the committed lockfile on first use.
-      - uses: astral-sh/setup-uv@v8
+      - uses: astral-sh/setup-uv@v8.3.2
 
       - run: npm ci
       - run: npm run lint
