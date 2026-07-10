@@ -117,7 +117,6 @@ export type {
  * dropping SQL intelligence — a consumer UX policy, not engine knowledge.
  */
 const DBT_ADAPTER_DIALECTS: Record<string, Dialect> = {
-	postgresql: 'postgres',
 	materialize: 'postgres',
 	risingwave: 'postgres',
 };
