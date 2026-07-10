@@ -120,7 +120,7 @@ This is what happens during startup to recognize the project and make sure dbt A
 >
 > This means the manifest dbt Anvil uses for model intelligence, lineage, and completions is its own private copy, kept in sync by the extension. It is not the same file that `dbt run` or `dbt build` writes to your project.
 >
-> The exact location is VS Code's workspace-scoped extension storage, inside a `target/` subfolder. On Windows this is typically `%APPDATA%\Code\User\workspaceStorage\<workspace-hash>\nickeolofsson.dbt-anvil\target\`. On macOS/Linux it is under `~/.config/Code/User/workspaceStorage/` with the same structure. The `storageDir` path is also logged to the dbt Anvil output channel at startup — search for `storageDir:` to find it.
+> The exact location is VS Code's workspace-scoped extension storage, inside a `target/` subfolder. On Windows this is typically `%APPDATA%\Code\User\workspaceStorage\<workspace-hash>\nickeolofsson.dbt-anvil-vscode\target\`. On macOS/Linux it is under `~/.config/Code/User/workspaceStorage/` with the same structure. The `storageDir` path is also logged to the dbt Anvil output channel at startup — search for `storageDir:` to find it.
 
 #### 4.1 Hot start vs cold start
 

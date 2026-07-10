@@ -90,7 +90,7 @@ fs.mkdirSync(userDataDir, { recursive: true });
 	const wsStorage = path.join(userDataDir, 'User', 'workspaceStorage');
 	if (!fs.existsSync(wsStorage)) return;
 	for (const hash of fs.readdirSync(wsStorage)) {
-		const f = path.join(wsStorage, hash, 'nickeolofsson.dbt-anvil', 'profile-results.json');
+		const f = path.join(wsStorage, hash, 'nickeolofsson.dbt-anvil-vscode', 'profile-results.json');
 		if (fs.existsSync(f)) { fs.unlinkSync(f); console.log(`[profiler] cleared persisted results: ${path.relative(repoRoot, f)}`); }
 	}
 })();
@@ -893,7 +893,7 @@ async function main() {
 			const wsStorage = path.join(userDataDir, 'User', 'workspaceStorage');
 			if (!fs.existsSync(wsStorage)) return null;
 			for (const hash of fs.readdirSync(wsStorage)) {
-				const candidate = path.join(wsStorage, hash, 'nickeolofsson.dbt-anvil', 'column-store.json');
+				const candidate = path.join(wsStorage, hash, 'nickeolofsson.dbt-anvil-vscode', 'column-store.json');
 				if (fs.existsSync(candidate)) return candidate;
 			}
 			return null;

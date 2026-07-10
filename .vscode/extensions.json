@@ -3,6 +3,6 @@
 		"dbaeumer.vscode-eslint"
 	],
 	"unwantedRecommendations": [
-		"nickeolofsson.dbt-anvil"
+		"nickeolofsson.dbt-anvil-vscode"
 	]
 }

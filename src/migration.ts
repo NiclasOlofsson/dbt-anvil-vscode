@@ -18,7 +18,7 @@ import type { ILogger } from './types/logger';
 
 const MIGRATION_FLAG = 'dbtAnvil.migratedFromDbtStudio.v1';
 const OLD_ID = 'nickeolofsson.dbt-studio-vscode';
-const NEW_ID = 'nickeolofsson.dbt-anvil';
+const NEW_ID = 'nickeolofsson.dbt-anvil-vscode';
 const OLD_MCP_SERVER = 'dbt-studio';
 
 // Leaf config keys (sub-paths under the namespace), derived from package.json.

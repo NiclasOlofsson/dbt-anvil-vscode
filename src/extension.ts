@@ -805,7 +805,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			await vscode.workspace.getConfiguration('dbt-anvil').update('notifications.suppressAutoSaveWarning', true, vscode.ConfigurationTarget.Global);
 		}),
 		vscode.commands.registerCommand('dbt-anvil.setAsDefaultFormatter', async () => {
-			await vscode.workspace.getConfiguration('editor', { languageId: 'jinja-sql' }).update('defaultFormatter', 'nickeolofsson.dbt-anvil', vscode.ConfigurationTarget.Global, true);
+			await vscode.workspace.getConfiguration('editor', { languageId: 'jinja-sql' }).update('defaultFormatter', 'nickeolofsson.dbt-anvil-vscode', vscode.ConfigurationTarget.Global, true);
 		}),
 		vscode.commands.registerCommand('dbt-anvil.suppressFormatterWarning', async () => {
 			await vscode.workspace.getConfiguration('dbt-anvil').update('notifications.suppressFormatterWarning', true, vscode.ConfigurationTarget.Global);
@@ -1060,7 +1060,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 
 		vscode.commands.registerCommand('dbt-anvil.getStarted', () => {
-			void vscode.commands.executeCommand('workbench.action.openWalkthrough', 'nickeolofsson.dbt-anvil#dbtAnvilSetup');
+			void vscode.commands.executeCommand('workbench.action.openWalkthrough', 'nickeolofsson.dbt-anvil-vscode#dbtAnvilSetup');
 		}),
 
 		vscode.commands.registerCommand('dbt-anvil.createModelFile', async (modelName: string) => {
@@ -1150,7 +1150,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 
 		vscode.commands.registerCommand('dbt-anvil.openSettings', () => {
-			void vscode.commands.executeCommand('workbench.action.openSettings', '@ext:nickeolofsson.dbt-anvil');
+			void vscode.commands.executeCommand('workbench.action.openSettings', '@ext:nickeolofsson.dbt-anvil-vscode');
 		}),
 
 		// ---- Profiler commands ----

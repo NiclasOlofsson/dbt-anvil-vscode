@@ -595,7 +595,7 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		const suppressed = vscode.workspace.getConfiguration('dbt-anvil').get<boolean>('notifications.suppressFormatterWarning');
 		const projectYml = vscode.Uri.file(`${this.projectDir}/dbt_project.yml`);
 		const defaultFormatter = vscode.workspace.getConfiguration('editor', { languageId: 'jinja-sql' }).get<string>('defaultFormatter');
-		if (suppressed || defaultFormatter === 'nickeolofsson.dbt-anvil') {
+		if (suppressed || defaultFormatter === 'nickeolofsson.dbt-anvil-vscode') {
 			this._formatterCollection.delete(projectYml);
 			return;
 		}
