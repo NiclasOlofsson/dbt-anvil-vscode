@@ -1,5 +1,7 @@
 # dbt Anvil
 
+Powered by [sqllens](https://github.com/NiclasOlofsson/sqllens) — a native TypeScript SQL parser and analyzer with name resolution, type inference, and column-level lineage across all the major SQL dialects.
+
 A VS Code extension that gives dbt the same kind of language support that most programming languages have had for years. Now it's here, for dbt Core.
 
 If you work with TypeScript or Python in VS Code, you take column completions, go-to-definition, and inline diagnostics for granted. dbt projects haven't had any of that. dbt Anvil changes that — column intelligence, interactive lineage, an integrated test runner, and Copilot tools that can query your warehouse and trace your DAG.
@@ -68,7 +70,7 @@ Tests integrate with VS Code's native Test Controller, so the Testing panel work
 
 ## AI Tools
 
-With GitHub Copilot, dbt Anvil registers 17 tools that give Copilot real access to your project:
+With GitHub Copilot, dbt Anvil registers a set of tools that give Copilot real access to your project:
 
 - **Project & Resources** — project info, resource listing, model/source details, dependency installation
 - **Lineage & Impact** — lineage tracing, impact analysis, column-level lineage
@@ -115,7 +117,7 @@ You've read the prose. You skipped to here anyway. Fine.
 - SQL Debugger — step through CTEs and clauses with F10/F11, inspect intermediate results, step back for free, breakpoints by name or line, edit and continue, cross-model step-in
 - Model Explorer — browse the project tree with materialisation icons
 - Test Explorer — pass/fail/warn by status, integrates with VS Code Testing panel
-- AI tools — 17 tools for project info, lineage, queries, and dbt execution; registered with Copilot and exposed to Claude Code over MCP
+- AI tools — project info, lineage, queries, and dbt execution; registered with Copilot and exposed to Claude Code over MCP
 
 ## Under the Hood
 
