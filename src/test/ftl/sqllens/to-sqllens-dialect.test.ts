@@ -17,6 +17,8 @@ describe('toSqllensDialect (dbt adapter → sqllens dialect, end to end)', () =>
 		expect(toSqllensDialect('postgres')).toBe('postgres');
 		expect(toSqllensDialect('duckdb')).toBe('duckdb');
 		expect(toSqllensDialect('trino')).toBe('trino');
+		expect(toSqllensDialect('sqlite')).toBe('sqlite');
+		expect(toSqllensDialect('mysql')).toBe('mysql');
 	});
 
 	it('renamed and family adapters route via the mapping', () => {

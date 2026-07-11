@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.0
+
+Two new dialects: **SQLite** and **MySQL**. If your dbt project runs on `dbt-sqlite` or `dbt-mysql`, the whole toolkit now speaks your SQL, the same way it already does for Snowflake, BigQuery, Databricks, and the rest: hover, lineage, diagnostics, and the formatter.
+
+- **SQLite and MySQL support** — full SQL intelligence for both adapters, from the new dialects in [sqllens](https://github.com/NiclasOlofsson/sqllens) 1.1. Nothing to switch on: the extension reads your adapter type and routes to the right parser automatically.
+
 ## 1.0.0
 
 dbt Studio is now **dbt Anvil**, and it's open source. The full source lives at [github.com/NiclasOlofsson/dbt-anvil-vscode](https://github.com/NiclasOlofsson/dbt-anvil-vscode) under MIT. Read it, break it, file issues, send PRs.
