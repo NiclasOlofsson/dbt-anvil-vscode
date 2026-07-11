@@ -2306,7 +2306,7 @@
 		"test:watch": "vitest",
 		"typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
 		"vscode:prepublish": "tsx .esbuild.ts",
-		"package:marketplace": "vsce package --allow-proposed-apis contribLanguageModelToolSets",
+		"package:marketplace": "vsce package",
 		"demo:capture": "node scripts/demo/capture-demo.mjs",
 		"demo:generate": "node scripts/demo/generate-demo.mjs",
 		"demo:render:gif": "node scripts/demo/generate-demo.mjs --config scripts/demo/rendering-config-gif.json",

@@ -48,7 +48,7 @@ jobs:
       # vsce runs vscode:prepublish (the production esbuild) during package.
       # The same .vsix then goes to the Marketplace and the GitHub release.
       - name: Package
-        run: npx vsce package --allow-proposed-apis contribLanguageModelToolSets
+        run: npx vsce package
 
       - name: Publish to Marketplace
         env:

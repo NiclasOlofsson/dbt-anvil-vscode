@@ -84,7 +84,7 @@ Releases are built and published by the **Release** GitHub Actions workflow, not
 
 > **Note:** Publishing requires the `VSCE_PAT` repository secret: an Azure DevOps personal access token with the *Marketplace: Manage* scope for the `nickeolofsson` publisher. Only the maintainer holds this; external contributors open a PR and the maintainer releases.
 
-> **Note:** Packaging passes `--allow-proposed-apis contribLanguageModelToolSets` because the toolset feature is still a proposed VS Code API. The toolset grouping only works in VS Code Insiders; core features (syntax highlighting, model explorer, individual tools) work in stable VS Code.
+> **Note:** Publishing passes `--allow-proposed-apis contribLanguageModelToolSets` because the toolset feature is still a proposed VS Code API. The toolset grouping only works in VS Code Insiders; core features (syntax highlighting, model explorer, individual tools) work in stable VS Code.
 
 ### Local packaging (testing only)
 
