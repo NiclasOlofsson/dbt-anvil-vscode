@@ -48,6 +48,8 @@ Thumbs.db
 experiments/
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
+# Implementation plans are point-in-time working artifacts, never published
+.claude/plans/
 .mcp.json
 
 # Personal editor config (holds local debug-target paths)
