@@ -36,7 +36,7 @@ type ViewMode = 'full' | 'stack';
  *  - `stack` — only ancestors of the current frame (the dependency path)
  */
 export class DataPipelineProvider implements vscode.TreeDataProvider<PipelineNode> {
-	static readonly viewId = 'dbt-sql.dataPipeline';
+	static readonly viewId = 'dbt-anvil.dataPipeline';
 
 	private readonly _onDidChangeTreeData = new vscode.EventEmitter<PipelineNode | undefined | void>();
 	readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
@@ -85,7 +85,7 @@ export class DataPipelineProvider implements vscode.TreeDataProvider<PipelineNod
 
 	toggleMode(): void {
 		this._mode = this._mode === 'full' ? 'stack' : 'full';
-		void vscode.commands.executeCommand('setContext', 'dbt-sql.pipelineModeStack', this._mode === 'stack');
+		void vscode.commands.executeCommand('setContext', 'dbt-anvil.pipelineModeStack', this._mode === 'stack');
 		this._onDidChangeTreeData.fire();
 	}
 
@@ -121,7 +121,7 @@ export class DataPipelineProvider implements vscode.TreeDataProvider<PipelineNod
 			}
 			if (this._sourceUri) {
 				item.command = {
-					command: 'dbt-sql.dataPipeline.goToFrame',
+					command: 'dbt-anvil.dataPipeline.goToFrame',
 					title: 'Go to Line',
 					arguments: [this._sourceUri, element.line],
 				};
@@ -177,7 +177,7 @@ export class DataPipelineProvider implements vscode.TreeDataProvider<PipelineNod
 		// Click → navigate to source line
 		if (this._sourceUri) {
 			item.command = {
-				command: 'dbt-sql.dataPipeline.goToFrame',
+				command: 'dbt-anvil.dataPipeline.goToFrame',
 				title: 'Go to Frame',
 				arguments: [this._sourceUri, element.line],
 			};

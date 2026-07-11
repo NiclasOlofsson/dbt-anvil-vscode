@@ -291,17 +291,17 @@
 				"title": "Export as Markdown"
 			},
 			{
-				"command": "dbt-sql.dataPipeline.toggleModeFull",
+				"command": "dbt-anvil.dataPipeline.toggleModeFull",
 				"title": "Show Full DAG",
 				"icon": "$(list-tree)"
 			},
 			{
-				"command": "dbt-sql.dataPipeline.toggleModeStack",
+				"command": "dbt-anvil.dataPipeline.toggleModeStack",
 				"title": "Show Current Stack Only",
 				"icon": "$(git-merge)"
 			},
 			{
-				"command": "dbt-sql.dataPipeline.goToFrame",
+				"command": "dbt-anvil.dataPipeline.goToFrame",
 				"title": "Go to Frame"
 			},
 			{
@@ -464,7 +464,7 @@
 			],
 			"debug": [
 				{
-					"id": "dbt-sql.dataPipeline",
+					"id": "dbt-anvil.dataPipeline",
 					"name": "Data Pipeline",
 					"when": "inDebugMode && debugType == 'dbt-sql'"
 				}
@@ -737,13 +737,13 @@
 					"group": "navigation"
 				},
 				{
-					"command": "dbt-sql.dataPipeline.toggleModeFull",
-					"when": "view == dbt-sql.dataPipeline && dbt-sql.pipelineModeStack",
+					"command": "dbt-anvil.dataPipeline.toggleModeFull",
+					"when": "view == dbt-anvil.dataPipeline && dbt-anvil.pipelineModeStack",
 					"group": "navigation"
 				},
 				{
-					"command": "dbt-sql.dataPipeline.toggleModeStack",
-					"when": "view == dbt-sql.dataPipeline && !dbt-sql.pipelineModeStack",
+					"command": "dbt-anvil.dataPipeline.toggleModeStack",
+					"when": "view == dbt-anvil.dataPipeline && !dbt-anvil.pipelineModeStack",
 					"group": "navigation"
 				}
 			],

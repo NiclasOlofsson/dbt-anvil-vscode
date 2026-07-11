@@ -1380,9 +1380,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				symbolSqlProvider.clear();
 			}
 		}),
-		vscode.commands.registerCommand('dbt-sql.dataPipeline.toggleModeFull', () => dataPipelineProvider.toggleMode()),
-		vscode.commands.registerCommand('dbt-sql.dataPipeline.toggleModeStack', () => dataPipelineProvider.toggleMode()),
-		vscode.commands.registerCommand('dbt-sql.dataPipeline.goToFrame', async (uri: string, line: number) => {
+		vscode.commands.registerCommand('dbt-anvil.dataPipeline.toggleModeFull', () => dataPipelineProvider.toggleMode()),
+		vscode.commands.registerCommand('dbt-anvil.dataPipeline.toggleModeStack', () => dataPipelineProvider.toggleMode()),
+		vscode.commands.registerCommand('dbt-anvil.dataPipeline.goToFrame', async (uri: string, line: number) => {
 			if (!uri || line === undefined) return;
 			const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri));
 			const editor = await vscode.window.showTextDocument(doc, { preview: false });

@@ -110,9 +110,9 @@ export async function migrateLegacySettings(
 /**
  * Warn if the previous "dbt Studio" extension is still installed AND enabled.
  * The two extensions collide on globally-named resources (language-model tool
- * names, the kept `dbt-sql` debugger type + data-pipeline view), so running
- * both produces "already registered" / "duplicate view id" errors and leaves
- * dbt Anvil's tools half-broken. Offer a one-click uninstall. Runs every
+ * names and the kept `dbt-sql` debugger type), so running both produces
+ * "already registered" errors and leaves dbt Anvil's tools half-broken. Offer
+ * a one-click uninstall. Runs every
  * activation while the conflict exists; goes away once the old one is removed.
  * `getExtension` returns undefined for a disabled extension, so a user who
  * merely disabled (not uninstalled) the old one is not nagged.
