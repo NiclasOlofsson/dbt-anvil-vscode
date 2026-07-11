@@ -3,6 +3,6 @@
 # `{% %}` Jinja syntax as prose examples, which Jekyll's Liquid pass
 # misparses as its own template tags and fails to build.
 exclude:
-  - DEBUGGING.md
+  - debugging.md
   - ninja-linter.md
-  - STARTUP-BEHAVIOR.md
+  - startup-behavior.md
