@@ -62,9 +62,16 @@ jobs:
         if: inputs.bump != 'none'
         run: git push origin HEAD:main --follow-tags
 
+      # Release notes come from the CHANGELOG section for this version, so the
+      # GitHub release and the Marketplace changelog tab tell the same story.
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          gh release create "v$VERSION" ./*.vsix --title "v$VERSION" --generate-notes
+          awk -v ver="## $VERSION" '$0 == ver {found=1; next} /^## / && found {exit} found' CHANGELOG.md > release-notes.md
+          if [ -s release-notes.md ]; then
+            gh release create "v$VERSION" ./*.vsix --title "v$VERSION" --notes-file release-notes.md
+          else
+            gh release create "v$VERSION" ./*.vsix --title "v$VERSION" --generate-notes
+          fi

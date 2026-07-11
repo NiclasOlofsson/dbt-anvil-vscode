@@ -28,15 +28,15 @@ npx vitest run -t "test name pattern"     # Filter by test name
 npm run lint && npm run typecheck && npm test
 
 # Packaging
-npm run package:marketplace    # Bump patch version + create .vsix
+npm run package:marketplace    # Create a local .vsix (no version bump; releases run from GitHub Actions)
 ```
 
 Press **F5** in VS Code to launch the Extension Development Host after starting `npm run watch`.
 
 ## Conventions
 
-- **Markdown naming.** Uppercase filenames only for the well-known files: `README.md` in any folder, plus root-level CHANGELOG, CONTRIBUTING, LICENSE, ROADMAP, and CLAUDE.md. Everything else — including all of `docs/` — is lowercase-kebab-case (`ninja-linter.md`, `startup-behavior.md`).
-- **No defensive coding.** The codebase is small and well-typed. Don't add `if (!x) return null` guards or invented fallback values — they add noise and hide bugs. If a value is unexpectedly missing, throw (or return `undefined` and let the bug surface at its source) rather than papering over it.
+- **Markdown naming.** Uppercase filenames only for the well-known files: `README.md` in any folder, plus root-level CHANGELOG, CONTRIBUTING, LICENSE, ROADMAP, and CLAUDE.md. Everything else (including all of `docs/`) is lowercase-kebab-case (`ninja-linter.md`, `startup-behavior.md`).
+- **No defensive coding.** The codebase is small and well-typed. Don't add `if (!x) return null` guards or invented fallback values: they add noise and hide bugs. If a value is unexpectedly missing, throw (or return `undefined` and let the bug surface at its source) rather than papering over it.
 
 ## Architecture
 
@@ -44,8 +44,8 @@ dbt Anvil is a VS Code extension (TypeScript + persistent Python subprocess) pro
 
 ### Entry Points
 
-- `src/extension.ts` — `activate()` function; wires up all services and providers (the authoritative wiring blueprint — read this first when tracing how a feature is hooked up)
-- `src/mcp/proxy/index.ts` — Stdio ↔ HTTP proxy Claude Code spawns as its MCP server
+- `src/extension.ts`: `activate()` function; wires up all services and providers (the authoritative wiring blueprint, read this first when tracing how a feature is hooked up)
+- `src/mcp/proxy/index.ts`: Stdio ↔ HTTP proxy Claude Code spawns as its MCP server
 
 Both are bundled by esbuild (`.esbuild.ts`) into `dist/`.
 
@@ -53,10 +53,10 @@ Both are bundled by esbuild (`.esbuild.ts`) into `dist/`.
 
 1. Create `ServiceContainer` (singleton, lazy-initialized)
 2. Load `dbt_project.yml` via `DbtProjectService`
-3. Detect Python env (venv/uv/poetry/pipenv/conda) and validate dbt installation — **runs off the critical path (async)**
+3. Detect Python env (venv/uv/poetry/pipenv/conda) and validate dbt installation: **runs off the critical path (async)**
 4. Load `manifest.json` and build in-memory DAG + symbol tables (`ManifestIndexer`)
 5. Spawn `bridge.py` as a persistent Python subprocess (JSON RPC over stdin/stdout)
-6. Construct the SQL parser (`SqllensDocumentParser` — native TS, in-process, nothing to boot)
+6. Construct the SQL parser (`SqllensDocumentParser`, native TS, in-process, nothing to boot)
 7. Start MCP subsystem: HTTP server on an ephemeral 127.0.0.1 port, write discovery file at `~/.dbt-anvil/mcp/<workspace-hash>.json`, upsert `~/.claude.json` per-project entry pointing at `dist/mcp-proxy.js`
 8. Register all language providers, tree views, debug adapter, and language-model tools (Copilot + MCP)
 
@@ -70,7 +70,7 @@ Both are bundled by esbuild (`.esbuild.ts`) into `dist/`.
 | **Language providers** | `src/providers/sql/`, `src/providers/yaml/` | All VS Code language features (completion, hover, definition, rename, diagnostics, code lens). Providers are re-registered dynamically when project paths change |
 | **Ninja linter** | `src/ninja/` | ~40 built-in SQL style/quality rules; full-workspace scanner; separate editor panel |
 | **Views & UI** | `src/views/` | Model Explorer, interactive lineage graph (D3/dagre), test explorer, profiler results, query result panel |
-| **Copilot tools** | `src/tools/` | Language model tools in 4 toolsets: Project & Resources, Lineage & Impact, Database, Execution. One file per tool — add new ones via `src/tools/index.ts` |
+| **Copilot tools** | `src/tools/` | Language model tools in 4 toolsets: Project & Resources, Lineage & Impact, Database, Execution. One file per tool: add new ones via `src/tools/index.ts` |
 | **MCP subsystem** | `src/mcp/` | Exposes the same tools to Claude Code (and any MCP client) via a stdio proxy → in-host HTTP server. Shares the registry with Copilot so schemas never drift |
 | **Debug adapter** | `src/dbt/debug-adapter.ts` | Debug Adapter Protocol for CTE stepping |
 | **Caching** | `src/dbt/compile-cache.ts`, `src/dbt/describe-cache.ts`, persistence files | Compile results, column metadata, and parse results all persisted to disk with mtime/hash validation |
@@ -88,8 +88,8 @@ Both are bundled by esbuild (`.esbuild.ts`) into `dist/`.
 
 esbuild bundles two targets from `.esbuild.ts`:
 - `src/extension.ts` → `dist/extension.js` (Node 18, CJS)
-- `src/mcp/proxy/index.ts` → `dist/mcp-proxy.js` (Node 18, CJS, fully self-contained — no externals, no `vscode` import)
+- `src/mcp/proxy/index.ts` → `dist/mcp-proxy.js` (Node 18, CJS, fully self-contained: no externals, no `vscode` import)
 
 Externals (extension only): `vscode`, `@duckdb/*`, `*.node`. The MCP proxy bundles everything so it runs as a standalone subprocess outside the extension host.
 
-sqllens resolves from node_modules like any other dependency. To develop against a local sqllens checkout instead, temporarily point `sqllens` / `sqllens/minijinja` at `../sql-dialect-grammars/src/` via an esbuild `alias` in `.esbuild.ts`, `paths` in `tsconfig.json` + `tsconfig.test.json`, and an `alias` in `vitest.config.ts` (run `npm run gen` there first) — local-only edits, never committed.
+sqllens resolves from node_modules like any other dependency. To develop against a local sqllens checkout instead, temporarily point `sqllens` / `sqllens/minijinja` at `../sql-dialect-grammars/src/` via an esbuild `alias` in `.esbuild.ts`, `paths` in `tsconfig.json` + `tsconfig.test.json`, and an `alias` in `vitest.config.ts` (run `npm run gen` there first), local-only edits, never committed.

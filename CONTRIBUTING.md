@@ -70,42 +70,29 @@ All three must pass with no errors.
 
 ## Release Process
 
-### Before Publishing
+Releases are built and published by the **Release** GitHub Actions workflow, not from a local machine.
 
-1. **Update `CHANGELOG.md`** — add a new section for the upcoming version with a summary of changes. Review `git log --oneline` since the last release for reference. This is a manual step; there is no script for it.
+1. **Update `CHANGELOG.md`** — add a `## X.Y.Z` section for the version the release will produce; the workflow bumps the current `package.json` version by your chosen patch, minor, or major. Review `git log --oneline` since the last release for reference. The workflow lifts this section into the GitHub release notes, and the Marketplace renders the changelog on the listing.
 
-2. **Run pre-flight checks:**
-   ```bash
-   npm run lint && npm run typecheck && npm test
-   ```
+2. **Trigger the workflow** — GitHub → Actions → Release → Run workflow, and choose the version bump (`patch`, `minor`, `major`, or `none` to publish the version already in `package.json`). The run:
+   - re-runs the CI gates (lint, typecheck, full test suite); a release never skips them
+   - bumps the version and tags via `npm version`
+   - packages the `.vsix` and publishes it to the VS Code Marketplace
+   - pushes the version commit + tag back to `main` and creates a GitHub release with the `.vsix` attached
 
-### Package (without publishing)
+   A failed publish leaves the repository untouched. Fix the problem and re-run.
+
+> **Note:** Publishing requires the `VSCE_PAT` repository secret: an Azure DevOps personal access token with the *Marketplace: Manage* scope for the `nickeolofsson` publisher. Only the maintainer holds this; external contributors open a PR and the maintainer releases.
+
+> **Note:** Packaging passes `--allow-proposed-apis contribLanguageModelToolSets` because the toolset feature is still a proposed VS Code API. The toolset grouping only works in VS Code Insiders; core features (syntax highlighting, model explorer, individual tools) work in stable VS Code.
+
+### Local packaging (testing only)
 
 ```bash
 npm run package:marketplace
 ```
 
-This bumps the patch version and produces a `.vsix` file locally. Useful for manual testing before publishing.
-
-### Publish
-
-> **Note:** Publishing is restricted to the maintainer (`nickeolofsson`). External contributors should open a PR — the maintainer handles releases.
-
-```bash
-npm run publish:marketplace
-```
-
-This bumps the patch version and publishes directly to the VS Code Marketplace. Requires marketplace publisher access and a valid `vsce` token (`npx vsce login nickeolofsson`).
-
-> **Note:** Both commands pass `--allow-proposed-apis contribLanguageModelToolSets` because the toolset feature is still a proposed VS Code API. This means the toolset grouping only works in VS Code Insiders; core features (syntax highlighting, model explorer, individual tools) work in stable VS Code.
-
-`npm run publish:marketplace` runs `npm version patch` internally, which automatically creates a git commit and tag for the version bump. After publishing, push the commit and tag:
-
-```bash
-git push && git push --tags
-```
-
-Do **not** manually commit `package.json` or `package-lock.json` after publishing — `npm version patch` already did that.
+Produces a `.vsix` locally without touching the version. Install it via **Extensions: Install from VSIX...** to test a build before releasing.
 
 ## Quick Reference
 
@@ -118,5 +105,4 @@ Do **not** manually commit `package.json` or `package-lock.json` after publishin
 | `npm run lint:fix` | Lint and auto-fix |
 | `npm run typecheck` | TypeScript type-check only |
 | `npm test` | Run all tests |
-| `npm run package:marketplace` | Bump version + package `.vsix` |
-| `npm run publish:marketplace` | Bump version + publish to Marketplace |
+| `npm run package:marketplace` | Package a local `.vsix` (no version bump) |

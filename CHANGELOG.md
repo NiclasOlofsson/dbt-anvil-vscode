@@ -1,25 +1,30 @@
 # Changelog
 
-## Unreleased
+## 1.0.0
 
-- **Multi-statement files** — scratch files with `;`-separated statements are parsed per statement; refs, tokens, and diagnostics come from every statement, not just the first.
-- **Star expansion without a warehouse connection** — `select *` through CTEs and subqueries now expands from the model text alone; schema enrichment still adds warehouse columns when available.
-- **Debugger internals** — symbol emission and query decomposition moved from the Python bridge to the native parser. Clause SQL is sliced from the source text at exact parser spans instead of being regenerated, so what you step through is byte-for-byte what runs.
+dbt Studio is now **dbt Anvil**, and it's open source. The full source lives at [github.com/NiclasOlofsson/dbt-anvil-vscode](https://github.com/NiclasOlofsson/dbt-anvil-vscode) under MIT. Read it, break it, file issues, send PRs.
+
+Coming from dbt Studio? Install dbt Anvil and you're done. Your settings move over automatically on first activation, the default SQL formatter is repointed, and stale MCP wiring is cleaned up. When dbt Anvil spots the old extension it offers a one-click uninstall.
+
+- **sqllens 1.0** — the parser behind hover, lineage, diagnostics, and the formatter grew up and moved out. It's now [sqllens](https://github.com/NiclasOlofsson/sqllens), a standalone open-source TypeScript SQL parser, and dbt Anvil consumes it from npm like anyone else can.
+- **Multi-statement scratch files** — write several `;`-separated statements in one file and every statement gets the full treatment: refs, tokens, and diagnostics, not just for the first one.
+- **`select *` without a warehouse** — star expansion through CTEs and subqueries now works from your SQL alone. No connection needed; a warehouse connection only makes it richer.
+- **A debugger that doesn't paraphrase** — clause SQL is now sliced straight from your source at exact parser spans instead of being regenerated. What you step through is byte-for-byte what runs.
 
 ## 0.1.14
 
-A packaging hotfix. The `0.1.13` VSIX accidentally bundled the in-progress `experiments/` folder, the GitHub Pages site under `docs/`, and a handful of internal development docs — pushing the install size from a few megabytes to over 200. This release tightens `.vscodeignore` so only what the extension actually needs at runtime ships: `dist/`, `resources/`, `syntaxes/`, the duckdb native module, `README.md`, `CHANGELOG.md`, and `LICENSE`. Functionally identical to `0.1.13`.
+A packaging hotfix. The `0.1.13` VSIX accidentally bundled the in-progress `experiments/` folder, the GitHub Pages site under `docs/`, and a handful of internal development docs, pushing the install size from a few megabytes to over 200. This release tightens `.vscodeignore` so only what the extension actually needs at runtime ships: `dist/`, `resources/`, `syntaxes/`, the duckdb native module, `README.md`, `CHANGELOG.md`, and `LICENSE`. Functionally identical to `0.1.13`.
 
 ## 0.1.13
 
-The headline for this release is the new Ninja linter and the FTL parser. Ninja is now an AST-driven SQL style engine with around fifty rules, a proper rule editor, and a reflow-based formatter — `Format Document` on a SQL file does something genuinely useful now. FTL is an in-process native SQL parser that replaces the Python bridge for document parsing, which is why the editor feels noticeably faster on every keystroke. There's also a long tail of improvements across the debugger, lineage, MCP, and startup.
+The headline for this release is the new Ninja linter and the FTL parser. Ninja is now an AST-driven SQL style engine with around fifty rules, a proper rule editor, and a reflow-based formatter. `Format Document` on a SQL file does something genuinely useful now. FTL is an in-process native SQL parser that replaces the Python bridge for document parsing, which is why the editor feels noticeably faster on every keystroke. There's also a long tail of improvements across the debugger, lineage, MCP, and startup.
 
-> **Heads up:** this is a large release and may have introduced instabilities. Every feature area can be turned on or off individually from Settings — completions, hover, diagnostics, the Ninja linter, auto-fix on save, and the rest — so if something misbehaves you can disable just that piece while keeping everything else running. If you hit a problem, please open an issue at [github.com/NiclasOlofsson/dbt-anvil-vscode/issues](https://github.com/NiclasOlofsson/dbt-anvil-vscode/issues).
+> **Heads up:** this is a large release and may have introduced instabilities. Every feature area can be turned on or off individually from Settings (completions, hover, diagnostics, the Ninja linter, auto-fix on save, and the rest), so if something misbehaves you can disable just that piece while keeping everything else running. If you hit a problem, please open an issue at [github.com/NiclasOlofsson/dbt-anvil-vscode/issues](https://github.com/NiclasOlofsson/dbt-anvil-vscode/issues).
 
 - **Ninja linter** — A from-the-ground-up rewrite of the SQL linter. Around fifty rules now, organised across capitalisation, layout, spacing, conventions, ambiguity, aliasing, and structure. Rules are AST-aware (no more regex false positives) and Jinja-aware (conditional blocks and macro calls don't trip them up). Severity and autofix are split, so you can downgrade a rule's diagnostic without losing its quick-fix, or vice versa. A new **Ninja Rule Editor** view lets you toggle, mute, and tune rules without editing JSON. Workspace diagnostics persist across restarts.
 - **Format Document for SQL** — `Shift+Alt+F` now reflows your SQL through the Ninja layout engine: indentation, comma position, operator position, indented joins/CTEs/THEN/ON, and configurable max line length. Auto-fix on save and auto-fix on format are independently controllable, with per-rule overrides. dbt Studio offers to register itself as the default SQL formatter on first run.
 - **User-configurable data layers** — The Model Explorer now classifies models by user-defined layers (staging, intermediate, marts, and so on) instead of a hard-coded scheme. Configure folder patterns and naming prefixes per project, and the explorer and lineage graph follow.
-- **FTL parser** — Document parsing has been moved out of the Python bridge and into an in-process native parser. This is the path that drives every keystroke — diagnostics, hover, completion, lineage. It is faster than the bridge round-trip and has no subprocess startup cost. Column lineage has also been re-implemented on top of FTL with proper AST-based scope resolution for `resolveTableRefs`.
+- **FTL parser** — Document parsing has been moved out of the Python bridge and into an in-process native parser. This is the path that drives every keystroke: diagnostics, hover, completion, lineage. It is faster than the bridge round-trip and has no subprocess startup cost. Column lineage has also been re-implemented on top of FTL with proper AST-based scope resolution for `resolveTableRefs`.
 - **Debugger: UNION-aware decomposition** — Models that use `UNION` / `UNION ALL` at the top level are now decomposed correctly, with each branch labelled by clause. The debugger also no longer writes `.vscode/launch.json` on activation, which was surprising in clean checkouts.
 - **MCP integration with Claude Code** — dbt Studio's tools are now registered with Claude Code over MCP, in addition to the existing Copilot integration. Both surfaces share the same registry so schemas never drift.
 - **Faster startup** — dbt and Python environment validation now runs off the activation critical path, so the extension activates and starts indexing immediately. A missing or broken Python environment surfaces a notification rather than blocking activation. `pipenv` / `uv` / `poetry` projects are auto-bootstrapped when their lockfile is present but the venv is missing.
@@ -58,7 +63,7 @@ The headline for this release is a step debugger for dbt SQL. The paste-CTE-into
 
 - **SQL Debugger** — Press F5 on any dbt model to start a debug session. F10 steps to the next CTE and shows what came out; F11 steps into clause-level execution so you can watch the row count change through `FROM → JOIN → WHERE → GROUP BY → SELECT`. Step Back replays cached results at zero cost. Breakpoints work by CTE name or line. The debug console evaluates SQL in the current CTE's scope. Edit a CTE mid-session and Restart Frame recompiles just that piece, keeping upstream results cached. Step Into a `ref()` and it opens a nested session for the referenced model.
 - **Data Pipeline tree view** — A live CTE dependency DAG in the Debug sidebar that updates as you step. Any clause that produced more rows than its input gets a warning flag, so the fan-out join is usually obvious within the first few steps.
-- **DuckDB native queries** — Projects targeting DuckDB now run queries directly without going through `dbt show`, the same path Databricks has had for a while. Windows only for now — other platforms are coming.
+- **DuckDB native queries** — Projects targeting DuckDB now run queries directly without going through `dbt show`, the same path Databricks has had for a while. Windows only for now; other platforms are coming.
 
 ## 0.1.8
 
@@ -70,9 +75,9 @@ The headline for this release is a step debugger for dbt SQL. The paste-CTE-into
 
 ## 0.1.6
 
-This release is a significant step under the hood. The entire SQL analysis layer has been rewritten around a real SQL parser — no more regular expressions. Every hover, definition, diagnostic, and rename result comes from a proper parse tree, which means far fewer false positives and no more features silently falling back to guesswork. Jinja handling is also much improved, so mixed Jinja/SQL files are parsed more accurately. Caching has been overhauled too, so the extension stays fast even in large projects. On top of that, there's a genuinely useful new SQL editor for running ad-hoc queries and a round of editor experience improvements that make day-to-day work smoother.
+This release is a significant step under the hood. The entire SQL analysis layer has been rewritten around a real SQL parser. No more regular expressions. Every hover, definition, diagnostic, and rename result comes from a proper parse tree, which means far fewer false positives and no more features silently falling back to guesswork. Jinja handling is also much improved, so mixed Jinja/SQL files are parsed more accurately. Caching has been overhauled too, so the extension stays fast even in large projects. On top of that, there's a genuinely useful new SQL editor for running ad-hoc queries and a round of editor experience improvements that make day-to-day work smoother.
 
-- **SQL editor for ad-hoc queries** — A dedicated SQL editor and result panel for running queries directly against your warehouse, without going through a dbt model. Open a scratch SQL file, run it with a single command, and results appear in the panel immediately. Per-row gutter numbers, a toggleable stats summary, and a cleaner toolbar make it easy to inspect what came back. Copy and export are selection-aware — only the selected rows are included. An export save-as dialog lets you choose the output path. A new entry in the Run and Debug picker provides quick access, and the `resultLocation` launch config option lets you route results to a custom destination.
+- **SQL editor for ad-hoc queries** — A dedicated SQL editor and result panel for running queries directly against your warehouse, without going through a dbt model. Open a scratch SQL file, run it with a single command, and results appear in the panel immediately. Per-row gutter numbers, a toggleable stats summary, and a cleaner toolbar make it easy to inspect what came back. Copy and export are selection-aware: only the selected rows are included. An export save-as dialog lets you choose the output path. A new entry in the Run and Debug picker provides quick access, and the `resultLocation` launch config option lets you route results to a custom destination.
 - **CTE Profiler overhaul** — The profiler tree view is completely rebuilt. Gutter icons and the overview ruler now mark hot and warm CTEs directly in the editor so you can see the cost distribution without leaving the file. Decorations can be toggled on and off. On Databricks the profiler issues a `REFRESH TABLE` hint before each run so results reflect actual execution time, not cached reads.
 - **SQL syntax diagnostics** — SQL syntax errors are flagged inline as you type. Whitespace-only changes skip re-validation.
 - **Rename symbol (F2)** — Rename any CTE, column alias, or inline alias across the entire file with F2. Every reference updates in one step, the same as renaming a variable in any other language.
@@ -86,7 +91,7 @@ This release is a significant step under the hood. The entire SQL analysis layer
 
 - **Databricks native queries** — If you're on Databricks, the extension now talks directly to the SQL Statement API instead of going through `dbt show`. Queries run faster and don't require a dbt invocation for every describe or inline execution.
 - **Document outline** — CTEs and columns now appear in the breadcrumb bar and the Outline panel (Ctrl+Shift+O), each with correct source positions. Jump straight to any CTE or column definition without scrolling.
-- **Feature toggles** — Every feature area (completions, hover, diagnostics, go-to-definition, etc.) can now be turned on or off individually from Settings, with immediate effect — no window reload needed. A gear icon in the Model Explorer opens the relevant settings page directly.
+- **Feature toggles** — Every feature area (completions, hover, diagnostics, go-to-definition, etc.) can now be turned on or off individually from Settings, with immediate effect, no window reload needed. A gear icon in the Model Explorer opens the relevant settings page directly.
 - **More accurate hover and go-to-definition** — Both providers are now built on the AST token index rather than text patterns. Hover info and definition jumps are more precise, and spurious matches on unrelated text are gone.
 - **Smarter column diagnostics** — Unknown-column warnings are now driven by the AST instead of a text regex. Diagnostics no longer fire on JOIN conditions, Jinja expressions, or cases where the same alias is reused in a CTE body and the outer SELECT. Warning ranges point to the exact column token.
 
@@ -105,7 +110,7 @@ This release adds the two biggest missing pieces: a lineage graph and column int
 
 ## 0.1.1
 
-Column completions now pull real column metadata from the warehouse (via `dbt show`) instead of relying only on YAML definitions. Results are cached so repeated completions are instant. General responsiveness improvements — the extension cancels work immediately when you keep typing, and avoids redundant parsing when the manifest hasn't changed.
+Column completions now pull real column metadata from the warehouse (via `dbt show`) instead of relying only on YAML definitions. Results are cached so repeated completions are instant. General responsiveness improvements: the extension cancels work immediately when you keep typing, and avoids redundant parsing when the manifest hasn't changed.
 
 ## 0.1.0
 

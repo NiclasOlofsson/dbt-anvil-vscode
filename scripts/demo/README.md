@@ -55,12 +55,12 @@ Both commands call `generate-demo.mjs` with a rendering config. Intermediates
 
 | File | Purpose |
 |---|---|
-| `capture-demo.mjs` | Playwright driver — launches VS Code, runs segments, saves frames + video |
-| `generate-demo.mjs` | ffmpeg renderer — composes clips into GIF or animated WebP |
+| `capture-demo.mjs` | Playwright driver: launches VS Code, runs segments, saves frames + video |
+| `generate-demo.mjs` | ffmpeg renderer: composes clips into GIF or animated WebP |
 | `manuscript.json` | Clip list: id, caption, timing references, `useVideo` flag |
 | `rendering-config-gif.json` | Output settings for GIF (quality, loop, dimensions) |
 | `rendering-config-webp.json` | Output settings for WebP (fps, quality, dimensions) |
-| `demo-config.json` | Legacy static-frame config — **not used by current pipeline** |
+| `demo-config.json` | Legacy static-frame config: **not used by current pipeline** |
 
 ---
 
@@ -95,11 +95,11 @@ of looping a static screenshot. The profiler and query-results clips use this.
 
 ## Troubleshooting
 
-**`demo-recording.json` not found** — run capture first, or check that the watch
+**`demo-recording.json` not found**: run capture first, or check that the watch
 task is running (compile must succeed before capture launches VS Code).
 
-**Profiler clip encodes forever** — old bug; fixed by putting `-t` on the output
+**Profiler clip encodes forever**: old bug; fixed by putting `-t` on the output
 side (not the input) and resetting PTS with `setpts=PTS-STARTPTS`.
 
-**Segment screenshot looks wrong** — re-run capture for that segment only:
+**Segment screenshot looks wrong**: re-run capture for that segment only:
 `npm run demo:capture -- --step <id>`, then re-render.

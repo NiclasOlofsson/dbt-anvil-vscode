@@ -2,13 +2,13 @@
 
 ## Background
 
-SQL linting has a rich history in the dbt ecosystem. Tools like **sqlfluff** pioneered the space, bringing configurable rule-based analysis to SQL files and establishing many of the conventions that teams rely on today — consistent capitalisation, trailing whitespace, indentation standards, and more. These tools work well as standalone CLI utilities and CI checks.
+SQL linting has a rich history in the dbt ecosystem. Tools like **sqlfluff** pioneered the space, bringing configurable rule-based analysis to SQL files and establishing many of the conventions that teams rely on today: consistent capitalisation, trailing whitespace, indentation standards, and more. These tools work well as standalone CLI utilities and CI checks.
 
-dbt Anvil takes a different approach: it embeds linting directly into the editor as a native VS Code experience. Rather than running an external process and parsing its output, Ninja operates on the same parsed representation that powers every other dbt Anvil feature — completions, navigation, diagnostics, and debugging. This means lint feedback appears instantly as you type, with no round-trip to a subprocess, no Python dependency, and no configuration file to maintain outside of VS Code settings.
+dbt Anvil takes a different approach: it embeds linting directly into the editor as a native VS Code experience. Rather than running an external process and parsing its output, Ninja operates on the same parsed representation that powers every other dbt Anvil feature: completions, navigation, diagnostics, and debugging. This means lint feedback appears instantly as you type, with no round-trip to a subprocess, no Python dependency, and no configuration file to maintain outside of VS Code settings.
 
 ## What Made This Possible
 
-Ninja is built on top of the **DocumentModel** — a rich AST-like representation that dbt Anvil already maintains for every open SQL file. The DocumentModel is produced by the extension's native TypeScript SQL parser (jinja-aware, error-tolerant, all spans in raw-source coordinates), and it provides:
+Ninja is built on top of the **DocumentModel** (a rich AST-like representation that dbt Anvil already maintains for every open SQL file). The DocumentModel is produced by the extension's native TypeScript SQL parser (jinja-aware, error-tolerant, all spans in raw-source coordinates), and it provides:
 
 - **Token-level information** — every column reference, table reference, and column definition, with resolved source tracking (`resolvedTableRef`) that links column usages back to their defining CTE or table.
 - **CTE awareness** — each CTE's name, line span, and column list, enabling cross-CTE dependency analysis.
@@ -24,7 +24,7 @@ Ninja rules come in two types:
 
 | Type | Input | Use Case |
 |------|-------|----------|
-| **TokenRule** | `DocumentModel` + config | Semantic checks — references, structure, naming |
+| **TokenRule** | `DocumentModel` + config | Semantic checks: references, structure, naming |
 | **LayoutRule** | Raw text + lines + Jinja tokens + config | Whitespace, indentation, line length |
 
 All rules run independently and in parallel. Each returns an array of violations, optionally with auto-fix edits that VS Code can apply in one action.
@@ -147,7 +147,7 @@ cast(id as int), cast(name as varchar(255))
 
 > Jinja tags should have single-space padding inside delimiters.
 
-Checks `{{ }}` expression tags and `{% %}` block tags. Requires exactly one space after the opening delimiter and one space before the closing delimiter. Jinja comments (`{# #}`) are skipped. Whitespace-control dashes (`{{-`, `-}}`, `{%-`, `-%}`) are respected. Multiline blocks (where the content spans multiple lines) are skipped entirely — padding rules don't apply to block-style config calls.
+Checks `{{ }}` expression tags and `{% %}` block tags. Requires exactly one space after the opening delimiter and one space before the closing delimiter. Jinja comments (`{# #}`) are skipped. Whitespace-control dashes (`{{-`, `-}}`, `{%-`, `-%}`) are respected. Multiline blocks (where the content spans multiple lines) are skipped entirely. Padding rules don't apply to block-style config calls.
 
 - **Default severity:** warning
 - **Auto-fix:** Inserts missing space or deletes excess spaces to produce exactly one space of padding.
@@ -177,7 +177,7 @@ These rules analyse the semantic structure of SQL using the DocumentModel's CTE 
 Finds CTEs whose names never appear as a `table_ref` in any downstream FROM or JOIN clause. A CTE that is defined but never read from is dead code.
 
 - **Default severity:** info
-- **Code fix (†):** Precisely deletes the unused CTE definition. Because deleting a CTE is a destructive, hard-to-reverse operation, the fix is offered as an individual code fix only — it is intentionally excluded from the bulk "Fix all" action and the `source.fixAll.ninja` on-save action. Handles three distinct cases:
+- **Code fix (†):** Precisely deletes the unused CTE definition. Because deleting a CTE is a destructive, hard-to-reverse operation, the fix is offered as an individual code fix only. It is intentionally excluded from the bulk "Fix all" action and the `source.fixAll.ninja` on-save action. Handles three distinct cases:
   1. **Only CTE** — removes the entire `WITH ... AS (...)` block, leaving just the final SELECT.
   2. **First of several** — removes from the CTE name through the comma before the next CTE.
   3. **Middle or last** — removes from the preceding comma through the closing parenthesis of the unused CTE.
@@ -343,7 +343,7 @@ where status IS NULL or category IS NOT NULL
 
 #### `ninja.convention.left-join`
 
-> Prefer `LEFT JOIN` over `RIGHT JOIN` — reorder the tables instead.
+> Prefer `LEFT JOIN` over `RIGHT JOIN`, reorder the tables instead.
 
 `RIGHT JOIN` is less readable than `LEFT JOIN` because the primary table ends up on the right side. Reordering the tables and using `LEFT JOIN` keeps the dominant table first and aligns with dbt conventions.
 
@@ -359,7 +359,7 @@ select o.id from orders o left join items i on o.id = i.order_id
 
 #### `ninja.convention.outer-join` ⚡
 
-> Remove the redundant `OUTER` keyword — `LEFT`, `RIGHT`, and `FULL` already imply outer semantics.
+> Remove the redundant `OUTER` keyword: `LEFT`, `RIGHT`, and `FULL` already imply outer semantics.
 
 `LEFT OUTER JOIN`, `RIGHT OUTER JOIN`, and `FULL OUTER JOIN` are identical to their shorter forms. The `OUTER` keyword adds visual noise without any meaning.
 
@@ -391,7 +391,7 @@ select coalesce(amount, 0), coalesce(status, 'unknown')
 
 #### `ninja.convention.union-style` ⚡
 
-> Enforce a consistent UNION qualifier — either always `ALL` or always `DISTINCT`.
+> Enforce a consistent UNION qualifier: either always `ALL` or always `DISTINCT`.
 
 Configured via `dbt-anvil.ninja.convention.unionStyle` (`"all"` or `"distinct"`, default `"all"`). When a `UNION ALL` or `UNION DISTINCT` is found with the wrong qualifier, it is flagged. Bare `UNION` (no qualifier) is handled separately by `ninja.ambiguity.bare-union`.
 
@@ -413,7 +413,7 @@ select 1 union all select 2
 
 > Column references should be table-qualified when multiple sources are present.
 
-When a query has two or more table references (FROM + JOINs, or multiple CTEs), unqualified column names are ambiguous — it's unclear which table they come from. This rule flags column references that lack a table qualifier. Wildcard `*` is excluded.
+When a query has two or more table references (FROM + JOINs, or multiple CTEs), unqualified column names are ambiguous: it's unclear which table they come from. This rule flags column references that lack a table qualifier. Wildcard `*` is excluded.
 
 - **Default severity:** info
 - **Skip conditions:** Single-table queries (no ambiguity), columns that already have a table qualifier.
@@ -469,7 +469,7 @@ select id from archive_orders
 
 #### `ninja.ambiguity.distinct-groupby`
 
-> Avoid using DISTINCT together with GROUP BY — it is redundant.
+> Avoid using DISTINCT together with GROUP BY. It is redundant.
 
 When a GROUP BY is present, results are already unique per the grouping keys. Adding DISTINCT is at best redundant and at worst misleading.
 
@@ -502,7 +502,7 @@ from orders
 
 > Table references should have aliases when multiple sources are present.
 
-When a query has two or more table sources, all tables should be aliased. Aliases make column qualifications shorter and the query more readable. Single-table queries are exempt — an alias there is optional.
+When a query has two or more table sources, all tables should be aliased. Aliases make column qualifications shorter and the query more readable. Single-table queries are exempt. An alias there is optional.
 
 - **Default severity:** info
 - **No auto-fix** — choosing a good alias name requires human judgment.
@@ -588,9 +588,9 @@ group by id
 
 #### `ninja.structure.else-null`
 
-> Redundant `ELSE NULL` — CASE already returns NULL by default.
+> Redundant `ELSE NULL`: CASE already returns NULL by default.
 
-When the last branch of a CASE expression is `ELSE NULL`, it can be removed — CASE returns NULL implicitly if no branch matches.
+When the last branch of a CASE expression is `ELSE NULL`, it can be removed: CASE returns NULL implicitly if no branch matches.
 
 - **Default severity:** info
 - **Auto-fix:** Removes `ELSE NULL` leaving just `... END`.
@@ -622,7 +622,7 @@ amount > 0
 
 > Remove unnecessary parentheses around DISTINCT.
 
-`DISTINCT(id)` reads like a function call but `DISTINCT` is not a function — the parentheses are superfluous.
+`DISTINCT(id)` reads like a function call but `DISTINCT` is not a function; the parentheses are superfluous.
 
 - **Default severity:** warning
 - **No auto-fix** — removing parentheses may change formatting.
@@ -696,7 +696,7 @@ More than one blank line in a row is visual noise without semantic meaning.
 
 > Lines should not exceed the configured maximum length.
 
-Lines longer than `maxLineLength` (default: 120) are flagged. Lines that contain more than 50% Jinja content are skipped — they often can't be shortened without restructuring the template logic.
+Lines longer than `maxLineLength` (default: 120) are flagged. Lines that contain more than 50% Jinja content are skipped. They often can't be shortened without restructuring the template logic.
 
 - **Default severity:** info
 - **No auto-fix** — safe line breaking requires understanding the SQL and Jinja structure.
@@ -779,15 +779,15 @@ Classic SQL optimizer transforms (eliminate-subqueries, merge-subqueries, predic
 
 **`ninja.perf.correlated-subquery`** ← unnest-subqueries
 - Detect correlated subqueries (WHERE EXISTS/IN referencing outer columns)
-- Hint only — suggest rewriting as JOIN
+- Hint only: suggest rewriting as JOIN
 
 **`ninja.structure.unused-columns` auto-fix** ← pushdown-projections
-- Existing rule detects unused CTE columns but has no fix — add auto-fix that removes the column from the SELECT list
+- Existing rule detects unused CTE columns but has no fix. Add auto-fix that removes the column from the SELECT list
 
 ### Tier 2 — Refactoring Code Actions
 
 **Qualify Columns refactoring** ← qualify-columns
-- The parser already calls `qualify()` — qualified output exists
+- The parser already calls `qualify()`: qualified output exists
 - Code action: "Qualify all column references" → rewrites `col` to `table.col`
 - Compare pre/post-qualify column tokens; emit TextEdits
 
@@ -796,6 +796,6 @@ Classic SQL optimizer transforms (eliminate-subqueries, merge-subqueries, predic
 
 ### Tier 3 — Advanced / Future
 
-**Full expression simplification** — simplify the expression tree in the parser, compare with the original, and surface the differences as rule hints.
+**Full expression simplification**: simplify the expression tree in the parser, compare with the original, and surface the differences as rule hints.
 
-**Join optimization hints** ← optimize-joins — Detect CROSS JOINs that should be INNER JOINs based on WHERE predicates.
+**Join optimization hints** ← optimize-joins: Detect CROSS JOINs that should be INNER JOINs based on WHERE predicates.

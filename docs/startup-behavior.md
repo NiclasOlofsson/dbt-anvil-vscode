@@ -56,7 +56,7 @@ This is what happens during startup to recognize the project and make sure dbt A
 - **What happens**
 	- dbt Anvil checks whether Python is accessible and working inside the detected environment.
 - **How it is detected**
-	- For managed environments (uv, pipenv, etc.), this runs through the full managed command — for example `uv run --directory <project> python --version`. This requires **both** the manager CLI to exist **and** the managed environment to already be set up (e.g. `.venv` created). If the environment has never been initialised, this step fails even if the manager itself is correctly installed.
+	- For managed environments (uv, pipenv, etc.), this runs through the full managed command, for example `uv run --directory <project> python --version`. This requires **both** the manager CLI to exist **and** the managed environment to already be set up (e.g. `.venv` created). If the environment has never been initialised, this step fails even if the manager itself is correctly installed.
 	- If this succeeds, steps 2.3 and 2.4 are skipped entirely.
 - **What users see if it fails**
 	- Moves to 2.3 to diagnose the cause.
@@ -66,7 +66,7 @@ This is what happens during startup to recognize the project and make sure dbt A
 - **What happens**
 	- Step 2.2 failed, but that could mean two very different things: either the manager CLI is not installed at all, or the manager is fine but the environment just hasn't been created yet (e.g. fresh clone). Step 2.3 distinguishes between these two cases.
 - **How it is detected**
-	- dbt Anvil probes just the manager CLI itself (for example `uv --version`, `poetry --version`, or `pipenv --version`) — no environment involvement.
+	- dbt Anvil probes just the manager CLI itself (for example `uv --version`, `poetry --version`, or `pipenv --version`), no environment involvement.
 	- If the CLI is missing → error shown, startup stops (can't bootstrap without it).
 	- If the CLI is present → environment likely just needs to be created, proceed to 2.4.
 - **What users see if it fails**
@@ -116,11 +116,11 @@ This is what happens during startup to recognize the project and make sure dbt A
 
 > **About dbt Anvil's internal target directory**
 >
-> dbt Anvil maintains its own isolated dbt output directory, separate from the project's `target/` folder. When dbt Anvil runs `dbt parse` or `dbt compile` internally, the output (including `manifest.json`) is written to a private directory inside VS Code's extension storage — not into your workspace. Your own `target/` folder is never touched by dbt Anvil's background operations.
+> dbt Anvil maintains its own isolated dbt output directory, separate from the project's `target/` folder. When dbt Anvil runs `dbt parse` or `dbt compile` internally, the output (including `manifest.json`) is written to a private directory inside VS Code's extension storage, not into your workspace. Your own `target/` folder is never touched by dbt Anvil's background operations.
 >
 > This means the manifest dbt Anvil uses for model intelligence, lineage, and completions is its own private copy, kept in sync by the extension. It is not the same file that `dbt run` or `dbt build` writes to your project.
 >
-> The exact location is VS Code's workspace-scoped extension storage, inside a `target/` subfolder. On Windows this is typically `%APPDATA%\Code\User\workspaceStorage\<workspace-hash>\nickeolofsson.dbt-anvil-vscode\target\`. On macOS/Linux it is under `~/.config/Code/User/workspaceStorage/` with the same structure. The `storageDir` path is also logged to the dbt Anvil output channel at startup — search for `storageDir:` to find it.
+> The exact location is VS Code's workspace-scoped extension storage, inside a `target/` subfolder. On Windows this is typically `%APPDATA%\Code\User\workspaceStorage\<workspace-hash>\nickeolofsson.dbt-anvil-vscode\target\`. On macOS/Linux it is under `~/.config/Code/User/workspaceStorage/` with the same structure. The `storageDir` path is also logged to the dbt Anvil output channel at startup; search for `storageDir:` to find it.
 
 #### 4.1 Hot start vs cold start
 
@@ -129,7 +129,7 @@ Step 4 branches into two paths depending on whether a manifest already exists in
 - **Hot start** — manifest exists from a previous session. dbt Anvil loads and indexes it immediately, sets status to ready, and skips `dbt parse` entirely. This is the normal path on every reload after the first.
 - **Cold start** — no manifest yet (first ever open, storage was cleared, or workspace hash changed). dbt Anvil must generate one from scratch by running `dbt parse` in the background.
 
-> **`dbt parse` vs `dbt compile`**: `dbt parse` only validates the project and generates `manifest.json`. It does not compile SQL or run any models. It is fast and safe to run in the background. `dbt compile` goes further — it renders all Jinja and produces compiled SQL — and is only triggered on demand (e.g. when opening a model file), never as part of the startup sequence.
+> **`dbt parse` vs `dbt compile`**: `dbt parse` only validates the project and generates `manifest.json`. It does not compile SQL or run any models. It is fast and safe to run in the background. `dbt compile` goes further (it renders all Jinja and produces compiled SQL) and is only triggered on demand (e.g. when opening a model file), never as part of the startup sequence.
 
 #### 4.2 Cold start: startup parse gating
 
@@ -162,7 +162,7 @@ Step 4 branches into two paths depending on whether a manifest already exists in
 	- Compile warm-up: runs unconditionally after the manifest is indexed, unless the restored cache is already large enough.
 - **What users see if it fails**
 	- dbt Anvil may stay partially initialized (for example limited lineage/model intelligence) until parse/index completes successfully.
-	- A failed compile warm-up is non-fatal — features still work, but the first hover or compile request may be slower than usual.
+	- A failed compile warm-up is non-fatal: features still work, but the first hover or compile request may be slower than usual.
 
 ## Where to look when startup goes wrong
 
