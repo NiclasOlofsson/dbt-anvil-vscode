@@ -35,7 +35,7 @@ Press **F5** in VS Code to launch the Extension Development Host after starting 
 
 ## Conventions
 
-- **Markdown naming.** Uppercase filenames only for the root-level well-known files (README, CHANGELOG, CONTRIBUTING, LICENSE, ROADMAP, CLAUDE.md); everything else — including all of `docs/` — is lowercase-kebab-case (`ninja-linter.md`, `startup-behavior.md`).
+- **Markdown naming.** Uppercase filenames only for the well-known files: `README.md` in any folder, plus root-level CHANGELOG, CONTRIBUTING, LICENSE, ROADMAP, and CLAUDE.md. Everything else — including all of `docs/` — is lowercase-kebab-case (`ninja-linter.md`, `startup-behavior.md`).
 - **No defensive coding.** The codebase is small and well-typed. Don't add `if (!x) return null` guards or invented fallback values — they add noise and hide bugs. If a value is unexpectedly missing, throw (or return `undefined` and let the bug surface at its source) rather than papering over it.
 
 ## Architecture
