@@ -27,7 +27,7 @@ describe('classifyMacroShape — body-leading keyword (no call context)', () => 
 });
 
 describe('classifyMacroShape — literal call args bound to parameters', () => {
-	// The Oatly generic_is_deleted family: the MODE is an argument —
+	// A production soft-delete macro family: the MODE is an argument —
 	// `{{ stat }} {{ column_name }}=false` — so the body alone classifies as
 	// nothing. The call site carries the literal mode word; binding it lets the
 	// and-mode call classify as a conjunct.

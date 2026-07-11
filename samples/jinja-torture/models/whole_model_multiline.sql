@@ -1,4 +1,4 @@
--- Origin: anaplan norm views (490 models of the first Oatly ratchet scan) —
+-- Origin: generated normalized views (hundreds of models in one production project) —
 -- the entire model is ONE multi-line macro tag. The shape answer (statement)
 -- must reach the fill even when the tag spans lines.
 {{

@@ -66,9 +66,9 @@ You can also test individual CTEs in isolation using the `model::cte_name` conve
 
 Tests integrate with VS Code's native Test Controller, so the Testing panel works too. No excuses left, really.
 
-## Copilot Tools
+## AI Tools
 
-With GitHub Copilot, dbt Anvil registers 14 tools that give Copilot real access to your project:
+With GitHub Copilot, dbt Anvil registers 17 tools that give Copilot real access to your project:
 
 - **Project & Resources** — project info, resource listing, model/source details, dependency installation
 - **Lineage & Impact** — lineage tracing, impact analysis, column-level lineage
@@ -87,6 +87,8 @@ Some examples:
 
 Copilot uses the tools to actually query your project and run commands — these aren't canned responses.
 
+Using Claude Code instead? Same tools, zero setup. dbt Anvil detects Claude Code, starts a local MCP server, and registers itself automatically. Both surfaces share one tool registry, so what Copilot can do, Claude can do.
+
 ## Full Feature List
 
 You've read the prose. You skipped to here anyway. Fine.
@@ -98,6 +100,8 @@ You've read the prose. You skipped to here anyway. Fine.
 - Rename with F2 — models (including the file), CTEs, column aliases, and inline aliases
 - Call hierarchy — see which models reference yours, and which models yours references
 - Diagnostics — parse errors, unresolved refs, column mismatches, SQL syntax errors
+- SQL formatter — Format Document reflows through a layout engine; sqlfmt and dbt Labs style presets
+- Ninja linter — ~50 AST-aware, Jinja-aware style and quality rules, per-rule severity and autofix, with a visual rule editor
 - Inline / restore ref — quick-fix to expand a `ref()` to its compiled SQL or restore it
 - Quick Fix — create missing model files from unresolved refs
 - CodeLens — per-CTE query actions inline above each CTE definition
@@ -111,7 +115,7 @@ You've read the prose. You skipped to here anyway. Fine.
 - SQL Debugger — step through CTEs and clauses with F10/F11, inspect intermediate results, step back for free, breakpoints by name or line, edit and continue, cross-model step-in
 - Model Explorer — browse the project tree with materialisation icons
 - Test Explorer — pass/fail/warn by status, integrates with VS Code Testing panel
-- Copilot tools — 14 tools for project info, lineage, queries, and dbt execution
+- AI tools — 17 tools for project info, lineage, queries, and dbt execution; registered with Copilot and exposed to Claude Code over MCP
 
 ## Under the Hood
 
@@ -129,13 +133,13 @@ Every feature area can be turned on or off individually from Settings — comple
 2. Open a folder containing `dbt_project.yml`
 3. The extension activates and starts indexing automatically
 
-For AI features, install GitHub Copilot.
+For the AI tools, use GitHub Copilot or Claude Code — dbt Anvil registers with both automatically.
 
 ## Requirements
 
 - VS Code 1.115.0 or later
 - Python environment with `dbt-core` installed
-- GitHub Copilot (optional — needed for AI tools)
+- GitHub Copilot or Claude Code (optional — for the AI tools)
 
 ## License
 

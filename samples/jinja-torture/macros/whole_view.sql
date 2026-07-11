@@ -1,6 +1,6 @@
 -- Whole-model macro: the entire model body is one call to this WITH-first
--- query generator (the anaplan norm-view shape — 490 models of the first
--- Oatly ratchet scan).
+-- query generator (a production shape — hundreds of generated normalized
+-- views in the originating project).
 {% macro whole_view(table_name) %}
 
 -- Latest row per key from the raw feed

@@ -365,7 +365,7 @@ describe('SqllensDocumentParser — parse-failure paths', () => {
 	});
 
 	it('parses a trailing-conjunct macro cleanly when the provider classifies it (conjunct shape)', async () => {
-		// The Oatly `generic_is_deleted` family: an `and …` conjunct appended after
+		// A production soft-delete macro family: an `and …` conjunct appended after
 		// a complete ON expression, before UNION ALL. With the macro's source bound
 		// via the provider, classifyMacroShape answers 'conjunct' and sqllens fills
 		// `AND 1=1` — restoring the full-parse assertions the cascade's comment-
