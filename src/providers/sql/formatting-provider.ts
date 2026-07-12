@@ -4,6 +4,7 @@ import { loadConfig } from '../../ninja/config-loader';
 import { FixAction, type NinjaViolation } from '../../ninja/violation';
 import type { NinjaConfig } from '../../ninja/config';
 import { reflowDocument } from '../../ninja/reflow/engine';
+import type { ILogger } from '../../types/logger';
 
 /**
  * Document formatting provider powered by Ninja.
@@ -15,6 +16,7 @@ import { reflowDocument } from '../../ninja/reflow/engine';
 export class NinjaFormattingProvider implements vscode.DocumentFormattingEditProvider {
 	constructor(
 		private readonly parseService: ParseService,
+		private readonly logger: ILogger,
 	) {}
 
 	async provideDocumentFormattingEdits(
@@ -23,9 +25,17 @@ export class NinjaFormattingProvider implements vscode.DocumentFormattingEditPro
 		_token: vscode.CancellationToken,
 	): Promise<vscode.TextEdit[]> {
 		const config = loadConfig();
-		if (!config.enabled) return [];
+		this.logger.info(`Ninja format: ${document.uri.fsPath} (enabled=${config.enabled}, applyOnFormat=${config.autoFix.applyOnFormat})`);
 
-		if (!config.autoFix.applyOnFormat) return [];
+		if (!config.enabled) {
+			this.logger.info('Ninja format: skipped — ninja.enabled is false');
+			return [];
+		}
+
+		if (!config.autoFix.applyOnFormat) {
+			this.logger.info('Ninja format: skipped — ninja.autoFix.applyOnFormat is false; nothing will happen until it is enabled');
+			return [];
+		}
 
 		const [model, symbols] = await Promise.all([
 			this.parseService.getDocumentModel(document),
@@ -38,6 +48,7 @@ export class NinjaFormattingProvider implements vscode.DocumentFormattingEditPro
 		// explicitly. Mixing the two paths produced the multi-pass
 		// convergence pathology that the original reflow engine failed on.
 		const reflow = reflowDocument(document, model ?? undefined, config, symbols ?? undefined);
+		this.logger.info(`Ninja format: reflow ${reflow.edit ? 'produced an edit' : 'made no change (already formatted)'}`);
 		return reflow.edit ? [reflow.edit] : [];
 	}
 }

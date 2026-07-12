@@ -712,7 +712,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const sqlCodeActionProvider = new SqlCodeActionProvider(manifestIndexer, logger);
 	sqlCodeActionProvider.setPathResolver(pathResolver);
 	sqlCodeActionProvider.setNinjaResultProvider(uri => diagnosticsProvider.getNinjaResult(uri));
-	const ninjaFormattingProvider = new NinjaFormattingProvider(parseService);
+	const ninjaFormattingProvider = new NinjaFormattingProvider(parseService, logger);
 	const configCodeActionProvider = new ConfigCodeActionProvider();
 	const callHierarchyProvider = new DbtCallHierarchyProvider(manifestIndexer, logger, parseService);
 
