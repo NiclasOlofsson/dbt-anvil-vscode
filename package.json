@@ -1214,18 +1214,18 @@
 						"type": "string",
 						"default": "dbt-anvil",
 						"enum": [
+							"dbt-anvil",
 							"sqlfmt",
 							"dbt-labs",
-							"dbt-anvil",
 							"custom"
 						],
 						"enumDescriptions": [
-							"sqlfmt style: 88-char lines, lowercase, trailing commas.",
-							"dbt Labs style guide: 120-char lines, lowercase, leading commas.",
-							"dbt Anvil house style: leading commas + operators, plus forced multi-line wrapping for GROUP BY, ORDER BY, OVER window, CASE, and WHERE/HAVING boolean chains.",
-							"No preset — all settings use their explicit values or defaults."
+							"dbt Anvil house style: 120-char lines, lowercase, trailing commas, leading operators, plus forced multi-line wrapping for GROUP BY, ORDER BY, OVER window, CASE, and WHERE/HAVING boolean chains.",
+							"sqlfmt style: 88-char lines, lowercase, trailing commas, leading operators.",
+							"dbt Labs style guide: 80-char lines, lowercase, trailing commas, trailing operators.",
+							"No preset: all settings use their explicit values or defaults."
 						],
-						"markdownDescription": "Named style preset. Provides defaults for unset config keys; explicit overrides always win. **New installs** default to `sqlfmt`; existing users whose settings are already configured see no change."
+						"markdownDescription": "Named style preset. Provides defaults for unset config keys; explicit overrides always win. Defaults to `dbt-anvil` (the house style); existing users whose settings are already configured see no change."
 					},
 					"dbt-anvil.ninja.layout.alwaysWrap.select": {
 						"type": "boolean",

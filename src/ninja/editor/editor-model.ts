@@ -12,7 +12,7 @@ import {
 	type SortColumn,
 } from './editor-types';
 
-const AVAILABLE_PRESETS: FormatPreset[] = ['sqlfmt', 'dbt-labs', 'dbt-anvil', 'custom'];
+const AVAILABLE_PRESETS: FormatPreset[] = ['dbt-anvil', 'sqlfmt', 'dbt-labs', 'custom'];
 
 // ── Inspected config input ──────────────────────────────────────────
 

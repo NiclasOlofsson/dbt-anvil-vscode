@@ -91,11 +91,10 @@ const DBT_LABS_PRESET: PresetOverrides = {
 };
 
 /**
- * dbt Anvil house style: dbt-labs leading-comma/operator layout, plus
+ * dbt Anvil house style: trailing commas with leading boolean operators, plus
  * forced multi-line wrapping for GROUP BY, ORDER BY, the OVER window, CASE,
- * and WHERE/HAVING boolean chains. Matches the layout most dbt teams write
- * by hand — vertical clauses make diffs and review easier when columns or
- * predicates change.
+ * and WHERE/HAVING boolean chains. Vertical clauses make diffs and review
+ * easier when columns or predicates change.
  */
 const DBT_ANVIL_PRESET: PresetOverrides = {
 	maxLineLength: 120,
