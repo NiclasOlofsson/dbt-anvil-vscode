@@ -29,6 +29,26 @@ export function normaliseTagSpacing(raw: string): string | null {
 	return null;
 }
 
+/**
+ * Normalise ONLY argument spacing inside a jinja tag: a single space after each
+ * comma and no spaces around a kwarg `=`, both outside string literals. The
+ * delimiter padding is left exactly as-is (that is `ninja.jinja.padding`'s
+ * concern), so the two rules never overlap. Newline-aware: author line breaks
+ * and indentation are preserved, and a comma at end of line gets no trailing
+ * space because the break already separates the arguments.
+ *
+ * Returns the normalised string, or null if no changes are needed.
+ */
+export function normaliseArgumentSpacing(raw: string): string | null {
+	if (raw.startsWith('{{') && raw.endsWith('}}')) {
+		return normaliseArgsOnly(raw, '{{', '}}');
+	}
+	if (raw.startsWith('{%') && raw.endsWith('%}')) {
+		return normaliseArgsOnly(raw, '{%', '%}');
+	}
+	return null;
+}
+
 // ── internals ─────────────────────────────────────────────────────────────────
 
 /**
@@ -39,8 +59,11 @@ export function normaliseTagSpacing(raw: string): string | null {
  * where <open> is `{{` or `{%` and <close> is `}}` or `%}`.
  */
 function normaliseStructuredTag(raw: string, open: string, close: string): string | null {
-	// Multiline tags: leave alone — newlines inside a tag are intentional.
-	if (raw.includes('\n')) return null;
+	// Multiline tags: preserve the delimiter padding and line breaks, and
+	// normalise only the argument spacing. Forcing single-space padding here
+	// would collapse a newline right after the opener and destroy the author's
+	// multiline structure. Line wrapping is the reflow engine's job, not ours.
+	if (raw.includes('\n')) return normaliseArgsOnly(raw, open, close);
 
 	const innerRaw = raw.slice(open.length, raw.length - close.length);
 
@@ -77,6 +100,18 @@ function normaliseStructuredTag(raw: string, open: string, close: string): strin
 	const normClose = ' ' + closeDash + close;
 	const normalised = normOpen + normalisedContent + normClose;
 
+	return normalised === raw ? null : normalised;
+}
+
+/**
+ * Normalise the argument spacing of a structured tag's interior while leaving
+ * the delimiter padding and whitespace-control dashes exactly as-is. The whole
+ * interior (including its surrounding whitespace) is copied verbatim except for
+ * commas and kwarg `=`, which `normaliseInnerContent` rewrites.
+ */
+function normaliseArgsOnly(raw: string, open: string, close: string): string | null {
+	const inner = raw.slice(open.length, raw.length - close.length);
+	const normalised = open + normaliseInnerContent(inner) + close;
 	return normalised === raw ? null : normalised;
 }
 
@@ -119,14 +154,15 @@ function normaliseInnerContent(content: string): string {
 			continue;
 		}
 
-		// Comma: output comma, consume any trailing spaces, then add exactly one.
+		// Comma: output comma, consume any trailing spaces, then add exactly one
+		// UNLESS the next thing is a line break (a comma at end of line is
+		// already separated by the break) or the end of the content.
 		if (ch === ',') {
 			result += ',';
 			i++;
-			// Skip existing whitespace after comma.
+			// Skip existing spaces after the comma.
 			while (i < n && content[i] === ' ') i++;
-			// Only add a space if something follows (not at end of content).
-			if (i < n) result += ' ';
+			if (i < n && content[i] !== '\n' && content[i] !== '\r') result += ' ';
 			continue;
 		}
 
@@ -189,5 +225,9 @@ function isIdentOrParen(ch: string): boolean {
 }
 
 function isIdentOrQuote(ch: string): boolean {
-	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch === '_' || ch === '\'' || ch === '"' || ch === '(';
+	// A kwarg value can start with an identifier, number, quote, or an opening
+	// bracket: `(` call/tuple, `[` list, `{` dict. All of them mean the `=`
+	// before them is a kwarg assignment whose spaces should collapse.
+	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')
+		|| ch === '_' || ch === '\'' || ch === '"' || ch === '(' || ch === '[' || ch === '{';
 }

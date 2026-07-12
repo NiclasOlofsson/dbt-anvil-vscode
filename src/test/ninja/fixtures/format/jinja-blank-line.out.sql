@@ -1,6 +1,6 @@
 {{ config(
-    tags = ["CHEP", "mart_serving"],
-    materialized = "table"
+    tags=["CHEP", "mart_serving"],
+    materialized="table"
 ) }}
 
 -- THe packing slip is the triggering operation

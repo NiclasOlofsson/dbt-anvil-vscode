@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { mockDocument, cfg, model, applyEditsToText } from './helpers';
 import { jinjaArgumentSpacingRule } from '../../ninja/rules/jinja-argument-spacing';
-import { normaliseTagSpacing } from '../../ninja/jinja/tag-formatter';
+import { normaliseTagSpacing, normaliseArgumentSpacing } from '../../ninja/jinja/tag-formatter';
 import { parseTemplated } from '../../ftl/sqllens/api';
 import { jinjaTokensFromStream } from '../../ftl/sqllens/extract/jinja-stream';
 import type { NinjaViolation } from '../../ninja/violation';
@@ -101,9 +101,21 @@ describe('normaliseTagSpacing', () => {
 		expect(normaliseTagSpacing('{# comment #}')).toBeNull();
 	});
 
-	it('skips multiline tags', () => {
-		const multiline = '{{\n    config(materialized="table")\n}}';
-		expect(normaliseTagSpacing(multiline)).toBeNull();
+	// Multiline tags are no longer skipped: their argument spacing is normalised
+	// while padding and line breaks are preserved (single-line padding is not
+	// forced, so a newline right after `{{` survives).
+	it('normalises args inside a multiline tag, preserving padding and line breaks', () => {
+		const input = '{{ config(\n    tags=[\'a\',\'b\'],materialized=\'t\'\n) }}';
+		const expected = '{{ config(\n    tags=[\'a\', \'b\'], materialized=\'t\'\n) }}';
+		expect(normaliseTagSpacing(input)).toBe(expected);
+	});
+
+	it('returns null for a correctly-spaced multiline tag', () => {
+		expect(normaliseTagSpacing('{{\n    config(materialized="table")\n}}')).toBeNull();
+	});
+
+	it('fixes args in a newline-padded tag without collapsing the padding', () => {
+		expect(normaliseTagSpacing('{{\n    ref(\'a\',\'b\')\n}}')).toBe('{{\n    ref(\'a\', \'b\')\n}}');
 	});
 
 	it('handles source() with two string args', () => {
@@ -136,18 +148,14 @@ describe(RULE, () => {
 		expect(check('select 1 from t')).toHaveLength(0);
 	});
 
-	// ── Missing padding ──────────────────────────────────────────────────────
+	// ── De-overlap: padding is NOT this rule's concern ───────────────────────
 
-	it('flags missing padding in expression delimiter', () => {
-		const v = check('{{ref(\'orders\')}}');
-		expect(v).toHaveLength(1);
-		expect(v[0].rule).toBe(RULE);
+	it('does not flag a padding-only expression tag (jinja.padding owns padding)', () => {
+		expect(check('{{ref(\'orders\')}}')).toHaveLength(0);
 	});
 
-	it('flags missing padding in block delimiter', () => {
-		const v = check('{%if true%}');
-		expect(v).toHaveLength(1);
-		expect(v[0].rule).toBe(RULE);
+	it('does not flag a padding-only block tag', () => {
+		expect(check('{%if true%}')).toHaveLength(0);
 	});
 
 	// ── Comma spacing ────────────────────────────────────────────────────────
@@ -173,8 +181,8 @@ describe(RULE, () => {
 
 	// ── Autofix ──────────────────────────────────────────────────────────────
 
-	it('autofix: adds padding to expression tag', () => {
-		expect(applyFixes('{{ref(\'orders\')}}')).toBe('{{ ref(\'orders\') }}');
+	it('autofix: comma fixed without adding delimiter padding', () => {
+		expect(applyFixes('{{ref(\'a\',\'b\')}}')).toBe('{{ref(\'a\', \'b\')}}');
 	});
 
 	it('autofix: adds comma space in source()', () => {
@@ -185,12 +193,18 @@ describe(RULE, () => {
 		expect(applyFixes('{{ ref(\'orders\', package = \'pkg\') }}')).toBe('{{ ref(\'orders\', package=\'pkg\') }}');
 	});
 
-	it('autofix: combined padding + comma spacing', () => {
-		expect(applyFixes('{{source(\'raw\',\'orders\')}}')).toBe('{{ source(\'raw\', \'orders\') }}');
+	it('autofix: fixes comma but leaves the delimiter padding to jinja.padding', () => {
+		expect(applyFixes('{{source(\'raw\',\'orders\')}}')).toBe('{{source(\'raw\', \'orders\')}}');
 	});
 
-	it('autofix: preserves whitespace-control dashes', () => {
-		expect(applyFixes('{{-ref(\'orders\')-}}')).toBe('{{- ref(\'orders\') -}}');
+	it('autofix: fixes comma but leaves whitespace-control dashes untouched', () => {
+		expect(applyFixes('{{-ref(\'a\',\'b\')-}}')).toBe('{{-ref(\'a\', \'b\')-}}');
+	});
+
+	it('autofix: fixes argument spacing inside a multiline tag, keeping line breaks', () => {
+		const input = '{{ config(\n    tags=[\'a\',\'b\'],materialized=\'t\'\n) }}';
+		const expected = '{{ config(\n    tags=[\'a\', \'b\'], materialized=\'t\'\n) }}';
+		expect(applyFixes(input)).toBe(expected);
 	});
 
 	// ── No false positives ───────────────────────────────────────────────────
@@ -206,5 +220,57 @@ describe(RULE, () => {
 	it('does not modify comma inside string literals', () => {
 		// No violation: comma is inside the string 'a,b', not between args
 		expect(check('{{ var(\'key\', \'a,b\') }}')).toHaveLength(0);
+	});
+});
+
+// ── Unit tests: normaliseArgumentSpacing ────────────────────────────────────
+// Args-only: normalises commas and kwarg `=`, NEVER the delimiter padding (that
+// is `ninja.jinja.padding`'s job), and preserves author line breaks so it works
+// inside a multiline tag.
+
+describe('normaliseArgumentSpacing', () => {
+	it('adds a space after a comma', () => {
+		expect(normaliseArgumentSpacing('{{ ref(\'a\',\'b\') }}')).toBe('{{ ref(\'a\', \'b\') }}');
+	});
+
+	it('removes spaces around a kwarg =', () => {
+		expect(normaliseArgumentSpacing('{{ config(x = 1) }}')).toBe('{{ config(x=1) }}');
+	});
+
+	it('removes spaces around = consistently for list and dict values', () => {
+		expect(normaliseArgumentSpacing('{{ config(tags = [\'a\']) }}')).toBe('{{ config(tags=[\'a\']) }}');
+		expect(normaliseArgumentSpacing('{{ config(meta = {\'k\': 1}) }}')).toBe('{{ config(meta={\'k\': 1}) }}');
+	});
+
+	it('returns null when args are already correct', () => {
+		expect(normaliseArgumentSpacing('{{ ref(\'a\', \'b\') }}')).toBeNull();
+	});
+
+	it('does not touch a comma inside a string literal', () => {
+		expect(normaliseArgumentSpacing('{{ var(\'a,b\') }}')).toBeNull();
+	});
+
+	// De-overlap: padding is NOT this function's concern.
+	it('does not add missing delimiter padding while fixing a comma', () => {
+		expect(normaliseArgumentSpacing('{{ref(\'a\',\'b\')}}')).toBe('{{ref(\'a\', \'b\')}}');
+	});
+
+	it('does not collapse extra delimiter padding', () => {
+		expect(normaliseArgumentSpacing('{{  ref(\'a\', \'b\')  }}')).toBeNull();
+	});
+
+	it('returns null for a padding-only issue (no args to fix)', () => {
+		expect(normaliseArgumentSpacing('{{ref(\'x\')}}')).toBeNull();
+	});
+
+	// Newline-aware: normalise same-line spacing, preserve line breaks/indent.
+	it('normalises mid-line commas inside a multiline tag, keeping line breaks', () => {
+		const input = '{{ config(\n    tags=[\'a\',\'b\'],materialized=\'t\'\n) }}';
+		const expected = '{{ config(\n    tags=[\'a\', \'b\'], materialized=\'t\'\n) }}';
+		expect(normaliseArgumentSpacing(input)).toBe(expected);
+	});
+
+	it('does not add a space after a comma at end of line', () => {
+		expect(normaliseArgumentSpacing('{{ config(\n    a,\n    b\n) }}')).toBeNull();
 	});
 });

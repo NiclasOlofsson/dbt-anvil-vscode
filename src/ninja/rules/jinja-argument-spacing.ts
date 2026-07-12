@@ -2,22 +2,22 @@ import * as vscode from 'vscode';
 import { NinjaCategory } from '../categories';
 import { FixAction, type NinjaViolation } from '../violation';
 import type { TokenRule, TokenRuleContext } from '../rule';
-import { normaliseTagSpacing } from '../jinja/tag-formatter';
+import { normaliseArgumentSpacing } from '../jinja/tag-formatter';
 import { replaceOp } from '../fix-op';
 
 const RULE_ID = 'ninja.jinja.argument-spacing';
 
 /**
- * JJ02: Jinja tags should have normalised internal spacing.
+ * JJ02: Jinja tag ARGUMENT spacing.
  *
  * Checks:
- *   - Single space after each comma in function arguments: `ref('a','b')` → `ref('a', 'b')`
- *   - No spaces around `=` in keyword arguments: `package = 'p'` → `package='p'`
- *   - Single space inside delimiters: `{{x}}` → `{{ x }}`
- *   - Single space after whitespace-control dashes: `{{-x-}}` → `{{- x -}}`
+ *   - Single space after each comma in function arguments: `ref('a','b')` -> `ref('a', 'b')`
+ *   - No spaces around `=` in keyword arguments: `package = 'p'` -> `package='p'`
  *
- * String literal contents are never modified.
- * Multiline tags are skipped — newlines inside a tag are intentional formatting.
+ * Delimiter padding is NOT this rule's concern; `ninja.jinja.padding` owns that,
+ * so the two rules never overlap. String literal contents are never modified.
+ * Newline-aware: line breaks and indentation inside a multiline tag are
+ * preserved, and a comma at end of line gets no trailing space.
  */
 export const jinjaArgumentSpacingRule: TokenRule = {
 	id: RULE_ID,
@@ -73,7 +73,7 @@ export const jinjaArgumentSpacingRule: TokenRule = {
 
 			// Extract the full raw tag text from the document source.
 			const raw = text.slice(token.start, tagEnd);
-			const normalised = normaliseTagSpacing(raw);
+			const normalised = normaliseArgumentSpacing(raw);
 			if (normalised === null) continue; // already correct
 
 			const startPos = ctx.document.positionAt(token.start);
