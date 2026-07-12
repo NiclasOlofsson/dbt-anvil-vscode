@@ -4,10 +4,10 @@ import { cfg, mockDocument, model, sqlTok } from '../helpers';
 import type { DialectSymbols } from '../../../ftl/sql-tokens';
 
 describe('reflow.edge-cases', () => {
-	it('does not emit more than N consecutive blank lines (maxBlankLines)', () => {
-		// The printer should never produce more than one blank line between
-		// statements/clauses regardless of config — we regenerate whitespace,
-		// so consecutive blanks are a bug, not input-driven.
+	it('caps consecutive blank lines at maxBlankLines between statements', () => {
+		// The printer regenerates whitespace, so it clamps an author blank run
+		// to `maxBlankLines` (default 2) rather than collapsing every run to one
+		// or preserving an arbitrary number.
 		const sql = 'select 1;\n\n\n\n\nselect 2';
 		const doc = mockDocument(sql);
 		const tokens = [
@@ -19,8 +19,9 @@ describe('reflow.edge-cases', () => {
 		];
 		const result = reflowDocument(doc, model({ sqlTokens: tokens }), cfg());
 		const rendered = result.edit?.newText ?? '';
-		// Never more than 2 consecutive newlines (one blank line max).
-		expect(rendered).not.toMatch(/\n\n\n/);
+		// 4 source blanks clamp to exactly 2 (default maxBlankLines), never 3+.
+		expect(rendered).toMatch(/select 1;\n\n\nselect 2/);
+		expect(rendered).not.toMatch(/\n\n\n\n/);
 	});
 
 	it('consistent function capitalisation — reuses first casing seen', () => {

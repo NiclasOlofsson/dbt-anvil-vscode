@@ -685,12 +685,12 @@ Blank lines at the top of a file serve no purpose and look like accidental white
 
 #### `ninja.layout.max-blank-lines` ⚡
 
-> There should be at most one consecutive blank line.
+> There should be at most `maxBlankLines` consecutive blank lines (default 2, configurable 1-10).
 
-More than one blank line in a row is visual noise without semantic meaning.
+Runs of blank lines beyond the limit are visual noise. Formatting preserves deliberate blank lines up to this limit at any nesting depth: top level, inside a CTE body, or inside a subquery. Longer runs are trimmed back to the limit.
 
 - **Default severity:** warning
-- **Auto-fix:** Keeps one blank line and deletes the extras.
+- **Auto-fix:** Keeps up to `maxBlankLines` blank lines and deletes the extras.
 
 #### `ninja.layout.long-lines`
 

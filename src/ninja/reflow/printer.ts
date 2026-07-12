@@ -282,6 +282,11 @@ export function printDocument(input: PrinterInput): string {
 		if (offset >= lineForOffset.length) return lineForOffset[lineForOffset.length - 1];
 		return lineForOffset[offset];
 	};
+	// Whether each source line is blank (whitespace-only). Blank-line
+	// preservation counts these directly rather than the line-number delta, so
+	// lines occupied by an intervening Jinja comment/tag (which `prev` skips)
+	// are not miscounted as author blanks.
+	const lineIsBlank: boolean[] = source.split('\n').map(l => l.trim() === '');
 	// Merge the always-wrap-forced AND/OR offsets into the predicate-boolean
 	// set so the existing operator-position wrap path picks them up. Without
 	// this merge, the toggle would only break the keyword line — every
@@ -346,11 +351,13 @@ export function printDocument(input: PrinterInput): string {
 	let prev: NinjaSqlToken | undefined;
 	let prevTypeUpper = '';
 	let pendingNewline = false;
-	// One-shot flag: insert a BLANK line at the next emitNewline. The blank
-	// line "rides" through any intervening Jinja tags so a Jinja `{% if %}`
-	// between CTE definitions doesn't swallow the blank — the blank lands
-	// before the NEXT CTE name regardless of the Jinja in between.
-	let pendingBlankLine = false;
+	// One-shot count: insert this many BLANK lines at the next emitNewline. The
+	// blanks "ride" through any intervening Jinja tags so a Jinja `{% if %}`
+	// between CTE definitions doesn't swallow them; they land before the NEXT
+	// CTE name regardless of the Jinja in between. Sourced from either the CTE
+	// separator (exactly 1) or preserved author blank lines (capped at
+	// `maxBlankLines`).
+	let pendingBlankLines = 0;
 	// One-shot extra indent used for `indented_on` / `indented_then` /
 	// `indented_joins`: consumed by the next `emitNewline()` and then
 	// reset to 0, so only the single line introduced by the trigger
@@ -411,7 +418,7 @@ export function printDocument(input: PrinterInput): string {
 		// If `oneShotExtraIndent` changed since the previous emit, retroactively
 		// fix the indent on the current line by replacing the last indent
 		// entry — keeps continuation indents aligned without doubling newlines.
-		if (atLineStart && !pendingBlankLine) {
+		if (atLineStart && pendingBlankLines === 0) {
 			if (oneShotExtraIndent !== currentLineExtraIndent) {
 				parts[parts.length - 1] = policy.at(indentLevel + oneShotExtraIndent);
 				currentLineExtraIndent = oneShotExtraIndent;
@@ -421,13 +428,13 @@ export function printDocument(input: PrinterInput): string {
 			oneShotIsBooleanContinuation = false;
 			return;
 		}
-		if (pendingBlankLine) {
+		if (pendingBlankLines > 0) {
 			// Don't double-blank when the last emission was already a blank-
 			// terminated line (consecutive emitNewlines without intervening
-			// content would otherwise stack two extra newlines).
+			// content would otherwise stack extra newlines).
 			if (!atLineStart) parts.push('\n');
-			parts.push('\n');
-			pendingBlankLine = false;
+			for (let b = 0; b < pendingBlankLines; b++) parts.push('\n');
+			pendingBlankLines = 0;
 		} else {
 			parts.push('\n');
 		}
@@ -504,22 +511,22 @@ export function printDocument(input: PrinterInput): string {
 			// Honor pendingNewline so Jinja tags between CTEs (and similar
 			// boundary positions) land on their own line rather than gluing
 			// onto the previous line with a leading space. The deferred
-			// pendingBlankLine survives — it'll fire on the next emitNewline,
-			// landing the blank line before the next CTE name as intended.
+			// pendingBlankLines survive; they fire on the next emitNewline,
+			// landing the blank lines before the next CTE name as intended.
 			if (pendingNewline) {
-				const blankWasPending: boolean = pendingBlankLine;
-				pendingBlankLine = false;
+				const blanksWerePending = pendingBlankLines;
+				pendingBlankLines = 0;
 				emitNewline();
 				pendingNewline = false;
-				pendingBlankLine = blankWasPending;
+				pendingBlankLines = blanksWerePending;
 			} else if (!atLineStart) {
 				emitSpace();
 			}
-			// Keep pendingNewline alive while a blank-line is still owed —
+			// Keep pendingNewline alive while blank lines are still owed:
 			// the next non-Jinja token must break onto its own line so the
-			// blank lands directly before it (e.g. before the next CTE name
+			// blanks land directly before it (e.g. before the next CTE name
 			// when Jinja sits between CTEs).
-			if (pendingBlankLine) pendingNewline = true;
+			if (pendingBlankLines > 0) pendingNewline = true;
 			const rawTag = source.slice(tok.start, tok.tagEnd);
 			parts.push(normaliseTagSpacing(rawTag) ?? rawTag);
 			atLineStart = false;
@@ -540,17 +547,16 @@ export function printDocument(input: PrinterInput): string {
 		const literal = source.slice(tok.start, tok.end + 1);
 
 		// ── Source blank-line preservation ────────────────────────────────
-		// If the source had a blank line between the previous token (SQL or
+		// If the source had blank line(s) between the previous token (SQL or
 		// Jinja) and this token's first emission (leading comment OR the
-		// token itself), queue a blank line. Skipped inside indenting
-		// parens / function calls — blank lines in those contexts are
-		// almost always source formatting noise rather than meaningful
-		// section separators.
+		// token itself), queue up to `maxBlankLines` of them. Applies at any
+		// paren depth: an author blank inside a CTE body or subquery is as
+		// intentional as one at top level, so depth does not gate it.
 		//
 		// We derive the prev line from the source offset (not `prev.line`)
-		// so the check works for both SQL and Jinja tokens — Jinja tokens
+		// so the check works for both SQL and Jinja tokens; Jinja tokens
 		// don't carry the same `line` field.
-		if (prev && config.maxBlankLines > 0 && parenDepth === 0) {
+		if (prev && config.maxBlankLines > 0) {
 			const prevLine = lineOfOffset(prev.end);
 			let firstEmitLine = tok.line;
 			if (tok.comments?.length) {
@@ -561,8 +567,15 @@ export function printDocument(input: PrinterInput): string {
 					}
 				}
 			}
-			if (firstEmitLine - prevLine > 1) {
-				pendingBlankLine = true;
+			// Count ONLY truly-blank source lines between the two tokens; a
+			// line-number delta would miscount an intervening Jinja comment's
+			// lines as blanks and clobber the CTE separator's single blank.
+			let blankLines = 0;
+			for (let l = prevLine + 1; l < firstEmitLine; l++) {
+				if (lineIsBlank[l]) blankLines++;
+			}
+			if (blankLines > 0) {
+				pendingBlankLines = Math.min(blankLines, config.maxBlankLines);
 			}
 		}
 
@@ -1031,7 +1044,7 @@ export function printDocument(input: PrinterInput): string {
 				// on the previous run stacks a second one every pass
 				// (fixed-point breaker; trailing mode is immune because both
 				// paths share the one-shot flag).
-				pendingBlankLine = false;
+				pendingBlankLines = 0;
 				parts.push('\n');
 				// If the next SQL token carries leading comments (e.g. `--
 				// comment\n next_cte as (`), drain those FIRST so the block
@@ -1326,14 +1339,14 @@ export function printDocument(input: PrinterInput): string {
 		if (isCteSeparatorComma) {
 			if (config.layout.commaPosition !== 'leading') {
 				// Trailing mode: insert a blank line between CTE definitions.
-				// Use the deferred `pendingBlankLine` flag so the blank line
+				// Use the deferred `pendingBlankLines` count so the blank line
 				// rides through any intervening Jinja tags and lands
 				// immediately before the NEXT CTE name's line. Without the
 				// deferral the blank would sit right after the comma, and a
 				// `{% if %} ... {% endif %}` between CTEs would absorb it,
 				// leaving no blank above the next CTE name and re-triggering
 				// `ninja.layout.cte-blank-line` on the formatter's own output.
-				pendingBlankLine = true;
+				pendingBlankLines = 1;
 				pendingNewline = true;
 			}
 		} else if (isListClauseComma) {
