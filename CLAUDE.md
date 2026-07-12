@@ -68,7 +68,7 @@ Both are bundled by esbuild (`.esbuild.ts`) into `dist/`.
 | **Manifest & indexing** | `src/indexing/` | Loads `manifest.json`, builds DAG, tracks file hashes to avoid redundant re-indexes |
 | **SQL parsing (FTL)** | `src/ftl/sqllens/`, `src/ftl/` | [sqllens](https://github.com/NiclasOlofsson/sqllens), the native TypeScript SQL parser, consumed as a regular npm dependency. One `parseTemplated` pass handles jinja + SQL with raw-source spans; error-tolerant, never a fallback cascade |
 | **Language providers** | `src/providers/sql/`, `src/providers/yaml/` | All VS Code language features (completion, hover, definition, rename, diagnostics, code lens). Providers are re-registered dynamically when project paths change |
-| **Ninja linter** | `src/ninja/` | ~40 built-in SQL style/quality rules; full-workspace scanner; separate editor panel |
+| **Ninja linter** | `src/ninja/` | many built-in SQL style/quality rules; full-workspace scanner; separate editor panel |
 | **Views & UI** | `src/views/` | Model Explorer, interactive lineage graph (D3/dagre), test explorer, profiler results, query result panel |
 | **Copilot tools** | `src/tools/` | Language model tools in 4 toolsets: Project & Resources, Lineage & Impact, Database, Execution. One file per tool: add new ones via `src/tools/index.ts` |
 | **MCP subsystem** | `src/mcp/` | Exposes the same tools to Claude Code (and any MCP client) via a stdio proxy → in-host HTTP server. Shares the registry with Copilot so schemas never drift |
