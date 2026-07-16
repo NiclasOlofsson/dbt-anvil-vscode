@@ -199,7 +199,9 @@ function sourceName(src: Source, promotedNames?: ReadonlyMap<Source, string>): s
 	if (promoted !== undefined) return promoted;
 	switch (src.kind) {
 		case 'table':
-			return src.name[src.name.length - 1] ?? '';
+			// #38: TableSource.name (string[]) → relation.name (the object's own last
+			// part, as written) — the same display handle the debug adapter steps against.
+			return src.relation.name;
 		case 'subquery':
 			// No table name; the alias is the closest step-in handle. Falls back to the
 			// first inner table so lineage still resolves when unaliased.

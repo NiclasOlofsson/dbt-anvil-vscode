@@ -1,7 +1,9 @@
 import { buildLineStarts } from '../ftl/line-index';
-import { deriveSymbols, parseTemplated, resolveScopes, tokenize, toSqllensDialect, MAIN_FRAME } from '../ftl/sqllens/api';
+import { minijinja, SqlDocument, tokenize, toSqllensDialect, MAIN_FRAME } from '../ftl/sqllens/api';
 import type { Sym, Dialect, ScopeTree, TagNode } from '../ftl/sqllens/api';
 import { allScopes, asCst } from '../ftl/sqllens/extract/spans';
+import { NOT_MACRO_CALLS } from '../ftl/sqllens/extract/tag-infos';
+import { DBT_PROVIDER } from '../ftl/sqllens/template-shape';
 import { jinjaTokensFromStream } from '../ftl/sqllens/extract/jinja-stream';
 import type { JinjaToken } from '../ftl/jinja-tokenizer';
 
@@ -495,11 +497,13 @@ function buildJinjaClassifications(
 		}
 	}
 
-	// Macro spans come from the tag-AST: kind 'macro' is exactly the old regex
-	// filter chain (expr tag, not ref/source, not a no-output builtin, not
-	// var/env_var), and `name` is the last callee path component.
+	// Macro spans from the tag-AST (dbt-agnostic since sqllens 1.2.0): a `{{ … }}`
+	// expression is a `call` node; a macro is any closed call whose callee is not a
+	// ref/source/no-output-builtin/var/env_var/keyword (NOT_MACRO_CALLS) — the old
+	// 'macro'-kind filter chain. `name` is the top-level callee.
 	for (const tag of tags) {
-		if (tag.kind !== 'macro') continue;
+		if (tag.kind !== 'call' || tag.incomplete) continue;
+		if (NOT_MACRO_CALLS.has(tag.name)) continue;
 		macroSpans.push({
 			name: tag.name,
 			sourceLine: tag.tagSpan.line - 1,
@@ -649,25 +653,33 @@ function resolveFrame(line: number, ranges: FrameRange[]): string {
 	return best ? best.name : MAIN_FRAME;
 }
 
-/** Run sqllens's templated front end: ONE length-/newline-preserving fill (the
- *  old two-mode blank retry is gone with the cascade), symbols derived from the
- *  tag-applied ast (real ref/source relation names — not the `jjj…` fill), and
- *  the placeholder returned for the 1:1 token re-lex (positions in placeholder
- *  == positions in the source). Error-tolerant: a partial parse still yields
- *  symbols for everything that parsed. */
+/** One engine instance, mirroring document-parser.ts's MINIJINJA: a stateless
+ *  strategy object sqllens keys its cell cache on by name, so a module singleton
+ *  keeps that key stable. */
+const MINIJINJA = minijinja();
+
+/** Run sqllens's templated front end through the full SqlDocument door (the same
+ *  one the language providers use), so symbols come from `unionSymbols()` — idents
+ *  and functions across EVERY branch/loop arm, deduped — rather than the single
+ *  primary realization. dbt compiles exactly one arm; whichever it is, that arm's
+ *  ident markers are now present. The keyword/star/lit path (tokenize(placeholder))
+ *  was already all-arms since the placeholder is the length-preserving all-text-live
+ *  fill. `tags`/`placeholder`/`tokens` ride on `doc.templated`, so this stays one
+ *  parse. Error-tolerant: a partial parse still yields symbols for what parsed. */
 function analyzeTemplated(
 	source: string,
 	dialect: Dialect,
 ): { symbols: Sym[]; blanked: string; tags: TagNode[]; jinjaTokens: JinjaToken[]; cteBodyBounds: Map<string, { start: number; end: number }> } | undefined {
-	const templated = parseTemplated(source, dialect);
 	try {
-		const scopes = resolveScopes(templated.sql.ast, dialect);
+		const doc = SqlDocument.create(source, dialect, { templating: MINIJINJA, provider: DBT_PROVIDER });
+		const templated = doc.templated;
+		if (!templated) return undefined;
 		return {
-			symbols: deriveSymbols(scopes, undefined, { dialect }),
+			symbols: doc.unionSymbols(),
 			blanked: templated.placeholder,
 			tags: templated.tags,
 			jinjaTokens: jinjaTokensFromStream(templated.tokens, templated.tags, source),
-			cteBodyBounds: cteWholeClauseLineBounds(scopes),
+			cteBodyBounds: cteWholeClauseLineBounds(doc.scopes),
 		};
 	} catch {
 		// Preserve the old failure contract: the caller's undefined arm falls

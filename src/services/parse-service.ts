@@ -8,7 +8,7 @@ import type { DocumentParser, ParseOptions } from './document-parser';
 import type { JinjaToken } from '../ftl/sql-tokens';
 import type { AstIndex } from '../ninja/reflow/ast-index';
 import type { NinjaSqlToken } from '../ftl/ninja-sql-tokens';
-import type { Sym } from '../ftl/sqllens/api';
+import type { Completion, SignatureHelpInfo, Sym, TemplateProvider } from '../ftl/sqllens/api';
 
 export interface ColumnInfo {
 	name: string;
@@ -308,6 +308,41 @@ export class ParseService {
 			this._symbolsPromise = this._parser.getDialectSymbols?.() ?? Promise.resolve(undefined);
 		}
 		return this._symbolsPromise;
+	}
+
+	/**
+	 * The manifest-backed template provider: macro-shape classification plus
+	 * warehouse-backed ref/source relation answers, and the `templateCandidates` catalog
+	 * sqllens asks for in a jinja call slot. `undefined` when nothing is configured — the
+	 * parser then falls back to the static dbt overlay.
+	 *
+	 * Built fresh per call by contract (instances are per-parse-cycle: misses accumulate on
+	 * the instance and one `prime()` warms them all).
+	 */
+	private _makeProvider(skipEnrichment = false): TemplateProvider | undefined {
+		const enrichment = skipEnrichment ? undefined : this._enrichment;
+		return enrichment
+			? makeTemplateProvider(name => enrichment.indexer.findMacroByName(name)?.macroSql, enrichment)
+			: undefined;
+	}
+
+	/**
+	 * Editor completion candidates at char `offset` in `sql` — delegates to the parser's
+	 * sqllens-backed `completeAt` (its own error-tolerant mid-edit parse, no DocumentModel
+	 * cache involved). The manifest provider rides along so a caret in a jinja call slot
+	 * gets dbt model / source / macro names back as `kind: "template"`.
+	 * `[]` when the parser lacks the capability.
+	 */
+	completeAt(sql: string, offset: number): Completion[] {
+		return this._parser.completeAt?.(sql, offset, this._makeProvider()) ?? [];
+	}
+
+	/**
+	 * Signature help for the SQL function call enclosing char `offset` in `sql`, or
+	 * `null` when the caret is not inside a recognizable call (or unsupported).
+	 */
+	signatureAt(sql: string, offset: number): SignatureHelpInfo | null {
+		return this._parser.signatureAt?.(sql, offset, this._makeProvider()) ?? null;
 	}
 
 	/**
@@ -615,10 +650,7 @@ export class ParseService {
 		// The provider doubles as qualify()'s SchemaProvider inside the parser, which
 		// is what resolves templated sources to real columns and scopes the
 		// unknown-column diagnostics to positively-described relations only.
-		const enrichment = skipEnrichment ? undefined : this._enrichment;
-		const provider = enrichment
-			? makeTemplateProvider(name => enrichment.indexer.findMacroByName(name)?.macroSql, enrichment)
-			: undefined;
+		const provider = this._makeProvider(skipEnrichment);
 		const options: ParseOptions | undefined = provider ? { templateProvider: provider } : undefined;
 
 		// ONE parser call — the variant-aware SqlDocument inside the adapter owns

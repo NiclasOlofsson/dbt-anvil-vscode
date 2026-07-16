@@ -16,7 +16,12 @@ import type { ParseService, DocumentModel } from '../services/parse-service';
 import type { Sym } from '../ftl/sqllens/api';
 
 function createMockParseService(): ParseService {
-	return { getDocumentModel: vi.fn().mockResolvedValue(null) } as unknown as ParseService;
+	return {
+		getDocumentModel: vi.fn().mockResolvedValue(null),
+		getDialectSymbols: vi.fn().mockResolvedValue(undefined),
+		completeAt: vi.fn().mockReturnValue([]),
+		signatureAt: vi.fn().mockReturnValue(null),
+	} as unknown as ParseService;
 }
 
 function createMockParseServiceWithModel(model: Partial<DocumentModel>): ParseService {
@@ -28,7 +33,12 @@ function createMockParseServiceWithModel(model: Partial<DocumentModel>): ParseSe
 		timing: { parseMs: 0, totalMs: 0 },
 		...model,
 	};
-	return { getDocumentModel: vi.fn().mockResolvedValue(full) } as unknown as ParseService;
+	return {
+		getDocumentModel: vi.fn().mockResolvedValue(full),
+		getDialectSymbols: vi.fn().mockResolvedValue(undefined),
+		completeAt: vi.fn().mockReturnValue([]),
+		signatureAt: vi.fn().mockReturnValue(null),
+	} as unknown as ParseService;
 }
 
 function createMockPathResolver(mapping: Record<string, DbtFileCategory> = {}): DbtPathResolver {
@@ -745,7 +755,7 @@ describe('DbtSignatureHelpProvider', () => {
 
 	beforeEach(() => {
 		vi.clearAllMocks();
-		provider = new DbtSignatureHelpProvider(createMockIndexer(), createMockLogger());
+		provider = new DbtSignatureHelpProvider(createMockIndexer(), createMockLogger(), createMockParseService());
 	});
 
 	it('shows parameter hints for known macro', () => {
@@ -798,7 +808,7 @@ describe('DbtSignatureHelpProvider', () => {
 			packageName: 'project',
 			arguments: [],
 		});
-		const p = new DbtSignatureHelpProvider(indexer, createMockLogger());
+		const p = new DbtSignatureHelpProvider(indexer, createMockLogger(), createMockParseService());
 
 		const doc = createMockDocument('{{ no_args(');
 		const pos = new vscode.Position(0, 11);
@@ -806,6 +816,33 @@ describe('DbtSignatureHelpProvider', () => {
 
 		const result = p.provideSignatureHelp(doc, pos, mockToken, ctx);
 		expect(result).toBeUndefined();
+	});
+
+	it('shows a SQL function signature from sqllens when not in a macro call', () => {
+		const ps = {
+			getDocumentModel: vi.fn().mockResolvedValue(null),
+			getDialectSymbols: vi.fn().mockResolvedValue(undefined),
+			completeAt: vi.fn().mockReturnValue([]),
+			signatureAt: vi.fn().mockReturnValue({
+				signatures: [{
+					label: 'date_add(start_date: date, num_days: int)',
+					parameters: [{ label: 'start_date: date' }, { label: 'num_days: int' }],
+				}],
+				activeSignature: 0,
+				activeParameter: 1,
+			}),
+		} as unknown as ParseService;
+		const p = new DbtSignatureHelpProvider(createMockIndexer(), createMockLogger(), ps);
+
+		const doc = createMockDocument('select date_add(order_date, 1) from t');
+		const pos = new vscode.Position(0, 28); // inside the 2nd argument
+		const ctx = {} as vscode.SignatureHelpContext;
+
+		const result = p.provideSignatureHelp(doc, pos, mockToken, ctx);
+		expect(result).toBeDefined();
+		expect(result!.signatures[0].label).toContain('date_add');
+		expect(result!.signatures[0].parameters.length).toBe(2);
+		expect(result!.activeParameter).toBe(1);
 	});
 });
 

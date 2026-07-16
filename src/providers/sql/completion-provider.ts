@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import type { ManifestIndexer } from '../../indexing/manifest-indexer';
 import type { ILogger } from '../../types/logger';
 import { ParseService } from '../../services/parse-service';
+import type { Completion } from '../../ftl/sqllens/api';
 import { isLinePositionInComment } from '../common/comment-utils';
 import { DbtCompletionKind } from '../common/icons';
 import { isCursorInsideOpenJinjaTag } from './jinja-cursor';
@@ -29,39 +30,30 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 		// Skip comments
 		if (isLinePositionInComment(document.lineAt(position.line).text, position.character)) return undefined;
 
-		// Inside ref('...')
-		if (/ref\(\s*['"][^'"]*$/.test(linePrefix)) {
-			const items = this._completeRef();
-			this.logger.trace(`Completion: ref() → ${items.length} models`);
-			return items;
-		}
-
-		// Inside source('name', '...')  (second argument)
-		const sourceSecond = /source\(\s*['"]([^'"]+)['"]\s*,\s*['"][^'"]*$/;
-		const sourceSecondMatch = sourceSecond.exec(linePrefix);
-		if (sourceSecondMatch) {
-			const items = this._completeSourceTable(sourceSecondMatch[1]);
-			this.logger.trace(`Completion: source('${sourceSecondMatch[1]}', ...) → ${items.length} tables`);
-			return items;
-		}
-
-		// Inside source('...')  (first argument)
-		if (/source\(\s*['"][^'"]*$/.test(linePrefix)) {
-			const items = this._completeSourceName();
-			this.logger.debug(`Completion: source() → ${items.length} sources`);
-			return items;
-		}
-
-		// Inside {{ ... }} — complete macro names. Cross-line aware: walks the
-		// whole document text so a `{{` on a previous line still counts.
+		// ONE sqllens call at the CARET. Since sqllens 1.4.0 the caret token is the token being
+		// typed, so a single offset serves both the jinja slots and the SQL walk — no
+		// pre-detection of which world we're in, and no word-start anchoring.
 		const cursorOffset = document.offsetAt(position);
 		const docText = document.getText();
-		if (isCursorInsideOpenJinjaTag(docText, cursorOffset)
-			&& !/(?:ref|source)\(\s*['"]/.test(linePrefix)) {
-			const items = this._completeMacros();
-			this.logger.debug(`Completion: macro → ${items.length} macros`);
-			return items;
+		const candidates = this.parseService.completeAt(docText, cursorOffset);
+
+		// A jinja call slot: sqllens located it (`jinjaSlotAt`), our provider named it
+		// (`templateCandidates` → ref models / source names + that source's tables / macros +
+		// the `ref`/`source` builtins). This replaces the old ref()/source()/macro line-prefix
+		// regexes — the parse decides the slot now, not a backwards scan of the line.
+		const templates = candidates.filter(c => c.kind === 'template');
+		if (templates.length > 0) {
+			this.logger.debug(`Completion: jinja slot → ${templates.length} dbt names`);
+			return templates.map(c => {
+				const item = new vscode.CompletionItem(c.label, DbtCompletionKind.modelRef);
+				if (c.detail) item.detail = c.detail;
+				return item;
+			});
 		}
+
+		// Inside a tag but not at a call slot (`{% if x %}`, a comment tag): sqllens offers
+		// nothing there and neither should we — SQL completion must not leak into a tag.
+		if (isCursorInsideOpenJinjaTag(docText, cursorOffset)) return undefined;
 
 		// FQN completion: FROM/JOIN followed by dotted path with trailing dot
 		// e.g. "FROM catalog." or "FROM catalog.schema."
@@ -100,8 +92,9 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 				return this._completeTables(document, token);
 			}
 			if (!insideJinja) {
-				this.logger.debug('Completion: bare column word');
-				return this._completeAllColumns(document, token);
+				this.logger.debug('Completion: bare word (columns + SQL functions/keywords)');
+				const columns = await this._completeAllColumns(document, token);
+				return [...columns, ...this._sqlWordItems(candidates)];
 			}
 		}
 
@@ -175,6 +168,38 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 	private async _getScopeAliases(document: vscode.TextDocument, _token: vscode.CancellationToken): Promise<Record<string, string[]>> {
 		const model = await this.parseService.getDocumentModel(document);
 		return model ? ParseService.resolveAliases(model) : {};
+	}
+
+	// -----------------------------------------------------------------------
+	// SQL function / keyword completions (dialect-aware, from sqllens)
+	// -----------------------------------------------------------------------
+
+	/**
+	 * The SQL function + keyword half of sqllens's candidates, as editor items. The engine
+	 * self-gates on caret context: functions surface only at a value/expression slot, and
+	 * keywords are the grammar candidates reachable at the caret — so this needs no
+	 * per-dialect list of ours. Its column/table candidates are dropped: the
+	 * manifest/describe-backed ones we produce are richer. Sorted after columns (columns
+	 * first, then functions, then keywords).
+	 */
+	private _sqlWordItems(candidates: readonly Completion[]): vscode.CompletionItem[] {
+		const items: vscode.CompletionItem[] = [];
+		for (const c of candidates) {
+			if (c.kind === 'function') {
+				const item = new vscode.CompletionItem(c.label, DbtCompletionKind.sqlFunction);
+				item.detail = c.detail ?? 'SQL function';
+				item.insertText = new vscode.SnippetString(`${c.label}($0)`);
+				item.sortText = `8_${c.label}`;
+				items.push(item);
+			} else if (c.kind === 'keyword') {
+				const item = new vscode.CompletionItem(c.label, DbtCompletionKind.keyword);
+				if (c.detail) item.detail = c.detail;
+				item.sortText = `9_${c.label}`;
+				items.push(item);
+			}
+		}
+		this.logger.trace(`Completion: ${items.length} SQL functions/keywords`);
+		return items;
 	}
 
 	// -----------------------------------------------------------------------
@@ -324,63 +349,4 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 		return items;
 	}
 
-	private _completeSourceName(): vscode.CompletionItem[] {
-		const index = this.indexer.index;
-		if (!index) return [];
-
-		const names = new Set<string>();
-		for (const source of index.sources.values()) {
-			names.add(source.sourceName);
-		}
-
-		return [...names].sort().map(name => {
-			const item = new vscode.CompletionItem(name, DbtCompletionKind.sourceName);
-			item.detail = 'dbt source';
-			return item;
-		});
-	}
-
-	private _completeSourceTable(sourceName: string): vscode.CompletionItem[] {
-		const index = this.indexer.index;
-		if (!index) return [];
-
-		const items: vscode.CompletionItem[] = [];
-		for (const source of index.sources.values()) {
-			if (source.sourceName === sourceName) {
-				const item = new vscode.CompletionItem(source.name, DbtCompletionKind.sourceTable);
-				item.detail = `${source.schema}`;
-				if (source.description) {
-					item.documentation = new vscode.MarkdownString(source.description);
-				}
-				items.push(item);
-			}
-		}
-		return items;
-	}
-
-	private _completeMacros(): vscode.CompletionItem[] {
-		const index = this.indexer.index;
-		if (!index) return [];
-
-		const items: vscode.CompletionItem[] = [];
-		for (const macro of index.macros.values()) {
-			const item = new vscode.CompletionItem(macro.name, DbtCompletionKind.macro);
-			item.detail = macro.packageName;
-
-			const args = macro.arguments;
-			if (args.length > 0) {
-				const sig = args.map(a => a.name).join(', ');
-				item.detail = `${macro.packageName} — (${sig})`;
-			}
-
-			if (macro.description) {
-				item.documentation = new vscode.MarkdownString(macro.description);
-			}
-
-			// Insert as function call with parentheses
-			item.insertText = new vscode.SnippetString(`${macro.name}($0)`);
-			items.push(item);
-		}
-		return items;
-	}
 }

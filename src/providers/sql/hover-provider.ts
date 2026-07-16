@@ -5,7 +5,8 @@ import { ParseService } from '../../services/parse-service';
 import type { DocumentModel } from '../../services/parse-service';
 import type { Sym } from '../../ftl/sqllens/api';
 import { isLinePositionInComment } from '../common/comment-utils';
-import { SQL_KEYWORDS } from './sql-keywords';
+import { isSqlKeywordOrFunction } from './sql-words';
+import type { DialectSymbols } from '../../ftl/sql-tokens';
 import { resolvePositionContext } from './position-context';
 import { relationForAlias } from './sym-spans';
 import { DbtMaterializationIcons, SqlIcons } from '../common/icons';
@@ -58,7 +59,8 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		}
 
 		// No token match — try bare-word column fallback
-		return this._hoverColumnFallback(document, position, line, model, token);
+		const dialectSymbols = await this.parseService.getDialectSymbols();
+		return this._hoverColumnFallback(document, position, line, model, token, dialectSymbols);
 	}
 
 	private _md(): vscode.MarkdownString {
@@ -342,6 +344,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		line: string,
 		model: DocumentModel,
 		token: vscode.CancellationToken,
+		dialectSymbols: DialectSymbols | undefined,
 	): vscode.Hover | undefined {
 		if (token.isCancellationRequested) return undefined;
 		const prefix = line.substring(0, position.character);
@@ -350,7 +353,7 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		const wordRange = document.getWordRangeAtPosition(position, /[a-zA-Z_]\w*/);
 		if (!wordRange) return undefined;
 		const word = document.getText(wordRange);
-		if (SQL_KEYWORDS.has(word.toUpperCase())) return undefined;
+		if (isSqlKeywordOrFunction(word, dialectSymbols)) return undefined;
 
 		// Find the column Sym at this position, use its bound source if available
 		const colSym = (model.symbols ?? []).find(s =>

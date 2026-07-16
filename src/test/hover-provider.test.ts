@@ -77,6 +77,9 @@ function createMockParseService(model: DocumentModel | undefined): ParseService 
 	return {
 		getDocumentModel: vi.fn().mockResolvedValue(model),
 		evict: vi.fn(),
+		getDialectSymbols: vi.fn().mockResolvedValue(undefined),
+		completeAt: vi.fn().mockReturnValue([]),
+		signatureAt: vi.fn().mockReturnValue(null),
 	} as unknown as ParseService;
 }
 

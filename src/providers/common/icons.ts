@@ -63,6 +63,8 @@ export const DbtCompletionKind = {
 	sourceName:  vscode.CompletionItemKind.Module,
 	sourceTable: vscode.CompletionItemKind.Class,
 	macro:       vscode.CompletionItemKind.Function,
+	sqlFunction: vscode.CompletionItemKind.Function,
+	keyword:     vscode.CompletionItemKind.Keyword,
 } as const;
 
 /** SymbolKind for document outline symbols per SQL construct. */

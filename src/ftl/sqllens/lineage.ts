@@ -32,6 +32,7 @@
  * expression — never reconstructed from the IR.
  */
 import { foldIdentifier, lineage as sqllensLineage, lineageOf, parseTemplated, resolveScopes, Schema } from './api';
+import { DBT_PROVIDER } from './template-shape';
 import type {
 	Dialect,
 	IdentKind,
@@ -123,7 +124,10 @@ export function traceColumnLineage(
 	// model/table with no blanking. Plain/compiled SQL passes through unchanged, and the
 	// placeholder is length-preserving, so the ORIGINAL `sql` still slices correct expression
 	// snippets in the renderer below. (Retired the interim blankJinja from 12d2643.)
-	const ast = parseTemplated(sql, dialect).sql.ast;
+	// DBT_PROVIDER is what makes ref/source resolve to the real model name: since sqllens
+	// 1.2.0 the dbt vocabulary lives in the provider, so a providerless parse names the
+	// relation after the placeholder fill instead of the model.
+	const ast = parseTemplated(sql, dialect, { provider: DBT_PROVIDER }).sql.ast;
 	const tree = resolveScopes(ast, dialect);
 	const schemaObj = new Schema(schema ?? {});
 
@@ -547,7 +551,11 @@ function legProjection(leg: Scope, columnName: string, idx: number, dialect: str
 function sourceId(src: ResolvedSource): string {
 	switch (src.kind) {
 		case 'table':
-			return `table:${stripQuotes(src.name[src.name.length - 1] ?? '')}`;
+			// #38: ResolvedSource(table).name now carries the FOLDED KEY, not display parts.
+			// The id must stay DISPLAY-spelled so it merges with renderTableLeaf's origin-derived
+			// `table:` id (origins keep display parts) — under a case-folding dialect (snowflake)
+			// the folded key would diverge (TBL vs tbl). relation.name is the own name, as written.
+			return `table:${stripQuotes(src.source.relation.name)}`;
 		case 'cte':
 			return `cte:${src.ref.def.name}`;
 		case 'subquery':

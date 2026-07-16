@@ -4,6 +4,8 @@ import type { ParseService } from '../services/parse-service';
 import type { DocumentModel } from '../services/parse-service';
 
 import { DbtCompletionProvider } from '../providers/sql/completion-provider';
+import { ParseService as RealParseService } from '../services/parse-service';
+import { SqllensDocumentParser } from '../ftl/sqllens/document-parser';
 import { createMockLogger } from './helpers';
 import { MAIN_FRAME } from '../ftl/sqllens/api';
 import type { Sym } from '../ftl/sqllens/api';
@@ -19,6 +21,21 @@ function mockDocument(lines: string[], version = 1) {
 			let offset = 0;
 			for (let i = 0; i < line; i++) offset += (lines[i]?.length ?? 0) + 1; // +1 for \n
 			return offset + character;
+		},
+		// Minimal stand-in for vscode.TextDocument.getWordRangeAtPosition — finds the
+		// regex word containing the caret on its line (used for word-start anchoring).
+		getWordRangeAtPosition: (pos: { line: number; character: number }, re: RegExp) => {
+			const lineText = lines[pos.line] ?? '';
+			const rx = new RegExp(re.source, 'g');
+			let m: RegExpExecArray | null;
+			while ((m = rx.exec(lineText)) !== null) {
+				const s = m.index;
+				const e = m.index + m[0].length;
+				if (pos.character >= s && pos.character <= e) {
+					return { start: { line: pos.line, character: s }, end: { line: pos.line, character: e } };
+				}
+			}
+			return undefined;
 		},
 		uri: { toString: () => 'file:///test.sql' },
 		version,
@@ -49,6 +66,8 @@ function makeParseServiceWithRelationColumns(relationColumns: Record<string, str
 	return {
 		getDocumentModel: vi.fn().mockResolvedValue(model),
 		evict: vi.fn(),
+		completeAt: vi.fn().mockReturnValue([]),
+		signatureAt: vi.fn().mockReturnValue(null),
 	} as unknown as ParseService;
 }
 
@@ -174,6 +193,131 @@ describe('DbtCompletionProvider — bare column completions', () => {
 	});
 });
 
+describe('DbtCompletionProvider — SQL functions + keywords (sqllens completeAt)', () => {
+	function makeParseServiceWithCompletions(
+		candidates: Array<{ label: string; kind: string; detail?: string }>,
+		relationColumns: Record<string, string[]> = {},
+	): { service: ParseService; completeAt: ReturnType<typeof vi.fn> } {
+		const model = {
+			ctes: [], refs: [], sources: [], finalColumns: [],
+			relationColumns, symbols: [], timing: { parseMs: 0, totalMs: 0 },
+		} as unknown as DocumentModel;
+		const completeAt = vi.fn().mockReturnValue(candidates);
+		const service = {
+			getDocumentModel: vi.fn().mockResolvedValue(model),
+			evict: vi.fn(),
+			completeAt,
+			signatureAt: vi.fn().mockReturnValue(null),
+		} as unknown as ParseService;
+		return { service, completeAt };
+	}
+
+	it('surfaces functions (Function kind) and keywords (Keyword kind), dropping column/table kinds', async () => {
+		const { service } = makeParseServiceWithCompletions([
+			{ label: 'ifnull', kind: 'function' },
+			{ label: 'FROM', kind: 'keyword' },
+			{ label: 'some_col', kind: 'column' },
+			{ label: 'some_table', kind: 'table' },
+		]);
+		const provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), service);
+
+		const linePrefix = 'SELECT case when x then ifn';
+		const doc = mockDocument([linePrefix]);
+		const pos = { line: 0, character: linePrefix.length };
+
+		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
+
+		const ifnull = items!.find(i => i.label === 'ifnull');
+		expect(ifnull).toBeDefined();
+		expect(ifnull!.kind).toBe(2 /* CompletionItemKind.Function */);
+
+		const from = items!.find(i => i.label === 'FROM');
+		expect(from).toBeDefined();
+		expect(from!.kind).toBe(13 /* CompletionItemKind.Keyword */);
+
+		// completeAt's own column/table candidates are dropped — we produce richer ones.
+		expect(items!.some(i => i.label === 'some_col')).toBe(false);
+		expect(items!.some(i => i.label === 'some_table')).toBe(false);
+	});
+
+	it('asks sqllens at the CARET — one offset serves both jinja and SQL', async () => {
+		const { service, completeAt } = makeParseServiceWithCompletions([{ label: 'ifnull', kind: 'function' }]);
+		const provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), service);
+
+		const linePrefix = 'SELECT ifn';
+		const doc = mockDocument([linePrefix]);
+		const pos = { line: 0, character: linePrefix.length }; // caret at end of `ifn` (offset 10)
+
+		await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
+
+		// The caret (10), NOT the word start. sqllens 1.4.0 made the caret token the token
+		// being typed, so `SELECT ifn|` yields functions at the caret. The old word-start
+		// anchoring existed only to dodge that, and it broke the jinja callee slot (which
+		// resolves only at the caret) — one offset now serves both.
+		expect(completeAt).toHaveBeenCalledWith('SELECT ifn', 10);
+	});
+
+	it('a jinja call slot returns the provider dbt names and never falls through to columns', async () => {
+		// sqllens answers a jinja slot with kind "template"; that IS the answer. The old
+		// ref()/source()/macro line-prefix regexes are gone — the parse decides the slot.
+		const { service } = makeParseServiceWithCompletions(
+			[{ label: 'customers', kind: 'template', detail: 'table — jaffle' }],
+			{ orders: ['id', 'amount'] }, // in-scope columns that must NOT leak into the tag
+		);
+		const provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), service);
+
+		const linePrefix = 'select 1 from {{ ref(\'cu';
+		const doc = mockDocument([linePrefix]);
+		const pos = { line: 0, character: linePrefix.length };
+
+		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
+
+		const labels = items!.map(i => i.label);
+		expect(labels).toEqual(['customers']);
+		expect(labels).not.toContain('id');
+		expect(items![0].detail).toBe('table — jaffle');
+	});
+
+	it('offers functions even when no columns resolve (the reported empty case)', async () => {
+		const { service } = makeParseServiceWithCompletions([{ label: 'ifnull', kind: 'function' }], {});
+		const provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), service);
+
+		const linePrefix = 'SELECT case when x then ifn';
+		const doc = mockDocument([linePrefix]);
+		const pos = { line: 0, character: linePrefix.length };
+
+		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
+
+		expect(items!.map(i => i.label)).toContain('ifnull');
+	});
+});
+
+describe('DbtCompletionProvider — end-to-end with the REAL parser (no mocked completeAt)', () => {
+	it('completes ifnull at a CASE value slot in a databricks jinja model, typing a bare word (no dot)', async () => {
+		// Whole chain, nothing stubbed: provider → real ParseService → real
+		// SqllensDocumentParser → sqllens completeAt. Mirrors the reported screenshot.
+		const parser = new SqllensDocumentParser({ adapterType: 'databricks' });
+		const parseService = new RealParseService(parser, createMockLogger());
+		const provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), parseService);
+
+		const lines = [
+			'select',
+			'  case',
+			'    when ve.defaultdimension is not null then ifn',
+			'  end as gold_chainkey',
+			'from {{ ref(\'some_model\') }} ve',
+		];
+		const doc = mockDocument(lines);
+		const pos = { line: 2, character: lines[2].length }; // caret at end of `ifn`
+
+		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
+
+		const ifnull = items!.find(i => i.label === 'ifnull');
+		expect(ifnull, 'ifnull should be offered as a function completion').toBeDefined();
+		expect(ifnull!.kind).toBe(2 /* CompletionItemKind.Function */);
+	});
+});
+
 describe('DbtCompletionProvider — alias.column completions (existing)', () => {
 	it('still works for alias. prefix', async () => {
 		const provider = new DbtCompletionProvider(
@@ -201,6 +345,8 @@ describe('DbtCompletionProvider — FROM/JOIN with ParseService', () => {
 		return {
 			getDocumentModel: vi.fn().mockResolvedValue(model),
 			evict: vi.fn(),
+			completeAt: vi.fn().mockReturnValue([]),
+			signatureAt: vi.fn().mockReturnValue(null),
 		} as unknown as ParseService;
 	}
 
@@ -324,6 +470,8 @@ describe('DbtCompletionProvider — FQN completions', () => {
 	const emptyParseService = {
 		getDocumentModel: vi.fn().mockResolvedValue(null),
 		evict: vi.fn(),
+		completeAt: vi.fn().mockReturnValue([]),
+		signatureAt: vi.fn().mockReturnValue(null),
 	} as unknown as ParseService;
 
 	it('returns schemas after catalog. (trailing dot)', async () => {

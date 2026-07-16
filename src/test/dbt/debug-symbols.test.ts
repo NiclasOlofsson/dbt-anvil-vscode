@@ -208,3 +208,80 @@ describe('emitDebugSymbols — frame attribution on a plain CTE chain', () => {
 		expect(frameOnLine(res!.symbols, 1)).toBe('_main_');
 	});
 });
+
+// dbt compiles exactly ONE jinja arm, chosen at render time from real state — a
+// choice emit cannot predict. So emit must mark EVERY arm, and whichever arm dbt
+// keeps carries its markers. Symbols come from sqllens's unionSymbols() (all-arm
+// idents/fns); keywords/star/lits come from the all-text-live placeholder lex.
+describe('emitDebugSymbols — jinja arm coverage', () => {
+	const identsOnLine = (res: SymbolEntry[] | undefined, line: number): SymbolEntry[] =>
+		(res ?? []).filter(s => s.line === line && s.role === 'ident');
+
+	it('marks the identifier in BOTH arms of an if/else (not just the primary arm)', () => {
+		const source = [
+			'select',                     // 0
+			'  id,',                      // 1
+			'{% if var("flag") %}',       // 2
+			'  amount_a as amount',       // 3  if-arm
+			'{% else %}',                 // 4
+			'  amount_b as amount',       // 5  else-arm
+			'{% endif %}',                // 6
+			'from {{ ref(\'orders\') }}', // 7
+		].join('\n');
+
+		const res = emitDebugSymbols(source, 'databricks');
+		// The if-arm ident and the else-arm ident BOTH carry a marker. Before
+		// unionSymbols, only the primary (if) arm did, so dbt taking the else branch
+		// left `amount_b` with no source mapping.
+		expect(identsOnLine(res!.symbols, 3)).toHaveLength(1); // amount_a
+		expect(identsOnLine(res!.symbols, 5)).toHaveLength(1); // amount_b
+	});
+
+	it('marks the clause keyword in BOTH arms of an if/else', () => {
+		const source = [
+			'select id',            // 0
+			'from {{ ref("t") }}',  // 1
+			'{% if var("f") %}',    // 2
+			'where a = 1',          // 3  if-arm WHERE
+			'{% else %}',           // 4
+			'where b = 2',          // 5  else-arm WHERE
+			'{% endif %}',          // 6
+		].join('\n');
+
+		const res = emitDebugSymbols(source, 'databricks');
+		const whereLines = res!.symbols.filter(s => s.role === 'where').map(s => s.line).sort();
+		expect(whereLines).toEqual([3, 5]);
+	});
+
+	it('marks a for-loop body once; dbt unroll duplicates the marker with the body', () => {
+		const source = [
+			'{% for t in ["x","y"] %}',      // 0
+			'select col from {{ ref(t) }}',  // 1  loop body
+			'{% if not loop.last %}union all{% endif %}', // 2
+			'{% endfor %}',                  // 3
+		].join('\n');
+
+		const res = emitDebugSymbols(source, 'databricks');
+		// The loop body's select/from/ident get a marker on the single source line
+		// they occupy; dbt unrolls the loop (markers included), so every generated
+		// leg stays mapped back to source line 1.
+		const line1 = res!.symbols.filter(s => s.line === 1).map(s => s.role).sort();
+		expect(line1).toContain('select');
+		expect(line1).toContain('from');
+		expect(line1).toContain('ident');
+	});
+
+	it('plain (non-branched) SQL is unchanged by the union path', () => {
+		const source = [
+			'select id, amount',  // 0
+			'from orders',        // 1
+			'where id > 0',       // 2
+		].join('\n');
+		const res = emitDebugSymbols(source, 'databricks');
+		const roles = res!.symbols.map(s => `${s.role}@${s.line}`).sort();
+		// select + two idents on L0, from on L1, where + ident + lit on L2.
+		expect(roles).toContain('select@0');
+		expect(roles).toContain('from@1');
+		expect(roles).toContain('where@2');
+	});
+});

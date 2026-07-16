@@ -5,7 +5,8 @@ import { ParseService } from '../../services/parse-service';
 import type { DocumentModel } from '../../services/parse-service';
 import type { Sym } from '../../ftl/sqllens/api';
 import { isLinePositionInComment, computeCommentRanges, isOffsetInComment } from '../common/comment-utils';
-import { SQL_KEYWORDS } from './sql-keywords';
+import { isSqlKeywordOrFunction } from './sql-words';
+import type { DialectSymbols } from '../../ftl/sql-tokens';
 import { isRelationSym, qualifierRangeOf, rangeOfSpan, relationForAlias, relationNameRangeOf, symMatchesCte } from './sym-spans';
 
 /**
@@ -34,6 +35,7 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 
 		if (this.parseService) {
 			const model = await this.parseService.getDocumentModel(document);
+			const dialectSymbols = await this.parseService.getDialectSymbols();
 			if (!token.isCancellationRequested && model) {
 				// Check refs: full {{ ref(...) }} jinja span is clickable
 				const ref = model.refs.find(r =>
@@ -70,7 +72,7 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 						return [];
 					}
 					const bareName = sym.name.split('.').pop()!;
-					return this._findColumnReferences(document, bareName, token);
+					return this._findColumnReferences(document, bareName, token, dialectSymbols);
 				}
 
 				if (isRelationSym(sym)) {
@@ -280,6 +282,7 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 		document: vscode.TextDocument,
 		columnName: string,
 		token: vscode.CancellationToken,
+		dialectSymbols: DialectSymbols | undefined,
 	): vscode.Location[] {
 		const text = document.getText();
 		const commentRanges = computeCommentRanges(text);
@@ -289,7 +292,7 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 		while ((m = pattern.exec(text)) !== null) {
 			if (token.isCancellationRequested) break;
 			if (isOffsetInComment(m.index, commentRanges)) continue;
-			if (SQL_KEYWORDS.has(m[0].toUpperCase())) continue;
+			if (isSqlKeywordOrFunction(m[0], dialectSymbols)) continue;
 			const pos = document.positionAt(m.index);
 			// Skip occurrences inside Jinja blocks
 			const matchLine = document.lineAt(pos.line).text;

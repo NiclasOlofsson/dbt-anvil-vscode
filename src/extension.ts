@@ -708,7 +708,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const sqlDocumentSymbolProvider = new SqlDocumentSymbolProvider(manifestIndexer, logger, parseService);
 	const yamlDocumentSymbolProvider = new YamlDocumentSymbolProvider(logger);
 	const workspaceSymbolProvider = new DbtWorkspaceSymbolProvider(manifestIndexer, logger);
-	const signatureHelpProvider = new DbtSignatureHelpProvider(manifestIndexer, logger);
+	const signatureHelpProvider = new DbtSignatureHelpProvider(manifestIndexer, logger, parseService);
 	const sqlCodeActionProvider = new SqlCodeActionProvider(manifestIndexer, logger);
 	sqlCodeActionProvider.setPathResolver(pathResolver);
 	sqlCodeActionProvider.setNinjaResultProvider(uri => diagnosticsProvider.getNinjaResult(uri));

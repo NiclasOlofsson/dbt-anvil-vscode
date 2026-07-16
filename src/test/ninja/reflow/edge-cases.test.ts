@@ -28,6 +28,7 @@ describe('reflow.edge-cases', () => {
 		const symbols: DialectSymbols = {
 			functions: new Set(['count']),
 			keywordTokenTypes: new Set(['select', 'from']),
+			keywords: new Set(['select', 'from']),
 			types: new Set(),
 		};
 		// select Count(*), COUNT(x) from t — under consistent, the second

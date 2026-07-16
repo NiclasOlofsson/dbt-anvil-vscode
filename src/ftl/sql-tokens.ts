@@ -35,6 +35,13 @@ export interface DialectSymbols {
 	readonly functions: ReadonlySet<string>;
 	/** Lowercase token-type names that represent SQL keywords (e.g. 'select', 'qualify'). */
 	readonly keywordTokenTypes: ReadonlySet<string>;
+	/**
+	 * Lowercase SQL keyword WORDS for this dialect (e.g. 'select', 'from', 'qualify') —
+	 * the grammar's literal keyword set, distinct from `keywordTokenTypes` (token-type
+	 * names). Used to tell a keyword apart from a user identifier (hover / references
+	 * suppression) without a dialect-blind hardcoded list.
+	 */
+	readonly keywords: ReadonlySet<string>;
 	/** Lowercase data type names (e.g. 'bigint', 'timestamp_ltz'). */
 	readonly types: ReadonlySet<string>;
 }

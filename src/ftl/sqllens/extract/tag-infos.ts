@@ -86,6 +86,30 @@ export interface TagInfos {
 }
 
 /**
+ * Whether a tag emits a `RefInfo` / `SourceInfo` here, and which. Since sqllens 1.2.0
+ * the tag-AST is dbt-agnostic (every `{{ … }}` is a `call` node); the ref/source
+ * classification is ours, by callee name. A confirmed reference needs a CLOSED tag
+ * and LITERAL name args (dbt: `ref`'s model is the last arg; `source`'s are args 0/1) —
+ * a computed arg (`ref(var('x'))`, value null) is not one. This is the SINGLE predicate
+ * `tagInfos` (emission) and `backfillSymAliases` (index alignment) share, so they never
+ * disagree on the count or order.
+ */
+export function emittedTagKind(tag: TagNode): 'ref' | 'source' | undefined {
+	if (tag.kind !== 'call' || tag.incomplete) return undefined;
+	if (tag.name === 'ref') {
+		const arg = tag.args[tag.args.length - 1];
+		return arg && arg.value !== null && arg.valueSpan !== undefined ? 'ref' : undefined;
+	}
+	if (tag.name === 'source') {
+		const src = tag.args[0];
+		const tbl = tag.args[1];
+		return src && src.value !== null && src.valueSpan !== undefined
+			&& tbl && tbl.value !== null && tbl.valueSpan !== undefined ? 'source' : undefined;
+	}
+	return undefined;
+}
+
+/**
  * Project sqllens R2 tag nodes onto the extension's ref / source / macro consumer
  * shapes. Every position is a direct PartSpan field read (line 1-based -> 0-based;
  * column/endColumn already 0-based) — the offset->line/col conversion pass died
@@ -97,66 +121,63 @@ export function tagInfos(tags: TagNode[]): TagInfos {
 	const macroCalls: MacroCallInfo[] = [];
 
 	for (const tag of tags) {
-		if (tag.kind === 'ref') {
-			refs.push({
-				model: tag.model,
-				// line/col anchor on the `ref` identifier (callSpan starts at the callee),
-				// NOT the `{{` — matches the old extractor's `id.line`/`id.col`.
-				line: tag.callSpan.line - 1,
-				col: tag.callSpan.column,
-				// model name string CONTENT (quotes excluded — modelSpan is content-only).
-				modelCol: tag.modelSpan.column,
-				modelEndCol: tag.modelSpan.endColumn,
-				// full `{{ … }}` tag span.
-				jinjaCol: tag.tagSpan.column,
-				jinjaEndCol: tag.tagSpan.endColumn,
-			});
-		} else if (tag.kind === 'source') {
-			sources.push({
-				sourceName: tag.sourceName,
-				tableName: tag.tableName,
-				// line/col anchor on the bare `source` identifier (callSpan starts at the
-				// callee, exactly like ref) — matches the old extractor's `id.line`/`id.col`.
-				line: tag.callSpan.line - 1,
-				col: tag.callSpan.column,
-				// source/table string CONTENT (quotes excluded — the spans are content-only).
-				sourceNameCol: tag.sourceNameSpan.column,
-				sourceNameEndCol: tag.sourceNameSpan.endColumn,
-				tableNameCol: tag.tableNameSpan.column,
-				tableNameEndCol: tag.tableNameSpan.endColumn,
-				// full `{{ … }}` tag span.
-				jinjaCol: tag.tagSpan.column,
-				jinjaEndCol: tag.tagSpan.endColumn,
-			});
-		} else if (tag.kind === 'macro') {
-			// `{{ … }}` expression macro node. `calls` (af1170c) is the top-level call
-			// (`calls[0]`, == the node's own name/args) PLUS every nested call in source
-			// order, symmetric to `control.calls` — so `{{ outer(inner()) }}` surfaces
-			// BOTH, matching the old tokenizer's paren-scan. Filtered by the same
-			// NOT_MACRO_CALLS set (`ref`/`source`/`var`/`env_var`/`config` never surface).
-			for (const call of tag.calls) {
-				if (NOT_MACRO_CALLS.has(call.name)) continue;
-				macroCalls.push(macroInfo(call, tag.tagSpan));
+		if (tag.kind === 'call') {
+			const emitted = emittedTagKind(tag);
+			if (emitted === 'ref') {
+				// dbt: the model is the LAST positional arg (`ref('model')` / `ref('pkg','model')`
+				// / `ref(model='x')`); `value`/`valueSpan` are the quote-excluded literal, exactly
+				// what the old `tag.model`/`modelSpan` carried.
+				const arg = tag.args[tag.args.length - 1]!;
+				refs.push({
+					model: arg.value!,
+					line: tag.callSpan.line - 1,
+					col: tag.callSpan.column,
+					modelCol: arg.valueSpan!.column,
+					modelEndCol: arg.valueSpan!.endColumn,
+					jinjaCol: tag.tagSpan.column,
+					jinjaEndCol: tag.tagSpan.endColumn,
+				});
+			} else if (emitted === 'source') {
+				// dbt: source(source_name, table_name) — args 0 and 1 positionally.
+				const src = tag.args[0]!;
+				const tbl = tag.args[1]!;
+				sources.push({
+					sourceName: src.value!,
+					tableName: tbl.value!,
+					line: tag.callSpan.line - 1,
+					col: tag.callSpan.column,
+					sourceNameCol: src.valueSpan!.column,
+					sourceNameEndCol: src.valueSpan!.endColumn,
+					tableNameCol: tbl.valueSpan!.column,
+					tableNameEndCol: tbl.valueSpan!.endColumn,
+					jinjaCol: tag.tagSpan.column,
+					jinjaEndCol: tag.tagSpan.endColumn,
+				});
+			} else if (!tag.incomplete && tag.name !== 'ref' && tag.name !== 'source') {
+				// A macro expression tag. `calls` is the top-level call (`calls[0]`) plus every
+				// nested call in source order, so `{{ outer(inner()) }}` surfaces both. Filtered
+				// by NOT_MACRO_CALLS (`ref`/`source`/`config`/`var`/`env_var`/keywords never surface).
+				for (const call of tag.calls) {
+					if (NOT_MACRO_CALLS.has(call.name)) continue;
+					macroCalls.push(macroInfo(call, tag.tagSpan));
+				}
 			}
+			// A ref/source call with computed (non-literal) args emits nothing.
 		} else if (tag.kind === 'control') {
 			// `{% … %}` block tag — each embedded call, filtered like the old extractor.
 			let declSkipped = false;
 			for (const call of tag.calls) {
-				// Skip the macro's OWN declaration (`{% macro foo(a) %}` → `foo`): the old
-				// extractor skips a callee immediately preceded by the `macro` keyword. The
-				// declaration is the first call in source order, so drop the first `calls`
-				// entry whose name is the declared macro name.
+				// Skip the macro's OWN declaration (`{% macro foo(a) %}` → `foo`): drop the first
+				// `calls` entry whose name is the declared macro name.
 				if (tag.keyword === 'macro' && !declSkipped && call.name === tag.name) {
 					declSkipped = true;
 					continue;
 				}
-				// `ref`/`source`/jinja keywords/dbt globals (`config`/`var`/`env_var`) that
-				// appear as callees INSIDE a control tag are not user macro calls.
 				if (NOT_MACRO_CALLS.has(call.name)) continue;
 				macroCalls.push(macroInfo(call, tag.tagSpan));
 			}
 		}
-		// var / env_var / config / other: not ref/source/macro-call sites.
+		// kind 'other': not a ref/source/macro-call site.
 	}
 
 	return { refs, sources, macroCalls };

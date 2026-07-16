@@ -612,6 +612,10 @@ describe('SqllensDocumentParser — getDialectSymbols', () => {
 		// A known function and type.
 		expect(symbols!.functions.has('coalesce')).toBe(true);
 		expect(symbols!.types.has('int')).toBe(true);
+		// Keyword WORDS (distinct from keywordTokenTypes) — the grammar literal set,
+		// lowercased, used by hover/reference suppression.
+		expect(symbols!.keywords.has('select')).toBe(true);
+		expect(symbols!.keywords.has('from')).toBe(true);
 	});
 
 	it('carries the tsql-specific TOP keyword type and NVARCHAR type', async () => {
@@ -627,6 +631,69 @@ describe('SqllensDocumentParser — getDialectSymbols', () => {
 		expect(a).toBe(b);
 		expect(a!.functions).toBe(b!.functions);
 		expect(a!.keywordTokenTypes).toBe(b!.keywordTokenTypes);
+	});
+});
+
+describe('SqllensDocumentParser — completeAt / signatureAt', () => {
+	it('offers dialect functions (ifnull) at a value slot in a jinja model', () => {
+		// The exact shape of the reported gap: a CASE arm value position in a
+		// Databricks jinja-SQL model. `ifnull` is a Databricks function, not a column.
+		// Anchored at the START of the partial word (the value-slot offset) — the
+		// completion provider anchors there so the walk sees an open expression slot,
+		// not the token the partial word already parses as. See _completeSqlWords.
+		const sql = 'select case when x is not null then ifn end as y\nfrom {{ ref(\'m\') }}';
+		const offset = sql.indexOf('ifn');
+		const items = parser('databricks').completeAt(sql, offset);
+		const functions = items.filter(i => i.kind === 'function').map(i => i.label);
+		expect(functions).toContain('ifnull');
+	});
+
+	// Fixed upstream in sqllens 1.2.0 (068d0c2): completeAt lexes the placeholder, not raw
+	// text, so a leading {{ config() }} block no longer zeroes the candidate list.
+	it('still offers functions when the model opens with a {{ config() }} block (regression)', () => {
+		const sql = [
+			'{{ config(materialized=\'table\') }}',
+			'select',
+			'  case when ve.x is not null then ifn else \'-1\' end as k',
+			'from {{ ref(\'silver__vendor\') }} ve',
+		].join('\n');
+		const offset = sql.indexOf('then ifn') + 'then '.length;
+		const functions = parser('databricks').completeAt(sql, offset).filter(i => i.kind === 'function').map(i => i.label);
+		expect(functions).toContain('ifnull');
+	});
+
+	it('offers context keywords from the caret walk', () => {
+		const sql = 'select 1 ';
+		const items = parser('databricks').completeAt(sql, sql.length);
+		const keywords = items.filter(i => i.kind === 'keyword').map(i => i.label.toLowerCase());
+		// After `select 1 ` the grammar can continue with FROM (among others).
+		expect(keywords).toContain('from');
+	});
+
+	it('answers a jinja ref() slot with dbt model names via the provider (REQ2 seam)', () => {
+		// The whole seam end to end: sqllens finds the slot ({{ ref('cu → callee `ref`, arg 0),
+		// asks our provider for that slot's candidates, and hands them back as kind "template".
+		const models = new Map<string, unknown>([
+			['model.p.customers', { name: 'customers', materialisation: 'table', packageName: 'p' }],
+		]);
+		const indexer = {
+			index: { models, sources: new Map(), macros: new Map() },
+		} as unknown as import('../../../indexing/manifest-indexer').ManifestIndexer;
+		const describeCache = { columns: () => Promise.resolve(undefined) } as unknown as import('../../../dbt/describe-cache').DescribeCache;
+		const provider = makeTemplateProvider(() => undefined, { indexer, describeCache });
+
+		const sql = 'select 1 from {{ ref(\'cu';
+		const items = parser('databricks').completeAt(sql, sql.length, provider);
+		const templates = items.filter(i => i.kind === 'template').map(i => i.label);
+		expect(templates).toContain('customers');
+	});
+
+	it('returns a signature for a SQL function call', () => {
+		const sql = 'select date_add(order_date, 1) from t';
+		const offset = sql.indexOf('order_date');
+		const info = parser('databricks').signatureAt(sql, offset);
+		expect(info).not.toBeNull();
+		expect(info!.signatures[info!.activeSignature].label.toLowerCase()).toContain('date_add');
 	});
 });
 

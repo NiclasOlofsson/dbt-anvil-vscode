@@ -4,10 +4,10 @@
  * Two sources, two warning types:
  * - `syntax_error` ← `parse().diagnostics` (`SyntaxDiagnostic`) — outright parse failures.
  * - `scope_warning` ← `qualify().diagnostics` — schema-fed column-resolution problems
- *   (unknown / ambiguous column, unknown struct field). Column kinds only: unknown-table
- *   never fires against our open-world provider, and the call-signature kinds
- *   (wrong-arity / wrong-argument-type) are a different editor surface, deliberately
- *   not mapped here.
+ *   (unknown / ambiguous column, unknown struct field). Column kinds only: the table kinds
+ *   (unknown-table, and ambiguous-table added in sqllens 1.5.0 / #38) never fire against our
+ *   open-world provider, and the call-signature kinds (wrong-arity / wrong-argument-type) are
+ *   a different editor surface, deliberately not mapped here.
  */
 import type { ParseWarning } from '../../../services/parse-service';
 import type { Diagnostic, SyntaxDiagnostic } from '../api';

@@ -1,7 +1,7 @@
 import type { DocumentModel } from './parse-service';
 import type { DialectSymbols } from '../ftl/sql-tokens';
 import type { LineageResult } from '../ftl/sqllens/lineage';
-import type { TemplateProvider } from '../ftl/sqllens/api';
+import type { Completion, SignatureHelpInfo, TemplateProvider } from '../ftl/sqllens/api';
 
 /**
  * Options passed to a DocumentParser.parse() call.
@@ -30,6 +30,14 @@ export interface DocumentParser {
 	decomposeQuery?(compiledSql: string): Promise<string>;
 	/** Return the dialect symbol lists (functions, keyword types, data types). */
 	getDialectSymbols?(): Promise<DialectSymbols | undefined>;
+	/**
+	 * Editor completion candidates (keywords, functions, columns, tables, and — in a jinja
+	 * call slot — the provider's `templateCandidates`) at `offset`. `provider` supplies the
+	 * host catalog sqllens has no way to know; without one only the static dbt overlay answers.
+	 */
+	completeAt?(sql: string, offset: number, provider?: TemplateProvider): Completion[];
+	/** Signature help for the SQL function call enclosing `offset`, or null. */
+	signatureAt?(sql: string, offset: number, provider?: TemplateProvider): SignatureHelpInfo | null;
 	/**
 	 * Trace column lineage for one output column. Returns the lineage result or a
 	 * structured `{ error }`. Bypasses ParseService caching — called directly by

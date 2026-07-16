@@ -11,6 +11,7 @@
 import { deriveSymbols } from '../api';
 import type { Dialect, ScopeTree, SchemaProvider, StarExpansion, Sym, TagNode } from '../api';
 import type { RefInfo, SourceInfo } from '../../../services/parse-service';
+import { emittedTagKind } from './tag-infos';
 
 /** The `SymbolKind` values `relationSymbol` (sqllens symbols.ts) produces — everything
  *  a FROM/JOIN source or CTE reference can be, i.e. every kind that can carry an alias. */
@@ -66,8 +67,9 @@ export function backfillSymAliases(
 	let refIdx = 0;
 	let srcIdx = 0;
 	for (const tag of primaryTags) {
-		if (tag.kind === 'ref') infoByStart.set(tag.tagSpan.start, refs[refIdx++]);
-		else if (tag.kind === 'source') infoByStart.set(tag.tagSpan.start, sources[srcIdx++]);
+		const kind = emittedTagKind(tag);
+		if (kind === 'ref') infoByStart.set(tag.tagSpan.start, refs[refIdx++]);
+		else if (kind === 'source') infoByStart.set(tag.tagSpan.start, sources[srcIdx++]);
 	}
 
 	for (const arm of arms) {
@@ -78,7 +80,7 @@ export function backfillSymAliases(
 			}
 		}
 		for (const tag of arm.tags) {
-			if (tag.kind !== 'ref' && tag.kind !== 'source') continue;
+			if (emittedTagKind(tag) === undefined) continue;
 			const info = infoByStart.get(tag.tagSpan.start);
 			if (!info || info.alias !== undefined) continue;
 			const node = arm.nodeOf(tag);

@@ -29,8 +29,8 @@
  * fit-guard Open Gap sqllens owns; `statement` is safe in every real position (a select-item
  * `SELECT 1` is fit-rejected back to the identifier fill; a `(...)`/statement slot accepts it).
  */
-import { DefaultTemplateProvider } from './api';
-import type { ExpansionShape, ResolvedRelation, TemplateCall } from './api';
+import { DbtTemplateProvider, DefaultTemplateProvider } from './api';
+import type { ExpansionShape, ResolvedRelation, TemplateCall, TemplateCandidate } from './api';
 import type { ManifestIndexer } from '../../indexing/manifest-indexer';
 import type { DescribeCache } from '../../dbt/describe-cache';
 
@@ -117,10 +117,11 @@ function physicalParts(node: RawNode): string[] | undefined {
 }
 
 /**
- * The extension's template provider (sqllens 4e1b18b catalog unification): the
- * shipped `DefaultTemplateProvider` carries the dbt-builtin knowledge (config →
- * "nothing", ref/source relations, env_var strings); this subclass overrides
- * `shapeOf` with the manifest-sourced classifier. `super.shapeOf` runs FIRST so
+ * The extension's template provider. Since sqllens 1.2.0 the dbt-builtin knowledge
+ * (config → "nothing", ref/source relations, env_var strings) lives in
+ * `DbtTemplateProvider` (moved out of the neutral `DefaultTemplateProvider`), so this
+ * subclass extends THAT and overrides `shapeOf` with the manifest-sourced classifier.
+ * `super.shapeOf` runs FIRST so
  * builtins keep their default answers (ship-note contract). Lazy: a macro is
  * classified only when the engine asks about it (i.e. it appears as a tag);
  * package qualifiers are ignored — dbt macro names are unique enough by bare
@@ -135,7 +136,7 @@ function physicalParts(node: RawNode): string[] | undefined {
  * a fabricated list. `world` stays "open" (the base default): our catalog is
  * partial by construction, so a miss must never diagnose unknown-table.
  */
-class AnvilTemplateProvider extends DefaultTemplateProvider {
+class AnvilTemplateProvider extends DbtTemplateProvider {
 	constructor(
 		private readonly lookupMacroSql: (name: string) => string | undefined,
 		private readonly enrichment?: RelationEnrichment,
@@ -185,6 +186,85 @@ class AnvilTemplateProvider extends DefaultTemplateProvider {
 		return { nameParts, columns: cols.map(name => ({ name })) };
 	}
 
+	/**
+	 * Completion candidates for a jinja call slot — the REQ2 seam. sqllens detects WHICH slot
+	 * the caret is in (`jinjaSlotAt`) and hands us the whole parsed call; the dbt MEANING of
+	 * that slot is ours, and so is the catalog that fills it. Nothing here parses: we answer
+	 * names, sqllens placed the caret.
+	 *
+	 *   callee slot (argIndex -1)  → the callees we know: dbt's `ref`/`source` + manifest macros
+	 *   ref(…)                     → model names (package names in the 2-arg form's slot 0)
+	 *   source(…) arg 0            → source names
+	 *   source(…) arg 1            → the tables OF the source named in arg 0
+	 *
+	 * Taking the whole `TemplateCall` (sqllens 1.4.0, issue #37) is what makes the last one
+	 * possible: an arg's candidates can depend on its siblings, and `call.args` carries them
+	 * (literal string per arg, `null` when computed). Without a manifest we know no names and
+	 * answer none — never a fabricated list.
+	 */
+	override templateCandidates(call: TemplateCall, argIndex: number): TemplateCandidate[] {
+		const index = this.enrichment?.indexer.index;
+		if (!index) return [];
+
+		const packageName = call.packageParts?.join('.');
+
+		// The caret is still in the callee identifier (`{{ re|`, `{{ dbt_utils.st|`).
+		if (argIndex === -1) {
+			const out: TemplateCandidate[] = [];
+			// `ref`/`source` are dbt builtins, not manifest macros — they exist in no map we
+			// hold, so they must be named here or they can never be completed at all.
+			if (packageName === undefined) {
+				out.push({ label: 'ref', detail: 'dbt model reference' });
+				out.push({ label: 'source', detail: 'dbt source reference' });
+			}
+			for (const macro of index.macros.values()) {
+				if (packageName !== undefined && macro.packageName !== packageName) continue;
+				out.push({ label: macro.name, detail: macro.packageName });
+			}
+			return out;
+		}
+
+		if (call.name === 'ref') {
+			// dbt: the model is the LAST arg — `ref('model')` / `ref('pkg','model')`. The whole
+			// call gives us the arity, so slot 0 of the 2-arg form is the PACKAGE, not a model.
+			if (call.args.length >= 2 && argIndex === 0) {
+				const packages = new Set([...index.models.values()].map(m => m.packageName));
+				return [...packages].sort().map(label => ({ label, detail: 'dbt package' }));
+			}
+			return [...index.models.values()].map(m => ({
+				label: m.name,
+				detail: `${m.materialisation} — ${m.packageName}`,
+			}));
+		}
+
+		if (call.name === 'source') {
+			if (argIndex === 0) {
+				const names = new Set([...index.sources.values()].map(s => s.sourceName));
+				return [...names].sort().map(label => ({ label, detail: 'dbt source' }));
+			}
+			if (argIndex === 1) {
+				// `source('raw', 'ord|')` — narrow to raw's tables via the sibling arg.
+				const sourceName = call.args[0];
+				if (typeof sourceName === 'string') {
+					return [...index.sources.values()]
+						.filter(s => s.sourceName === sourceName)
+						.map(s => ({ label: s.name, detail: s.schema ?? sourceName }));
+				}
+				// arg 0 is computed (`source(var('s'), …)`) — no source to narrow by, so name
+				// every table with its owning source(s) rather than guess one.
+				const bySource = new Map<string, string[]>();
+				for (const s of index.sources.values()) {
+					if (!bySource.has(s.name)) bySource.set(s.name, []);
+					bySource.get(s.name)!.push(s.sourceName);
+				}
+				return [...bySource].map(([label, owners]) => ({ label, detail: owners.join(', ') }));
+			}
+		}
+
+		// A user macro's arguments: we know its parameter names, not their legal values.
+		return [];
+	}
+
 	protected override async fetchExpansions(missing: TemplateCall[]): Promise<void> {
 		await Promise.all(missing.map(call => {
 			const uid = this.uidOf(call);
@@ -205,3 +285,17 @@ export function makeTemplateProvider(
 ): DefaultTemplateProvider {
 	return new AnvilTemplateProvider(lookup, enrichment);
 }
+
+/**
+ * The zero-configuration dbt default. Since sqllens 1.2.0 the neutral
+ * `DefaultTemplateProvider` carries NO dbt vocabulary, so a parse built without a
+ * provider resolves `ref`/`source` to nothing and the relation binds to the raw
+ * placeholder fill (`j0jjjj…`) instead of the model name. EVERY parse path that has no
+ * richer (manifest-backed) provider must pass this one: it is sqllens's shipped dbt
+ * overlay — ref → the logical model name, source → [source, table], env_var → string,
+ * config/docs/… → no output.
+ *
+ * Safe to share as a singleton: static famous-macro knowledge only, no state, nothing
+ * closed over per document (the same rationale as sqllens's own `OPEN_PROVIDER`).
+ */
+export const DBT_PROVIDER: DefaultTemplateProvider = new DbtTemplateProvider();

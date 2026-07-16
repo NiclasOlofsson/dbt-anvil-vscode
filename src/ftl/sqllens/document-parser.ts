@@ -14,7 +14,8 @@ import type { DocumentModel, ParseWarning } from '../../services/parse-service';
 import type { DocumentParser, ParseOptions } from '../../services/document-parser';
 import type { DialectSymbols } from '../sql-tokens';
 import { performance } from 'node:perf_hooks';
-import { dialectSymbols, minijinja, Schema, SqlDocument, toSqllensDialect, type Dialect, type Qualification, type SchemaMapping, type SchemaProvider, type Scope, type Sym, type TagNode, type TemplateProvider } from './api';
+import { completeAt as sqllensCompleteAt, dialectSymbols, minijinja, Schema, signatureAt as sqllensSignatureAt, SqlDocument, toSqllensDialect, type Completion, type Dialect, type Qualification, type SchemaMapping, type SchemaProvider, type Scope, type SignatureHelpInfo, type Sym, type TagNode, type TemplateProvider } from './api';
+import { DBT_PROVIDER } from './template-shape';
 import { keywordTokenTypesFor, mapTokens } from './token-mapper';
 import { mergeSqlAndJinjaTokens } from '../ninja-sql-tokens';
 import { tagInfos } from './extract/tag-infos';
@@ -127,11 +128,42 @@ export class SqllensDocumentParser implements DocumentParser {
 						.map(x => x.toLowerCase())
 						.filter(x => /^[a-z]+$/.test(x)),
 				),
+				keywords: lower(s.keywords),
 				types: DATA_TYPE_NAMES,
 			};
 			this._symbolsCache.set(dialect, symbols);
 		}
 		return Promise.resolve(symbols);
+	}
+
+	/**
+	 * Editor completion candidates at char `offset` — sqllens's own error-tolerant
+	 * `completeAt` over the templated document.
+	 *
+	 * `provider` is passed TWICE by design: to `SqlDocument.create` (so ref/source resolve
+	 * and jinja blanks correctly) and as `completeAt`'s schema argument, because that is the
+	 * object sqllens reads `templateCandidates` off when the caret sits in a jinja call slot
+	 * (complete.js `templateCompletions`). Pass the manifest-backed provider and dbt model /
+	 * source / macro names come back as `kind: "template"`; pass none and only the static
+	 * dbt overlay answers, which knows no catalog.
+	 */
+	completeAt(sql: string, offset: number, provider?: TemplateProvider): Completion[] {
+		const dialect = toSqllensDialect(this._context.adapterType);
+		const p = provider ?? DBT_PROVIDER;
+		const doc = SqlDocument.create(sql, dialect, { templating: MINIJINJA, provider: p });
+		return sqllensCompleteAt(doc, offset, p);
+	}
+
+	/**
+	 * Signature help at char `offset` — sqllens's curated per-dialect function signatures.
+	 * Takes the provider for parity with `completeAt` (same document contract); the curated
+	 * signature tables don't consult it today.
+	 */
+	signatureAt(sql: string, offset: number, provider?: TemplateProvider): SignatureHelpInfo | null {
+		const dialect = toSqllensDialect(this._context.adapterType);
+		const p = provider ?? DBT_PROVIDER;
+		const doc = SqlDocument.create(sql, dialect, { templating: MINIJINJA, provider: p });
+		return sqllensSignatureAt(doc, offset, p);
 	}
 
 	/**
@@ -200,9 +232,15 @@ export class SqllensDocumentParser implements DocumentParser {
 		// doubles as the SchemaProvider every analyze()/union view resolves
 		// against — one object, both seams. Read ONCE per document.
 		const provider = enrichedProvider ?? this._context.templateProvider;
+		// A CONFIGURED provider doubles as the SchemaProvider; without one, the caller's
+		// schema hint (the compiled-SQL `select *` path) is the schema. DBT_PROVIDER is NOT
+		// a schema — it answers no columns — so it must never take this slot.
 		const schemaProvider: SchemaProvider = provider ?? new Schema((schema ?? {}) as SchemaMapping);
+		// Templating, though, ALWAYS needs dbt vocabulary: since sqllens 1.2.0 the neutral
+		// default knows none, so a providerless parse binds `{{ ref() }}` to the placeholder
+		// fill instead of the model name.
 		const tp0 = performance.now();
-		const doc = SqlDocument.create(rawSql, dialect, { templating: MINIJINJA, ...(provider ? { provider } : {}) });
+		const doc = SqlDocument.create(rawSql, dialect, { templating: MINIJINJA, provider: provider ?? DBT_PROVIDER });
 		const parseMs = performance.now() - tp0;
 
 		// A `;`-separated batch lowers to a flagged compound STUB, so whole-doc
@@ -263,7 +301,7 @@ export class SqllensDocumentParser implements DocumentParser {
 				+ rawSql.slice(r.startOffset, end)
 				+ rawSql.slice(end).replace(/[^\r\n]/g, ' ');
 			const tp0 = performance.now();
-			const cellDoc = SqlDocument.create(masked, dialect, { templating: MINIJINJA, ...(provider ? { provider } : {}) });
+			const cellDoc = SqlDocument.create(masked, dialect, { templating: MINIJINJA, provider: provider ?? DBT_PROVIDER });
 			const cellMs = performance.now() - tp0;
 			parseMs += cellMs;
 			cells.push(this._extract(masked, cellDoc, dialect, schemaProvider, t0, cellMs));

@@ -13,6 +13,7 @@ describe('reflow.dialect-cap', () => {
 	const symbols: DialectSymbols = {
 		functions: new Set(['count', 'coalesce', 'lower', 'upper', 'nullif', 'cast']),
 		keywordTokenTypes: new Set(['select', 'from', 'where']),
+		keywords: new Set(['select', 'from', 'where']),
 		types: new Set(['int', 'varchar', 'bigint', 'timestamp']),
 	};
 
@@ -82,6 +83,7 @@ describe('reflow.dialect-cap', () => {
 		const localSymbols: DialectSymbols = {
 			functions: new Set(),
 			keywordTokenTypes: new Set(['qualify']),
+			keywords: new Set(['qualify']),
 			types: new Set(),
 		};
 		const sql = 'QUALIFY 1';

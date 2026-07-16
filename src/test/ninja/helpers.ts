@@ -297,20 +297,23 @@ export function model(
  */
 export function stubDialectSymbols(overrides: Partial<{
 	keywordTokenTypes: Iterable<string>;
+	keywords: Iterable<string>;
 	functions: Iterable<string>;
 	types: Iterable<string>;
 }> = {}): DialectSymbols {
+	const defaultKeywords = [
+		'select', 'from', 'where', 'and', 'or', 'not', 'in', 'is', 'null',
+		'as', 'alias', 'on', 'join', 'left', 'right', 'inner', 'outer', 'full', 'cross',
+		'group', 'by', 'order', 'having', 'limit', 'offset', 'union', 'all',
+		'group_by', 'order_by', 'not_in',
+		'distinct', 'case', 'when', 'then', 'else', 'end', 'with',
+		'between', 'like', 'ilike', 'asc', 'desc', 'over', 'partition',
+		'except', 'intersect', 'true', 'false', 'cast', 'using',
+		'qualify', 'pivot', 'unpivot',
+	];
 	return {
-		keywordTokenTypes: new Set(overrides.keywordTokenTypes ?? [
-			'select', 'from', 'where', 'and', 'or', 'not', 'in', 'is', 'null',
-			'as', 'alias', 'on', 'join', 'left', 'right', 'inner', 'outer', 'full', 'cross',
-			'group', 'by', 'order', 'having', 'limit', 'offset', 'union', 'all',
-			'group_by', 'order_by', 'not_in',
-			'distinct', 'case', 'when', 'then', 'else', 'end', 'with',
-			'between', 'like', 'ilike', 'asc', 'desc', 'over', 'partition',
-			'except', 'intersect', 'true', 'false', 'cast', 'using',
-			'qualify', 'pivot', 'unpivot',
-		]),
+		keywordTokenTypes: new Set(overrides.keywordTokenTypes ?? defaultKeywords),
+		keywords: new Set(overrides.keywords ?? defaultKeywords),
 		functions: new Set(overrides.functions ?? [
 			'count', 'coalesce', 'nullif', 'cast', 'lower', 'upper',
 			'sum', 'avg', 'min', 'max', 'round', 'abs', 'trim',
