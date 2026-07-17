@@ -62,6 +62,7 @@ export const DbtCompletionKind = {
 	modelRef:    vscode.CompletionItemKind.Reference,
 	sourceName:  vscode.CompletionItemKind.Module,
 	sourceTable: vscode.CompletionItemKind.Class,
+	namespace:   vscode.CompletionItemKind.Module,
 	macro:       vscode.CompletionItemKind.Function,
 	sqlFunction: vscode.CompletionItemKind.Function,
 	keyword:     vscode.CompletionItemKind.Keyword,

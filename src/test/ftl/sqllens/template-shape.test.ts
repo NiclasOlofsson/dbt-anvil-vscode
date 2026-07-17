@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { classifyMacroShape, makeTemplateProvider } from '../../../ftl/sqllens/template-shape';
-import type { TemplateCall } from '../../../ftl/sqllens/api';
+import type { SchemaProvider, TemplateCall } from '../../../ftl/sqllens/api';
 import type { ManifestIndexer } from '../../../indexing/manifest-indexer';
 import type { DescribeCache } from '../../../dbt/describe-cache';
 
@@ -91,6 +91,58 @@ describe('AnvilTemplateProvider — templateCandidates (the dbt catalog seam)', 
 
 	it('no manifest → no candidates, never a fabricated list', () => {
 		expect(makeTemplateProvider(() => undefined).templateCandidates(call('ref', ['x']), 0)).toEqual([]);
+	});
+});
+
+describe('AnvilTemplateProvider — tables() and childrenOf() (the SQL catalog seam sqllens completes over)', () => {
+	// sqllens's completeAt reads these off the schema it is handed: tables() feeds the FROM-slot
+	// `table` candidates; childrenOf() feeds qualified-path `namespace`/`table` segments. This is
+	// the catalog half that replaced our FROM-line / FQN line-prefix regexes.
+
+	function fqnProvider(): SchemaProvider {
+		const models = new Map<string, unknown>([
+			['model.pkg.gold__company', { name: 'gold__company', materialisation: 'table', packageName: 'pkg', schema: 'niclas_olofsson_gold', database: 'hive_metastore' }],
+			['model.pkg.mart_serving__chep', { name: 'mart_serving__chep', materialisation: 'view', packageName: 'pkg', schema: 'niclas_olofsson_mart_serving', database: 'hive_metastore' }],
+		]);
+		const sources = new Map<string, unknown>([
+			['source.pkg.raw.orders', { name: 'orders', sourceName: 'raw', schema: 'niclas_olofsson_raw', database: 'hive_metastore' }],
+		]);
+		const indexer = { index: { models, sources, macros: new Map() } } as unknown as ManifestIndexer;
+		const describeCache = { columns: () => Promise.resolve(undefined) } as unknown as DescribeCache;
+		return makeTemplateProvider(() => undefined, { indexer, describeCache });
+	}
+
+	it('tables() offers bare model names, deduped, and nothing without a manifest', () => {
+		const p: SchemaProvider = providerWithCatalog();
+		expect(p.tables().sort()).toEqual(['customers', 'orders']);
+		expect((makeTemplateProvider(() => undefined) as SchemaProvider).tables()).toEqual([]);
+	});
+
+	it('childrenOf([catalog]) offers the schemas inside it as namespaces', () => {
+		const namespaces = fqnProvider().childrenOf!(['hive_metastore'])
+			.filter(k => k.kind === 'namespace').map(k => k.name).sort();
+		expect(namespaces).toEqual(['niclas_olofsson_gold', 'niclas_olofsson_mart_serving', 'niclas_olofsson_raw']);
+	});
+
+	it('childrenOf([catalog, schema]) offers only that schema\'s relations as tables', () => {
+		expect(fqnProvider().childrenOf!(['hive_metastore', 'niclas_olofsson_gold']))
+			.toEqual([{ name: 'gold__company', kind: 'table' }]);
+	});
+
+	it('childrenOf([schema]) offers that schema\'s relations (the 2-part schema.table path)', () => {
+		const tables = fqnProvider().childrenOf!(['niclas_olofsson_mart_serving'])
+			.filter(k => k.kind === 'table').map(k => k.name);
+		expect(tables).toEqual(['mart_serving__chep']);
+	});
+
+	it('childrenOf matches the catalog case-insensitively', () => {
+		expect(fqnProvider().childrenOf!(['HIVE_METASTORE', 'NICLAS_OLOFSSON_GOLD']).map(k => k.name))
+			.toEqual(['gold__company']);
+	});
+
+	it('childrenOf is empty without a manifest, and for an empty prefix', () => {
+		expect((makeTemplateProvider(() => undefined) as SchemaProvider).childrenOf!(['x'])).toEqual([]);
+		expect(fqnProvider().childrenOf!([])).toEqual([]);
 	});
 });
 

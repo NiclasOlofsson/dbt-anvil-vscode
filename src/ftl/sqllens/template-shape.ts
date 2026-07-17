@@ -265,6 +265,57 @@ class AnvilTemplateProvider extends DbtTemplateProvider {
 		return [];
 	}
 
+	/**
+	 * Bare relation-name candidates for a FROM/JOIN slot (the SchemaProvider seam sqllens's
+	 * completeAt reads for `table`-kind candidates). dbt model names, deduped by name — a
+	 * same-named model in two packages is one bare candidate here, since a bare FROM name
+	 * carries no package. In-scope CTE names are NOT ours: sqllens emits those itself (kind
+	 * "cte") from the query's own scope. Without a manifest we know no names.
+	 */
+	override tables(): string[] {
+		const index = this.enrichment?.indexer.index;
+		if (!index) return [];
+		return [...new Set([...index.models.values()].map(m => m.name))];
+	}
+
+	/**
+	 * The immediate children of a dotted relation path (the #38 SchemaProvider seam): the NEXT
+	 * segment after a qualifier dot, powering qualified-path completion off the manifest catalog.
+	 * `catalog.` answers the schemas inside it (kind "namespace"); `catalog.schema.` (or a bare
+	 * `schema.`) answers its relations (kind "table"). Replaces our FROM-line FQN regex. Matched
+	 * case-insensitively against the physical database/schema the manifest records, over models
+	 * and sources alike.
+	 */
+	childrenOf(prefixParts: string[]): { name: string; kind: 'namespace' | 'table' }[] {
+		const index = this.enrichment?.indexer.index;
+		if (!index || prefixParts.length === 0) return [];
+		const parts = prefixParts.map(p => p.toLowerCase());
+		const models = [...index.models.values()];
+		const sources = [...index.sources.values()];
+		const out: { name: string; kind: 'namespace' | 'table' }[] = [];
+		const seen = new Set<string>();
+		const push = (name: string | undefined, kind: 'namespace' | 'table'): void => {
+			if (!name) return;
+			const key = `${kind}:${name.toLowerCase()}`;
+			if (!seen.has(key)) { seen.add(key); out.push({ name, kind }); }
+		};
+
+		if (parts.length === 1) {
+			const seg = parts[0];
+			// `<database>.` -> the schemas inside it.
+			for (const m of models) if (m.database?.toLowerCase() === seg) push(m.schema, 'namespace');
+			for (const s of sources) if (s.database?.toLowerCase() === seg) push(s.schema, 'namespace');
+			// `<schema>.` -> the relations inside it (a 2-part schema.table path).
+			for (const m of models) if (m.schema?.toLowerCase() === seg) push(m.name, 'table');
+			for (const s of sources) if (s.schema?.toLowerCase() === seg) push(s.name, 'table');
+		} else if (parts.length === 2) {
+			const [db, schema] = parts;
+			for (const m of models) if (m.database?.toLowerCase() === db && m.schema?.toLowerCase() === schema) push(m.name, 'table');
+			for (const s of sources) if (s.database?.toLowerCase() === db && s.schema?.toLowerCase() === schema) push(s.name, 'table');
+		}
+		return out;
+	}
+
 	protected override async fetchExpansions(missing: TemplateCall[]): Promise<void> {
 		await Promise.all(missing.map(call => {
 			const uid = this.uidOf(call);

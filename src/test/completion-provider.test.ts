@@ -1,18 +1,18 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { ManifestIndexer } from '../indexing/manifest-indexer';
+import { describe, it, expect, vi } from 'vitest';
 import type { ParseService } from '../services/parse-service';
-import type { DocumentModel } from '../services/parse-service';
+import type { Completion } from '../ftl/sqllens/api';
 
 import { DbtCompletionProvider } from '../providers/sql/completion-provider';
 import { ParseService as RealParseService } from '../services/parse-service';
 import { SqllensDocumentParser } from '../ftl/sqllens/document-parser';
 import { createMockLogger } from './helpers';
-import { MAIN_FRAME } from '../ftl/sqllens/api';
-import type { Sym } from '../ftl/sqllens/api';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-function mockDocument(lines: string[], version = 1) {
+const TOKEN = { isCancellationRequested: false };
+const CTX = {};
+
+function mockDocument(lines: string[]) {
 	const text = lines.join('\n');
 	return {
 		getText: () => text,
@@ -22,283 +22,155 @@ function mockDocument(lines: string[], version = 1) {
 			for (let i = 0; i < line; i++) offset += (lines[i]?.length ?? 0) + 1; // +1 for \n
 			return offset + character;
 		},
-		// Minimal stand-in for vscode.TextDocument.getWordRangeAtPosition — finds the
-		// regex word containing the caret on its line (used for word-start anchoring).
-		getWordRangeAtPosition: (pos: { line: number; character: number }, re: RegExp) => {
-			const lineText = lines[pos.line] ?? '';
-			const rx = new RegExp(re.source, 'g');
-			let m: RegExpExecArray | null;
-			while ((m = rx.exec(lineText)) !== null) {
-				const s = m.index;
-				const e = m.index + m[0].length;
-				if (pos.character >= s && pos.character <= e) {
-					return { start: { line: pos.line, character: s }, end: { line: pos.line, character: e } };
-				}
-			}
-			return undefined;
-		},
 		uri: { toString: () => 'file:///test.sql' },
-		version,
+		version: 1,
 	};
 }
 
-function makeIndexer(): ManifestIndexer {
-	return {
-		index: { adapterType: 'duckdb', models: new Map(), sources: new Map() },
-		findModelsByName: () => [],
-		getRawNode: () => null,
-		getColumns: () => null,
-		setColumns: vi.fn(),
-		buildSchemaMapping: () => ({}),
-	} as unknown as ManifestIndexer;
+/** A ParseService stub exposing only `completeAt` — the one method the provider calls. */
+function serviceReturning(candidates: Completion[]): { service: ParseService; completeAt: ReturnType<typeof vi.fn> } {
+	const completeAt = vi.fn().mockReturnValue(candidates);
+	return { service: { completeAt } as unknown as ParseService, completeAt };
 }
 
-function makeParseServiceWithRelationColumns(relationColumns: Record<string, string[]>, symbols: Sym[] = []): ParseService {
-	const model = {
-		ctes: [],
-		refs: [],
-		sources: [],
-		finalColumns: [],
-		relationColumns,
-		symbols,
-		timing: { parseMs: 0, totalMs: 0 },
-	} as unknown as DocumentModel;
-	return {
-		getDocumentModel: vi.fn().mockResolvedValue(model),
-		evict: vi.fn(),
-		completeAt: vi.fn().mockReturnValue([]),
-		signatureAt: vi.fn().mockReturnValue(null),
-	} as unknown as ParseService;
+function run(candidates: Completion[], lines: string[], character: number, line = 0) {
+	const { service, completeAt } = serviceReturning(candidates);
+	const provider = new DbtCompletionProvider(createMockLogger(), service);
+	const items = provider.provideCompletionItems(
+		mockDocument(lines) as never,
+		{ line, character } as never,
+		TOKEN as never,
+		CTX as never,
+	);
+	return { items, completeAt };
 }
-
-/**
- * A relation-reference Sym carrying a FROM/JOIN alias — lets a relationColumns
- * entry resolve through an alias the way `ParseService.resolveAliases` does for
- * a real parse (an alias key never appears in relationColumns directly).
- */
-function makeAliasSym(name: string, alias: string): Sym {
-	return {
-		kind: 'table',
-		modifiers: ['reference'],
-		name,
-		span: { start: 0, end: name.length, line: 1, column: 0, endLine: 1, endColumn: name.length },
-		frame: MAIN_FRAME,
-		alias: { name: alias, span: { start: name.length + 1, end: name.length + 1 + alias.length, line: 1, column: name.length + 1, endLine: 1, endColumn: name.length + 1 + alias.length } },
-	};
-}
-
-
-const TOKEN = { isCancellationRequested: false };
-const CTX = {};
 
 // ─── tests ───────────────────────────────────────────────────────────────────
 
-describe('DbtCompletionProvider — bare column completions', () => {
-	let provider: DbtCompletionProvider;
-
-	const relationColumns = {
-		customers: ['id', 'name', 'email'],
-		orders: ['id', 'order_date', 'amount'],
-	};
-
-	beforeEach(() => {
-		provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), makeParseServiceWithRelationColumns(relationColumns));
-	});
-
-	it('returns merged column list when typing a bare word in SELECT', async () => {
-		const linePrefix = 'SELECT na';
-		const doc = mockDocument([linePrefix]);
-		const pos = { line: 0, character: linePrefix.length };
-
-		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
-
-		expect(items).toBeDefined();
-		expect(items!.length).toBeGreaterThan(0);
-
-		const labels = items!.map(i => i.label);
-		expect(labels).toContain('name');
-		expect(labels).toContain('id');
-		expect(labels).toContain('order_date');
-		expect(labels).toContain('email');
-		expect(labels).toContain('amount');
-	});
-
-	it('deduplicates columns shared across tables with multi-table detail', async () => {
-		const linePrefix = 'SELECT id';
-		const doc = mockDocument([linePrefix]);
-		const pos = { line: 0, character: linePrefix.length };
-
-		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
-
-		const idItem = items?.find(i => i.label === 'id');
-		expect(idItem).toBeDefined();
-		// Not "column of X" — should show both tables
-		expect(idItem!.detail).not.toMatch(/^column of \w+$/);
-		expect(idItem!.detail).toContain('customers');
-		expect(idItem!.detail).toContain('orders');
-	});
-
-	it('shows single-table detail for column unique to one table', async () => {
-		const linePrefix = 'SELECT em';
-		const doc = mockDocument([linePrefix]);
-		const pos = { line: 0, character: linePrefix.length };
-
-		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
-
-		const emailItem = items?.find(i => i.label === 'email');
-		expect(emailItem).toBeDefined();
-		expect(emailItem!.detail).toBe('column of customers');
-	});
-
-	it('returns table completions (not columns) after FROM keyword', async () => {
-		const linePrefix = 'FROM cu';
-		const doc = mockDocument([linePrefix]);
-		const pos = { line: 0, character: linePrefix.length };
-
-		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
-
-		// Should return table/CTE completions (empty without ParseService), not column completions
-		expect(items).toBeDefined();
-		expect(items).toBeInstanceOf(Array);
-		// No column items should leak through
-		const columnItems = items?.filter(i => i.kind === 5 /* CompletionItemKind.Field */);
-		expect(columnItems).toHaveLength(0);
-	});
-
-	it('returns table completions (not columns) after JOIN keyword', async () => {
-		const linePrefix = 'JOIN ord';
-		const doc = mockDocument([linePrefix]);
-		const pos = { line: 0, character: linePrefix.length };
-
-		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
-
-		// Should return table/CTE completions (empty without ParseService), not column completions
-		expect(items).toBeDefined();
-		expect(items).toBeInstanceOf(Array);
-		const columnItems = items?.filter(i => i.kind === 5 /* CompletionItemKind.Field */);
-		expect(columnItems).toHaveLength(0);
-	});
-
-	it('returns [] (not undefined) when no aliases resolved', async () => {
-		const p = new DbtCompletionProvider(makeIndexer(), createMockLogger(), makeParseServiceWithRelationColumns({}));
-
-		const linePrefix = 'SELECT na';
-		const doc = mockDocument([linePrefix]);
-		const pos = { line: 0, character: linePrefix.length };
-
-		const items = await p.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
-
-		// Empty alias map → _completeAllColumns returns [] early
-		expect(items).toEqual([]);
-	});
-});
-
-describe('DbtCompletionProvider — SQL functions + keywords (sqllens completeAt)', () => {
-	function makeParseServiceWithCompletions(
-		candidates: Array<{ label: string; kind: string; detail?: string }>,
-		relationColumns: Record<string, string[]> = {},
-	): { service: ParseService; completeAt: ReturnType<typeof vi.fn> } {
-		const model = {
-			ctes: [], refs: [], sources: [], finalColumns: [],
-			relationColumns, symbols: [], timing: { parseMs: 0, totalMs: 0 },
-		} as unknown as DocumentModel;
-		const completeAt = vi.fn().mockReturnValue(candidates);
-		const service = {
-			getDocumentModel: vi.fn().mockResolvedValue(model),
-			evict: vi.fn(),
-			completeAt,
-			signatureAt: vi.fn().mockReturnValue(null),
-		} as unknown as ParseService;
-		return { service, completeAt };
-	}
-
-	it('surfaces functions (Function kind) and keywords (Keyword kind), dropping column/table kinds', async () => {
-		const { service } = makeParseServiceWithCompletions([
-			{ label: 'ifnull', kind: 'function' },
-			{ label: 'FROM', kind: 'keyword' },
-			{ label: 'some_col', kind: 'column' },
-			{ label: 'some_table', kind: 'table' },
-		]);
-		const provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), service);
-
-		const linePrefix = 'SELECT case when x then ifn';
-		const doc = mockDocument([linePrefix]);
-		const pos = { line: 0, character: linePrefix.length };
-
-		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
-
-		const ifnull = items!.find(i => i.label === 'ifnull');
-		expect(ifnull).toBeDefined();
-		expect(ifnull!.kind).toBe(2 /* CompletionItemKind.Function */);
-
-		const from = items!.find(i => i.label === 'FROM');
-		expect(from).toBeDefined();
-		expect(from!.kind).toBe(13 /* CompletionItemKind.Keyword */);
-
-		// completeAt's own column/table candidates are dropped — we produce richer ones.
-		expect(items!.some(i => i.label === 'some_col')).toBe(false);
-		expect(items!.some(i => i.label === 'some_table')).toBe(false);
-	});
-
-	it('asks sqllens at the CARET — one offset serves both jinja and SQL', async () => {
-		const { service, completeAt } = makeParseServiceWithCompletions([{ label: 'ifnull', kind: 'function' }]);
-		const provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), service);
-
-		const linePrefix = 'SELECT ifn';
-		const doc = mockDocument([linePrefix]);
-		const pos = { line: 0, character: linePrefix.length }; // caret at end of `ifn` (offset 10)
-
-		await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
-
-		// The caret (10), NOT the word start. sqllens 1.4.0 made the caret token the token
-		// being typed, so `SELECT ifn|` yields functions at the caret. The old word-start
-		// anchoring existed only to dodge that, and it broke the jinja callee slot (which
-		// resolves only at the caret) — one offset now serves both.
-		expect(completeAt).toHaveBeenCalledWith('SELECT ifn', 10);
-	});
-
-	it('a jinja call slot returns the provider dbt names and never falls through to columns', async () => {
-		// sqllens answers a jinja slot with kind "template"; that IS the answer. The old
-		// ref()/source()/macro line-prefix regexes are gone — the parse decides the slot.
-		const { service } = makeParseServiceWithCompletions(
-			[{ label: 'customers', kind: 'template', detail: 'table — jaffle' }],
-			{ orders: ['id', 'amount'] }, // in-scope columns that must NOT leak into the tag
+describe('DbtCompletionProvider — maps sqllens candidates by kind', () => {
+	it('maps each content kind to its CompletionItemKind and passes detail through', () => {
+		const { items } = run(
+			[
+				{ label: 'base', kind: 'cte', detail: 'in-scope CTE' },
+				{ label: 'customers', kind: 'table' },
+				{ label: 'niclas_gold', kind: 'namespace' },
+				{ label: 'order_id', kind: 'column', detail: 'bigint' },
+				{ label: 'my_model', kind: 'template', detail: 'table — jaffle' },
+			],
+			['select '],
+			7,
 		);
-		const provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), service);
 
-		const linePrefix = 'select 1 from {{ ref(\'cu';
-		const doc = mockDocument([linePrefix]);
-		const pos = { line: 0, character: linePrefix.length };
+		const by = (label: string) => items!.find(i => i.label === label)!;
+		expect(by('base').kind).toBe(5 /* Variable */);
+		expect(by('base').detail).toBe('in-scope CTE');
+		expect(by('customers').kind).toBe(17 /* Reference */);
+		expect(by('customers').detail).toBeUndefined();
+		expect(by('niclas_gold').kind).toBe(8 /* Module */);
+		expect(by('order_id').kind).toBe(4 /* Field */);
+		expect(by('order_id').detail).toBe('bigint');
+		expect(by('my_model').kind).toBe(17 /* Reference */);
+		expect(by('my_model').detail).toBe('table — jaffle');
+	});
 
-		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
+	it('renders functions as a snippet (Function kind) and keywords (Keyword kind)', () => {
+		const { items } = run(
+			[
+				{ label: 'ifnull', kind: 'function' },
+				{ label: 'coalesce', kind: 'function', detail: 'returns first non-null' },
+				{ label: 'FROM', kind: 'keyword' },
+			],
+			['select ifn'],
+			10,
+		);
 
-		const labels = items!.map(i => i.label);
-		expect(labels).toEqual(['customers']);
-		expect(labels).not.toContain('id');
+		const ifnull = items!.find(i => i.label === 'ifnull')!;
+		expect(ifnull.kind).toBe(2 /* Function */);
+		expect((ifnull.insertText as unknown as { value: string }).value).toBe('ifnull($0)');
+		expect(ifnull.detail).toBe('SQL function'); // default when sqllens gives none
+
+		expect(items!.find(i => i.label === 'coalesce')!.detail).toBe('returns first non-null');
+
+		const from = items!.find(i => i.label === 'FROM')!;
+		expect(from.kind).toBe(13 /* Keyword */);
+	});
+
+	it('sorts content candidates before functions and keywords, preserving sqllens order', () => {
+		// sqllens hands them back in one list; we keep its order for content and push fn/kw last.
+		const { items } = run(
+			[
+				{ label: 'base', kind: 'cte' },
+				{ label: 'customers', kind: 'table' },
+				{ label: 'ifnull', kind: 'function' },
+				{ label: 'FROM', kind: 'keyword' },
+			],
+			['from '],
+			5,
+		);
+		const sort = (label: string) => items!.find(i => i.label === label)!.sortText;
+		expect(sort('base')).toBe('0000');
+		expect(sort('customers')).toBe('0001');
+		expect(sort('ifnull')).toBe('8_ifnull');
+		expect(sort('FROM')).toBe('9_FROM');
+		// content < function < keyword
+		expect(sort('customers')! < sort('ifnull')!).toBe(true);
+		expect(sort('ifnull')! < sort('FROM')!).toBe(true);
+	});
+
+	it('preserves sqllens shadow-rank: an in-scope CTE ahead of a same-named table', () => {
+		const { items } = run(
+			[
+				{ label: 'orders', kind: 'cte' },
+				{ label: 'orders', kind: 'table' },
+			],
+			['from ord'],
+			8,
+		);
+		expect(items!).toHaveLength(2);
+		expect(items![0].kind).toBe(5 /* Variable — the CTE */);
+		expect(items![0].sortText).toBe('0000');
+		expect(items![1].kind).toBe(17 /* Reference — the table */);
+		expect(items![1].sortText).toBe('0001');
+	});
+
+	it('a jinja call slot maps the template candidates and nothing else leaks', () => {
+		// sqllens answers a jinja call slot with kind "template" only — no SQL columns leak in.
+		const { items } = run(
+			[{ label: 'customers', kind: 'template', detail: 'table — jaffle' }],
+			['select 1 from {{ ref(\'cu'],
+			24,
+		);
+		expect(items!.map(i => i.label)).toEqual(['customers']);
+		expect(items![0].kind).toBe(17 /* Reference */);
 		expect(items![0].detail).toBe('table — jaffle');
 	});
 
-	it('offers functions even when no columns resolve (the reported empty case)', async () => {
-		const { service } = makeParseServiceWithCompletions([{ label: 'ifnull', kind: 'function' }], {});
-		const provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), service);
+	it('asks sqllens once at the caret offset — one offset serves both jinja and SQL', () => {
+		const { completeAt } = run([{ label: 'ifnull', kind: 'function' }], ['SELECT ifn'], 10);
+		// The caret (10), NOT the word start — sqllens 1.4.0 made the caret token the token being typed.
+		expect(completeAt).toHaveBeenCalledTimes(1);
+		expect(completeAt).toHaveBeenCalledWith('SELECT ifn', 10);
+	});
 
-		const linePrefix = 'SELECT case when x then ifn';
-		const doc = mockDocument([linePrefix]);
-		const pos = { line: 0, character: linePrefix.length };
+	it('returns undefined when sqllens has no candidates', () => {
+		const { items } = run([], ['select '], 7);
+		expect(items).toBeUndefined();
+	});
 
-		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
-
-		expect(items!.map(i => i.label)).toContain('ifnull');
+	it('skips completion inside a SQL line comment (before touching sqllens)', () => {
+		const { items, completeAt } = run([{ label: 'ifnull', kind: 'function' }], ['-- select ifn'], 13);
+		expect(items).toBeUndefined();
+		expect(completeAt).not.toHaveBeenCalled();
 	});
 });
 
-describe('DbtCompletionProvider — end-to-end with the REAL parser (no mocked completeAt)', () => {
-	it('completes ifnull at a CASE value slot in a databricks jinja model, typing a bare word (no dot)', async () => {
-		// Whole chain, nothing stubbed: provider → real ParseService → real
-		// SqllensDocumentParser → sqllens completeAt. Mirrors the reported screenshot.
+describe('DbtCompletionProvider — end-to-end with the real parser (no mocked completeAt)', () => {
+	it('completes ifnull at a CASE value slot in a databricks jinja model, typing a bare word (no dot)', () => {
+		// Whole chain, nothing stubbed: provider → real ParseService → real SqllensDocumentParser →
+		// sqllens completeAt. Mirrors the reported screenshot.
 		const parser = new SqllensDocumentParser({ adapterType: 'databricks' });
 		const parseService = new RealParseService(parser, createMockLogger());
-		const provider = new DbtCompletionProvider(makeIndexer(), createMockLogger(), parseService);
+		const provider = new DbtCompletionProvider(createMockLogger(), parseService);
 
 		const lines = [
 			'select',
@@ -307,247 +179,15 @@ describe('DbtCompletionProvider — end-to-end with the REAL parser (no mocked c
 			'  end as gold_chainkey',
 			'from {{ ref(\'some_model\') }} ve',
 		];
-		const doc = mockDocument(lines);
-		const pos = { line: 2, character: lines[2].length }; // caret at end of `ifn`
-
-		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
+		const items = provider.provideCompletionItems(
+			mockDocument(lines) as never,
+			{ line: 2, character: lines[2].length } as never,
+			TOKEN as never,
+			CTX as never,
+		);
 
 		const ifnull = items!.find(i => i.label === 'ifnull');
 		expect(ifnull, 'ifnull should be offered as a function completion').toBeDefined();
-		expect(ifnull!.kind).toBe(2 /* CompletionItemKind.Function */);
-	});
-});
-
-describe('DbtCompletionProvider — alias.column completions (existing)', () => {
-	it('still works for alias. prefix', async () => {
-		const provider = new DbtCompletionProvider(
-			makeIndexer(),
-			createMockLogger(),
-			makeParseServiceWithRelationColumns({ customers: ['id', 'name'] }, [makeAliasSym('customers', 'c')]),
-		);
-
-		const linePrefix = 'SELECT c.';
-		const doc = mockDocument([linePrefix]);
-		const pos = { line: 0, character: linePrefix.length };
-
-		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
-
-		expect(items).toBeDefined();
-		const labels = items!.map(i => i.label);
-		expect(labels).toContain('id');
-		expect(labels).toContain('name');
-		expect(items![0].detail).toBe('column of c');
-	});
-});
-
-describe('DbtCompletionProvider — FROM/JOIN with ParseService', () => {
-	function makeParseService(model: DocumentModel): ParseService {
-		return {
-			getDocumentModel: vi.fn().mockResolvedValue(model),
-			evict: vi.fn(),
-			completeAt: vi.fn().mockReturnValue([]),
-			signatureAt: vi.fn().mockReturnValue(null),
-		} as unknown as ParseService;
-	}
-
-	function makeIndexerWithModels(): ManifestIndexer {
-		const models = new Map([
-			['model.jaffle.customers', { name: 'customers', uniqueId: 'model.jaffle.customers', materialisation: 'table', packageName: 'jaffle', path: 'models/customers.sql', schema: 'main', tags: [], description: '' }],
-			['model.jaffle.orders', { name: 'orders', uniqueId: 'model.jaffle.orders', materialisation: 'view', packageName: 'jaffle', path: 'models/orders.sql', schema: 'main', tags: [], description: '' }],
-		]);
-		return {
-			index: { adapterType: 'duckdb', models, sources: new Map() },
-			findModelsByName: () => [],
-			getRawNode: () => null,
-			getColumns: () => null,
-			setColumns: vi.fn(),
-			buildSchemaMapping: () => ({}),
-		} as unknown as ManifestIndexer;
-	}
-
-	const docModel: DocumentModel = {
-		ctes: [
-			{ name: 'base', line: 0, endLine: 5, columns: [{ name: 'id', line: 1 }, { name: 'name', line: 2 }] },
-			{ name: 'enriched', line: 6, endLine: 10, columns: [{ name: 'total', line: 7 }] },
-		],
-		refs: [],
-		sources: [],
-		finalColumns: [] as import('../services/parse-service').ColumnInfo[],
-		timing: { parseMs: 1, totalMs: 2 },
-	};
-
-	it('returns CTE names before model names after FROM', async () => {
-		const indexer = makeIndexerWithModels();
-		const parseService = makeParseService(docModel);
-		const provider = new DbtCompletionProvider(indexer, createMockLogger(), parseService);
-
-		const linePrefix = 'FROM ';
-		const doc = mockDocument([linePrefix]);
-		const pos = { line: 0, character: linePrefix.length };
-
-		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
-
-		expect(items).toBeDefined();
-		const labels = items!.map(i => i.label);
-		expect(labels).toContain('base');
-		expect(labels).toContain('enriched');
-		expect(labels).toContain('customers');
-		expect(labels).toContain('orders');
-
-		// CTEs should sort before models
-		const baseIdx = items!.findIndex(i => i.label === 'base');
-		const customersIdx = items!.findIndex(i => i.label === 'customers');
-		expect(baseIdx).toBeLessThan(customersIdx);
-	});
-
-	it('shows CTE column count in detail', async () => {
-		const parseService = makeParseService(docModel);
-		const provider = new DbtCompletionProvider(makeIndexerWithModels(), createMockLogger(), parseService);
-
-		const linePrefix = 'JOIN ';
-		const doc = mockDocument([linePrefix]);
-		const pos = { line: 0, character: linePrefix.length };
-
-		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
-
-		const baseItem = items!.find(i => i.label === 'base');
-		expect(baseItem).toBeDefined();
-		expect(baseItem!.detail).toBe('CTE (2 columns)');
-
-		const enrichedItem = items!.find(i => i.label === 'enriched');
-		expect(enrichedItem).toBeDefined();
-		expect(enrichedItem!.detail).toBe('CTE (1 columns)');
-	});
-});
-
-describe('DbtCompletionProvider — FQN completions', () => {
-	function makeIndexerWithFqnModels(): ManifestIndexer {
-		const models = new Map([
-			['model.pkg.gold__company', {
-				name: 'gold__company',
-				uniqueId: 'model.pkg.gold__company',
-				materialisation: 'table',
-				packageName: 'pkg',
-				path: 'models/gold__company.sql',
-				schema: 'niclas_olofsson_gold',
-				database: 'hive_metastore',
-				tags: [],
-				description: '',
-			}],
-			['model.pkg.mart_serving__chep', {
-				name: 'mart_serving__chep',
-				uniqueId: 'model.pkg.mart_serving__chep',
-				materialisation: 'view',
-				packageName: 'pkg',
-				path: 'models/mart_serving__chep.sql',
-				schema: 'niclas_olofsson_mart_serving',
-				database: 'hive_metastore',
-				tags: [],
-				description: '',
-			}],
-		]);
-		const sources = new Map([
-			['source.pkg.raw.orders', {
-				uniqueId: 'source.pkg.raw.orders',
-				name: 'orders',
-				sourceName: 'raw',
-				schema: 'niclas_olofsson_raw',
-				database: 'hive_metastore',
-				tags: [],
-				description: '',
-			}],
-		]);
-		return {
-			index: { adapterType: 'spark', models, sources },
-			findModelsByName: () => [],
-			getRawNode: () => null,
-			getColumns: () => null,
-			setColumns: vi.fn(),
-			buildSchemaMapping: () => ({}),
-		} as unknown as ManifestIndexer;
-	}
-
-	const emptyParseService = {
-		getDocumentModel: vi.fn().mockResolvedValue(null),
-		evict: vi.fn(),
-		completeAt: vi.fn().mockReturnValue([]),
-		signatureAt: vi.fn().mockReturnValue(null),
-	} as unknown as ParseService;
-
-	it('returns schemas after catalog. (trailing dot)', async () => {
-		const provider = new DbtCompletionProvider(makeIndexerWithFqnModels(), createMockLogger(), emptyParseService);
-		const linePrefix = 'FROM hive_metastore.';
-		const doc = mockDocument([linePrefix]);
-		const pos = { line: 0, character: linePrefix.length };
-
-		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
-
-		expect(items).toBeDefined();
-		const labels = items!.map(i => i.label);
-		expect(labels).toContain('niclas_olofsson_gold');
-		expect(labels).toContain('niclas_olofsson_mart_serving');
-		expect(labels).toContain('niclas_olofsson_raw');
-	});
-
-	it('returns table names after catalog.schema. (trailing dot)', async () => {
-		const provider = new DbtCompletionProvider(makeIndexerWithFqnModels(), createMockLogger(), emptyParseService);
-		const linePrefix = 'FROM hive_metastore.niclas_olofsson_gold.';
-		const doc = mockDocument([linePrefix]);
-		const pos = { line: 0, character: linePrefix.length };
-
-		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
-
-		expect(items).toBeDefined();
-		const labels = items!.map(i => i.label);
-		expect(labels).toContain('gold__company');
-		expect(labels).not.toContain('mart_serving__chep');
-	});
-
-	it('returns table names after catalog.schema.partial (no dot)', async () => {
-		const provider = new DbtCompletionProvider(makeIndexerWithFqnModels(), createMockLogger(), emptyParseService);
-		const linePrefix = 'FROM hive_metastore.niclas_olofsson_gold.gold__';
-		const doc = mockDocument([linePrefix]);
-		const pos = { line: 0, character: linePrefix.length };
-
-		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
-
-		expect(items).toBeDefined();
-		const labels = items!.map(i => i.label);
-		expect(labels).toContain('gold__company');
-	});
-
-	it('works after JOIN keyword too', async () => {
-		const provider = new DbtCompletionProvider(makeIndexerWithFqnModels(), createMockLogger(), emptyParseService);
-		const linePrefix = 'JOIN hive_metastore.niclas_olofsson_mart_serving.';
-		const doc = mockDocument([linePrefix]);
-		const pos = { line: 0, character: linePrefix.length };
-
-		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
-
-		expect(items).toBeDefined();
-		const labels = items!.map(i => i.label);
-		expect(labels).toContain('mart_serving__chep');
-		expect(labels).not.toContain('gold__company');
-	});
-
-	it('does not pollute alias.column path for non-FROM context', async () => {
-		const provider = new DbtCompletionProvider(
-			makeIndexerWithFqnModels(),
-			createMockLogger(),
-			makeParseServiceWithRelationColumns({ customers: ['id', 'name'] }, [makeAliasSym('customers', 'c')]),
-		);
-		// "SELECT c." — should still give column completions, not FQN
-		const linePrefix = 'SELECT c.';
-		const doc = mockDocument([linePrefix]);
-		const pos = { line: 0, character: linePrefix.length };
-
-		const items = await provider.provideCompletionItems(doc as any, pos as any, TOKEN as any, CTX as any);
-
-		expect(items).toBeDefined();
-		const labels = items!.map(i => i.label);
-		expect(labels).toContain('id');
-		expect(labels).toContain('name');
-		// No schema/table names should appear
-		expect(labels).not.toContain('niclas_olofsson_gold');
+		expect(ifnull!.kind).toBe(2 /* Function */);
 	});
 });

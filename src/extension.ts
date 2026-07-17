@@ -697,7 +697,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// -------- Register language providers (dynamic, re-registered on path changes) --------
 	const definitionProvider = new DbtDefinitionProvider(manifestIndexer, manifestLoader, logger, parseService);
 	const hoverProvider = new DbtHoverProvider(manifestIndexer, logger, parseService);
-	const completionProvider = new DbtCompletionProvider(manifestIndexer, logger, parseService);
+	const completionProvider = new DbtCompletionProvider(logger, parseService);
 	const yamlCompletionProvider = new YamlCompletionProvider(manifestIndexer, logger);
 	const yamlHoverProvider = new YamlHoverProvider(manifestIndexer, logger);
 	const referenceProvider = new DbtReferenceProvider(manifestIndexer, logger, parseService);
