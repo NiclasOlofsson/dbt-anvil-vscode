@@ -191,7 +191,7 @@ function optControl(opt: RuleConfigOptionSpec, curVal: RuleOptionValue | undefin
 	}
 	if (opt.type === 'bool') {
 		const isFalse = curVal === false || curVal === 'false';
-		return `<select class="opt-select" data-path="${escAttr(opt.settingPath)}" title="${escAttr(opt.label)}"><option value="true"${!isFalse ? ' selected' : ''}>true</option><option value="false"${isFalse ? ' selected' : ''}>false</option></select>`;
+		return `<select class="opt-select" data-path="${escAttr(opt.settingPath)}" data-bool="true" title="${escAttr(opt.label)}"><option value="true"${!isFalse ? ' selected' : ''}>true</option><option value="false"${isFalse ? ' selected' : ''}>false</option></select>`;
 	}
 	// number
 	const numVal = curVal !== undefined ? String(curVal) : '';
@@ -883,10 +883,13 @@ const CLIENT_JS = /* js */`
 		});
 	});
 
-	// Config option selects
+	// Config option selects. Bool selects are marked data-bool: the DOM only
+	// hands back strings, and a string "false" saved into a boolean setting
+	// reads truthy everywhere the config is consumed.
 	document.querySelectorAll('.opt-select').forEach(sel => {
 		sel.addEventListener('change', () => {
-			vscode.postMessage({ type: 'setRuleOption', settingPath: sel.dataset.path, value: sel.value });
+			const value = sel.dataset.bool ? sel.value === 'true' : sel.value;
+			vscode.postMessage({ type: 'setRuleOption', settingPath: sel.dataset.path, value });
 		});
 	});
 
