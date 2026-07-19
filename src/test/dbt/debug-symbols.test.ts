@@ -288,33 +288,33 @@ describe('emitDebugSymbols — jinja arm coverage', () => {
 
 describe('emitDebugSymbols — ref/source markers off the tag-AST', () => {
 	it('emits a ref marker for the plain single-arg form', () => {
-		const res = emitDebugSymbols("select id from {{ ref('customers') }}", 'databricks');
+		const res = emitDebugSymbols('select id from {{ ref(\'customers\') }}', 'databricks');
 		expect(res!.refMarkers).toHaveLength(1);
 		expect(res!.refMarkers[0]).toMatchObject({ name: 'customers', sourceLine: 0 });
 	});
 
 	// dbt resolves the LAST positional arg as the model in the two-arg
 	// package form; the marker must name the model, not the package.
-	it("emits a ref marker for the two-arg ref('pkg','model') form", () => {
-		const res = emitDebugSymbols("select id from {{ ref('some_pkg', 'customers') }}", 'databricks');
+	it('emits a ref marker for the two-arg ref(\'pkg\',\'model\') form', () => {
+		const res = emitDebugSymbols('select id from {{ ref(\'some_pkg\', \'customers\') }}', 'databricks');
 		expect(res!.refMarkers).toHaveLength(1);
 		expect(res!.refMarkers[0]).toMatchObject({ name: 'customers', sourceLine: 0 });
 	});
 
 	it('emits a ref marker for the keyword-arg ref(model=...) form', () => {
-		const res = emitDebugSymbols("select id from {{ ref(model='customers') }}", 'databricks');
+		const res = emitDebugSymbols('select id from {{ ref(model=\'customers\') }}', 'databricks');
 		expect(res!.refMarkers).toHaveLength(1);
 		expect(res!.refMarkers[0]).toMatchObject({ name: 'customers', sourceLine: 0 });
 	});
 
 	it('emits a source marker with schema and table', () => {
-		const res = emitDebugSymbols("select id from {{ source('raw', 'orders') }}", 'databricks');
+		const res = emitDebugSymbols('select id from {{ source(\'raw\', \'orders\') }}', 'databricks');
 		expect(res!.sourceMarkers).toHaveLength(1);
 		expect(res!.sourceMarkers[0]).toMatchObject({ schema: 'raw', name: 'orders', sourceLine: 0 });
 	});
 
 	it('emits nothing for a computed ref arg', () => {
-		const res = emitDebugSymbols("select id from {{ ref(var('m')) }}", 'databricks');
+		const res = emitDebugSymbols('select id from {{ ref(var(\'m\')) }}', 'databricks');
 		expect(res!.refMarkers).toHaveLength(0);
 	});
 });
