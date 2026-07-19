@@ -1494,7 +1494,7 @@
 					},
 					"dbt-anvil.ninja.layout.operatorPosition": {
 						"type": "string",
-						"default": "trailing",
+						"default": "leading",
 						"enum": [
 							"trailing",
 							"leading"
