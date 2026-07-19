@@ -1,11 +1,9 @@
 import { buildLineStarts } from '../ftl/line-index';
 import { minijinja, SqlDocument, tokenize, toSqllensDialect, MAIN_FRAME } from '../ftl/sqllens/api';
-import type { Sym, Dialect, ScopeTree, TagNode } from '../ftl/sqllens/api';
+import type { Sym, Dialect, ScopeTree, TagNode, TemplateProvider } from '../ftl/sqllens/api';
 import { allScopes, asCst } from '../ftl/sqllens/extract/spans';
-import { NOT_MACRO_CALLS } from '../ftl/sqllens/extract/tag-infos';
+import { emittedTagKind, NOT_MACRO_CALLS } from '../ftl/sqllens/extract/tag-infos';
 import { DBT_PROVIDER } from '../ftl/sqllens/template-shape';
-import { jinjaTokensFromStream } from '../ftl/sqllens/extract/jinja-stream';
-import type { JinjaToken } from '../ftl/jinja-tokenizer';
 
 export interface SymbolEntry {
 	line: number;
@@ -439,71 +437,49 @@ export function parseSourceMap(compiledSql: string): SourceMap {
 }
 
 /**
- * Extract @ref / @source / @macro Jinja classifications from a raw dbt source.
+ * Extract @ref / @source / @macro Jinja classifications from the tag-AST.
  * The Jinja marker wire format is independent of the symbol emit pass.
+ *
+ * ref/source detection shares `emittedTagKind` with tag-infos.ts, so the
+ * debugger and the language providers never disagree on what counts as a
+ * confirmed reference (covers `ref('pkg','model')` and `ref(model=…)`, which
+ * the retired jinja-token scan silently dropped). A macro is any closed call
+ * whose callee is not in NOT_MACRO_CALLS; `name` is the top-level callee.
  */
 function buildJinjaClassifications(
-	jinjaTokens: JinjaToken[],
 	tags: TagNode[],
 ): { refMarkers: BridgeRefMarker[]; sourceMarkers: BridgeSourceMarker[]; macroSpans: BridgeMacroSpan[] } {
 	const refMarkers: BridgeRefMarker[] = [];
 	const sourceMarkers: BridgeSourceMarker[] = [];
 	const macroSpans: BridgeMacroSpan[] = [];
 
-	for (let i = 0; i < jinjaTokens.length; i++) {
-		const open = jinjaTokens[i];
-		if (open.type !== 'jinja_expression_open' || open.tagEnd === undefined) continue;
-		const tagStart = open.start;
-		const tagEnd = open.tagEnd;
-		const sourceLine = open.line;
-
-		// Scan inside the tag for ref('name') or source('schema', 'table').
-		for (let j = i + 1; j < jinjaTokens.length && jinjaTokens[j].start < tagEnd; j++) {
-			const id = jinjaTokens[j];
-			if (id.type !== 'jinja_identifier') continue;
-
-			if (id.value === 'ref') {
-				const lp = jinjaTokens[j + 1];
-				const arg = jinjaTokens[j + 2];
-				const rp = jinjaTokens[j + 3];
-				if (lp?.type === 'jinja_paren_open' && arg?.type === 'jinja_string' && rp?.type === 'jinja_paren_close') {
-					refMarkers.push({ name: arg.value, sourceLine, startOffset: tagStart, endOffset: tagEnd });
-				}
-				break;
-			}
-			if (id.value === 'source') {
-				const lp = jinjaTokens[j + 1];
-				const arg1 = jinjaTokens[j + 2];
-				const comma = jinjaTokens[j + 3];
-				const arg2 = jinjaTokens[j + 4];
-				const rp = jinjaTokens[j + 5];
-				if (
-					lp?.type === 'jinja_paren_open' &&
-					arg1?.type === 'jinja_string' &&
-					comma?.type === 'jinja_comma' &&
-					arg2?.type === 'jinja_string' &&
-					rp?.type === 'jinja_paren_close'
-				) {
-					sourceMarkers.push({
-						schema: arg1.value,
-						name: arg2.value,
-						sourceLine,
-						startOffset: tagStart,
-						endOffset: tagEnd,
-					});
-				}
-				break;
-			}
-		}
-	}
-
-	// Macro spans from the tag-AST (dbt-agnostic since sqllens 1.2.0): a `{{ … }}`
-	// expression is a `call` node; a macro is any closed call whose callee is not a
-	// ref/source/no-output-builtin/var/env_var/keyword (NOT_MACRO_CALLS) — the old
-	// 'macro'-kind filter chain. `name` is the top-level callee.
 	for (const tag of tags) {
-		if (tag.kind !== 'call' || tag.incomplete) continue;
-		if (NOT_MACRO_CALLS.has(tag.name)) continue;
+		if (tag.kind !== 'call') continue;
+		const emitted = emittedTagKind(tag);
+		if (emitted === 'ref') {
+			// dbt: the model is the LAST positional arg (or `model=`).
+			const arg = tag.args[tag.args.length - 1]!;
+			refMarkers.push({
+				name: arg.value!,
+				sourceLine: tag.tagSpan.line - 1,
+				startOffset: tag.tagSpan.start,
+				endOffset: tag.tagSpan.end,
+			});
+			continue;
+		}
+		if (emitted === 'source') {
+			const src = tag.args[0]!;
+			const tbl = tag.args[1]!;
+			sourceMarkers.push({
+				schema: src.value!,
+				name: tbl.value!,
+				sourceLine: tag.tagSpan.line - 1,
+				startOffset: tag.tagSpan.start,
+				endOffset: tag.tagSpan.end,
+			});
+			continue;
+		}
+		if (tag.incomplete || NOT_MACRO_CALLS.has(tag.name)) continue;
 		macroSpans.push({
 			name: tag.name,
 			sourceLine: tag.tagSpan.line - 1,
@@ -669,16 +645,16 @@ const MINIJINJA = minijinja();
 function analyzeTemplated(
 	source: string,
 	dialect: Dialect,
-): { symbols: Sym[]; blanked: string; tags: TagNode[]; jinjaTokens: JinjaToken[]; cteBodyBounds: Map<string, { start: number; end: number }> } | undefined {
+	provider: TemplateProvider,
+): { symbols: Sym[]; blanked: string; tags: TagNode[]; cteBodyBounds: Map<string, { start: number; end: number }> } | undefined {
 	try {
-		const doc = SqlDocument.create(source, dialect, { templating: MINIJINJA, provider: DBT_PROVIDER });
+		const doc = SqlDocument.create(source, dialect, { templating: MINIJINJA, provider });
 		const templated = doc.templated;
 		if (!templated) return undefined;
 		return {
 			symbols: doc.unionSymbols(),
 			blanked: templated.placeholder,
 			tags: templated.tags,
-			jinjaTokens: jinjaTokensFromStream(templated.tokens, templated.tags, source),
 			cteBodyBounds: cteWholeClauseLineBounds(doc.scopes),
 		};
 	} catch {
@@ -703,11 +679,12 @@ function analyzeTemplated(
 export function emitDebugSymbols(
 	source: string,
 	dialect: string | undefined,
+	provider: TemplateProvider = DBT_PROVIDER,
 ): EmitResult | undefined {
 	const sqllensDialect = toSqllensDialect(dialect);
-	const analyzed = analyzeTemplated(source, sqllensDialect);
+	const analyzed = analyzeTemplated(source, sqllensDialect, provider);
 	if (!analyzed) return undefined;
-	const { symbols: syms, blanked, tags, jinjaTokens, cteBodyBounds } = analyzed;
+	const { symbols: syms, blanked, tags, cteBodyBounds } = analyzed;
 
 	const lineStarts = buildLineStarts(source);
 	// Marker-exclusion regions straight off the tag-AST (the old private
@@ -804,7 +781,7 @@ export function emitDebugSymbols(
 
 	if (symbols.length === 0) return undefined;
 
-	const { refMarkers, sourceMarkers, macroSpans } = buildJinjaClassifications(jinjaTokens, tags);
+	const { refMarkers, sourceMarkers, macroSpans } = buildJinjaClassifications(tags);
 	const annotatedSource = injectMarkers(source, symbols, jinjaSpans, { macroSpans, refMarkers, sourceMarkers });
 	return { annotatedSource, symbols, macroSpans, refMarkers, sourceMarkers };
 }

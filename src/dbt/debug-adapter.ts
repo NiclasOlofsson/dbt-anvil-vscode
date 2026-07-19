@@ -2406,10 +2406,15 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 		sourceText: string,
 	): Promise<{ compiledSql: string; sourceMap: SourceMap | undefined } | undefined> {
 		try {
-			// sqllens emit path: symbols, jinja stream, and classifications from one
-			// in-process templated parse — the debug path no longer needs the legacy
-			// token parse at all.
-			const emitResult = emitDebugSymbols(sourceText, this._manifestIndexer.adapterType);
+			// sqllens emit path: symbols and tag classifications from one in-process
+			// templated parse. The manifest-backed template provider gives emit the
+			// same document the language providers see (real macro shapes, ref/source
+			// relation knowledge) instead of the static dbt floor.
+			const emitResult = emitDebugSymbols(
+				sourceText,
+				this._manifestIndexer.adapterType,
+				this._manifestIndexer.templateProvider,
+			);
 
 			if (!emitResult) {
 				this._logger.info('Debug adapter: no debug symbols emitted — falling back to plain compile');
