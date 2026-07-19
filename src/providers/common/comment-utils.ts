@@ -4,7 +4,8 @@
  * Correctly ignores comment markers inside SQL string literals.
  */
 
-//TODO: Replace with document model traversing for all callers of this
+// TODO(#19): replace with document-model traversal for all callers — the
+// parser already knows every comment span; see the issue for scope.
 
 export interface CommentRange {
 	start: number;

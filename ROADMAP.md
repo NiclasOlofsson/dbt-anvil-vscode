@@ -1,6 +1,6 @@
 # Roadmap
 
-Ideas and planned work for the extension. Rough notes, not commitments — discussion and contributions welcome. Items marked _(done)_ have shipped and are kept here for context.
+Ideas and planned work for the extension. Rough notes, not commitments — discussion and contributions welcome. Items marked _(done)_ have shipped and are kept here for context. Open items are tracked as [GitHub issues](https://github.com/NiclasOlofsson/dbt-anvil-vscode/issues); each section links to its issue.
 
 ## Graph lineage, for aggregations _(done)_
 
@@ -11,15 +11,15 @@ However,it can't visualize aggregations correctly, like count(orders). It should
 
 Have something running in the background that can profile models in the database.
 
-## Unit testing
+## Unit testing ([#12](https://github.com/NiclasOlofsson/dbt-anvil-vscode/issues/12))
 
 Code action > Generate unit test for this model/CTE.
 
-## copilot tools
+## copilot tools ([#13](https://github.com/NiclasOlofsson/dbt-anvil-vscode/issues/13))
 
 It's a pretty big difference between running the copilot tools in the extension vs how they felt when running them with MCP. The progress reporting was way better with the old MCP tools. However, now that we are INSIDE vscode, with an extension I expect us to be able to improve on the visual feedback of the tools. Lets investigate this and figure out a good progress reporting for the tools like test/run/build etc.
 
-## No more fluff
+## No more fluff (continued in [#3](https://github.com/NiclasOlofsson/dbt-anvil-vscode/issues/3), [#4](https://github.com/NiclasOlofsson/dbt-anvil-vscode/issues/4))
 
 Make replacement for SQL fluff. Completely. Formatting and .. well we have syntax checks already. However, we might want to see if we can do a semantic or pattern type of checks too .. maybe (otherwise we can just use sqlfluff for some of these checks). But i mean, we have the parser. how hard can it be :D
 
@@ -30,15 +30,15 @@ VS Code has a rich context menu of language features. We already cover most of t
 **Missing providers:**
 
 - [x] **Call Hierarchy** (`CallHierarchyProvider`) — "Show Call Hierarchy" (Shift+Alt+H). Re-invent call stack but for dbt — lineage surfaced the way a coder would have it. Native tree panel with incoming callers (who refs this model) and outgoing calls (what this model refs). Keyboard-driven, not a graph.
-- [ ] **Document Highlights** (`DocumentHighlightProvider`) — powers "Change All Occurrences" (Ctrl+F2). Highlights same-symbol occurrences in the file. Without it, Ctrl+F2 falls back to dumb text matching.
-- [ ] **Type Definition** (`TypeDefinitionProvider`) — "Go to Type Definition". Cursor on a column → jump to its schema.yml definition. Or cursor on a `ref()` → jump to the YAML model entry instead of the .sql file.
-- [ ] **Refactor code actions** (`CodeActionKind.Refactor`) — "Refactor..." sub-menu. Extract selection into a new CTE, inline a CTE, extract model into a separate file.
+- [ ] **Document Highlights** (`DocumentHighlightProvider`) — powers "Change All Occurrences" (Ctrl+F2). Highlights same-symbol occurrences in the file. Without it, Ctrl+F2 falls back to dumb text matching. ([#5](https://github.com/NiclasOlofsson/dbt-anvil-vscode/issues/5))
+- [ ] **Type Definition** (`TypeDefinitionProvider`) — "Go to Type Definition". Cursor on a column → jump to its schema.yml definition. Or cursor on a `ref()` → jump to the YAML model entry instead of the .sql file. ([#6](https://github.com/NiclasOlofsson/dbt-anvil-vscode/issues/6))
+- [ ] **Refactor code actions** (`CodeActionKind.Refactor`) — "Refactor..." sub-menu. Extract selection into a new CTE, inline a CTE, extract model into a separate file. ([#7](https://github.com/NiclasOlofsson/dbt-anvil-vscode/issues/7))
 
 **Incomplete providers:**
 
 - [x] **Rename** — currently only renames `ref('model')` and the .sql file. Should also rename CTE names (with all in-file references), column aliases, source names, and macro names.
 
-## Structure-aware smart completion
+## Structure-aware smart completion ([#8](https://github.com/NiclasOlofsson/dbt-anvil-vscode/issues/8))
 
 Because we have a real SQL parser (sqllens), completions can understand query structure and apply coordinated edits — not just insert text at the cursor. VS Code's `CompletionItem.additionalTextEdits` lets a completion atomically edit multiple locations in the document when accepted, exactly like TypeScript auto-imports.
 
@@ -51,15 +51,15 @@ Because we have a real SQL parser (sqllens), completions can understand query st
 
 The code action (lightbulb) variant makes sense for *existing* SQL that already has the problem (e.g. "column in SELECT not in GROUP BY"). Smart completion handles the *as-you-type* case. Both are worth implementing — they cover different moments in the workflow.
 
-## Heat map
+## Heat map ([#16](https://github.com/NiclasOlofsson/dbt-anvil-vscode/issues/16))
 
 Heat or flame maps .. for the model. It would be cool if the tree could visualize how many dependencies and dependents it has .. colorful in the model explorer perhaps. Something that could be toggled on/off perhaps. Also could imagine some sort of github green matrix view on some of, just have to come up with a cool usecase for it. Like, visualizing the entire model (all 2000 models and sources) etc .. in some sort of .. don't know visual that is sqarish .. need more thinking obviously :D
 
-## dbt profiles
+## dbt profiles ([#15](https://github.com/NiclasOlofsson/dbt-anvil-vscode/issues/15))
 
 Support selection of different profiles from the project and user home. Different environments basically. Also with authentication support (when not using PAC). In addition to that, would imply that we can also implement deffer for dbt commands that can use it. And important aspect of when doing this is that we need to be able to classify different environments as dev, test, prod environments and similar. This ultimately opens up for monitoring of the environments, but that is very database dependent and there are probably better tools for that.
 
-## Yaml models and sources
+## Yaml models and sources ([#17](https://github.com/NiclasOlofsson/dbt-anvil-vscode/issues/17))
 
 We have to make SQL and YAML play better togeter. For a model, they are one and the same and just two different views. Its almost like the code-behind views we had in visual studio back in the days (winforms). So navigation should be seamless .. it should offer
 
@@ -114,7 +114,7 @@ Better Yaml (or something like that). But then we need to make sure we support.
 
 If we can't handle this, we have to investigate how we can make sure we "win" over them :D
 
-## DBT Metric Flow
+## DBT Metric Flow ([#18](https://github.com/NiclasOlofsson/dbt-anvil-vscode/issues/18))
 
 Just do it! Work together with Microsoft on this feature to surface in Fabric and replace runtime of metric flow.
 
@@ -130,6 +130,6 @@ Last step, make it a service that can be deployed. As an example, to azure funct
 
 Color the background of lineage graph so that level-1, -2 etc have different vertical bands so we can see what models belong to which depth. Will help identify stuff...
 
-## Whitespace commit support
+## Whitespace commit support ([#11](https://github.com/NiclasOlofsson/dbt-anvil-vscode/issues/11))
 
 Since we provide a formatter and autofixing as part of Ninja, it is probably good if we can think about how to handle whitespace commits. We should consider if we should use some git best practice around this and help the users with it. As an example, if the user chooses to format a model, and want to separate that from actual logical changes, maybe help them by doing a commit for it. Could be that we create a commit for whitespace in the beginning, with basically nothing (empty) and then we keep amending that witch whitespace commits to help the users. Or something like that. So basically, if we format, we check vs git somehow .. and if there is mixed logic and whitespace we detect that, take the origin out, format that, commits that in our whitespace commit (ammend) and then apply the logic on the fomrmatted version. Or something like that. Can be different strateiges, but it usually helps with reviews. SQL formatting can be brutal when you apply it so it is a bit unusual situation compared to some code (the community is less aware).

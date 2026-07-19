@@ -7,7 +7,7 @@
 2. **Clone the repository:**
    ```bash
    git clone https://github.com/NiclasOlofsson/dbt-anvil-vscode.git
-   cd dbt-anvil
+   cd dbt-anvil-vscode
    ```
 
 3. **Install dependencies:**
@@ -52,9 +52,13 @@ npm run typecheck
 ```bash
 # Run all tests (vitest)
 npm test
-```
 
-Always run `npm test` directly in the terminal — do not use the vitest task runner or `npx vitest run`.
+# Single file
+npx vitest run src/path/to/file.test.ts
+
+# Filter by test name
+npx vitest run -t "test name pattern"
+```
 
 ### Pre-commit Checklist
 
@@ -101,6 +105,7 @@ Produces a `.vsix` locally without touching the version. Install it via **Extens
 | `npm run compile` | One-off development build |
 | `npm run watch` | Watch mode (esbuild rebuild-on-save) |
 | `npm run watch:types` | Optional continuous `tsc --noEmit` |
+| `npm run watch:lint` | Optional ESLint on save |
 | `npm run lint` | Lint with ESLint |
 | `npm run lint:fix` | Lint and auto-fix |
 | `npm run typecheck` | TypeScript type-check only |

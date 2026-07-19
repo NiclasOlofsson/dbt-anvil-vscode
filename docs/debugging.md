@@ -126,8 +126,8 @@ The registration chain:
 1. **`package.json`** declares a debugger type `dbt-sql` with launch configurations, breakpoint support for `jinja-sql` files, and configuration attributes (`file`, `limit`, `scope`, `resultLocation`).
 2. **`extension.ts`** registers a `DebugAdapterDescriptorFactory` that creates a fresh `SqlDebugAdapter` instance per F5 launch, plus a `DebugConfigurationProvider` for default configs.
 3. Each F5 press creates a new adapter instance injected with the extension's shared services (query runner, bridge runner, compile cache, database provider, manifest indexer).
-4. VS Code sends DAP messages to the adapter's `handleMessage()`. The adapter responds via `_send()` and `_sendEvent()`.
-5. The adapter and the Data Pipeline TreeView are in separate contexts. They communicate via custom DAP events (`pipeline` event), received by the extension host through `onDidReceiveDebugSessionCustomEvent`.
+4. VS Code sends DAP messages to the adapter's `handleMessage()`. The adapter responds (and emits events) via `_send()`.
+5. The adapter and the Data Pipeline TreeView are in separate contexts. They communicate via custom DAP events (`dbt-sql:pipeline`), received by the extension host through `onDidReceiveDebugSessionCustomEvent`.
 
 ### DAP Capabilities We Declare
 
@@ -211,7 +211,7 @@ The lookup indexes (`bySourceLine`, `byCompiledLine`) are built at parse time fo
 
 ### 3.3 The Debug Adapter (`debug-adapter.ts`)
 
-The adapter is a ~1500-line class that implements `vscode.DebugAdapter`. A fresh instance is created for each F5 launch. It manages all debug state: frames, clauses, current position, result cache, breakpoints, and source map.
+The adapter is a single large class that implements `vscode.DebugAdapter`. A fresh instance is created for each F5 launch. It manages all debug state: frames, clauses, current position, result cache, breakpoints, and source map.
 
 #### Launch Sequence
 

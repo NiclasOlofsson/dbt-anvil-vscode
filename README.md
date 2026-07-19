@@ -103,7 +103,7 @@ You've read the prose. You skipped to here anyway. Fine.
 - Call hierarchy — see which models reference yours, and which models yours references
 - Diagnostics — parse errors, unresolved refs, column mismatches, SQL syntax errors
 - SQL formatter — Format Document reflows through a layout engine; sqlfmt and dbt Labs style presets
-- Ninja linter — ~50 AST-aware, Jinja-aware style and quality rules, per-rule severity and autofix, with a visual rule editor
+- Ninja linter — AST-aware, Jinja-aware style and quality rules, per-rule severity and autofix, with a visual rule editor
 - Inline / restore ref — quick-fix to expand a `ref()` to its compiled SQL or restore it
 - Quick Fix — create missing model files from unresolved refs
 - CodeLens — per-CTE query actions inline above each CTE definition

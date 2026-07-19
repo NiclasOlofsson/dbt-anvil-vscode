@@ -38,7 +38,7 @@ from orders  -- noqa: ninja.structure.select-star
 
 ## Configuration
 
-Ninja is configured through VS Code settings under the `dbt-anvil.ninja` namespace. Every rule can be individually set to `error`, `warning`, `info`, or `off`.
+Ninja is configured through VS Code settings under the `dbt-anvil.ninja` namespace. Every rule can be individually set to `error`, `warning`, `info`, `hint`, or `mute` (`mute` keeps the rule running for auto-fix but hides it from the Problems panel). To stop a rule entirely, list its ID in `dbt-anvil.ninja.disabledRules`.
 
 ```jsonc
 // .vscode/settings.json
@@ -52,15 +52,16 @@ Ninja is configured through VS Code settings under the `dbt-anvil.ninja` namespa
   "dbt-anvil.ninja.indentation.size": 4,
   "dbt-anvil.ninja.maxLineLength": 120,
   "dbt-anvil.ninja.layout.commaPosition": "trailing",
-  "dbt-anvil.ninja.layout.operatorPosition": "trailing",
+  "dbt-anvil.ninja.layout.operatorPosition": "leading",
   "dbt-anvil.ninja.structure.allowStarInCte": false,
   "dbt-anvil.ninja.convention.notEqual": "!=",
   "dbt-anvil.ninja.convention.unionStyle": "all",
   "dbt-anvil.ninja.rules": {
     "ninja.cap.keywords": "warning",
     "ninja.structure.unused-cte": "error",
-    "ninja.layout.long-lines": "off"
-  }
+    "ninja.layout.long-lines": "mute"
+  },
+  "dbt-anvil.ninja.disabledRules": ["ninja.convention.coalesce"]
 }
 ```
 
@@ -68,7 +69,7 @@ Ninja is configured through VS Code settings under the `dbt-anvil.ninja` namespa
 
 ## Rules Reference
 
-Ninja ships with **38 built-in rules** across 8 categories. Rules marked with ⚡ provide one-click auto-fix.
+Ninja's rules span eight categories: Capitalisation, Layout, Aliasing, Reference, Jinja, Structure, Ambiguity, and Convention. This reference documents the most commonly tuned rules; the complete, always-current catalog is the Ninja Rule Editor inside VS Code (and the `dbt-anvil.ninja.rules` setting enum). Rules marked with ⚡ provide one-click auto-fix.
 
 ### Capitalisation
 
@@ -80,7 +81,7 @@ These rules enforce consistent casing for SQL language elements. Each supports t
 
 Checks approximately 80 SQL keywords including `SELECT`, `FROM`, `WHERE`, `JOIN`, `GROUP BY`, `ORDER BY`, `HAVING`, `UNION`, `CASE`, `WHEN`, `THEN`, `ELSE`, `END`, `AND`, `OR`, `NOT`, `IN`, `EXISTS`, `BETWEEN`, `LIKE`, `IS`, `AS`, `ON`, `WITH`, `DISTINCT`, `LIMIT`, `OFFSET`, and more.
 
-- **Default severity:** warning
+- **Default severity:** hint
 - **Auto-fix:** Replaces the keyword with the correctly-cased version.
 - **Smart skipping:** Identifier positions from the DocumentModel are excluded to avoid false positives on column or table names that happen to match keywords.
 
@@ -97,7 +98,7 @@ select id from orders
 
 Checks approximately 130 SQL functions including `count`, `sum`, `avg`, `min`, `max`, `coalesce`, `nullif`, `cast`, `substring`, `trim`, `row_number`, `rank`, `dense_rank`, `lag`, `lead`, `first_value`, `last_value`, `date_trunc`, `date_diff`, `array_agg`, and more.
 
-- **Default severity:** warning
+- **Default severity:** hint
 - **Auto-fix:** Replaces the function name with the correctly-cased version.
 
 ```sql
@@ -113,7 +114,7 @@ select count(*), sum(amount) from orders
 
 Checks three SQL literals: `NULL`, `TRUE`, `FALSE`.
 
-- **Default severity:** warning
+- **Default severity:** hint
 - **Auto-fix:** Replaces the literal with the correctly-cased version.
 
 ```sql
@@ -129,7 +130,7 @@ where status is null
 
 Checks approximately 60 SQL types including `int`, `bigint`, `smallint`, `float`, `double`, `decimal`, `numeric`, `varchar`, `char`, `text`, `boolean`, `date`, `timestamp`, `datetime`, `json`, `jsonb`, `array`, `struct`, `map`, `binary`, `blob`, and more.
 
-- **Default severity:** warning
+- **Default severity:** hint
 - **Auto-fix:** Replaces the type keyword with the correctly-cased version.
 
 ```sql
@@ -149,7 +150,7 @@ cast(id as int), cast(name as varchar(255))
 
 Checks `{{ }}` expression tags and `{% %}` block tags. Requires exactly one space after the opening delimiter and one space before the closing delimiter. Jinja comments (`{# #}`) are skipped. Whitespace-control dashes (`{{-`, `-}}`, `{%-`, `-%}`) are respected. Multiline blocks (where the content spans multiple lines) are skipped entirely. Padding rules don't apply to block-style config calls.
 
-- **Default severity:** warning
+- **Default severity:** hint
 - **Auto-fix:** Inserts missing space or deletes excess spaces to produce exactly one space of padding.
 
 ```sql
@@ -243,7 +244,7 @@ These rules enforce team-agreed formatting conventions using the SQL token strea
 
 In **trailing** mode (default), commas belong at the end of the line. In **leading** mode, commas belong at the start of the next line. Uses SqlToken positions to detect commas that violate the configured convention.
 
-- **Default severity:** warning
+- **Default severity:** hint
 - **No auto-fix** — moving commas across lines also requires adjusting indentation.
 
 ```sql
@@ -268,13 +269,13 @@ from orders
 
 Same convention logic as commas but applied to `AND` and `OR` operators. In **trailing** mode, operators end the line. In **leading** mode, operators start the next line.
 
-Configured via `dbt-anvil.ninja.layout.operatorPosition`. Default is `trailing`.
+Configured via `dbt-anvil.ninja.layout.operatorPosition`. Default is `leading` (the `dbt-anvil` preset's style).
 
-- **Default severity:** warning
+- **Default severity:** hint
 - **Auto-fix:** Moves the operator to the correct position (appends to previous line in trailing mode, prepends to next line in leading mode).
 
 ```sql
--- Trailing mode (default) flags leading operators:
+-- Trailing mode flags leading operators:
 where
     status = 'active'
     and amount > 100    -- violation: leading AND
@@ -299,7 +300,7 @@ where
 
 Configured via `dbt-anvil.ninja.convention.notEqual`. Default is `!=`. Both `!=` and `<>` are valid SQL but mixing them is inconsistent.
 
-- **Default severity:** warning
+- **Default severity:** hint
 - **Auto-fix:** Replaces the operator with the configured style.
 
 ```sql
@@ -329,9 +330,9 @@ select count(*) from orders
 
 > Use `IS NULL` / `IS NOT NULL` instead of `= NULL` / `!= NULL`.
 
-Comparing with `= NULL` always returns `NULL` (not `TRUE`/`FALSE`) due to SQL's three-valued logic. This is a common bug source.
+Comparing with `= NULL` always returns `NULL` (not `TRUE`/`FALSE`) due to SQL's three-valued logic. It is an easy mistake to make.
 
-- **Default severity:** error
+- **Default severity:** warning
 - **Auto-fix:** Replaces `= NULL` with `IS NULL` and `!= NULL` / `<> NULL` with `IS NOT NULL`.
 
 ```sql
@@ -363,7 +364,7 @@ select o.id from orders o left join items i on o.id = i.order_id
 
 `LEFT OUTER JOIN`, `RIGHT OUTER JOIN`, and `FULL OUTER JOIN` are identical to their shorter forms. The `OUTER` keyword adds visual noise without any meaning.
 
-- **Default severity:** warning
+- **Default severity:** hint
 - **Auto-fix:** Deletes `OUTER ` (including the trailing space) from the join clause.
 
 ```sql
@@ -379,7 +380,7 @@ select * from orders o left join items i on o.id = i.order_id
 
 `COALESCE` is the SQL standard and works across all databases. `IFNULL`, `NVL`, and `ISNULL` are vendor-specific aliases.
 
-- **Default severity:** warning
+- **Default severity:** hint
 - **Auto-fix:** Replaces the function name with `coalesce`.
 
 ```sql
@@ -395,7 +396,7 @@ select coalesce(amount, 0), coalesce(status, 'unknown')
 
 Configured via `dbt-anvil.ninja.convention.unionStyle` (`"all"` or `"distinct"`, default `"all"`). When a `UNION ALL` or `UNION DISTINCT` is found with the wrong qualifier, it is flagged. Bare `UNION` (no qualifier) is handled separately by `ninja.ambiguity.bare-union`.
 
-- **Default severity:** warning
+- **Default severity:** hint
 - **Auto-fix:** Replaces the qualifier with the configured style (e.g. `DISTINCT` → `ALL`).
 
 ```sql
@@ -473,7 +474,7 @@ select id from archive_orders
 
 When a GROUP BY is present, results are already unique per the grouping keys. Adding DISTINCT is at best redundant and at worst misleading.
 
-- **Default severity:** warning
+- **Default severity:** info
 - **No auto-fix** — removing DISTINCT changes how the intent reads.
 
 #### `ninja.aliasing.column-as` ⚡
@@ -482,7 +483,7 @@ When a GROUP BY is present, results are already unique per the grouping keys. Ad
 
 Implicit aliases (e.g., `select id user_id`) are valid SQL but harder to read than explicit aliases (`select id AS user_id`). This rule checks columns in the final SELECT that have an alias position but no `AS` token between the expression and the alias.
 
-- **Default severity:** info
+- **Default severity:** hint
 - **Auto-fix:** Inserts `AS ` immediately before the alias identifier.
 
 ```sql
@@ -662,7 +663,7 @@ These rules operate on raw text and enforce whitespace/formatting standards. The
 
 Detects spaces or tabs at the end of non-empty lines.
 
-- **Default severity:** warning
+- **Default severity:** hint
 - **Auto-fix:** Deletes the trailing whitespace characters.
 
 #### `ninja.layout.trailing-newline` ⚡
@@ -671,7 +672,7 @@ Detects spaces or tabs at the end of non-empty lines.
 
 A missing newline causes issues with some tools; multiple trailing newlines are unnecessary.
 
-- **Default severity:** warning
+- **Default severity:** hint
 - **Auto-fix:** Adds a newline if missing, or removes excess trailing newlines to leave exactly one.
 
 #### `ninja.layout.leading-whitespace` ⚡
@@ -680,7 +681,7 @@ A missing newline causes issues with some tools; multiple trailing newlines are 
 
 Blank lines at the top of a file serve no purpose and look like accidental whitespace.
 
-- **Default severity:** warning
+- **Default severity:** hint
 - **Auto-fix:** Deletes all leading blank lines.
 
 #### `ninja.layout.max-blank-lines` ⚡
@@ -689,7 +690,7 @@ Blank lines at the top of a file serve no purpose and look like accidental white
 
 Runs of blank lines beyond the limit are visual noise. Formatting preserves deliberate blank lines up to this limit at any nesting depth: top level, inside a CTE body, or inside a subquery. Longer runs are trimmed back to the limit.
 
-- **Default severity:** warning
+- **Default severity:** hint
 - **Auto-fix:** Keeps up to `maxBlankLines` blank lines and deletes the extras.
 
 #### `ninja.layout.long-lines`
@@ -698,7 +699,7 @@ Runs of blank lines beyond the limit are visual noise. Formatting preserves deli
 
 Lines longer than `maxLineLength` (default: 120) are flagged. Lines that contain more than 50% Jinja content are skipped. They often can't be shortened without restructuring the template logic.
 
-- **Default severity:** info
+- **Default severity:** hint
 - **No auto-fix** — safe line breaking requires understanding the SQL and Jinja structure.
 
 #### `ninja.layout.indent` ⚡
@@ -712,7 +713,7 @@ Enforces consistent indentation using `space` or `tab` with the configured size 
 
 Blank lines and lines starting inside Jinja block tokens are skipped.
 
-- **Default severity:** warning
+- **Default severity:** hint
 - **Auto-fix:** Replaces the line's indentation with the correctly-formatted version.
 
 #### `ninja.layout.function_spacing` ⚡
@@ -721,7 +722,7 @@ Blank lines and lines starting inside Jinja block tokens are skipped.
 
 Flags patterns like `count (*)` or `sum (amount)` where a space separates the function name from its argument list. Checks approximately 130 known SQL function names.
 
-- **Default severity:** warning
+- **Default severity:** hint
 - **Auto-fix:** Deletes the space(s) between the function name and `(`.
 
 ```sql
@@ -738,16 +739,77 @@ select count(*), sum(amount)
 ⚡ = auto-fix (included in "Fix all" and `source.fixAll.ninja`)
 ⚡† = code fix only (available in the lightbulb menu, but excluded from bulk fix actions)
 
-| Category | Rules | ⚡ Auto-fix | ⚡† Code fix only |
-|----------|------:|:-----------:|:-----------------:|
-| Capitalisation | 4 | 4 | — |
-| Jinja | 1 | 1 | — |
-| Structure | 7 | 1 | 1 |
-| Convention | 9 | 7 | — |
-| Ambiguity | 4 | 2 | — |
-| Aliasing | 6 | 2 | — |
-| Layout | 7 | 6 | — |
-| **Total** | **38** | **23** | **1** |
+| Category | Rule | ⚡ Auto-fix | ⚡† Code fix only |
+|----------|------|:-----------:|:-----------------:|
+| Capitalisation | `ninja.cap.functions` | ⚡ | - |
+| Capitalisation | `ninja.cap.identifiers` | - | ⚡† |
+| Capitalisation | `ninja.cap.keywords` | ⚡ | - |
+| Capitalisation | `ninja.cap.literals` | ⚡ | - |
+| Capitalisation | `ninja.cap.types` | ⚡ | - |
+| Layout | `ninja.layout.clause-keyword` | - | - |
+| Layout | `ninja.layout.cte-blank-line` | - | - |
+| Layout | `ninja.layout.cte-bracket` | - | - |
+| Layout | `ninja.layout.function_spacing` | ⚡ | - |
+| Layout | `ninja.layout.indent` | ⚡ | - |
+| Layout | `ninja.layout.leading-whitespace` | ⚡ | - |
+| Layout | `ninja.layout.long-lines` | - | - |
+| Layout | `ninja.layout.max-blank-lines` | ⚡ | - |
+| Layout | `ninja.layout.select-modifiers` | - | - |
+| Layout | `ninja.layout.select-targets` | - | - |
+| Layout | `ninja.layout.set-operator` | - | - |
+| Layout | `ninja.layout.spacing` | ⚡ | - |
+| Layout | `ninja.layout.trailing-newline` | ⚡ | - |
+| Layout | `ninja.layout.trailing-whitespace` | ⚡ | - |
+| Aliasing | `ninja.alias.length` | - | - |
+| Aliasing | `ninja.alias.unique-columns` | - | - |
+| Aliasing | `ninja.aliasing.column-as` | ⚡ | - |
+| Aliasing | `ninja.aliasing.expression-no-alias` | - | - |
+| Aliasing | `ninja.aliasing.require-table-alias` | - | - |
+| Aliasing | `ninja.aliasing.self-alias` | ⚡ | - |
+| Aliasing | `ninja.aliasing.table-as` | ⚡ | - |
+| Aliasing | `ninja.aliasing.unique-table` | - | - |
+| Aliasing | `ninja.aliasing.unused-alias` | - | - |
+| Reference | `ninja.reference.consistent-single-table` | - | - |
+| Reference | `ninja.reference.keywords-as-identifiers` | - | - |
+| Reference | `ninja.reference.qualify-multi-table` | - | - |
+| Reference | `ninja.reference.quoting-policy` | - | - |
+| Reference | `ninja.reference.ref-in-from` | - | - |
+| Jinja | `ninja.jinja.argument-spacing` | ⚡ | - |
+| Jinja | `ninja.jinja.padding` | ⚡ | - |
+| Structure | `ninja.structure.column-order` | - | - |
+| Structure | `ninja.structure.distinct-parens` | ⚡ | - |
+| Structure | `ninja.structure.else-null` | ⚡ | - |
+| Structure | `ninja.structure.join-table-order` | - | - |
+| Structure | `ninja.structure.on-vs-using` | - | - |
+| Structure | `ninja.structure.select-star` | - | - |
+| Structure | `ninja.structure.simple-case` | - | - |
+| Structure | `ninja.structure.subquery-to-cte` | - | - |
+| Structure | `ninja.structure.unused-columns` | - | - |
+| Structure | `ninja.structure.unused-cte` | - | ⚡† |
+| Structure | `ninja.structure.unused-join` | - | - |
+| Ambiguity | `ninja.ambiguity.bare-union` | ⚡ | - |
+| Ambiguity | `ninja.ambiguity.distinct-groupby` | - | - |
+| Ambiguity | `ninja.ambiguity.implicit-join` | ⚡ | - |
+| Ambiguity | `ninja.ambiguity.join-without-on` | - | - |
+| Ambiguity | `ninja.ambiguity.order-by-direction` | - | - |
+| Ambiguity | `ninja.ambiguity.qualified-columns` | - | - |
+| Ambiguity | `ninja.ambiguity.setop-column-count` | - | - |
+| Ambiguity | `ninja.ambiguity.star-with-setop` | - | - |
+| Convention | `ninja.convention.blocked-words` | - | - |
+| Convention | `ninja.convention.cast-style` | - | - |
+| Convention | `ninja.convention.coalesce` | ⚡ | - |
+| Convention | `ninja.convention.comma-position` | ⚡ | - |
+| Convention | `ninja.convention.count-rows` | ⚡ | - |
+| Convention | `ninja.convention.explicit-inner-join` | ⚡ | - |
+| Convention | `ninja.convention.is-null` | ⚡ | - |
+| Convention | `ninja.convention.left-join` | - | - |
+| Convention | `ninja.convention.not-equal` | ⚡ | - |
+| Convention | `ninja.convention.operator-position` | ⚡ | - |
+| Convention | `ninja.convention.outer-join` | ⚡ | - |
+| Convention | `ninja.convention.quoted-literals` | - | - |
+| Convention | `ninja.convention.statement-terminator` | ⚡ | - |
+| Convention | `ninja.convention.trailing-comma` | ⚡ | - |
+| Convention | `ninja.convention.union-style` | ⚡ | - |
 
 ---
 
