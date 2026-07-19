@@ -80,7 +80,6 @@ export interface NinjaConfig {
 	/** Rule IDs that are completely disabled — no diagnostic, no autofix. */
 	disabledRules: string[];
 	autoFix: {
-		applyOnFormat: boolean;
 		applyOnFixAll: boolean;
 		/** Per-rule auto-fix overrides. Key = rule ID, value = true/false. Absent = use rule's built-in autoFix flag. */
 		rules: Record<string, boolean>;
@@ -139,7 +138,6 @@ export const DEFAULT_CONFIG: NinjaConfig = {
 	rules: {},
 	disabledRules: [],
 	autoFix: {
-		applyOnFormat: true,
 		applyOnFixAll: false,
 		rules: {},
 	},

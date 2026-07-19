@@ -1267,11 +1267,6 @@
 						"default": false,
 						"markdownDescription": "Always put `HAVING` on its own line and indent every predicate (including the first) onto its own line, when the HAVING has 2+ predicates joined by `AND`/`OR`. Single-predicate HAVINGs stay inline."
 					},
-					"dbt-anvil.ninja.autoFix.applyOnFormat": {
-						"type": "boolean",
-						"default": true,
-						"markdownDescription": "Apply safe auto-fixes when **Format Document** (`Shift+Alt+F`) is invoked on a SQL file. Which rules auto-fix is controlled by `#dbt-anvil.ninja.autoFix.rules#`."
-					},
 					"dbt-anvil.ninja.autoFix.applyOnFixAll": {
 						"type": "boolean",
 						"default": false,
@@ -1280,7 +1275,7 @@
 					"dbt-anvil.ninja.autoFix.rules": {
 						"type": "object",
 						"default": {},
-						"markdownDescription": "Per-rule auto-fix overrides. Only applies when `#dbt-anvil.ninja.autoFix.applyOnFormat#` or `#dbt-anvil.ninja.autoFix.applyOnFixAll#` is enabled.",
+						"markdownDescription": "Per-rule auto-fix overrides for the Fix All paths (the `Fix all` code action, and on-save when `#dbt-anvil.ninja.autoFix.applyOnFixAll#` is enabled).",
 						"propertyNames": {
 							"enum": [
 								"ninja.alias.length",

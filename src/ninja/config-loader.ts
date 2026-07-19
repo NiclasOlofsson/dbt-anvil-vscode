@@ -34,7 +34,6 @@ export function loadConfig(): NinjaConfig {
 		rules: cfg.get<Record<string, NinjaSeverity>>('rules', DEFAULT_CONFIG.rules),
 		disabledRules: cfg.get<string[]>('disabledRules', DEFAULT_CONFIG.disabledRules),
 		autoFix: {
-			applyOnFormat: cfg.get<boolean>('autoFix.applyOnFormat', DEFAULT_CONFIG.autoFix.applyOnFormat),
 			applyOnFixAll: cfg.get<boolean>('autoFix.applyOnFixAll', DEFAULT_CONFIG.autoFix.applyOnFixAll),
 			rules: cfg.get<Record<string, boolean>>('autoFix.rules', DEFAULT_CONFIG.autoFix.rules),
 		},

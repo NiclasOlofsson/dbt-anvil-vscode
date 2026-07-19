@@ -29,7 +29,6 @@ const CONFIG_KEYS = [
 	'logLevel',
 	'mcp.registration',
 	'ninja.autoFix.applyOnFixAll',
-	'ninja.autoFix.applyOnFormat',
 	'ninja.autoFix.rules',
 	'ninja.capitalisation.functions',
 	'ninja.capitalisation.identifiers.acronyms',

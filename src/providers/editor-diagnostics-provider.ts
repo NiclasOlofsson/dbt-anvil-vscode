@@ -426,8 +426,8 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		if (!config.enabled || !config.diagnostics.enabled) {
 			// Either the master switch is off, or diagnostics specifically have
 			// been silenced — clear the Problems panel either way. Formatting
-			// and code actions remain wired (they consult `config.enabled` and
-			// `config.autoFix.applyOnFormat` independently).
+			// and code actions remain wired (they consult `config.enabled`
+			// independently).
 			this._ninjaCollection.delete(document.uri);
 			this._ninjaResults.delete(document.uri.toString());
 			return;

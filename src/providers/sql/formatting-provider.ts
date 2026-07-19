@@ -25,15 +25,10 @@ export class NinjaFormattingProvider implements vscode.DocumentFormattingEditPro
 		_token: vscode.CancellationToken,
 	): Promise<vscode.TextEdit[]> {
 		const config = loadConfig();
-		this.logger.info(`Ninja format: ${document.uri.fsPath} (enabled=${config.enabled}, applyOnFormat=${config.autoFix.applyOnFormat})`);
+		this.logger.info(`Ninja format: ${document.uri.fsPath} (enabled=${config.enabled})`);
 
 		if (!config.enabled) {
 			this.logger.info('Ninja format: skipped — ninja.enabled is false');
-			return [];
-		}
-
-		if (!config.autoFix.applyOnFormat) {
-			this.logger.info('Ninja format: skipped — ninja.autoFix.applyOnFormat is false; nothing will happen until it is enabled');
 			return [];
 		}
 
