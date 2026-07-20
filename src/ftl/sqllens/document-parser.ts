@@ -14,7 +14,7 @@ import type { DocumentModel, ParseWarning } from '../../services/parse-service';
 import type { DocumentParser, ParseOptions } from '../../services/document-parser';
 import type { DialectSymbols } from '../sql-tokens';
 import { performance } from 'node:perf_hooks';
-import { completeAt as sqllensCompleteAt, dialectSymbols, minijinja, Schema, signatureAt as sqllensSignatureAt, SqlDocument, toSqllensDialect, type Completion, type Dialect, type Qualification, type SchemaMapping, type SchemaProvider, type Scope, type SignatureHelpInfo, type Sym, type TagNode, type TemplateProvider } from './api';
+import { completeAt as sqllensCompleteAt, dialectSymbols, minijinja, Schema, signatureAt as sqllensSignatureAt, SqlDocument, toSqllensDialect, type CompletionResult, type Dialect, type Qualification, type SchemaMapping, type SchemaProvider, type Scope, type SignatureHelpInfo, type Sym, type TagNode, type TemplateProvider } from './api';
 import { DBT_PROVIDER } from './template-shape';
 import { keywordTokenTypesFor, mapTokens } from './token-mapper';
 import { mergeSqlAndJinjaTokens } from '../ninja-sql-tokens';
@@ -147,7 +147,7 @@ export class SqllensDocumentParser implements DocumentParser {
 	 * source / macro names come back as `kind: "template"`; pass none and only the static
 	 * dbt overlay answers, which knows no catalog.
 	 */
-	completeAt(sql: string, offset: number, provider?: TemplateProvider): Completion[] {
+	completeAt(sql: string, offset: number, provider?: TemplateProvider): CompletionResult {
 		const dialect = toSqllensDialect(this._context.adapterType);
 		const p = provider ?? DBT_PROVIDER;
 		const doc = SqlDocument.create(sql, dialect, { templating: MINIJINJA, provider: p });

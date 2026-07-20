@@ -66,6 +66,7 @@ export type {
 	ColumnLineage,
 	ColumnRef,
 	Completion,
+	CompletionResult,
 	CteDef,
 	CteRef,
 	Dialect,

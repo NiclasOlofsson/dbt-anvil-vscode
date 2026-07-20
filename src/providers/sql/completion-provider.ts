@@ -51,6 +51,19 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 
 		let rank = 0;
 		const items = candidates.map(c => this._toItem(c, () => String(rank++).padStart(4, '0')));
+
+		// sqllens 1.6.0: candidates arrive pruned to the typed fragment, and replaceRange is
+		// that fragment's span (delimiter-aware — it covers an opening quote/bracket, so
+		// accepting an item never strands one). Absent range = empty-prefix caret; VS Code's
+		// word-at-cursor default is correct there.
+		if (candidates.replaceRange !== undefined) {
+			const range = new vscode.Range(
+				document.positionAt(candidates.replaceRange.start),
+				document.positionAt(candidates.replaceRange.end),
+			);
+			for (const item of items) item.range = range;
+		}
+
 		this.logger.debug(`Completion: ${items.length} candidates from sqllens`);
 		return items;
 	}

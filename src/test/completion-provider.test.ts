@@ -22,6 +22,14 @@ function mockDocument(lines: string[]) {
 			for (let i = 0; i < line; i++) offset += (lines[i]?.length ?? 0) + 1; // +1 for \n
 			return offset + character;
 		},
+		positionAt: (offset: number) => {
+			let remaining = offset;
+			for (let line = 0; line < lines.length; line++) {
+				if (remaining <= (lines[line]?.length ?? 0)) return { line, character: remaining };
+				remaining -= (lines[line]?.length ?? 0) + 1;
+			}
+			return { line: lines.length - 1, character: lines[lines.length - 1]?.length ?? 0 };
+		},
 		uri: { toString: () => 'file:///test.sql' },
 		version: 1,
 	};
@@ -131,6 +139,31 @@ describe('DbtCompletionProvider — maps sqllens candidates by kind', () => {
 		expect(items![0].sortText).toBe('0000');
 		expect(items![1].kind).toBe(17 /* Reference — the table */);
 		expect(items![1].sortText).toBe('0001');
+	});
+
+	it('applies sqllens replaceRange as every item\'s replacement range', () => {
+		// sqllens 1.6.0: candidates arrive prefix-pruned with the typed fragment's span,
+		// delimiter-aware ("my_t includes the opening quote). The items must replace that
+		// exact span so accepting never leaves a stray fragment or quote behind.
+		const candidates = [
+			{ label: 'customers', kind: 'table' },
+			{ label: 'cust_orders', kind: 'cte' },
+			{ label: 'current_date', kind: 'function' },
+		] as Completion[] & { replaceRange?: { start: number; end: number } };
+		candidates.replaceRange = { start: 7, end: 11 }; // the "cust" fragment
+		const { items } = run(candidates, ['select cust'], 11);
+
+		for (const item of items!) {
+			expect(item.range).toBeDefined();
+			const r = item.range as { start: { line: number; character: number }; end: { line: number; character: number } };
+			expect(r.start).toMatchObject({ line: 0, character: 7 });
+			expect(r.end).toMatchObject({ line: 0, character: 11 });
+		}
+	});
+
+	it('sets no range when sqllens reports no replaceRange (empty-prefix caret)', () => {
+		const { items } = run([{ label: 'customers', kind: 'table' }], ['select '], 7);
+		expect(items![0].range).toBeUndefined();
 	});
 
 	it('a jinja call slot maps the template candidates and nothing else leaks', () => {

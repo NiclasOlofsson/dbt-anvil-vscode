@@ -8,7 +8,7 @@ import type { DocumentParser, ParseOptions } from './document-parser';
 import type { JinjaToken } from '../ftl/sql-tokens';
 import type { AstIndex } from '../ninja/reflow/ast-index';
 import type { NinjaSqlToken } from '../ftl/ninja-sql-tokens';
-import type { Completion, SignatureHelpInfo, Sym, TemplateProvider } from '../ftl/sqllens/api';
+import type { CompletionResult, SignatureHelpInfo, Sym, TemplateProvider } from '../ftl/sqllens/api';
 
 export interface ColumnInfo {
 	name: string;
@@ -333,7 +333,7 @@ export class ParseService {
 	 * gets dbt model / source / macro names back as `kind: "template"`.
 	 * `[]` when the parser lacks the capability.
 	 */
-	completeAt(sql: string, offset: number): Completion[] {
+	completeAt(sql: string, offset: number): CompletionResult {
 		return this._parser.completeAt?.(sql, offset, this._makeProvider()) ?? [];
 	}
 
