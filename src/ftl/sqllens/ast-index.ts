@@ -243,7 +243,10 @@ export function createSqllensAstIndex(parse: SqllensParse, source: string): AstI
 				break;
 			case 'subscript':
 				walkExpr(ex.base);
-				walkExpr(ex.index);
+				// Slices (pg family, sqllens 1.6.0) carry any of index/end/step.
+				if (ex.index) walkExpr(ex.index);
+				if (ex.end) walkExpr(ex.end);
+				if (ex.step) walkExpr(ex.step);
 				break;
 			case 'with':
 				for (const b of ex.bindings) walkExpr(b.value);

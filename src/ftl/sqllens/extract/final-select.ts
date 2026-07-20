@@ -72,7 +72,10 @@ function collectColumnCsts(expr: Expr, out: CstNode[]): void {
 			break;
 		case 'subscript':
 			collectColumnCsts(expr.base, out);
-			collectColumnCsts(expr.index, out);
+			// Slices (pg family, sqllens 1.6.0) carry any of index/end/step.
+			if (expr.index) collectColumnCsts(expr.index, out);
+			if (expr.end) collectColumnCsts(expr.end, out);
+			if (expr.step) collectColumnCsts(expr.step, out);
 			break;
 		case 'lambda':
 			collectColumnCsts(expr.body, out);
