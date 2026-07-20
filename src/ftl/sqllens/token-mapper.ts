@@ -610,8 +610,13 @@ function singleType(tok: Token, dialect: Dialect): string {
 	if (dialectKw) return dialectKw;
 	const kw = KEYWORDS[upper];
 	if (kw) return kw;
-	// A word not in the keywords map becomes an identifier (VAR);
-	// an unmapped symbol keeps its uppercased text as a last resort.
+	// A word not in the keywords map becomes an identifier (VAR) EVEN when the
+	// lexer's role says 'keyword': ANTLR keyword vocabularies include SOFT
+	// keywords (duckdb lexes the column name in `a.name` as a NAME keyword
+	// token), and identifier treatment is the correct default for those. The
+	// tables above are the reserved-vs-soft semantic layer, not just renames —
+	// see the soft-keyword pin in token-mapper.test.ts.
+	// An unmapped symbol keeps its uppercased text as a last resort.
 	return /^[A-Z_][A-Z0-9_$]*$/.test(upper) ? 'VAR' : upper;
 }
 

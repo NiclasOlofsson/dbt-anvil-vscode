@@ -38,6 +38,30 @@ describe('mapTokens — clause & compound naming', () => {
 	});
 });
 
+describe('mapTokens — soft keywords stay identifiers', () => {
+	// ANTLR keyword vocabularies include SOFT keywords: words the lexer tags with
+	// role 'keyword' that are identifiers in use (duckdb lexes the column in
+	// `a.name` as a NAME keyword token). A naive "keyword role -> keyword type"
+	// default broke the kitchen-sink format oracle (`a.NAME` stopped lowercasing),
+	// so an unmapped word maps to VAR regardless of lexer role — the KEYWORDS
+	// tables are the reserved-vs-soft semantic layer, not just renames. Real
+	// keyword membership per dialect needs a reserved/soft split from sqllens
+	// (asked on the channel); until then the tables stay curated.
+	it('a soft keyword used as a column maps to VAR (identifier), not its own type', () => {
+		const toks = map('select a.name from t', 'duckdb');
+		const name = toks.find(t => t.start === 9)!; // `name` right after `a.`
+		expect(name.type).toBe('VAR');
+	});
+
+	it('renamed keywords still map through the tables (AS -> ALIAS)', () => {
+		expect(types('select a as b from t', 'snowflake')).toContain('ALIAS');
+	});
+
+	it('plain identifiers still map to VAR', () => {
+		expect(types('select foo from bar')).toEqual(['SELECT', 'VAR', 'FROM', 'VAR']);
+	});
+});
+
 describe('keywordTokenTypesFor', () => {
 	// The union of the mapper's KEYWORDS/COMPOUNDS/DIALECT_* table VALUES — the
 	// TokenType NAMES a mapped token's `.type` can carry. UPPERCASE (matches
