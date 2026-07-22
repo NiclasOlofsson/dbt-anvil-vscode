@@ -46,7 +46,7 @@ export class DbtCompletionProvider implements vscode.CompletionItemProvider {
 		// ONE call at the caret. Since sqllens 1.4.0 the caret token is the token being typed, so a
 		// single offset serves both jinja slots and the SQL walk — no context pre-detection, no
 		// word-start anchoring.
-		const candidates = this.parseService.completeAt(document.getText(), document.offsetAt(position));
+		const candidates = this.parseService.completeAt(document.getText(), document.offsetAt(position), document.uri.toString());
 		if (candidates.length === 0) return undefined;
 
 		let rank = 0;

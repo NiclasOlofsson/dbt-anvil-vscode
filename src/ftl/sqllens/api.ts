@@ -63,10 +63,16 @@ export type {
 
 export type {
 	Analysis,
+	CandidateDecoration,
+	CandidateIdentity,
+	ClauseInfo,
+	ClauseKind,
 	ColumnLineage,
 	ColumnRef,
+	CompleteOptions,
 	Completion,
 	CompletionResult,
+	DecorateCandidate,
 	CteDef,
 	CteRef,
 	Dialect,

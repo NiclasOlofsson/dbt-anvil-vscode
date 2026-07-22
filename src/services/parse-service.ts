@@ -9,6 +9,7 @@ import type { JinjaToken } from '../ftl/sql-tokens';
 import type { AstIndex } from '../ninja/reflow/ast-index';
 import type { NinjaSqlToken } from '../ftl/ninja-sql-tokens';
 import type { CompletionResult, SignatureHelpInfo, Sym, TemplateProvider } from '../ftl/sqllens/api';
+import { makeCandidateDecorator } from './candidate-decoration';
 
 export interface ColumnInfo {
 	name: string;
@@ -333,8 +334,17 @@ export class ParseService {
 	 * gets dbt model / source / macro names back as `kind: "template"`.
 	 * `[]` when the parser lacks the capability.
 	 */
-	completeAt(sql: string, offset: number): CompletionResult {
-		return this._parser.completeAt?.(sql, offset, this._makeProvider()) ?? [];
+	completeAt(sql: string, offset: number, uri?: string): CompletionResult {
+		// The decoration hook: sqllens decides the candidate set, this supplies the
+		// dbt-flavored detail (materialisation/package badges, CTE column counts)
+		// keyed on the structural identity sqllens hands over. The CTE join peeks
+		// this service's own cached model for the document, synchronously — a cold
+		// cache just means undecorated CTE candidates.
+		const decorate = makeCandidateDecorator(
+			this._enrichment?.indexer,
+			() => (uri !== undefined ? this._cache.get(uri)?.model : undefined),
+		);
+		return this._parser.completeAt?.(sql, offset, this._makeProvider(), { decorate }) ?? [];
 	}
 
 	/**

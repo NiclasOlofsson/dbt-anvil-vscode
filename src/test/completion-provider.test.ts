@@ -182,7 +182,7 @@ describe('DbtCompletionProvider — maps sqllens candidates by kind', () => {
 		const { completeAt } = run([{ label: 'ifnull', kind: 'function' }], ['SELECT ifn'], 10);
 		// The caret (10), NOT the word start — sqllens 1.4.0 made the caret token the token being typed.
 		expect(completeAt).toHaveBeenCalledTimes(1);
-		expect(completeAt).toHaveBeenCalledWith('SELECT ifn', 10);
+		expect(completeAt).toHaveBeenCalledWith('SELECT ifn', 10, 'file:///test.sql');
 	});
 
 	it('returns undefined when sqllens has no candidates', () => {

@@ -1,7 +1,7 @@
 import type { DocumentModel } from './parse-service';
 import type { DialectSymbols } from '../ftl/sql-tokens';
 import type { LineageResult } from '../ftl/sqllens/lineage';
-import type { CompletionResult, SignatureHelpInfo, TemplateProvider } from '../ftl/sqllens/api';
+import type { CompleteOptions, CompletionResult, SignatureHelpInfo, TemplateProvider } from '../ftl/sqllens/api';
 
 /**
  * Options passed to a DocumentParser.parse() call.
@@ -35,7 +35,7 @@ export interface DocumentParser {
 	 * call slot — the provider's `templateCandidates`) at `offset`. `provider` supplies the
 	 * host catalog sqllens has no way to know; without one only the static dbt overlay answers.
 	 */
-	completeAt?(sql: string, offset: number, provider?: TemplateProvider): CompletionResult;
+	completeAt?(sql: string, offset: number, provider?: TemplateProvider, opts?: CompleteOptions): CompletionResult;
 	/** Signature help for the SQL function call enclosing `offset`, or null. */
 	signatureAt?(sql: string, offset: number, provider?: TemplateProvider): SignatureHelpInfo | null;
 	/**
