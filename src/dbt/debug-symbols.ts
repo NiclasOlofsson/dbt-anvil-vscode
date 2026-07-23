@@ -1,7 +1,7 @@
 import { buildLineStarts } from '../ftl/line-index';
-import { minijinja, SqlDocument, tokenize, toSqllensDialect, MAIN_FRAME } from '../ftl/sqllens/api';
-import type { Sym, Dialect, ScopeTree, TagNode, TemplateProvider } from '../ftl/sqllens/api';
-import { allScopes, asCst } from '../ftl/sqllens/extract/spans';
+import { minijinja, SqlDocument, toSqllensDialect, MAIN_FRAME } from '../ftl/sqllens/api';
+import type { Sym, Dialect, ClauseKind, TagNode, TemplateProvider } from '../ftl/sqllens/api';
+import { allScopes } from '../ftl/sqllens/extract/spans';
 import { emittedTagKind, NOT_MACRO_CALLS } from '../ftl/sqllens/extract/tag-infos';
 import { DBT_PROVIDER } from '../ftl/sqllens/template-shape';
 
@@ -530,104 +530,32 @@ export interface EmitResult {
 // parseSourceMap are reused unchanged.
 // ---------------------------------------------------------------------------
 
-/** Clause-keyword text (uppercased) → debugger role. The sqllens analogue of
- *  TOKEN_ROLE_MAP: sqllens emits GROUP/ORDER/… as separate keyword tokens (not
- *  collapsed forms like GROUP_BY/ORDER_BY), so we key the *leading* keyword —
- *  its line is the one the debugger anchors the clause to. */
-const CLAUSE_KEYWORD_ROLE: Record<string, string> = {
-	SELECT: 'select',
-	FROM: 'from',
-	JOIN: 'join',
-	INNER: 'join',
-	LEFT: 'join',
-	RIGHT: 'join',
-	CROSS: 'join',
-	FULL: 'join',
-	WHERE: 'where',
-	GROUP: 'group',
-	HAVING: 'having',
-	ORDER: 'order',
-	LIMIT: 'limit',
+/** sqllens `ClauseKind` → debugger role (the wire vocabulary the stepping UI and
+ *  source map speak). `window` is deliberately unmapped: never a pausable anchor
+ *  (named windows dissolve into the OVER specs — channel ruling 2026-07-21). */
+const CLAUSE_KIND_ROLE: Partial<Record<ClauseKind, string>> = {
+	select: 'select',
+	from: 'from',
+	join: 'join',
+	where: 'where',
+	groupBy: 'group',
+	having: 'having',
+	qualify: 'qualify',
+	orderBy: 'order',
+	limit: 'limit',
+};
+
+/** Leading keyword (uppercased) → role, for the anchors `clausesOf` does not
+ *  model yet: WITH (the CTE section), OFFSET, and Spark's SORT/CLUSTER/DISTRIBUTE
+ *  BY. Marked from the templated token stream; retire entries as ClauseKind
+ *  grows. */
+const RESIDUAL_KEYWORD_ROLE: Record<string, string> = {
+	WITH: 'cte',
+	OFFSET: 'offset',
 	SORT: 'sort',
 	CLUSTER: 'cluster',
 	DISTRIBUTE: 'distribute',
-	OFFSET: 'offset',
-	WITH: 'cte',
 };
-
-interface FrameRange {
-	name: string;
-	/** 0-based inclusive line bounds. */
-	startLine: number;
-	endLine: number;
-}
-
-/** Each CTE's whole-clause (`name AS (body)`) 0-based line bounds, read straight off
- *  the CST rather than a declaration Sym's own `span` — sqllens (commit 04f9727) now
- *  anchors a declaration Sym's span at just the name identifier, not the whole clause,
- *  so it can no longer bound a CTE body that carries no other Sym-bearing content of
- *  its own (e.g. a bare unaliased literal projection: `with x as (select 1) ...`
- *  produces zero column Syms inside `x`'s frame). `buildFrameRanges` needs the WHOLE
- *  clause for that case. Keyed by the declaration's own start position (`line:column`,
- *  the same 1-based-line/0-based-column pair `Sym.span` uses) rather than by name —
- *  a CTE's `Sym.name` is `displayName`-derived and isn't guaranteed to match
- *  `CteDef.name`'s raw spelling, and a name-string key risks the same identity bug
- *  this codebase has hit before with CTEs (see sym-spans.ts's `cteAnchorOf`). The
- *  declaration's own span always starts at the same position as the whole clause
- *  (the name is the first thing in it), so this always finds an entry — verified
- *  empirically. */
-function cteWholeClauseLineBounds(scopes: ScopeTree): Map<string, { start: number; end: number }> {
-	const bounds = new Map<string, { start: number; end: number }>();
-	for (const scope of allScopes(scopes)) {
-		for (const [, cteRef] of scope.ctes) {
-			const c = asCst(cteRef.def.cst);
-			if (!c.start || !c.stop) continue;
-			bounds.set(`${c.start.line}:${c.start.column}`, { start: c.start.line - 1, end: c.stop.line - 1 });
-		}
-	}
-	return bounds;
-}
-
-/** Per-frame line ranges derived from Sym.frame. A symbol's own frame bounds that
- *  frame; a CTE *declaration* additionally bounds the frame it names, using the
- *  whole clause's bounds (`cteBodyBounds`) rather than the declaration Sym's own
- *  (now name-only) span — see `cteWholeClauseLineBounds`'s doc comment.
- *  Used only to attribute token-derived roles (keywords/star/literals) to a
- *  frame — ident/fn symbols carry Sym.frame directly. */
-function buildFrameRanges(symbols: Sym[], cteBodyBounds: Map<string, { start: number; end: number }>): FrameRange[] {
-	const map = new Map<string, { start: number; end: number }>();
-	const fold = (name: string, l0: number, l1: number): void => {
-		if (name === MAIN_FRAME) return; // _main_ is the fallback; never a bounded range
-		const cur = map.get(name);
-		if (cur) {
-			cur.start = Math.min(cur.start, l0);
-			cur.end = Math.max(cur.end, l1);
-		} else {
-			map.set(name, { start: l0, end: l1 });
-		}
-	};
-	for (const s of symbols) {
-		const l0 = s.span.line - 1;
-		const l1 = s.span.endLine - 1;
-		fold(s.frame, l0, l1);
-		if (s.kind === 'cte' && s.modifiers.includes('declaration')) {
-			const wholeClause = cteBodyBounds.get(`${s.span.line}:${s.span.column}`);
-			fold(s.name, wholeClause ? wholeClause.start : l0, wholeClause ? wholeClause.end : l1);
-		}
-	}
-	return [...map].map(([name, r]) => ({ name, startLine: r.start, endLine: r.end }));
-}
-
-/** The narrowest (innermost) frame whose range covers `line`, else _main_. */
-function resolveFrame(line: number, ranges: FrameRange[]): string {
-	let best: FrameRange | undefined;
-	for (const r of ranges) {
-		if (line >= r.startLine && line <= r.endLine) {
-			if (!best || r.endLine - r.startLine < best.endLine - best.startLine) best = r;
-		}
-	}
-	return best ? best.name : MAIN_FRAME;
-}
 
 /** One engine instance, mirroring document-parser.ts's MINIJINJA: a stateless
  *  strategy object sqllens keys its cell cache on by name, so a module singleton
@@ -638,25 +566,21 @@ const MINIJINJA = minijinja();
  *  one the language providers use), so symbols come from `unionSymbols()` — idents
  *  and functions across EVERY branch/loop arm, deduped — rather than the single
  *  primary realization. dbt compiles exactly one arm; whichever it is, that arm's
- *  ident markers are now present. The keyword/star/lit path (tokenize(placeholder))
- *  was already all-arms since the placeholder is the length-preserving all-text-live
- *  fill. `tags`/`placeholder`/`tokens` ride on `doc.templated`, so this stays one
- *  parse. Error-tolerant: a partial parse still yields symbols for what parsed. */
+ *  ident markers are now present. The doc itself rides along: clause anchors come
+ *  from its `clausesOf` view (per arm), residual keywords / star / literals from
+ *  `doc.templated.tokens` (the all-arms placeholder stream), frames from `frameAt`
+ *  — one parse, nothing re-lexed. Error-tolerant: a partial parse still yields
+ *  symbols for what parsed. */
 function analyzeTemplated(
 	source: string,
 	dialect: Dialect,
 	provider: TemplateProvider,
-): { symbols: Sym[]; blanked: string; tags: TagNode[]; cteBodyBounds: Map<string, { start: number; end: number }> } | undefined {
+): { doc: SqlDocument; symbols: Sym[]; tags: TagNode[] } | undefined {
 	try {
 		const doc = SqlDocument.create(source, dialect, { templating: MINIJINJA, provider });
 		const templated = doc.templated;
 		if (!templated) return undefined;
-		return {
-			symbols: doc.unionSymbols(),
-			blanked: templated.placeholder,
-			tags: templated.tags,
-			cteBodyBounds: cteWholeClauseLineBounds(doc.scopes),
-		};
+		return { doc, symbols: doc.unionSymbols(), tags: templated.tags };
 	} catch {
 		// Preserve the old failure contract: the caller's undefined arm falls
 		// back to a plain (marker-less) compile.
@@ -672,9 +596,10 @@ function analyzeTemplated(
  * shared and unchanged, so compile-survival is identical.
  *
  * Roles: idents (column reference / table / alias / cte) and functions come from
- * the semantic Sym model; clause keywords, `*`, and literals come from the
- * lexical token stream. Frames come from Sym.frame (idents/fns) or a frame-range
- * lookup keyed on Sym.frame (token-derived roles).
+ * the semantic Sym model; clause anchors come from sqllens's `clausesOf` view
+ * (per arm); residual keywords, `*`, and literals from the templated token
+ * stream. Frames come from Sym.frame (idents/fns) or `frameAt` (token-derived
+ * roles) — the two agree by construction.
  */
 export function emitDebugSymbols(
 	source: string,
@@ -684,14 +609,13 @@ export function emitDebugSymbols(
 	const sqllensDialect = toSqllensDialect(dialect);
 	const analyzed = analyzeTemplated(source, sqllensDialect, provider);
 	if (!analyzed) return undefined;
-	const { symbols: syms, blanked, tags, cteBodyBounds } = analyzed;
+	const { doc, symbols: syms, tags } = analyzed;
 
 	const lineStarts = buildLineStarts(source);
 	// Marker-exclusion regions straight off the tag-AST (the old private
 	// findJinjaSpans re-scan is token-path-only now).
 	const jinjaSpans: JinjaSpan[] = tags.map(t => ({ start: t.tagSpan.start, end: t.tagSpan.end }));
 	const inJinja = (offset: number): boolean => jinjaSpans.some(s => offset >= s.start && offset < s.end);
-	const frameRanges = buildFrameRanges(syms, cteBodyBounds);
 
 	// Candidate markers carry char offsets so we can drop any that overlap a kept
 	// one — injectMarkers assumes disjoint, single-line spans (it splices markers
@@ -754,19 +678,47 @@ export function emitDebugSymbols(
 		push(line, col, endCol, role, s.frame);
 	}
 
-	// Clause keywords, `*`, and literals from the lexical token stream.
-	for (const t of tokenize(blanked, sqllensDialect)) {
+	// Frame attribution for token-derived roles: sqllens's own owner-of-offset
+	// answer, agreeing with Sym.frame by construction. Off-construct → _main_.
+	const frameOf = (d: SqlDocument, offset: number): string => d.frameAt(offset)?.frame ?? MAIN_FRAME;
+
+	// Clause anchors from the structural clause view, walked per arm (a dbt
+	// `{% else %}` arm carries clauses the primary realization does not).
+	// Realizations are coordinate-preserving, so cross-arm duplicates share a
+	// start offset and dedupe on it. anchorSpan covers the whole keyword run
+	// (`group by`, `left join`), clamped to its first line for injectMarkers.
+	const seenAnchors = new Set<number>();
+	for (const armDoc of [doc, ...doc.variants.map(v => v.doc())]) {
+		for (const scope of allScopes(armDoc.scopes)) {
+			for (const clause of armDoc.clausesOf(scope)) {
+				const role = CLAUSE_KIND_ROLE[clause.kind];
+				if (role === undefined || seenAnchors.has(clause.anchorSpan.start)) continue;
+				seenAnchors.add(clause.anchorSpan.start);
+				const line = clause.anchorSpan.line - 1;
+				const lineEnd = (lineStarts[line + 1] ?? source.length + 1) - 1;
+				const endCol = clause.anchorSpan.endLine === clause.anchorSpan.line
+					? clause.anchorSpan.endColumn
+					: lineEnd - (lineStarts[line] ?? 0);
+				push(line, clause.anchorSpan.column, endCol, role, frameOf(armDoc, clause.anchorSpan.start));
+			}
+		}
+	}
+
+	// Residual keywords (kinds clausesOf does not model yet), `*`, and literals
+	// from the templated token stream — the all-arms placeholder lex the parse
+	// already carries; nothing is re-tokenized.
+	for (const t of doc.templated!.tokens) {
 		if (t.channel !== 0) continue; // skip hidden-channel trivia (comments/whitespace)
 		let role: string | undefined;
 		if (t.role === 'number' || t.role === 'string') role = 'lit';
 		else if (t.text === '*') role = 'star';
-		else if (t.role === 'keyword') role = CLAUSE_KEYWORD_ROLE[t.text.toUpperCase()];
+		else if (t.role === 'keyword') role = RESIDUAL_KEYWORD_ROLE[t.text.toUpperCase()];
 		if (role === undefined) continue;
 		const line = t.line - 1;
 		const col = t.column;
 		const nl = t.text.indexOf('\n');
 		const endCol = col + (nl === -1 ? t.text.length : nl); // clamp a multi-line literal to its first line
-		push(line, col, endCol, role, resolveFrame(line, frameRanges));
+		push(line, col, endCol, role, frameOf(doc, t.start));
 	}
 
 	// Sort by start offset and greedily keep a disjoint set (drop overlaps).

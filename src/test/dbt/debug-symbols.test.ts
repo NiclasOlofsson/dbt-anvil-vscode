@@ -318,3 +318,22 @@ describe('emitDebugSymbols — ref/source markers off the tag-AST', () => {
 		expect(res!.refMarkers).toHaveLength(0);
 	});
 });
+
+describe('emitDebugSymbols — clause anchors off clausesOf (sqllens 1.7.0)', () => {
+	it('emits a qualify clause anchor', () => {
+		const sql = [
+			'select id, row_number() over (order by id) as rn', // 0
+			'from orders', // 1
+			'qualify rn = 1', // 2
+		].join('\n');
+		const res = emitDebugSymbols(sql, 'databricks');
+		const q = res!.symbols.find(s => s.role === 'qualify');
+		expect(q).toMatchObject({ line: 2, col: 0, frameName: '_main_' });
+	});
+
+	it('a group anchor spans the full GROUP BY keyword phrase', () => {
+		const res = emitDebugSymbols('select a, count(*) from t\ngroup by a', 'databricks');
+		const g = res!.symbols.find(s => s.role === 'group')!;
+		expect(g).toMatchObject({ line: 1, col: 0, endCol: 8 });
+	});
+});
