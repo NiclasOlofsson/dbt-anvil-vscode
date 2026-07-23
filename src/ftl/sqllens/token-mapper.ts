@@ -3,12 +3,14 @@
  * with TokenType names, so the reflow printer, ninja rules, and debug-symbols
  * keep working unchanged.
  *
- * The mapping preserves the lexer conventions for token classification:
- *   - symbols/operators map by exact text (SINGLE_TOKENS + the multi-char
- *     entries in KEYWORDS), so `-`→DASH, `%`→MOD, `::`→DCOLON, `*`→STAR;
- *   - words map by uppercased text through the KEYWORDS dict
- *     (`AS`→ALIAS, `SELECT`→SELECT, …); a word absent from KEYWORDS is an
- *     identifier → VAR (or IDENTIFIER when quoted);
+ * Token classification is the PARSE's, not a table's (sqllens `consumedAs`
+ * per-occurrence verdicts; #22 transition):
+ *   - symbols/operators map by exact text (`-`→DASH, `%`→MOD, `::`→DCOLON);
+ *   - a word the parse consumed as a keyword/type keeps its uppercased text as
+ *     its type, run through the small RENAME maps below (`AS`→ALIAS,
+ *     `STRING`→TEXT); a word consumed as an identifier is VAR regardless of
+ *     any table; unverdicted words (recovery regions, bare tokenize()) fall
+ *     back to the renames plus the fixed STRUCTURAL_CORE, else VAR;
  *   - adjacent keyword pairs like `GROUP BY` are folded into a single SqlToken
  *     (GROUP_BY, ORDER_BY, …) spanning both — ANTLR emits them separately.
  *
@@ -24,8 +26,9 @@ import type { Dialect, Token } from './api';
 
 type CommentSpan = { start: number; end: number; text: string };
 
-/** Exact-text → TokenType name for symbols/operators (SINGLE_TOKENS +
- *  the multi-char operator entries of the KEYWORDS dict). */
+/** Exact-text → TokenType name for symbols/operators. Spelling-keyed and
+ *  dialect-independent — the printer's operator vocabulary, not membership
+ *  (the dialect's lexer decides what exists in the stream). */
 const OPERATOR_TOKENS: Record<string, string> = {
 	'(': 'L_PAREN',
 	')': 'R_PAREN',
@@ -77,256 +80,52 @@ const OPERATOR_TOKENS: Record<string, string> = {
 	'??': 'DQMARK',
 };
 
-/** Uppercased word → TokenType name — the single-word entries of the
- *  base tokenizer KEYWORDS. A word not present is an identifier (VAR).
- *  Space-compounds are handled by `COMPOUNDS` below, not here. */
-const KEYWORDS: Record<string, string> = {
-	ALL: 'ALL',
-	AND: 'AND',
-	ANTI: 'ANTI',
-	ANY: 'ANY',
-	ASC: 'ASC',
+/** Uppercased word → canonical TokenType name, for the words whose type is NOT
+ *  their own spelling: genuine renames (AS→ALIAS) and type-synonym
+ *  canonicalization (STRING→TEXT, INT4→INT). PURE NAMING — membership is the
+ *  parse's `consumedAs` verdict, so this never grows with dialects and a word
+ *  absent here simply keeps its uppercased text as its type. */
+const KEYWORD_RENAMES: Record<string, string> = {
 	AS: 'ALIAS',
-	ASOF: 'ASOF',
 	AUTOINCREMENT: 'AUTO_INCREMENT',
-	AUTO_INCREMENT: 'AUTO_INCREMENT',
-	BEGIN: 'BEGIN',
-	BETWEEN: 'BETWEEN',
-	CACHE: 'CACHE',
-	UNCACHE: 'UNCACHE',
-	CASE: 'CASE',
-	COLLATE: 'COLLATE',
-	COLUMN: 'COLUMN',
-	COMMIT: 'COMMIT',
-	CONSTRAINT: 'CONSTRAINT',
-	COPY: 'COPY',
-	CREATE: 'CREATE',
-	CROSS: 'CROSS',
-	CUBE: 'CUBE',
-	CURRENT_DATE: 'CURRENT_DATE',
-	CURRENT_SCHEMA: 'CURRENT_SCHEMA',
-	CURRENT_TIME: 'CURRENT_TIME',
-	CURRENT_TIMESTAMP: 'CURRENT_TIMESTAMP',
-	CURRENT_USER: 'CURRENT_USER',
-	CURRENT_CATALOG: 'CURRENT_CATALOG',
-	DATABASE: 'DATABASE',
-	DEFAULT: 'DEFAULT',
-	DELETE: 'DELETE',
-	DESC: 'DESC',
-	DESCRIBE: 'DESCRIBE',
-	DISTINCT: 'DISTINCT',
-	DIV: 'DIV',
-	DROP: 'DROP',
-	ELSE: 'ELSE',
-	END: 'END',
-	ENUM: 'ENUM',
-	ESCAPE: 'ESCAPE',
-	EXCEPT: 'EXCEPT',
-	EXECUTE: 'EXECUTE',
-	EXISTS: 'EXISTS',
-	FALSE: 'FALSE',
-	FETCH: 'FETCH',
-	FILTER: 'FILTER',
-	FILE: 'FILE',
-	FIRST: 'FIRST',
-	FULL: 'FULL',
-	FUNCTION: 'FUNCTION',
-	FOR: 'FOR',
-	FORMAT: 'FORMAT',
-	FROM: 'FROM',
-	GEOGRAPHY: 'GEOGRAPHY',
-	GEOMETRY: 'GEOMETRY',
-	GLOB: 'GLOB',
-	HAVING: 'HAVING',
-	ILIKE: 'ILIKE',
-	IN: 'IN',
-	INDEX: 'INDEX',
-	INET: 'INET',
-	INNER: 'INNER',
-	INSERT: 'INSERT',
-	INTERVAL: 'INTERVAL',
-	INTERSECT: 'INTERSECT',
-	INTO: 'INTO',
-	IS: 'IS',
-	ISNULL: 'ISNULL',
-	JOIN: 'JOIN',
-	KEEP: 'KEEP',
-	KILL: 'KILL',
-	LATERAL: 'LATERAL',
-	LEFT: 'LEFT',
-	LIKE: 'LIKE',
-	LIMIT: 'LIMIT',
-	LOAD: 'LOAD',
-	LOCALTIME: 'LOCALTIME',
-	LOCALTIMESTAMP: 'LOCALTIMESTAMP',
-	LOCK: 'LOCK',
-	MERGE: 'MERGE',
-	NAMESPACE: 'NAMESPACE',
-	NATURAL: 'NATURAL',
-	NEXT: 'NEXT',
-	NOT: 'NOT',
-	NOTNULL: 'NOTNULL',
-	NULL: 'NULL',
-	OBJECT: 'OBJECT',
-	OFFSET: 'OFFSET',
-	ON: 'ON',
-	OR: 'OR',
-	XOR: 'XOR',
-	ORDINALITY: 'ORDINALITY',
-	OUT: 'OUT',
-	OUTER: 'OUTER',
-	OVER: 'OVER',
-	OVERLAPS: 'OVERLAPS',
-	OVERWRITE: 'OVERWRITE',
-	PARTITION: 'PARTITION',
-	PERCENT: 'PERCENT',
-	PIVOT: 'PIVOT',
-	PRAGMA: 'PRAGMA',
-	PROCEDURE: 'PROCEDURE',
-	OPERATOR: 'OPERATOR',
-	QUALIFY: 'QUALIFY',
-	RANGE: 'RANGE',
-	RECURSIVE: 'RECURSIVE',
 	REGEXP: 'RLIKE',
-	RENAME: 'RENAME',
-	REPLACE: 'REPLACE',
-	RETURNING: 'RETURNING',
-	REFERENCES: 'REFERENCES',
-	RIGHT: 'RIGHT',
-	RLIKE: 'RLIKE',
-	ROLLBACK: 'ROLLBACK',
-	ROLLUP: 'ROLLUP',
-	ROW: 'ROW',
-	ROWS: 'ROWS',
-	SCHEMA: 'SCHEMA',
-	SELECT: 'SELECT',
-	SEMI: 'SEMI',
-	SESSION: 'SESSION',
-	SESSION_USER: 'SESSION_USER',
-	SET: 'SET',
-	SETTINGS: 'SETTINGS',
-	SHOW: 'SHOW',
-	SOME: 'SOME',
-	STRAIGHT_JOIN: 'STRAIGHT_JOIN',
-	TABLE: 'TABLE',
 	TABLESAMPLE: 'TABLE_SAMPLE',
 	TEMP: 'TEMPORARY',
-	TEMPORARY: 'TEMPORARY',
-	THEN: 'THEN',
-	TRUE: 'TRUE',
-	TRUNCATE: 'TRUNCATE',
-	UNION: 'UNION',
-	UNKNOWN: 'UNKNOWN',
-	UNNEST: 'UNNEST',
-	UNPIVOT: 'UNPIVOT',
-	UPDATE: 'UPDATE',
-	USE: 'USE',
-	USING: 'USING',
-	UUID: 'UUID',
-	VALUES: 'VALUES',
-	VIEW: 'VIEW',
-	VOLATILE: 'VOLATILE',
-	WHEN: 'WHEN',
-	WHERE: 'WHERE',
-	WINDOW: 'WINDOW',
-	WITH: 'WITH',
-	APPLY: 'APPLY',
-	ARRAY: 'ARRAY',
-	BIT: 'BIT',
 	BOOL: 'BOOLEAN',
-	BOOLEAN: 'BOOLEAN',
 	BYTE: 'TINYINT',
-	MEDIUMINT: 'MEDIUMINT',
 	INT1: 'TINYINT',
-	TINYINT: 'TINYINT',
 	INT16: 'SMALLINT',
 	SHORT: 'SMALLINT',
-	SMALLINT: 'SMALLINT',
 	HUGEINT: 'INT128',
 	UHUGEINT: 'UINT128',
 	INT2: 'SMALLINT',
 	INTEGER: 'INT',
-	INT: 'INT',
 	INT4: 'INT',
 	INT32: 'INT',
 	INT64: 'BIGINT',
-	INT128: 'INT128',
-	INT256: 'INT256',
 	LONG: 'BIGINT',
-	BIGINT: 'BIGINT',
 	INT8: 'TINYINT',
-	UINT: 'UINT',
-	UINT128: 'UINT128',
-	UINT256: 'UINT256',
 	DEC: 'DECIMAL',
-	DECIMAL: 'DECIMAL',
-	DECIMAL32: 'DECIMAL32',
-	DECIMAL64: 'DECIMAL64',
-	DECIMAL128: 'DECIMAL128',
-	DECIMAL256: 'DECIMAL256',
-	DECFLOAT: 'DECFLOAT',
-	BIGDECIMAL: 'BIGDECIMAL',
 	BIGNUMERIC: 'BIGDECIMAL',
-	BIGNUM: 'BIGNUM',
-	LIST: 'LIST',
-	MAP: 'MAP',
-	NULLABLE: 'NULLABLE',
 	NUMBER: 'DECIMAL',
 	NUMERIC: 'DECIMAL',
 	FIXED: 'DECIMAL',
 	REAL: 'FLOAT',
-	FLOAT: 'FLOAT',
 	FLOAT4: 'FLOAT',
 	FLOAT8: 'DOUBLE',
-	DOUBLE: 'DOUBLE',
-	JSON: 'JSON',
-	JSONB: 'JSONB',
-	CHAR: 'CHAR',
 	CHARACTER: 'CHAR',
-	NCHAR: 'NCHAR',
-	VARCHAR: 'VARCHAR',
 	VARCHAR2: 'VARCHAR',
-	NVARCHAR: 'NVARCHAR',
 	NVARCHAR2: 'NVARCHAR',
-	BPCHAR: 'BPCHAR',
 	STR: 'TEXT',
 	STRING: 'TEXT',
-	TEXT: 'TEXT',
-	LONGTEXT: 'LONGTEXT',
-	MEDIUMTEXT: 'MEDIUMTEXT',
-	TINYTEXT: 'TINYTEXT',
 	CLOB: 'TEXT',
 	LONGVARCHAR: 'TEXT',
-	BINARY: 'BINARY',
 	BLOB: 'VARBINARY',
-	LONGBLOB: 'LONGBLOB',
-	MEDIUMBLOB: 'MEDIUMBLOB',
-	TINYBLOB: 'TINYBLOB',
 	BYTEA: 'VARBINARY',
-	VARBINARY: 'VARBINARY',
-	TIME: 'TIME',
-	TIMETZ: 'TIMETZ',
-	TIME_NS: 'TIME_NS',
-	TIMESTAMP: 'TIMESTAMP',
-	TIMESTAMPTZ: 'TIMESTAMPTZ',
-	TIMESTAMPLTZ: 'TIMESTAMPLTZ',
 	TIMESTAMP_LTZ: 'TIMESTAMPLTZ',
-	TIMESTAMPNTZ: 'TIMESTAMPNTZ',
 	TIMESTAMP_NTZ: 'TIMESTAMPNTZ',
-	DATE: 'DATE',
-	DATETIME: 'DATETIME',
-	UNIQUE: 'UNIQUE',
-	VECTOR: 'VECTOR',
-	STRUCT: 'STRUCT',
-	SEQUENCE: 'SEQUENCE',
-	VARIANT: 'VARIANT',
-	ALTER: 'ALTER',
-	ANALYZE: 'ANALYZE',
 	CALL: 'COMMAND',
-	COMMENT: 'COMMENT',
 	EXPLAIN: 'COMMAND',
-	GRANT: 'GRANT',
-	REVOKE: 'REVOKE',
 	OPTIMIZE: 'COMMAND',
 	PREPARE: 'COMMAND',
 	VACUUM: 'COMMAND',
@@ -353,65 +152,53 @@ const COMPOUNDS: Record<string, string> = {
 	'START WITH': 'START_WITH',
 };
 
-/** Per-dialect additions/overrides on top of the base KEYWORDS map above.
- *  Each dialect defines keyword tokens based on its tokenizer rules,
- *  following the dialect inheritance chain (databricks -> spark -> spark2 -> hive;
- *  redshift -> postgres). Consulted BEFORE the base KEYWORDS map in `singleType`. Entries
- *  identical to the base value (e.g. tsql's `REAL` -> FLOAT, postgres's
- *  `TEMP` -> TEMPORARY) are omitted as redundant. A dialect that *removes* a
- *  base keyword (`KEYWORDS.pop(...)`) is modeled here by mapping it to
- *  'VAR', treating the word as an identifier.
- *
- *  Not transcribed (out of scope for a *word*-keyed KEYWORDS layer):
- *   - symbol/operator overrides living in the same Python KEYWORDS dict but
- *     keyed on punctuation, not words (Postgres/Redshift `~`, `@>`, `?&`, …
- *     and the `/*+` hint marker every dialect here pops) — these belong with
- *     OPERATOR_TOKENS, which has no per-dialect variant yet;
- *   - Snowflake's `"FILE://": URI_START`, keyed on a URI scheme marker, not a
- *     plain word. */
-const DIALECT_KEYWORDS: Partial<Record<Dialect, Record<string, string>>> = {
+/** The fixed structural vocabulary of SQL — clause heads, connectives, and the
+ *  frame words the printer lays out by. RECOVERY-REGION FALLBACK ONLY: where
+ *  the parse produced no `consumedAs` verdict, these words still map to their
+ *  own type so a mid-edit document keeps its shape. Grammar-stable: this set
+ *  never grows when sqllens adds a dialect. */
+const STRUCTURAL_CORE = new Set([
+	'SELECT', 'FROM', 'WHERE', 'GROUP', 'BY', 'ORDER', 'HAVING', 'QUALIFY',
+	'JOIN', 'INNER', 'LEFT', 'RIGHT', 'FULL', 'CROSS', 'OUTER', 'NATURAL',
+	'ON', 'USING', 'AND', 'OR', 'NOT', 'IN', 'IS', 'NULL',
+	'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'WITH', 'RECURSIVE',
+	'UNION', 'ALL', 'DISTINCT', 'EXCEPT', 'INTERSECT',
+	'LIMIT', 'OFFSET', 'FETCH', 'TOP',
+	'BETWEEN', 'LIKE', 'ILIKE', 'EXISTS', 'ASC', 'DESC', 'NULLS', 'FIRST', 'LAST',
+	'OVER', 'PARTITION', 'WINDOW', 'ROWS', 'RANGE', 'CURRENT', 'ROW', 'LATERAL',
+	'TRUE', 'FALSE', 'CAST', 'INTERVAL', 'VALUES',
+	'INSERT', 'INTO', 'UPDATE', 'SET', 'DELETE', 'CREATE', 'TABLE', 'VIEW', 'DROP', 'ALTER',
+]);
+
+/** Per-dialect renames layered over KEYWORD_RENAMES (consulted first): the
+ *  entries where a word's canonical meaning genuinely differs by dialect
+ *  (MINUS→EXCEPT, tsql TIMESTAMP→ROWVERSION). PURE NAMING, same as the base
+ *  map — membership is the parse's verdict, so these never grow with new
+ *  dialects, only with genuinely dialect-divergent semantics. */
+const DIALECT_KEYWORD_RENAMES: Partial<Record<Dialect, Record<string, string>>> = {
 	tsql: {
-		DATETIME2: 'DATETIME2',
 		DATETIMEOFFSET: 'TIMESTAMPTZ',
-		DECLARE: 'DECLARE',
 		EXEC: 'COMMAND',
 		GO: 'COMMAND',
-		IMAGE: 'IMAGE',
-		MONEY: 'MONEY',
 		NTEXT: 'TEXT',
-		OPTION: 'OPTION',
 		OUTPUT: 'RETURNING',
 		PRINT: 'COMMAND',
 		PROC: 'PROCEDURE',
-		ROWVERSION: 'ROWVERSION',
-		SMALLDATETIME: 'SMALLDATETIME',
-		SMALLMONEY: 'SMALLMONEY',
 		SQL_VARIANT: 'VARIANT',
 		SYSTEM_USER: 'CURRENT_USER',
-		TOP: 'TOP',
 		TIMESTAMP: 'ROWVERSION',
 		TINYINT: 'UTINYINT',
 		UNIQUEIDENTIFIER: 'UUID',
-		XML: 'XML',
 	},
 	snowflake: {
 		BYTEINT: 'INT',
-		GET: 'GET',
-		MATCH_CONDITION: 'MATCH_CONDITION',
-		MATCH_RECOGNIZE: 'MATCH_RECOGNIZE',
 		MINUS: 'EXCEPT',
-		PUT: 'PUT',
 		REMOVE: 'COMMAND',
 		RM: 'COMMAND',
 		SAMPLE: 'TABLE_SAMPLE',
 		SQL_DOUBLE: 'DOUBLE',
 		SQL_VARCHAR: 'VARCHAR',
-		STAGE: 'STAGE',
-		STREAMLIT: 'STREAMLIT',
-		TAG: 'TAG',
 		TIMESTAMP_TZ: 'TIMESTAMPTZ',
-		TOP: 'TOP',
-		WAREHOUSE: 'WAREHOUSE',
 		// Snowflake treats FLOAT as a synonym for DOUBLE.
 		FLOAT: 'DOUBLE',
 	},
@@ -421,52 +208,34 @@ const DIALECT_KEYWORDS: Partial<Record<Dialect, Record<string, string>>> = {
 		// The bare word starts a BEGIN…EXCEPTION…END block (command); the
 		// two-word phrase below is the actual transaction-start keyword.
 		BEGIN: 'COMMAND',
-		CURRENT_DATETIME: 'CURRENT_DATETIME',
 		DATETIME: 'TIMESTAMP',
-		DECLARE: 'DECLARE',
 		ELSEIF: 'COMMAND',
 		EXCEPTION: 'COMMAND',
-		EXPORT: 'EXPORT',
 		FLOAT64: 'DOUBLE',
 		LOOP: 'COMMAND',
-		MODEL: 'MODEL',
 		RECORD: 'STRUCT',
 		REPEAT: 'COMMAND',
 		TIMESTAMP: 'TIMESTAMPTZ',
 		WHILE: 'COMMAND',
-		// KEYWORDS.pop(...): identifiers in BigQuery, not keywords.
-		DIV: 'VAR',
-		VALUES: 'VAR',
 	},
 	databricks: {
 		// Hive (base of the databricks -> spark -> spark2 -> hive chain).
 		MINUS: 'EXCEPT',
-		REFRESH: 'REFRESH',
 		SERDEPROPERTIES: 'SERDE_PROPERTIES',
 		// Spark2 override.
 		TIMESTAMP: 'TIMESTAMPTZ',
-		// Databricks's own addition.
-		VOID: 'VOID',
 	},
 	redshift: {
 		// Postgres (Redshift's base).
-		BIGSERIAL: 'BIGSERIAL',
 		CSTRING: 'PSEUDO_TYPE',
 		DECLARE: 'COMMAND',
 		DO: 'COMMAND',
 		EXEC: 'COMMAND',
-		HSTORE: 'HSTORE',
 		INT8: 'BIGINT',
-		MONEY: 'MONEY',
-		NAME: 'NAME',
 		OID: 'OBJECT_IDENTIFIER',
-		ONLY: 'ONLY',
-		POINT: 'POINT',
 		REFRESH: 'COMMAND',
 		REINDEX: 'COMMAND',
 		RESET: 'COMMAND',
-		SERIAL: 'SERIAL',
-		SMALLSERIAL: 'SMALLSERIAL',
 		REGCLASS: 'OBJECT_IDENTIFIER',
 		REGCOLLATION: 'OBJECT_IDENTIFIER',
 		REGCONFIG: 'OBJECT_IDENTIFIER',
@@ -479,17 +248,11 @@ const DIALECT_KEYWORDS: Partial<Record<Dialect, Record<string, string>>> = {
 		REGROLE: 'OBJECT_IDENTIFIER',
 		REGTYPE: 'OBJECT_IDENTIFIER',
 		FLOAT: 'DOUBLE',
-		XML: 'XML',
 		// Redshift's own additions.
-		HLLSKETCH: 'HLLSKETCH',
 		MINUS: 'EXCEPT',
-		SUPER: 'SUPER',
-		TOP: 'TOP',
 		UNLOAD: 'COMMAND',
 		VARBYTE: 'VARBINARY',
 		// KEYWORDS.pop(...): identifiers in Postgres/Redshift, not keywords.
-		DIV: 'VAR',
-		VALUES: 'VAR',
 	},
 };
 
@@ -591,16 +354,16 @@ function singleType(tok: Token, dialect: Dialect): { type: string; kind?: 'keywo
 	// type canonicalization), no longer membership, wherever a verdict exists.
 	if (tok.consumedAs === 'identifier') return { type: 'VAR' };
 	if (tok.consumedAs === 'keyword' || tok.consumedAs === 'type') {
-		const named = DIALECT_KEYWORDS[dialect]?.[upper] ?? KEYWORDS[upper] ?? upper;
-		return named === 'VAR' ? { type: 'VAR' } : { type: named, kind: tok.consumedAs };
+		const named = DIALECT_KEYWORD_RENAMES[dialect]?.[upper] ?? KEYWORD_RENAMES[upper] ?? upper;
+		return { type: named, kind: tok.consumedAs };
 	}
-	// No verdict (bare tokenize(), recovery regions): the curated tables stay
-	// the conservative membership fallback, VAR for unknown words — the
-	// soft-keyword pin in token-mapper.test.ts documents why identifier
-	// treatment is the safe default there. A table hit keeps the keyword kind
-	// the old membership set gave it.
-	const mapped = DIALECT_KEYWORDS[dialect]?.[upper] ?? KEYWORDS[upper];
-	if (mapped) return mapped === 'VAR' ? { type: 'VAR' } : { type: mapped, kind: 'keyword' };
+	// No verdict (bare tokenize(), recovery regions): the renames plus the
+	// fixed structural core keep classic keywords typed so a mid-edit document
+	// holds its shape; every other word is an identifier — the conservative
+	// default the soft-keyword pin in token-mapper.test.ts documents.
+	const mapped = DIALECT_KEYWORD_RENAMES[dialect]?.[upper] ?? KEYWORD_RENAMES[upper];
+	if (mapped) return { type: mapped, kind: 'keyword' };
+	if (STRUCTURAL_CORE.has(upper)) return { type: upper, kind: 'keyword' };
 	// An unmapped symbol keeps its uppercased text as a last resort.
 	return { type: /^[A-Z_][A-Z0-9_$]*$/.test(upper) ? 'VAR' : upper };
 }
