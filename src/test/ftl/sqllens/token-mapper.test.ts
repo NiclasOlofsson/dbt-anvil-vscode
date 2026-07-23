@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { tokenize } from 'sqllens';
+import { parse } from 'sqllens';
 import type { Dialect } from '../../../ftl/sqllens/api';
 import { keywordTokenTypesFor, mapTokens } from '../../../ftl/sqllens/token-mapper';
 
+/** Parse-carried tokens, the same stream production feeds mapTokens
+ *  (document-parser's `primary.tokens`) — carries `consumedAs` verdicts,
+ *  where a bare tokenize() stream by contract does not. */
 function map(sql: string, dialect: Dialect = 'databricks') {
-	return mapTokens(tokenize(sql, dialect), sql, dialect);
+	return mapTokens(parse(sql, dialect).tokens, sql, dialect);
 }
 
 function types(sql: string, dialect: Dialect = 'databricks') {
@@ -35,6 +38,29 @@ describe('mapTokens — clause & compound naming', () => {
 		expect(types('select count(*)\nfrom t\norder by 1')).toEqual([
 			'SELECT', 'VAR', 'L_PAREN', 'STAR', 'R_PAREN', 'FROM', 'VAR', 'ORDER_BY', 'NUMBER',
 		]);
+	});
+});
+
+describe('mapTokens — consumedAs verdicts (sqllens 1.8.0)', () => {
+	// The parse's own per-occurrence verdict outranks the curated tables in both
+	// directions: a keyword the tables don't know keeps its name when the parse
+	// consumed it as a keyword, and a table-listed word used as an identifier
+	// maps to VAR. The tables demote to naming (renames/canonicalization) plus
+	// fallback membership for unverdicted tokens.
+	it('an unknown keyword consumed as a keyword keeps its uppercased text', () => {
+		// snowflake scripting LET: keyword-role, consumedAs 'keyword', no table
+		// entry. (A bare `let x := 1` is a recovery region — verdict absent —
+		// and correctly stays VAR through the fallback; in a script block the
+		// parse verdicts it.)
+		expect(types('begin let x := 1; end;', 'snowflake')).toContain('LET');
+		expect(types('let x := 1', 'snowflake')[0]).toBe('VAR');
+	});
+
+	it('a table-listed word consumed as an identifier maps to VAR', () => {
+		// redshift lists NAME in its dialect keyword table, but here it is a column.
+		const toks = map('select a.name from t', 'redshift');
+		const name = toks.find(t => t.start === 9)!;
+		expect(name.type).toBe('VAR');
 	});
 });
 

@@ -606,16 +606,25 @@ function singleType(tok: Token, dialect: Dialect): string {
 	const bySymbol = OPERATOR_TOKENS[tok.text];
 	if (bySymbol) return bySymbol;
 	const upper = tok.text.toUpperCase();
+	// The parse's own per-occurrence verdict (sqllens 1.8.0 `consumedAs`)
+	// outranks the tables in both directions: a keyword-vocabulary word the
+	// parse absorbed through an identifier rule IS an identifier here (duckdb
+	// lexes the column in `a.name` as a NAME keyword token; redshift even
+	// tables it), and a keyword/type the tables don't know keeps its uppercased
+	// text instead of demoting to VAR. The tables are thereby NAMING (renames +
+	// type canonicalization), no longer membership, wherever a verdict exists.
+	if (tok.consumedAs === 'identifier') return 'VAR';
+	if (tok.consumedAs === 'keyword' || tok.consumedAs === 'type') {
+		return DIALECT_KEYWORDS[dialect]?.[upper] ?? KEYWORDS[upper] ?? upper;
+	}
+	// No verdict (bare tokenize(), recovery regions): the curated tables stay
+	// the conservative membership fallback, VAR for unknown words — the
+	// soft-keyword pin in token-mapper.test.ts documents why identifier
+	// treatment is the safe default there.
 	const dialectKw = DIALECT_KEYWORDS[dialect]?.[upper];
 	if (dialectKw) return dialectKw;
 	const kw = KEYWORDS[upper];
 	if (kw) return kw;
-	// A word not in the keywords map becomes an identifier (VAR) EVEN when the
-	// lexer's role says 'keyword': ANTLR keyword vocabularies include SOFT
-	// keywords (duckdb lexes the column name in `a.name` as a NAME keyword
-	// token), and identifier treatment is the correct default for those. The
-	// tables above are the reserved-vs-soft semantic layer, not just renames —
-	// see the soft-keyword pin in token-mapper.test.ts.
 	// An unmapped symbol keeps its uppercased text as a last resort.
 	return /^[A-Z_][A-Z0-9_$]*$/.test(upper) ? 'VAR' : upper;
 }
