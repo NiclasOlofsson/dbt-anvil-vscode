@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.2.0
+
+Completion grew up. Instead of the extension guessing at your cursor context with pattern matching, [sqllens](https://github.com/NiclasOlofsson/sqllens) now decides what fits at the caret from the grammar itself, and dbt Anvil decorates each suggestion with what it knows about your project. The debugger and the linter got sharper the same way: by asking the parser instead of re-deriving.
+
+- **Grammar-driven completion** — one parser call at the caret decides the candidates: columns, tables, CTEs, functions, keywords, and `ref()`/`source()` names inside jinja slots. Suggestions are pruned to what you typed, and accepting one replaces exactly the fragment you were typing, so completing inside `"my_t` never strands the opening quote.
+- **Suggestions that know dbt** — a model in the list reads like `incremental — jaffle_shop`, a source carries its schema, a CTE its column count, and descriptions from your schema YAML ride along as documentation.
+- **Sharper debugger stepping** — clause anchors come from the parser's structural view now: `qualify` is a pausable step on warehouses that have it, multi-word anchors like `group by` and `left join` are marked as one unit, and the `ref('package', 'model')` and `ref(model=...)` forms get stepping markers too.
+- **Keywords classified by usage, not by list** — the parser tells the linter and formatter how each word was actually used, per occurrence. A column that happens to be named `name` is never recased as a keyword again, and keywords the old lists never knew (`qualify`, Snowflake scripting) recase correctly on every dialect.
+- **Format Document always formats** — the leftover `ninja.autoFix.applyOnFormat` setting could silently disable Shift+Alt+F. It gated a path it was never designed for, so it's gone; on-demand formatting just works, and auto-fix on save keeps its own switch.
+- **Formatter fixes** — intentional blank lines inside CTEs and subqueries survive formatting (capped at your `maxBlankLines`), multiline `{{ config(...) }}` tags get proper padding and argument spacing, and the preset descriptions in settings now describe the presets you actually get.
+- **Truthful types on hover** — sqllens 1.8 graded its type inference against Spark's own golden test schemas and the postgres catalog, fixing hundreds of wrong answers. A few formerly confident answers are now an honest unknown, which beats a confident lie.
+- **Bind parameters and variables are real syntax** — `?`, `:name`, `$1`, and `@name` placeholders and session variables parse as what they are, instead of masquerading as columns or literals.
+- **Rule editor fix** — boolean options (indented joins, indented ON, star-in-CTE) now save as real booleans; they could previously save as strings and read back wrong.
+- **Docs aligned with reality** — the ninja rule reference lists the full live rule set with correct default severities, every open roadmap idea now links to a GitHub issue, and stale claims were swept from the guides.
+
 ## 1.1.0
 
 Two new dialects: **SQLite** and **MySQL**. If your dbt project runs on `dbt-sqlite` or `dbt-mysql`, the whole toolkit now speaks your SQL, the same way it already does for Snowflake, BigQuery, Databricks, and the rest: hover, lineage, diagnostics, and the formatter.
