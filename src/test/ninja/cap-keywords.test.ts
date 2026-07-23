@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { violationsFor, capCfg, mockDocument, cfg, model, sqlTok } from './helpers';
+import { violationsFor, capCfg, mockDocument, cfg, model, sqlTok, kwTok } from './helpers';
 import { runNinja } from '../../ninja/engine';
 import type { SqlToken } from '../../ftl/sql-tokens';
 import { FixAction } from '../../ninja/violation';
@@ -65,7 +65,9 @@ function keywordTokens(sql: string): SqlToken[] {
 				if (KEYWORD_TYPES.has(word.toLowerCase())) {
 					const absStart = absoluteOffset + start;
 					const absEnd = absoluteOffset + i - 1;
-					tokens.push(sqlTok(word.toUpperCase(), absStart, absEnd, lineIdx, i));
+					// Real mapped tokens carry the parse's per-occurrence verdict;
+					// this harness stamps it the way mapTokens would.
+					tokens.push({ ...sqlTok(word.toUpperCase(), absStart, absEnd, lineIdx, i), kind: 'keyword' as const });
 				}
 			} else {
 				i++;
@@ -189,8 +191,8 @@ describe(RULE, () => {
 		// (simulating the parser classifying it as VAR, not a keyword).
 		const sql = 'SELECT SELECT FROM t';
 		const tokens: SqlToken[] = [
-			sqlTok('SELECT', 0, 5, 0, 6),   // keyword at col 0
-			sqlTok('FROM', 14, 17, 0, 18),   // FROM keyword
+			kwTok('SELECT', 0, 5, 0, 6),   // keyword at col 0
+			kwTok('FROM', 14, 17, 0, 18),   // FROM keyword
 			// 'SELECT' at col 7 intentionally absent
 		];
 		const doc = mockDocument(sql);
@@ -258,5 +260,24 @@ describe(RULE, () => {
 		].join('\n');
 		const v = violationsFor(run(sql, capCfg('keywords', 'lower')), RULE);
 		expect(v.length).toBe(0);
+	});
+});
+
+describe(`${RULE} — per-occurrence kind (sqllens 1.8.0)`, () => {
+	it('never recases a kindless token, even with a keyword-looking type', () => {
+		// A soft keyword used as an identifier maps with no kind; the rule must
+		// not flag it regardless of what its type name looks like.
+		const doc = mockDocument('SELECT 1');
+		const m = model({ sqlTokens: [sqlTok('SELECT', 0, 5, 0, 6)] });
+		const v = violationsFor(runNinja(doc, m, [], cfg(capCfg('keywords', 'lower'))), RULE);
+		expect(v.length).toBe(0);
+	});
+
+	it('recases a verdicted keyword the old membership list never knew', () => {
+		const doc = mockDocument('LET x := 1');
+		const m = model({ sqlTokens: [{ ...sqlTok('LET', 0, 2, 0, 3), kind: 'keyword' as const }] });
+		const v = violationsFor(runNinja(doc, m, [], cfg(capCfg('keywords', 'lower'))), RULE);
+		expect(v.length).toBe(1);
+		expect(v[0].message).toContain('let');
 	});
 });

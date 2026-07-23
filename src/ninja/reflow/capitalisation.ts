@@ -1,5 +1,6 @@
 import type { CapitalisationPolicy, NinjaConfig } from '../config';
 import type { DialectSymbols } from '../../ftl/sql-tokens';
+import { isKeywordRecasable } from '../rules/cap-keywords';
 
 /**
  * Capitalisation applied by the reflow printer.
@@ -27,7 +28,6 @@ export interface CapitalisationState {
 	literalFirstSeen: Map<string, string>;
 	functionFirstSeen: Map<string, string>;
 	typeFirstSeen: Map<string, string>;
-	keywordTypes: ReadonlySet<string>;
 	functionNames: ReadonlySet<string>;
 	typeNames: ReadonlySet<string>;
 }
@@ -45,7 +45,6 @@ export function createCapitalisationState(symbols?: DialectSymbols): Capitalisat
 		literalFirstSeen: new Map(),
 		functionFirstSeen: new Map(),
 		typeFirstSeen: new Map(),
-		keywordTypes: symbols?.keywordTokenTypes ?? empty,
 		functionNames: symbols?.functions ?? empty,
 		typeNames: symbols?.types ?? empty,
 	};
@@ -65,6 +64,7 @@ export function recaseToken(
 	config: NinjaConfig,
 	state: CapitalisationState,
 	nextTokenType?: string,
+	kind?: 'keyword' | 'type',
 ): string {
 	const typeKey = tokenType.toLowerCase();
 
@@ -72,7 +72,10 @@ export function recaseToken(
 		return apply(literal, config.capitalisation.literals, state.literalFirstSeen);
 	}
 
-	if (state.keywordTypes.has(typeKey)) {
+	// Per-occurrence verdict (SqlToken.kind), not a membership set — the parse
+	// says whether THIS occurrence is a keyword. Same alpha-only exemption for
+	// compounds/underscore names the retired set encoded.
+	if (isKeywordRecasable({ kind, type: tokenType })) {
 		return apply(literal, config.capitalisation.keywords, state.keywordFirstSeen);
 	}
 

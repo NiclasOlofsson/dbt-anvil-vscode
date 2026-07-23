@@ -27,19 +27,25 @@ export interface SqlToken {
 	 * `start` is inclusive, `end` is exclusive (the char after the comment).
 	 */
 	comments?: Array<{ start: number; end: number; text: string }>;
+	/**
+	 * Per-occurrence classification: what the recasing rules key on instead of a
+	 * dialect membership set. From the parse's `consumedAs` verdict (sqllens
+	 * 1.8.0), or the curated fallback tables for unverdicted tokens. Absent on
+	 * identifiers, literals, and operators — an absent kind is never recased.
+	 */
+	kind?: 'keyword' | 'type';
 }
 
 /** Authoritative symbol lists for a specific SQL dialect. */
 export interface DialectSymbols {
 	/** Lowercase SQL function names (e.g. 'count', 'regexp_extract'). */
 	readonly functions: ReadonlySet<string>;
-	/** Lowercase token-type names that represent SQL keywords (e.g. 'select', 'qualify'). */
-	readonly keywordTokenTypes: ReadonlySet<string>;
 	/**
 	 * Lowercase SQL keyword WORDS for this dialect (e.g. 'select', 'from', 'qualify') —
-	 * the grammar's literal keyword set, distinct from `keywordTokenTypes` (token-type
-	 * names). Used to tell a keyword apart from a user identifier (hover / references
-	 * suppression) without a dialect-blind hardcoded list.
+	 * the grammar's literal keyword set. Used to tell a keyword apart from a user
+	 * identifier (hover / references suppression) without a dialect-blind hardcoded
+	 * list. (Keyword RECASING no longer uses a set at all: it keys on each mapped
+	 * token's own `SqlToken.kind`, the parse's per-occurrence verdict.)
 	 */
 	readonly keywords: ReadonlySet<string>;
 	/** Lowercase data type names (e.g. 'bigint', 'timestamp_ltz'). */

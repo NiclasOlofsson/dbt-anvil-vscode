@@ -51,7 +51,7 @@ function tokens(sql: string): SqlToken[] {
 				if (KEYWORD_TYPES.has(word.toLowerCase())) {
 					const absStart = absoluteOffset + start;
 					const absEnd = absoluteOffset + i - 1;
-					result.push(sqlTok(word.toUpperCase(), absStart, absEnd, lineIdx, i));
+					result.push({ ...sqlTok(word.toUpperCase(), absStart, absEnd, lineIdx, i), kind: 'keyword' as const });
 				}
 			} else {
 				i++;

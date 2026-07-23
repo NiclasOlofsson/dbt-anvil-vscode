@@ -16,7 +16,7 @@ import type { DialectSymbols } from '../sql-tokens';
 import { performance } from 'node:perf_hooks';
 import { completeAt as sqllensCompleteAt, dialectSymbols, minijinja, Schema, signatureAt as sqllensSignatureAt, SqlDocument, toSqllensDialect, type CompleteOptions, type CompletionResult, type Dialect, type Qualification, type SchemaMapping, type SchemaProvider, type Scope, type SignatureHelpInfo, type Sym, type TagNode, type TemplateProvider } from './api';
 import { DBT_PROVIDER } from './template-shape';
-import { keywordTokenTypesFor, mapTokens } from './token-mapper';
+import { mapTokens } from './token-mapper';
 import { mergeSqlAndJinjaTokens } from '../ninja-sql-tokens';
 import { tagInfos } from './extract/tag-infos';
 import { jinjaTokensFromStream } from './extract/jinja-stream';
@@ -101,18 +101,14 @@ export class SqllensDocumentParser implements DocumentParser {
 	 * `set.has(x.toLowerCase())`, and the interface documents lowercase:
 	 *   - `functions` — sqllens's own `dialectSymbols(dialect)` membership set
 	 *     (canonical UPPERCASE), lowercased here.
-	 *   - `keywordTokenTypes` — TokenType names the token-mapper can emit for
-	 *     this dialect (`keywordTokenTypesFor`), lowercased. These are token `.type`
-	 *     values (SELECT, ALIAS…), NOT keyword words, so sqllens's own `keywords` set
-	 *     (grammar literals) is deliberately NOT used for them. Compound token types
-	 *     (GROUP_BY, ORDER_BY, PARTITION_BY…) are FILTERED OUT: keyword recasing
-	 *     never applies to compound tokens, so `GROUP BY` keeps its source casing,
-	 *     and the format oracles encode that.
 	 *   - `types` — the canonical set of data type names (dialect-INDEPENDENT),
 	 *     provided as a static mirror (`DATA_TYPE_NAMES`). sqllens's
 	 *     own per-dialect type-word set is deliberately not used: it both misses
 	 *     canonical names the legacy recasing matched (`name`, `interval`, `map`…) and
 	 *     adds dialect aliases legacy never recased (`int4`, `string`…).
+	 *
+	 * Keyword recasing carries no set here anymore: it keys on each mapped
+	 * token's own `SqlToken.kind` (the parse's per-occurrence verdict).
 	 */
 	getDialectSymbols(): Promise<DialectSymbols | undefined> {
 		const dialect = toSqllensDialect(this._context.adapterType);
@@ -123,11 +119,6 @@ export class SqllensDocumentParser implements DocumentParser {
 				new Set([...set].map(x => x.toLowerCase()));
 			symbols = {
 				functions: lower(s.functions),
-				keywordTokenTypes: new Set(
-					[...keywordTokenTypesFor(dialect)]
-						.map(x => x.toLowerCase())
-						.filter(x => /^[a-z]+$/.test(x)),
-				),
 				keywords: lower(s.keywords),
 				types: DATA_TYPE_NAMES,
 			};

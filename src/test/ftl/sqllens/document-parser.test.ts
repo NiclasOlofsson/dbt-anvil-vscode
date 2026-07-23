@@ -591,36 +591,24 @@ describe('SqllensDocumentParser — schema-fed SELECT * expansion', () => {
 });
 
 describe('SqllensDocumentParser — getDialectSymbols', () => {
-	// The sets are LOWERCASE: every consumer (cap-keywords/functions/types, the reflow
-	// printer) tests membership with `set.has(x.toLowerCase())`, matching the original
-	// convention. keywordTokenTypes are TokenType names (select, alias…),
-	// NOT keyword words; functions come from sqllens's own membership set, lowercased;
-	// types mirror the DataType enum (the dialect-independent set).
-	it('exposes keyword TokenTypes, functions, and types for databricks', async () => {
+	// The sets are LOWERCASE: every consumer (cap-functions/types, the reflow
+	// printer) tests membership with `set.has(x.toLowerCase())`. Keyword
+	// RECASING carries no set here anymore — it keys on each mapped token's own
+	// `SqlToken.kind` (the parse's per-occurrence verdict, token-mapper tests).
+	it('exposes functions, types, and keyword words for databricks', async () => {
 		const symbols = await parser('databricks').getDialectSymbols();
 		expect(symbols).toBeDefined();
-		// Single-word keyword token-type names only. Compound names (group_by,
-		// order_by…) are excluded, mirroring the legacy `_get_dialect_symbols`
-		// `isalpha()` filter (sql_parser.py) — keyword recasing never touches
-		// multi-word tokens, so `GROUP BY` keeps its source casing (the format
-		// oracles encode exactly that, see kitchen-sink.out.sql).
-		expect(symbols!.keywordTokenTypes.has('group_by')).toBe(false);
-		expect(symbols!.keywordTokenTypes.has('alias')).toBe(true); // the AS keyword
-		expect(symbols!.keywordTokenTypes.has('select')).toBe(true);
-		// A word mapped to VAR (removed keyword) must NOT be a keyword type.
-		expect(symbols!.keywordTokenTypes.has('var')).toBe(false);
 		// A known function and type.
 		expect(symbols!.functions.has('coalesce')).toBe(true);
 		expect(symbols!.types.has('int')).toBe(true);
-		// Keyword WORDS (distinct from keywordTokenTypes) — the grammar literal set,
-		// lowercased, used by hover/reference suppression.
+		// Keyword WORDS — the grammar literal set, lowercased, used by
+		// hover/reference suppression.
 		expect(symbols!.keywords.has('select')).toBe(true);
 		expect(symbols!.keywords.has('from')).toBe(true);
 	});
 
-	it('carries the tsql-specific TOP keyword type and NVARCHAR type', async () => {
+	it('carries the tsql-specific NVARCHAR type', async () => {
 		const symbols = await parser('tsql').getDialectSymbols();
-		expect(symbols!.keywordTokenTypes.has('top')).toBe(true);
 		expect(symbols!.types.has('nvarchar')).toBe(true);
 	});
 
@@ -630,7 +618,6 @@ describe('SqllensDocumentParser — getDialectSymbols', () => {
 		const b = await p.getDialectSymbols();
 		expect(a).toBe(b);
 		expect(a!.functions).toBe(b!.functions);
-		expect(a!.keywordTokenTypes).toBe(b!.keywordTokenTypes);
 	});
 });
 

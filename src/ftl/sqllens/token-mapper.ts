@@ -531,31 +531,6 @@ const DIALECT_COMPOUNDS: Partial<Record<Dialect, Record<string, string>>> = {
 	},
 };
 
-/**
- * The set of `TokenType` NAMES the mapper can emit as a keyword for a
- * dialect — the union of the VALUES of the base `KEYWORDS` + `COMPOUNDS` tables
- * and the dialect's `DIALECT_KEYWORDS` + `DIALECT_COMPOUNDS` overlays. This is the
- * membership set a keyword-capitalisation rule tests a mapped token's `.type`
- * against (`DialectSymbols.keywordTokenTypes`); the values here are exactly the
- * `.type` strings `mapTokens` produces. `VAR` is excluded — a word mapped to VAR
- * is a removed keyword lexed as an identifier, not a keyword. UPPERCASE (matching
- * `token.type`); cached per dialect. The extension lowercases when adapting to its
- * lowercase `DialectSymbols` contract.
- */
-const _keywordTypeCache = new Map<Dialect, ReadonlySet<string>>();
-export function keywordTokenTypesFor(dialect: Dialect): ReadonlySet<string> {
-	const cached = _keywordTypeCache.get(dialect);
-	if (cached) return cached;
-	const out = new Set<string>();
-	const add = (v: string): void => { if (v !== 'VAR') out.add(v); };
-	for (const v of Object.values(KEYWORDS)) add(v);
-	for (const v of Object.values(COMPOUNDS)) add(v);
-	for (const v of Object.values(DIALECT_KEYWORDS[dialect] ?? {})) add(v);
-	for (const v of Object.values(DIALECT_COMPOUNDS[dialect] ?? {})) add(v);
-	_keywordTypeCache.set(dialect, out);
-	return out;
-}
-
 function buildLineStarts(sql: string): number[] {
 	const starts = [0];
 	for (let i = 0; i < sql.length; i++) {
@@ -593,18 +568,19 @@ function isWhitespaceToken(tok: Token): boolean {
 	return tok.role === 'whitespace' || /^\s+$/.test(tok.text ?? '');
 }
 
-/** Map one already-de-compounded sqllens token to a TokenType name. */
-function singleType(tok: Token, dialect: Dialect): string {
+/** Map one already-de-compounded sqllens token to a TokenType name plus its
+ *  recasing kind (what cap-keywords and the printer key on per occurrence). */
+function singleType(tok: Token, dialect: Dialect): { type: string; kind?: 'keyword' | 'type' } {
 	switch (tok.role) {
 		case 'string':
-			return 'STRING';
+			return { type: 'STRING' };
 		case 'number':
-			return 'NUMBER';
+			return { type: 'NUMBER' };
 		case 'identifier':
-			return isQuotedIdentifier(tok.text) ? 'IDENTIFIER' : 'VAR';
+			return { type: isQuotedIdentifier(tok.text) ? 'IDENTIFIER' : 'VAR' };
 	}
 	const bySymbol = OPERATOR_TOKENS[tok.text];
-	if (bySymbol) return bySymbol;
+	if (bySymbol) return { type: bySymbol };
 	const upper = tok.text.toUpperCase();
 	// The parse's own per-occurrence verdict (sqllens 1.8.0 `consumedAs`)
 	// outranks the tables in both directions: a keyword-vocabulary word the
@@ -613,20 +589,20 @@ function singleType(tok: Token, dialect: Dialect): string {
 	// tables it), and a keyword/type the tables don't know keeps its uppercased
 	// text instead of demoting to VAR. The tables are thereby NAMING (renames +
 	// type canonicalization), no longer membership, wherever a verdict exists.
-	if (tok.consumedAs === 'identifier') return 'VAR';
+	if (tok.consumedAs === 'identifier') return { type: 'VAR' };
 	if (tok.consumedAs === 'keyword' || tok.consumedAs === 'type') {
-		return DIALECT_KEYWORDS[dialect]?.[upper] ?? KEYWORDS[upper] ?? upper;
+		const named = DIALECT_KEYWORDS[dialect]?.[upper] ?? KEYWORDS[upper] ?? upper;
+		return named === 'VAR' ? { type: 'VAR' } : { type: named, kind: tok.consumedAs };
 	}
 	// No verdict (bare tokenize(), recovery regions): the curated tables stay
 	// the conservative membership fallback, VAR for unknown words — the
 	// soft-keyword pin in token-mapper.test.ts documents why identifier
-	// treatment is the safe default there.
-	const dialectKw = DIALECT_KEYWORDS[dialect]?.[upper];
-	if (dialectKw) return dialectKw;
-	const kw = KEYWORDS[upper];
-	if (kw) return kw;
+	// treatment is the safe default there. A table hit keeps the keyword kind
+	// the old membership set gave it.
+	const mapped = DIALECT_KEYWORDS[dialect]?.[upper] ?? KEYWORDS[upper];
+	if (mapped) return mapped === 'VAR' ? { type: 'VAR' } : { type: mapped, kind: 'keyword' };
 	// An unmapped symbol keeps its uppercased text as a last resort.
-	return /^[A-Z_][A-Z0-9_$]*$/.test(upper) ? 'VAR' : upper;
+	return { type: /^[A-Z_][A-Z0-9_$]*$/.test(upper) ? 'VAR' : upper };
 }
 
 /** Next non-whitespace token after index `i`, or null if a comment intervenes
@@ -660,6 +636,7 @@ export function mapTokens(tokens: Token[], sql: string, dialect: Dialect): SqlTo
 		}
 
 		let type: string | undefined;
+		let kind: SqlToken['kind'];
 		let endTok = tok;
 		if (tok.role === 'keyword') {
 			const nx = nextKeywordCandidate(tokens, i);
@@ -668,12 +645,17 @@ export function mapTokens(tokens: Token[], sql: string, dialect: Dialect): SqlTo
 				const compound = DIALECT_COMPOUNDS[dialect]?.[pairKey] ?? COMPOUNDS[pairKey];
 				if (compound) {
 					type = compound;
+					kind = 'keyword';
 					endTok = nx.tok;
 					i = nx.index;
 				}
 			}
 		}
-		if (type === undefined) type = singleType(tok, dialect);
+		if (type === undefined) {
+			const single = singleType(tok, dialect);
+			type = single.type;
+			kind = single.kind;
+		}
 
 		const line = lineAtOffset(endTok.stop, lineStarts);
 		const st: SqlToken = {
@@ -683,6 +665,7 @@ export function mapTokens(tokens: Token[], sql: string, dialect: Dialect): SqlTo
 			line,
 			col: endTok.stop - lineStarts[line] + 1,
 		};
+		if (kind !== undefined) st.kind = kind;
 		if (pending.length) {
 			st.comments = pending;
 			pending = [];

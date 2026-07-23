@@ -1243,7 +1243,7 @@ export function printDocument(input: PrinterInput): string {
 				emitType = preferred;
 			}
 		}
-		parts.push(recaseToken(emitType, emitLiteral, config, cap, nextSqlTypeUpper));
+		parts.push(recaseToken(emitType, emitLiteral, config, cap, nextSqlTypeUpper, tok.kind));
 		atLineStart = false;
 
 		// ── Trailing comments ────────────────────────────────────────────

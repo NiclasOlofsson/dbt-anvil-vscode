@@ -259,6 +259,12 @@ export function sqlTok(type: string, start: number, end: number, line: number, c
 	return { type, start, end, line, col };
 }
 
+/** A keyword-verdicted token — what mapTokens produces for a keyword occurrence
+ *  (`kind` is the parse's consumedAs verdict; recasing keys on it). */
+export function kwTok(type: string, start: number, end: number, line: number, col: number): SqlToken {
+	return { type, start, end, line, col, kind: 'keyword' };
+}
+
 /**
  * Build a DocumentModel with custom fields.
  *
@@ -296,7 +302,6 @@ export function model(
  * count/coalesce/etc. functions, int/varchar/timestamp types).
  */
 export function stubDialectSymbols(overrides: Partial<{
-	keywordTokenTypes: Iterable<string>;
 	keywords: Iterable<string>;
 	functions: Iterable<string>;
 	types: Iterable<string>;
@@ -312,7 +317,6 @@ export function stubDialectSymbols(overrides: Partial<{
 		'qualify', 'pivot', 'unpivot',
 	];
 	return {
-		keywordTokenTypes: new Set(overrides.keywordTokenTypes ?? defaultKeywords),
 		keywords: new Set(overrides.keywords ?? defaultKeywords),
 		functions: new Set(overrides.functions ?? [
 			'count', 'coalesce', 'nullif', 'cast', 'lower', 'upper',

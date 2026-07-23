@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parse } from 'sqllens';
 import type { Dialect } from '../../../ftl/sqllens/api';
-import { keywordTokenTypesFor, mapTokens } from '../../../ftl/sqllens/token-mapper';
+import { mapTokens } from '../../../ftl/sqllens/token-mapper';
 
 /** Parse-carried tokens, the same stream production feeds mapTokens
  *  (document-parser's `primary.tokens`) — carries `consumedAs` verdicts,
@@ -64,6 +64,37 @@ describe('mapTokens — consumedAs verdicts (sqllens 1.8.0)', () => {
 	});
 });
 
+describe('mapTokens — verdict kind on mapped tokens', () => {
+	// The recasing rules key on the mapped token's own kind (per-occurrence truth)
+	// instead of a dialect membership set. Verdicted keywords and types carry it;
+	// identifier verdicts and plain identifiers carry none.
+	it('a verdicted keyword carries kind "keyword"', () => {
+		const sel = map('select a from t').find(t => t.type === 'SELECT')!;
+		expect(sel.kind).toBe('keyword');
+	});
+
+	it('a folded compound carries kind "keyword" (rules exempt it by shape)', () => {
+		const g = map('select a from t group by a').find(t => t.type === 'GROUP_BY')!;
+		expect(g.kind).toBe('keyword');
+	});
+
+	it('a verdicted type carries kind "type" with the canonical name', () => {
+		// databricks STRING verdicts "type" and canonicalizes to TEXT. (postgres
+		// int4 lexes as a plain identifier-role token — no verdict, stays VAR.)
+		const toks = map('select cast(x as string) from t', 'databricks');
+		const text = toks.find(t => t.type === 'TEXT')!;
+		expect(text.kind).toBe('type');
+	});
+
+	it('identifier verdicts and plain identifiers carry no kind', () => {
+		const name = map('select a.name from t', 'redshift').find(t => t.start === 9)!;
+		expect(name.type).toBe('VAR');
+		expect(name.kind).toBeUndefined();
+		const foo = map('select foo from bar').find(t => t.start === 7)!;
+		expect(foo.kind).toBeUndefined();
+	});
+});
+
 describe('mapTokens — soft keywords stay identifiers', () => {
 	// ANTLR keyword vocabularies include SOFT keywords: words the lexer tags with
 	// role 'keyword' that are identifiers in use (duckdb lexes the column in
@@ -85,30 +116,6 @@ describe('mapTokens — soft keywords stay identifiers', () => {
 
 	it('plain identifiers still map to VAR', () => {
 		expect(types('select foo from bar')).toEqual(['SELECT', 'VAR', 'FROM', 'VAR']);
-	});
-});
-
-describe('keywordTokenTypesFor', () => {
-	// The union of the mapper's KEYWORDS/COMPOUNDS/DIALECT_* table VALUES — the
-	// TokenType NAMES a mapped token's `.type` can carry. UPPERCASE (matches
-	// token.type); the document parser lowercases these into its DialectSymbols.
-	it('unions base keyword + compound token-type names', () => {
-		const s = keywordTokenTypesFor('databricks');
-		expect(s.has('SELECT')).toBe(true);
-		expect(s.has('GROUP_BY')).toBe(true); // from COMPOUNDS
-		expect(s.has('ORDER_BY')).toBe(true);
-		expect(s.has('ALIAS')).toBe(true); // AS -> ALIAS
-		// VAR is an identifier fallback, never a keyword type.
-		expect(s.has('VAR')).toBe(false);
-	});
-
-	it('folds in the dialect layer (tsql TOP)', () => {
-		expect(keywordTokenTypesFor('tsql').has('TOP')).toBe(true);
-		expect(keywordTokenTypesFor('databricks').has('TOP')).toBe(false);
-	});
-
-	it('caches — repeat calls return the identical set instance', () => {
-		expect(keywordTokenTypesFor('snowflake')).toBe(keywordTokenTypesFor('snowflake'));
 	});
 });
 

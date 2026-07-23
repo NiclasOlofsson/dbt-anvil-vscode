@@ -12,7 +12,6 @@ import type { DialectSymbols } from '../../../ftl/sql-tokens';
 describe('reflow.dialect-cap', () => {
 	const symbols: DialectSymbols = {
 		functions: new Set(['count', 'coalesce', 'lower', 'upper', 'nullif', 'cast']),
-		keywordTokenTypes: new Set(['select', 'from', 'where']),
 		keywords: new Set(['select', 'from', 'where']),
 		types: new Set(['int', 'varchar', 'bigint', 'timestamp']),
 	};
@@ -77,19 +76,17 @@ describe('reflow.dialect-cap', () => {
 		expect(result.edit?.newText).toContain('VARCHAR');
 	});
 
-	it('uses dialect keywordTokenTypes instead of hardcoded set', () => {
-		// Set contains 'qualify' which isn't in the hardcoded fallback for
-		// every dialect. With symbols supplied, it should recase.
+	it('recases per the token\'s own kind verdict, not any membership set', () => {
+		// QUALIFY carries kind "keyword" from the parse; no set lists it anywhere.
 		const localSymbols: DialectSymbols = {
 			functions: new Set(),
-			keywordTokenTypes: new Set(['qualify']),
 			keywords: new Set(['qualify']),
 			types: new Set(),
 		};
 		const sql = 'QUALIFY 1';
 		const doc = mockDocument(sql);
 		const tokens = [
-			sqlTok('QUALIFY', 0, 6, 0, 7),
+			{ ...sqlTok('QUALIFY', 0, 6, 0, 7), kind: 'keyword' as const },
 			sqlTok('NUMBER', 8, 8, 0, 9),
 		];
 		const result = reflowDocument(doc, model({ sqlTokens: tokens }), cfg({

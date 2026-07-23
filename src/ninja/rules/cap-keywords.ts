@@ -8,32 +8,18 @@ import { sqlOnly } from '../../ftl/ninja-sql-tokens';
 
 const RULE_ID = 'ninja.cap.keywords';
 
-// TokenType names that represent SQL keywords.
-// All stored lowercase for comparison against token.type.toLowerCase().
-// Includes compound token types for multi-word keywords:
-// `ALIAS` (the AS keyword), `GROUP_BY`, `ORDER_BY`, `ISNULL`, `NOTNULL`, etc.
-// For compound tokens, `tokenText` returns the raw multi-word slice
-// (e.g. "GROUP BY"), and the replace pass lowercases it intact.
-const KEYWORD_TOKEN_TYPES = new Set([
-	'select', 'from', 'where', 'and', 'or', 'not', 'in', 'is', 'null',
-	'as', 'alias', 'on', 'join', 'left', 'right', 'inner', 'outer', 'full', 'cross',
-	'group', 'by', 'order', 'having', 'limit', 'offset', 'union', 'all',
-	'group_by', 'order_by', 'order_siblings_by', 'distribute_by',
-	'isnull', 'notnull',
-	'distinct', 'case', 'when', 'then', 'else', 'end', 'with', 'recursive',
-	'insert', 'into', 'values', 'update', 'set', 'delete', 'create', 'table',
-	'drop', 'alter', 'index', 'view', 'if', 'exists', 'between', 'like',
-	'ilike', 'asc', 'desc', 'nulls', 'first', 'last', 'over', 'partition',
-	'window', 'rows', 'range', 'unbounded', 'preceding', 'following', 'current',
-	'row', 'except', 'intersect', 'true', 'false', 'cast', 'using', 'natural',
-	'lateral', 'any', 'some', 'qualify', 'pivot', 'unpivot', 'tablesample',
-	'for', 'fetch', 'next', 'only', 'percent', 'top', 'returning', 'conflict',
-	'do', 'nothing', 'replace', 'ignore', 'temporary', 'temp', 'materialized',
-	'unique', 'primary', 'key', 'foreign', 'references', 'constraint', 'check',
-	'default', 'cascade', 'restrict', 'no', 'action', 'grant', 'revoke',
-	'begin', 'commit', 'rollback', 'savepoint', 'release', 'transaction',
-	'explain', 'analyze', 'verbose', 'format', 'type', 'enum', 'interval',
-]);
+/**
+ * A token is keyword-recasable when the PARSE said so for this occurrence
+ * (`SqlToken.kind`, from sqllens's consumedAs verdict or the mapper's curated
+ * fallback) AND its type is a single plain alpha word — compounds (GROUP_BY)
+ * and underscore names (CURRENT_DATE) keep their source casing, the same
+ * exemption the retired membership set encoded via its alpha-only filter.
+ * Type-kind tokens recase under the keyword policy exactly as their canonical
+ * names did when they sat in the old membership set.
+ */
+export function isKeywordRecasable(token: { kind?: 'keyword' | 'type'; type: string }): boolean {
+	return (token.kind === 'keyword' || token.kind === 'type') && /^[A-Za-z]+$/.test(token.type);
+}
 
 function checkPolicy(word: string, policy: CapitalisationPolicy, expected: Map<string, string>): string | undefined {
 	if (policy === 'upper') {
@@ -74,10 +60,8 @@ export const keywordCapRule: TokenRule = {
 
 		const text = ctx.document.getText();
 
-		const keywordTypes = ctx.dialectSymbols?.keywordTokenTypes ?? KEYWORD_TOKEN_TYPES;
-
 		for (const token of sqlTokens) {
-			if (!keywordTypes.has(token.type.toLowerCase())) continue;
+			if (!isKeywordRecasable(token)) continue;
 
 			const word = tokenText(text, token);
 			const fix = checkPolicy(word, policy, consistentMap);

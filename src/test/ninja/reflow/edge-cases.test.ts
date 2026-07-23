@@ -27,7 +27,6 @@ describe('reflow.edge-cases', () => {
 	it('consistent function capitalisation — reuses first casing seen', () => {
 		const symbols: DialectSymbols = {
 			functions: new Set(['count']),
-			keywordTokenTypes: new Set(['select', 'from']),
 			keywords: new Set(['select', 'from']),
 			types: new Set(),
 		};
