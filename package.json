@@ -2,7 +2,7 @@
 	"name": "dbt-anvil-vscode",
 	"displayName": "dbt Anvil",
 	"description": "A VS Code extension that gives dbt the same kind of language support that most programming languages have had for years. Now it's here, for dbt Core.",
-	"version": "1.1.0",
+	"version": "1.2.0",
 	"publisher": "nickeolofsson",
 	"license": "MIT",
 	"icon": "resources/icons/dbt-anvil-128.png",
