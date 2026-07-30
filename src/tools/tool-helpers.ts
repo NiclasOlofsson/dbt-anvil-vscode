@@ -1,11 +1,16 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
 import type { DbtCommandResult } from '../dbt/bridge-runner';
+import { ServiceContainer } from '../types/service-container';
 
 /**
  * Resolves a tool input path to a Uri. Accepts URIs (`file://...`, `vscode://...`),
- * absolute paths, or workspace-relative paths. Relative paths are resolved
- * against the first workspace folder.
+ * absolute paths, or project-relative paths.
+ *
+ * Relative paths resolve against the dbt project, which is what the tools
+ * themselves hand out: `get_resource_info` and friends report a manifest node's
+ * `original_file_path`, and that is relative to the project. The project is not
+ * always the workspace folder, since it can sit nested in a multi-repo workspace.
  */
 export function resolvePathToUri(input: string): vscode.Uri {
 	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(input)) {
@@ -14,9 +19,7 @@ export function resolvePathToUri(input: string): vscode.Uri {
 	if (/^[a-zA-Z]:[\\/]|^\//.test(input)) {
 		return vscode.Uri.file(input);
 	}
-	const folder = vscode.workspace.workspaceFolders?.[0];
-	if (!folder) { return vscode.Uri.file(input); }
-	return vscode.Uri.joinPath(folder.uri, input);
+	return vscode.Uri.file(path.join(ServiceContainer.getInstance().getManifestIndexer().projectDir, input));
 }
 
 export interface StateSelectionResult {

@@ -5,6 +5,7 @@ import { ServiceContainer } from './types/service-container';
 import { ManifestService } from './indexing/manifest-service';
 import { detectPythonEnvironment, validatePythonEnvironment, dbtPackagesExist, checkEnvManagerAvailable, getBootstrapCommand, validateDbtInstalled, followsVsCodeInterpreter } from './dbt/env-detector';
 import { getVsCodeInterpreter, onDidChangeVsCodeInterpreter } from './dbt/vscode-python';
+import { discoverDbtProject } from './dbt/project-discovery';
 import { writeShims } from './dbt/terminal-env';
 import { BridgeRunner } from './dbt/bridge-runner';
 import { DbtExecutionService, DbtJobType, Priority } from './dbt/execution-service';
@@ -110,13 +111,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		return;
 	}
 
-	const projectDir = workspaceFolders[0].uri.fsPath;
+	// The activation event is `workspaceContains:**/dbt_project.yml`, so a project
+	// nested in the folder wakes us up; resolution has to reach as deep.
+	const discovery = await discoverDbtProject(workspaceFolders[0].uri);
+	const projectDir = discovery.projectDir ?? workspaceFolders[0].uri.fsPath;
+	if (discovery.projectDir && discovery.candidates.length > 0) {
+		logger.info(`Found dbt project below the workspace root: ${projectDir}`);
+	}
+
 	const storageDir = context.storageUri?.fsPath ?? context.globalStorageUri.fsPath;
 	const extensionTargetDir = path.join(storageDir, 'target');
 	const projectService = new DbtProjectService(projectDir, logger);
 	context.subscriptions.push({ dispose: () => projectService.dispose() });
 	projectService.startWatching();
 	const hasDbtProject = !!projectService.projectConfig;
+
+	// Several projects in one folder is not supported yet, and binding to whichever
+	// the search returned first would be a silent wrong answer. Say so instead.
+	if (discovery.candidates.length > 1) {
+		logger.warn(`Several dbt projects found in the workspace: ${discovery.candidates.join(', ')}`);
+		void vscode.window.showWarningMessage(
+			`dbt Anvil: found ${discovery.candidates.length} dbt projects in this workspace and cannot work on more than one. Open a single project folder to use dbt Anvil.`,
+			'Show Output',
+		).then((selection) => {
+			if (selection === 'Show Output') {
+				void vscode.commands.executeCommand('dbt-anvil.showOutputChannel');
+			}
+		});
+	}
 
 	// -------- Detect Python environment --------
 	// Always detect (non-intrusive filesystem check), but only validate and show
