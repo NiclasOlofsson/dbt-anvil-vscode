@@ -388,6 +388,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// deps check and startup parse are triggered from _envInitDone.then() below.
 	let startupBootstrapTriggered = false;
 	let runStartupBootstrapParse: (() => Promise<void>) | undefined;
+	let ensureIndexReady: (() => Promise<void>) | undefined;
 
 	// -------- Compile cache (shared across all tools) --------
 	const compileCache = new CompileCache(executionService, manifestLoader, logger);
@@ -506,9 +507,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				if (result.success) {
 					void vscode.window.showInformationMessage('dbt deps: success');
 					updateSetupContext();
-					if (!manifestLoader.manifestExists()) {
-						void runStartupBootstrapParse?.();
-					}
+					void ensureIndexReady?.();
 				} else {
 					const msg = `Startup deps failed: ${result.stdout.trim() || result.stderr.trim()}`;
 					logger.warn(msg);
@@ -516,10 +515,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				}
 			});
 		} else {
-			if (!manifestLoader.manifestExists()) {
-				logger.info('Startup parse deferred until env validation — triggering now.');
-				void runStartupBootstrapParse?.();
-			}
+			void ensureIndexReady?.();
 		}
 	}).catch((err: unknown) => {
 		logger.error(`Unexpected error during environment validation: ${err}`);
@@ -656,6 +652,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 	);
 
+	/** Everything that has to happen the moment the index exists: views fill, the status bar leaves "Initializing". */
+	const publishIndexReady = async (): Promise<void> => {
+		if (!startupReady) {
+			startupReady = true;
+			diagnosticsProvider.setStartupReady();
+		}
+		statusBar.setReady();
+		const refreshedProvider = await createDatabaseProvider(projectService.activeConnection, projectDir, executionService, logger);
+		container.setDatabaseProvider(refreshedProvider);
+		describeCache.setProvider(refreshedProvider);
+		modelProfiler.setProvider(refreshedProvider);
+		testExplorerProvider.refresh();
+		modelExplorerProvider.refresh();
+		lineageGraphProvider.refreshGraph();
+		columnStorePersistence.save(manifestIndexer);
+		updateSetupContext();
+	};
+
 	runStartupBootstrapParse = async (): Promise<void> => {
 		if (startupBootstrapTriggered) return;
 		startupBootstrapTriggered = true;
@@ -677,20 +691,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			}
 			try {
 				manifestIndexer.build(true);
-				if (!startupReady) {
-					startupReady = true;
-					diagnosticsProvider.setStartupReady();
-				}
-				statusBar.setReady();
-				const refreshedProvider = await createDatabaseProvider(projectService.activeConnection, projectDir, executionService, logger);
-				container.setDatabaseProvider(refreshedProvider);
-				describeCache.setProvider(refreshedProvider);
-				modelProfiler.setProvider(refreshedProvider);
-				testExplorerProvider.refresh();
-				modelExplorerProvider.refresh();
-				lineageGraphProvider.refreshGraph();
-				columnStorePersistence.save(manifestIndexer);
-				updateSetupContext();
+				await publishIndexReady();
 				logger.info('Startup parse completed and manifest index rebuilt');
 			} catch (err) {
 				const msg = `Startup parse succeeded but manifest rebuild failed: ${err}`;
@@ -699,6 +700,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			}
 		} catch (err) {
 			const msg = `Startup parse error: ${err}`;
+			logger.warn(msg);
+			statusBar.setError(msg);
+		}
+	};
+
+	/**
+	 * Bring the index up on a cold start, where activation had no manifest to
+	 * build from and every view is therefore empty.
+	 *
+	 * The warm-cache compile runs in parallel with environment validation and
+	 * writes a manifest of its own, so by the time this runs the manifest may
+	 * already be there. Then indexing it is all that is left, and asking for
+	 * another parse would be asking dbt to redo work it has just done.
+	 */
+	ensureIndexReady = async (): Promise<void> => {
+		if (manifestIndexer.index) return;
+
+		if (!manifestLoader.manifestExists()) {
+			await runStartupBootstrapParse?.();
+			return;
+		}
+
+		logger.info('Manifest present but never indexed on startup — building the index');
+		try {
+			manifestIndexer.build(true);
+			await publishIndexReady();
+			logger.info('Manifest index built from the existing manifest');
+		} catch (err) {
+			const msg = `Manifest index build failed: ${err}`;
 			logger.warn(msg);
 			statusBar.setError(msg);
 		}
