@@ -126,6 +126,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	projectService.startWatching();
 	const hasDbtProject = !!projectService.projectConfig;
 
+	// Reasons dbt Anvil cannot serve this workspace at all, which the user resolves
+	// by changing what is open rather than by fixing their setup. Applied to the
+	// status bar once it exists, so activation never ends on a spinner.
+	let unavailable: { label: string; reason: string } | null = null;
+	if (discovery.candidates.length > 1) {
+		unavailable = {
+			label: 'Several projects',
+			reason: `dbt Anvil works on one project at a time, and this workspace holds ${discovery.candidates.length}:\n${discovery.candidates.join('\n')}\n\nOpen a single project folder.`,
+		};
+	} else if (!hasDbtProject) {
+		unavailable = {
+			label: 'No project',
+			reason: 'No dbt_project.yml found in this workspace. dbt Anvil is idle until a dbt project is open.',
+		};
+	}
+
 	// Several projects in one folder is not supported yet, and binding to whichever
 	// the search returned first would be a silent wrong answer. Say so instead.
 	if (discovery.candidates.length > 1) {
@@ -466,6 +482,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	if (manifestLoader.manifestExists()) {
 		statusBar.setReady();
 	}
+	if (unavailable) {
+		statusBar.setUnavailable(unavailable.label, unavailable.reason);
+	}
 	context.subscriptions.push(statusBar);
 
 	// Once background env validation settles: write shims, surface any error in the
@@ -537,9 +556,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// Persist as soon as the warm completes so a populated cache survives a hard
 	// shutdown — deactivate/dispose is not guaranteed to run (window reload, crash).
 	// Mirrors the checkpoint-save the ColumnStore already does on manifest refresh.
-	void compileCache.warmAll(projectDir, restoredCompileEntries).then(() => {
-		compileCachePersistence.save(compileCache);
-	});
+	// Not run without a project: the compile is guaranteed to fail, and reporting
+	// "dbt is not installed" for a workspace we have already declined to work on
+	// sends the user after the wrong problem.
+	if (hasDbtProject) {
+		void compileCache.warmAll(projectDir, restoredCompileEntries).then(() => {
+			compileCachePersistence.save(compileCache);
+		});
+	}
 
 	// -------- Parse service — sqllens native parser, synchronous and in-process --------
 	const documentParser: DocumentParser = new SqllensDocumentParser(manifestIndexer);

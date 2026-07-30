@@ -9,6 +9,7 @@ export class StatusBarManager implements vscode.Disposable {
 	private _queueSize = 0;
 	private _ready = false;
 	private _errorMessage: string | null = null;
+	private _unavailable: { label: string; reason: string } | null = null;
 
 	constructor(
 		service: DbtExecutionService,
@@ -50,6 +51,19 @@ export class StatusBarManager implements vscode.Disposable {
 		this._update();
 	}
 
+	/**
+	 * dbt Anvil cannot work on this workspace at all, for a reason the user
+	 * resolves by changing what is open rather than by fixing their setup.
+	 *
+	 * Distinct from setError, whose "Setup Required" tells the user their Python
+	 * or dbt install needs attention. Both exist so that activation never leaves
+	 * the spinner running: it readies, it errors, or it says it is unavailable.
+	 */
+	setUnavailable(label: string, reason: string): void {
+		this._unavailable = { label, reason };
+		this._update();
+	}
+
 	private _update(): void {
 		if (this._activeJob) {
 			const origin = this._activeJob.origin === 'copilot' ? ' (Copilot)' : '';
@@ -63,6 +77,13 @@ export class StatusBarManager implements vscode.Disposable {
 		if (this._errorMessage) {
 			this._item.text = '$(error) dbt: Setup Required';
 			this._item.tooltip = this._errorMessage;
+			this._item.command = 'dbt-anvil.statusBarMenu';
+			return;
+		}
+
+		if (this._unavailable) {
+			this._item.text = `$(warning) dbt: ${this._unavailable.label}`;
+			this._item.tooltip = this._unavailable.reason;
 			this._item.command = 'dbt-anvil.statusBarMenu';
 			return;
 		}
