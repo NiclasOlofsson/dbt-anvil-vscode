@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { detectPythonEnvironment, checkEnvManagerAvailable, getBootstrapCommand, validateDbtInstalled } from '../dbt/env-detector';
+import { detectPythonEnvironment, checkEnvManagerAvailable, getBootstrapCommand, validateDbtInstalled, followsVsCodeInterpreter } from '../dbt/env-detector';
 import type { PythonEnvironment } from '../dbt/env-detector';
 
 const mockSpawn = vi.hoisted(() => vi.fn());
@@ -64,6 +64,94 @@ describe('detectPythonEnvironment', () => {
 		const env = detectPythonEnvironment(tmpDir);
 		expect(env.description).toBe('system Python');
 		teardown();
+	});
+
+	it('uses the VS Code interpreter when the project itself yields nothing', () => {
+		// The environment users lose today: central, a sibling folder, or shared
+		// across repos, so nothing in the project directory points at it.
+		setup();
+		const interpreter = path.join(os.tmpdir(), 'central-envs', 'dbt', 'bin', 'python');
+
+		const env = detectPythonEnvironment(tmpDir, { vscodeInterpreter: interpreter });
+		expect(env.description).toContain('VS Code interpreter');
+		expect(env.command).toEqual([path.resolve(interpreter)]);
+		// dbt is looked up next to the interpreter, as it is for a discovered venv.
+		expect(env.venvBinDir).toBe(path.dirname(path.resolve(interpreter)));
+		teardown();
+	});
+
+	it('prefers the project venv over the VS Code interpreter', () => {
+		// Ordering guarantee: projects that resolve today keep resolving the same
+		// way once the interpreter lookup exists.
+		setup();
+		const venvDir = path.join(tmpDir, '.venv');
+		fs.mkdirSync(venvDir);
+		fs.writeFileSync(path.join(venvDir, 'pyvenv.cfg'), 'home = /usr/bin\n');
+		fs.mkdirSync(path.join(venvDir, process.platform === 'win32' ? 'Scripts' : 'bin'), { recursive: true });
+
+		const env = detectPythonEnvironment(tmpDir, { vscodeInterpreter: '/elsewhere/bin/python' });
+		expect(env.description).toContain('venv at');
+		teardown();
+	});
+
+	it('resolves an interpreter given as an environment directory', () => {
+		// The Python extension reports a directory for conda environments.
+		setup();
+		const envDir = path.join(tmpDir, 'conda-env');
+		const binDir = path.join(envDir, process.platform === 'win32' ? 'Scripts' : 'bin');
+		fs.mkdirSync(binDir, { recursive: true });
+		const exe = path.join(binDir, process.platform === 'win32' ? 'python.exe' : 'python');
+		fs.writeFileSync(exe, '');
+
+		const env = detectPythonEnvironment(tmpDir, { vscodeInterpreter: envDir });
+		expect(env.command).toEqual([exe]);
+		teardown();
+	});
+
+	it('lets dbt-anvil.pythonPath override a discovered venv', () => {
+		// The one case VS Code cannot express: several dbt projects in one folder,
+		// each needing its own interpreter.
+		setup();
+		const venvDir = path.join(tmpDir, '.venv');
+		fs.mkdirSync(venvDir);
+		fs.writeFileSync(path.join(venvDir, 'pyvenv.cfg'), 'home = /usr/bin\n');
+		fs.mkdirSync(path.join(venvDir, process.platform === 'win32' ? 'Scripts' : 'bin'), { recursive: true });
+		const override = path.join(os.tmpdir(), 'chosen-env', 'bin', 'python');
+
+		const env = detectPythonEnvironment(tmpDir, { configuredPath: override, vscodeInterpreter: '/elsewhere/bin/python' });
+		expect(env.description).toContain('dbt-anvil.pythonPath');
+		expect(env.command).toEqual([path.resolve(override)]);
+		teardown();
+	});
+
+	it('keeps a non-existent dbt-anvil.pythonPath so validation fails naming the setting', () => {
+		// Silently falling back to discovery would hide the typo; the path has to
+		// reach validation for the user to learn their setting is wrong.
+		setup();
+
+		const env = detectPythonEnvironment(tmpDir, { configuredPath: '/no/such/python' });
+		expect(env.command).toEqual([path.resolve('/no/such/python')]);
+		expect(env.description).toContain('dbt-anvil.pythonPath');
+		teardown();
+	});
+});
+
+describe('followsVsCodeInterpreter', () => {
+	// Decides whether switching interpreters is worth prompting the user to reload:
+	// true only when the selection is what decided the environment.
+	it('is true for an environment taken from the VS Code interpreter', () => {
+		const env = detectPythonEnvironment(os.tmpdir(), { vscodeInterpreter: '/envs/dbt/bin/python' });
+		expect(followsVsCodeInterpreter(env)).toBe(true);
+	});
+
+	it('is true for the system Python fallback, which a selection would replace', () => {
+		const env: PythonEnvironment = { command: ['python3'], description: 'system Python', wrapperPrefix: [] };
+		expect(followsVsCodeInterpreter(env)).toBe(true);
+	});
+
+	it('is false for a project-discovered venv, which the selection does not affect', () => {
+		const env: PythonEnvironment = { command: ['/proj/.venv/bin/python'], description: 'venv at .venv', wrapperPrefix: [], venvBinDir: '/proj/.venv/bin' };
+		expect(followsVsCodeInterpreter(env)).toBe(false);
 	});
 });
 

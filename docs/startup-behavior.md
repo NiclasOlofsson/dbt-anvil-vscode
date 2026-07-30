@@ -45,11 +45,14 @@ This is what happens during startup to recognize the project and make sure dbt A
 #### 2.1 Python environment type detection
 
 - **What happens**
-	- dbt Anvil detects environment strategy (venv / uv / poetry / pipenv / conda / system).
+	- dbt Anvil detects environment strategy (setting / venv / uv / poetry / pipenv / conda / VS Code interpreter / system).
 - **How it is detected**
-	- dbt Anvil infers the environment by checking common project markers and runtime context in priority order: local virtual environments (`.venv` / `venv` / `.env`), then lockfiles for `uv`, Poetry, and Pipenv, then active Conda context, and finally system Python as a fallback.
+	- dbt Anvil infers the environment by checking common project markers and runtime context in priority order: the `dbt-anvil.pythonPath` setting when set, then local virtual environments (`.venv` / `venv` / `.env`), then lockfiles for `uv`, Poetry, and Pipenv, then active Conda context, then the interpreter VS Code has for the folder, and finally system Python as a fallback.
+	- The VS Code interpreter is the one selected via **Python: Select Interpreter**, or `python.defaultInterpreterPath` when nothing has been selected. It is read through the Python extension's API, and only when the project itself yielded nothing, so the extension is not activated for projects that carry their own environment. With the Python extension absent, `python.defaultInterpreterPath` is read directly.
+	- Changing the interpreter mid-session does not re-resolve anything: the bridge process and terminal shims are built from the environment resolved at activation, so dbt Anvil offers a window reload instead.
 - **What users see if it fails**
 	- It still continues, but later validation may fail.
+	- A `dbt-anvil.pythonPath` pointing nowhere is used as written rather than ignored, so validation fails naming the setting instead of silently falling back to a different environment.
 
 #### 2.2 Python runtime validation
 

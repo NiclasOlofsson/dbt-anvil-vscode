@@ -15,19 +15,46 @@ export interface PythonEnvironment {
 	venvBinDir?: string;
 }
 
+/** Description prefix for an environment taken from VS Code's interpreter selection. */
+const VSCODE_INTERPRETER_LABEL = 'VS Code interpreter';
+
+/** Interpreter paths that come from outside the project directory. */
+export interface PythonEnvSources {
+	/** `dbt-anvil.pythonPath`. Set only when the user wants to override discovery. */
+	configuredPath?: string;
+	/**
+	 * The interpreter VS Code has for this folder. Resolving it needs the Python
+	 * extension, so callers pass it in rather than have this module import `vscode`.
+	 */
+	vscodeInterpreter?: string;
+}
+
 /**
  * Detect the Python environment for a dbt project.
  *
- * Priority order follows dbt-core-mcp env_detector.py:
+ * Priority order:
+ *   0. `dbt-anvil.pythonPath`, for the case VS Code cannot express: one workspace
+ *      folder holding several dbt projects that need different interpreters
  *   1. Standard venv (.venv or venv directory)
  *   2. uv (uv.lock present)
  *   3. Poetry (poetry.lock present)
  *   4. Pipenv (Pipfile.lock present)
  *   5. Conda (CONDA_DEFAULT_ENV env var)
- *   6. System Python fallback
+ *   6. VS Code's interpreter, when the project itself yielded nothing
+ *   7. System Python fallback
+ *
+ * Steps 1-5 follow dbt-core-mcp env_detector.py. Step 6 sits below them so a
+ * project that resolves today keeps resolving the same way, and above step 7
+ * because an interpreter the user picked always beats a bare `python` guess.
  */
-export function detectPythonEnvironment(projectDir: string): PythonEnvironment {
+export function detectPythonEnvironment(projectDir: string, sources: PythonEnvSources = {}): PythonEnvironment {
 	const absProjectDir = path.resolve(projectDir);
+
+	// 0. Explicit override. Used as given: a path that does not exist must fail
+	// validation loudly, naming the setting, rather than silently fall through.
+	if (sources.configuredPath) {
+		return pythonEnvFromPath(sources.configuredPath, 'dbt-anvil.pythonPath');
+	}
 
 	// 1. Standard venv
 	const venvPath = findVenv(absProjectDir);
@@ -82,12 +109,48 @@ export function detectPythonEnvironment(projectDir: string): PythonEnvironment {
 		};
 	}
 
-	// 6. Fallback to system Python
+	// 6. Nothing in the project. Use whatever interpreter VS Code has for this
+	// folder: the venv may be central, a sibling, or shared across repos.
+	if (sources.vscodeInterpreter) {
+		return pythonEnvFromPath(sources.vscodeInterpreter, VSCODE_INTERPRETER_LABEL);
+	}
+
+	// 7. Fallback to system Python
 	const systemPython = process.platform === 'win32' ? 'python' : 'python3';
 	return {
 		command: [systemPython],
 		description: 'system Python',
 		wrapperPrefix: [],
+	};
+}
+
+/**
+ * True when the resolved environment is one that VS Code's interpreter selection
+ * decides: either it already supplied the interpreter, or nothing was found and a
+ * selection would be used the next time round.
+ */
+export function followsVsCodeInterpreter(env: PythonEnvironment): boolean {
+	return env.description.startsWith(VSCODE_INTERPRETER_LABEL) || env.description === 'system Python';
+}
+
+/**
+ * Build an environment from a path pointing at either a Python executable or the
+ * environment directory holding one. Both shapes occur: the Python extension
+ * reports a directory for conda environments and an executable for venvs, and
+ * users write either into `dbt-anvil.pythonPath`.
+ *
+ * `venvBinDir` is set so the dbt lookup and the terminal shims call the `dbt`
+ * sitting next to the interpreter, the same way a discovered venv is treated.
+ */
+function pythonEnvFromPath(pythonPath: string, label: string): PythonEnvironment {
+	const resolved = path.resolve(pythonPath);
+	const isDirectory = fs.existsSync(resolved) && fs.statSync(resolved).isDirectory();
+	const pythonExe = isDirectory ? getVenvPython(resolved) : resolved;
+	return {
+		command: [pythonExe],
+		description: `${label} (${pythonExe})`,
+		wrapperPrefix: [],
+		venvBinDir: path.dirname(pythonExe),
 	};
 }
 

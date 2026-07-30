@@ -792,6 +792,11 @@
 						],
 						"markdownDescription": "Controls whether dbt Anvil runs its MCP subsystem for Claude Code. In `auto` mode the extension only starts the local MCP server and writes config files when Claude Code is installed; otherwise the subsystem stays dormant."
 					},
+					"dbt-anvil.pythonPath": {
+						"type": "string",
+						"default": "",
+						"markdownDescription": "Python interpreter or virtual environment directory to run dbt with. Leave empty to use the project's own environment (`.venv`, `uv.lock`, `poetry.lock`, `Pipfile.lock`, conda), falling back to the interpreter selected in VS Code. Set this only when one workspace folder holds several dbt projects needing different interpreters, which VS Code's per-folder interpreter selection cannot express."
+					},
 					"dbt-anvil.profilesDir": {
 						"type": "string",
 						"default": "",

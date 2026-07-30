@@ -3,7 +3,8 @@ import * as vscode from 'vscode';
 import { VSCodeLogger, type ILogger } from './types/logger';
 import { ServiceContainer } from './types/service-container';
 import { ManifestService } from './indexing/manifest-service';
-import { detectPythonEnvironment, validatePythonEnvironment, dbtPackagesExist, checkEnvManagerAvailable, getBootstrapCommand, validateDbtInstalled } from './dbt/env-detector';
+import { detectPythonEnvironment, validatePythonEnvironment, dbtPackagesExist, checkEnvManagerAvailable, getBootstrapCommand, validateDbtInstalled, followsVsCodeInterpreter } from './dbt/env-detector';
+import { getVsCodeInterpreter, onDidChangeVsCodeInterpreter } from './dbt/vscode-python';
 import { writeShims } from './dbt/terminal-env';
 import { BridgeRunner } from './dbt/bridge-runner';
 import { DbtExecutionService, DbtJobType, Priority } from './dbt/execution-service';
@@ -121,8 +122,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// Always detect (non-intrusive filesystem check), but only validate and show
 	// notifications when this is actually a dbt project. Users who have the extension
 	// installed on non-dbt workspaces must never see Python/dbt error toasts.
-	const pythonEnv = detectPythonEnvironment(projectDir);
+	const configuredPythonPath = vscode.workspace.getConfiguration('dbt-anvil').get<string>('pythonPath', '').trim();
+	let pythonEnv = detectPythonEnvironment(projectDir, { configuredPath: configuredPythonPath || undefined });
+
+	// Discovery found nothing in the project: the environment may be central, a
+	// sibling folder, or shared across repos. Ask VS Code which interpreter this
+	// folder uses. Deferred to here so the Python extension is only activated for
+	// the projects that actually need it.
+	if (hasDbtProject && followsVsCodeInterpreter(pythonEnv)) {
+		const interpreter = await getVsCodeInterpreter(workspaceFolders[0].uri);
+		if (interpreter) {
+			pythonEnv = detectPythonEnvironment(projectDir, { vscodeInterpreter: interpreter });
+		}
+	}
 	logger.info(`Python environment: ${pythonEnv.description} (${pythonEnv.command.join(' ')})`);
+
+	// A new interpreter only takes effect on the next activation: the bridge process
+	// and the terminal shims are both built from the one resolved above.
+	if (hasDbtProject && followsVsCodeInterpreter(pythonEnv)) {
+		context.subscriptions.push(onDidChangeVsCodeInterpreter(() => {
+			void vscode.window.showInformationMessage(
+				'dbt Anvil: Python interpreter changed. Reload the window to use it.',
+				'Reload Window',
+			).then((selection) => {
+				if (selection === 'Reload Window') {
+					void vscode.commands.executeCommand('workbench.action.reloadWindow');
+				}
+			});
+		}));
+	}
 
 	let initError: string | null = null;
 	let envReady = false;
