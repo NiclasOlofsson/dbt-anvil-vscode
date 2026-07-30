@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.0
+
+Startup got much harder to break. dbt Anvil finds your project when it isn't at the workspace root, uses the Python interpreter you already picked in VS Code, and never leaves you watching a spinner for work that is never coming.
+
+- **Your project doesn't have to be at the root** — open a folder holding several repos and dbt Anvil searches it for `dbt_project.yml`, skipping `dbt_packages/` and `target/` so a dependency's own project file can never win. Before, it woke up, looked in the top folder, found nothing, and quietly stopped, which looked exactly like a hang.
+- **The interpreter you already chose** — resolution falls through `dbt-anvil.pythonPath`, the project's own environment, VS Code's active interpreter, then system Python, so a central venv or one shared across repos just works. The new **dbt Anvil: Select Python Interpreter** command opens VS Code's picker from the palette, the status bar, or straight from the error toast; the Python extension never offers its own in a project made of SQL and YAML. And when the interpreter is one VS Code guessed at, a missing dbt sends you to the picker instead of telling you to edit dependencies you never chose.
+- **`dbt-anvil.pythonPath`** — pin a project to a specific interpreter, for the case VS Code cannot express: one folder holding several dbt projects that each need their own environment.
+- **A cold start builds the index** — on a project opened for the first time the model explorer, test explorer, and lineage came up empty with the status bar stuck on "Initializing", and a perfectly good manifest sitting on disk. They fill in now.
+- **Startup always ends somewhere** — a workspace dbt Anvil cannot serve says so in the status bar rather than spinning forever, and says what to do about it, whether that's no dbt project in sight or several of them in one folder.
+- **Pre-release builds** — click *Switch to Pre-Release Version* on the extension page to ride `main`. New builds publish daily whenever there's something new to publish. Odd minor versions belong to that channel from here on, which is why this release is 1.4.0 and not 1.3.0. You didn't miss one.
+
 ## 1.2.0
 
 Completion grew up. Instead of the extension guessing at your cursor context with pattern matching, [sqllens](https://github.com/NiclasOlofsson/sqllens) now decides what fits at the caret from the grammar itself, and dbt Anvil decorates each suggestion with what it knows about your project. The debugger and the linter got sharper the same way: by asking the parser instead of re-deriving.
