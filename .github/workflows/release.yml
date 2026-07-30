@@ -38,12 +38,20 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
+      # Odd minors belong to the pre-release channel (see prerelease.yml), so a
+      # minor bump skips over one: 1.2.0 -> 1.4.0. The Marketplace refuses a
+      # version that already went out on the other channel. patch and major both
+      # land on an even minor already.
       - name: Bump version
         if: inputs.bump != 'none'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          npm version ${{ inputs.bump }}
+          if [ "${{ inputs.bump }}" = "minor" ]; then
+            npm version "$(node -p "const v=require('./package.json').version.split('.'); v[0]+'.'+(+v[1]+2)+'.0'")"
+          else
+            npm version ${{ inputs.bump }}
+          fi
 
       # vsce runs vscode:prepublish (the production esbuild) during package.
       # The same .vsix then goes to the Marketplace and the GitHub release.

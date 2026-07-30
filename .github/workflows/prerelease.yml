@@ -1,0 +1,90 @@
+name: Pre-release
+
+# Publishes a daily pre-release build to the VS Code Marketplace, but only when
+# main has actually moved since the last successful run. Uses the same VSCE_PAT
+# secret as the Release workflow.
+#
+# Versioning follows the Marketplace convention: even minors are the stable
+# channel, odd minors are pre-release. main always sits on an even minor, so a
+# pre-release is major.(minor+1).<run number>. It is applied in the workflow and
+# never committed, so main's version stays wherever Release left it.
+#
+# Note: GitHub disables scheduled workflows after 60 days without repo activity.
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Publish even if nothing changed since the last pre-release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  # Compare HEAD against the commit the last successful run published. A time
+  # window ("commits in the last 24h") would silently drop a commit whenever
+  # GitHub delays or skips a scheduled run, which it does regularly.
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.probe.outputs.changed }}
+    steps:
+      - id: probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          LAST=$(gh api \
+            "repos/${{ github.repository }}/actions/workflows/prerelease.yml/runs?status=success&per_page=1" \
+            --jq '.workflow_runs[0].head_sha // ""')
+          echo "last published: ${LAST:-none}"
+          echo "current:        $GITHUB_SHA"
+          if [ "${{ inputs.force }}" != "true" ] && [ "$LAST" = "$GITHUB_SHA" ]; then
+            echo "No new commits, skipping."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  publish:
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: astral-sh/setup-uv@v8.3.2
+
+      - run: npm ci
+
+      # Same gates as CI — a pre-release never skips them.
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+
+      # The run number keeps the patch monotonic with no state to carry between
+      # runs, and stays well inside the Marketplace's integer limit.
+      - name: Set pre-release version
+        run: |
+          VERSION=$(node -p "const v=require('./package.json').version.split('.'); v[0]+'.'+(v[1]%2?+v[1]:+v[1]+1)+'.${{ github.run_number }}'")
+          echo "Publishing pre-release $VERSION"
+          npm version "$VERSION" --no-git-tag-version
+
+      # The .vsix has to be packaged as pre-release; vsce refuses to publish a
+      # normally-packaged one with --pre-release.
+      - name: Package
+        run: npx vsce package --pre-release
+
+      - name: Publish to Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx vsce publish --pre-release --packagePath ./*.vsix --allow-proposed-apis contribLanguageModelToolSets
