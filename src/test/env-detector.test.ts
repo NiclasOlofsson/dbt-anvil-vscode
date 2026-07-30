@@ -124,6 +124,19 @@ describe('detectPythonEnvironment', () => {
 		teardown();
 	});
 
+	it('runs a bare command name as a command rather than resolving it to a path', () => {
+		// `python.defaultInterpreterPath` ships with the literal default "python".
+		// path.resolve would turn that into a file beside the extension host's
+		// working directory, which is how VS Code's own install folder ended up
+		// being reported as the interpreter.
+		setup();
+
+		const env = detectPythonEnvironment(tmpDir, { configuredPath: 'python' });
+		expect(env.command).toEqual(['python']);
+		expect(env.venvBinDir).toBeUndefined();
+		teardown();
+	});
+
 	it('keeps a non-existent dbt-anvil.pythonPath so validation fails naming the setting', () => {
 		// Silently falling back to discovery would hide the typo; the path has to
 		// reach validation for the user to learn their setting is wrong.

@@ -216,6 +216,10 @@
 				"icon": "$(gear)"
 			},
 			{
+				"command": "dbt-anvil.selectPythonInterpreter",
+				"title": "Select Python Interpreter"
+			},
+			{
 				"command": "dbt-anvil.profiler.profileModel",
 				"title": "Profile Model",
 				"icon": "$(clock)"

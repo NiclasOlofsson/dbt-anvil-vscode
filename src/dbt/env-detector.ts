@@ -143,6 +143,17 @@ export function followsVsCodeInterpreter(env: PythonEnvironment): boolean {
  * sitting next to the interpreter, the same way a discovered venv is treated.
  */
 function pythonEnvFromPath(pythonPath: string, label: string): PythonEnvironment {
+	// A bare command name ("python", "python3") has no directory to resolve
+	// against. Resolving it would invent a file next to the extension host's
+	// working directory, so run it as the command it is and let PATH answer.
+	if (!pythonPath.includes('/') && !pythonPath.includes('\\')) {
+		return {
+			command: [pythonPath],
+			description: `${label} (${pythonPath})`,
+			wrapperPrefix: [],
+		};
+	}
+
 	const resolved = path.resolve(pythonPath);
 	const isDirectory = fs.existsSync(resolved) && fs.statSync(resolved).isDirectory();
 	const pythonExe = isDirectory ? getVenvPython(resolved) : resolved;

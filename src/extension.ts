@@ -4,7 +4,7 @@ import { VSCodeLogger, type ILogger } from './types/logger';
 import { ServiceContainer } from './types/service-container';
 import { ManifestService } from './indexing/manifest-service';
 import { detectPythonEnvironment, validatePythonEnvironment, dbtPackagesExist, checkEnvManagerAvailable, getBootstrapCommand, validateDbtInstalled, followsVsCodeInterpreter } from './dbt/env-detector';
-import { getVsCodeInterpreter, onDidChangeVsCodeInterpreter } from './dbt/vscode-python';
+import { getVsCodeInterpreter, openInterpreterPicker } from './dbt/vscode-python';
 import { discoverDbtProject } from './dbt/project-discovery';
 import { writeShims } from './dbt/terminal-env';
 import { BridgeRunner } from './dbt/bridge-runner';
@@ -169,29 +169,39 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// the projects that actually need it.
 	if (hasDbtProject && followsVsCodeInterpreter(pythonEnv)) {
 		const interpreter = await getVsCodeInterpreter(workspaceFolders[0].uri);
+		logger.info(`VS Code interpreter: ${interpreter ?? 'none'}`);
 		if (interpreter) {
 			pythonEnv = detectPythonEnvironment(projectDir, { vscodeInterpreter: interpreter });
 		}
 	}
 	logger.info(`Python environment: ${pythonEnv.description} (${pythonEnv.command.join(' ')})`);
 
-	// A new interpreter only takes effect on the next activation: the bridge process
-	// and the terminal shims are both built from the one resolved above.
-	if (hasDbtProject && followsVsCodeInterpreter(pythonEnv)) {
-		context.subscriptions.push(onDidChangeVsCodeInterpreter(() => {
-			void vscode.window.showInformationMessage(
-				'dbt Anvil: Python interpreter changed. Reload the window to use it.',
-				'Reload Window',
-			).then((selection) => {
-				if (selection === 'Reload Window') {
-					void vscode.commands.executeCommand('workbench.action.reloadWindow');
-				}
-			});
-		}));
-	}
-
 	let initError: string | null = null;
 	let envReady = false;
+
+	/**
+	 * Report a missing dbt with advice that matches where the environment came from.
+	 *
+	 * An interpreter VS Code handed us is a guess it made without ever seeing a
+	 * Python file, so "add dbt to your project dependencies" points the user at
+	 * the wrong file, and reloading lands them in the same place they already are.
+	 * There the remedy is a different interpreter.
+	 */
+	const reportDbtMissing = (): void => {
+		const interpreterIsOurs = followsVsCodeInterpreter(pythonEnv);
+		initError = interpreterIsOurs
+			? `dbt is not installed in ${pythonEnv.description}. Choose an interpreter that has dbt installed.`
+			: `dbt is not installed in the Python environment (${pythonEnv.description}). Add dbt to your project dependencies and reload.`;
+
+		const action = interpreterIsOurs ? 'Select Interpreter' : 'Reload Window';
+		void vscode.window.showErrorMessage(`dbt Anvil: ${initError}`, action).then((selection) => {
+			if (selection === 'Select Interpreter') {
+				void vscode.commands.executeCommand('dbt-anvil.selectPythonInterpreter');
+			} else if (selection === 'Reload Window') {
+				void vscode.commands.executeCommand('workbench.action.reloadWindow');
+			}
+		});
+	};
 
 	// Validation runs in the background so activation is not blocked.
 	// envReady / initError are updated by the IIFE; requireEnv() and the .then()
@@ -279,26 +289,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 							logger.info('Bootstrap succeeded — dbt is now available.');
 						} else {
 							logger.warn(`dbt still not found after bootstrap: ${pythonEnv.description}`);
-							initError = `dbt is not installed in the Python environment (${pythonEnv.description}). Add dbt to your project dependencies and reload.`;
-							void vscode.window.showErrorMessage(
-								'dbt Anvil: dbt is not installed in the Python environment. Add it to your project dependencies and reload the window.',
-								'Reload Window',
-							).then((selection) => {
-								if (selection === 'Reload Window') {
-									void vscode.commands.executeCommand('workbench.action.reloadWindow');
-								}
-							});
+							reportDbtMissing();
 						}
 					} else {
-						initError = `dbt is not installed in the Python environment (${pythonEnv.description}). Add dbt to your project dependencies and reload.`;
-						void vscode.window.showErrorMessage(
-							'dbt Anvil: dbt is not installed in the Python environment. Add it to your project dependencies and reload the window.',
-							'Reload Window',
-						).then((selection) => {
-							if (selection === 'Reload Window') {
-								void vscode.commands.executeCommand('workbench.action.reloadWindow');
-							}
-						});
+						reportDbtMissing();
 					}
 				}
 			}
@@ -944,13 +938,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 		vscode.commands.registerCommand('dbt-anvil.statusBarMenu', async () => {
 			const items: vscode.QuickPickItem[] = [
+				{ label: '$(snake) Select Python Interpreter', description: `Currently: ${pythonEnv.description}` },
 				{ label: '$(trash) Clear All Caches', description: 'Hard reset — wipes all cached data from memory and disk' },
 				{ label: '$(gear) Open Settings', description: 'Configure dbt Anvil options' },
 				{ label: '$(output) Show Output Channel', description: 'Open the dbt Anvil output log' },
 			];
 			const pick = await vscode.window.showQuickPick(items, { placeHolder: 'dbt Anvil' });
 			if (!pick) return;
-			if (pick.label.includes('Clear All')) {
+			if (pick.label.includes('Select Python')) {
+				void vscode.commands.executeCommand('dbt-anvil.selectPythonInterpreter');
+			} else if (pick.label.includes('Clear All')) {
 				// Clear in-memory caches
 				compileCache.clearAll();
 				manifestIndexer.clearColumnStore();
@@ -1256,6 +1253,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.commands.registerCommand('dbt-anvil.openSettings', () => {
 			void vscode.commands.executeCommand('workbench.action.openSettings', '@ext:nickeolofsson.dbt-anvil-vscode');
 		}),
+
+		vscode.commands.registerCommand('dbt-anvil.selectPythonInterpreter', () => openInterpreterPicker()),
 
 		// ---- Profiler commands ----
 
