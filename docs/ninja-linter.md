@@ -36,6 +36,8 @@ select *  -- noqa
 from orders  -- noqa: ninja.structure.select-star
 ```
 
+The lightbulb on any Ninja diagnostic writes that for you. *Suppress \<rule\> on this line* adds the `-- noqa` comment (extending the list when the line already has one), *Disable \<rule\> in this workspace* adds the rule to `disabledRules` in `.vscode/settings.json`, and *Configure \<rule\>...* opens the Rule Editor filtered to that rule. Every rule gets these, including the ones with no auto-fix.
+
 ## Configuration
 
 Ninja is configured through VS Code settings under the `dbt-anvil.ninja` namespace. Every rule can be individually set to `error`, `warning`, `info`, `hint`, or `mute` (`mute` keeps the rule running for auto-fix but hides it from the Problems panel). To stop a rule entirely, list its ID in `dbt-anvil.ninja.disabledRules`.

@@ -8,6 +8,7 @@ import { loadConfig } from '../config-loader';
 import { FixAction, SnippetAction } from '../violation';
 import { planEdits } from './edit-planner';
 import { applyFixGroups } from './applier';
+import { buildNoqaInsertion } from './suppress';
 import { opToTextEdit } from '../fix-op';
 import { filterAutoFixViolations } from '../../providers/sql/formatting-provider';
 
@@ -59,7 +60,7 @@ export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 	provideCodeActions(
 		document: vscode.TextDocument,
 		range: vscode.Range | vscode.Selection,
-		_context: vscode.CodeActionContext,
+		context: vscode.CodeActionContext,
 		_token: vscode.CancellationToken,
 	): vscode.CodeAction[] {
 		if (!vscode.workspace.getConfiguration('dbt-anvil').get('providers.sql.codeActions', true)) return [];
@@ -244,6 +245,59 @@ export class SqlCodeActionProvider implements vscode.CodeActionProvider {
 				sourceFixAll.edit.set(document.uri, applyFixGroups(planned.groups, document, ninjaConfig));
 				actions.push(sourceFixAll);
 			}
+		}
+
+		// Rule-engine actions. Driven by the diagnostics in range rather than by
+		// the ninja result, so every rule gets them — including rules with no fix,
+		// which would otherwise show "No quick fixes available". The rule ID rides
+		// on `diagnostic.code`, so nothing here is per-rule.
+		const seenRules = new Set<string>();
+		for (const diag of context.diagnostics) {
+			if (diag.source !== 'ninja' || typeof diag.code !== 'string') continue;
+			const ruleId = diag.code;
+			if (seenRules.has(ruleId)) continue;
+			seenRules.add(ruleId);
+
+			const insertion = buildNoqaInsertion(document.lineAt(diag.range.start.line).text, ruleId);
+			if (insertion) {
+				const suppress = new vscode.CodeAction(
+					`Suppress ${ruleId} on this line`,
+					vscode.CodeActionKind.QuickFix,
+				);
+				suppress.edit = new vscode.WorkspaceEdit();
+				suppress.edit.set(document.uri, [
+					vscode.TextEdit.insert(
+						new vscode.Position(diag.range.start.line, insertion.character),
+						insertion.text,
+					),
+				]);
+				suppress.diagnostics = [diag];
+				actions.push(suppress);
+			}
+
+			const disable = new vscode.CodeAction(
+				`Disable ${ruleId} in this workspace`,
+				vscode.CodeActionKind.QuickFix,
+			);
+			disable.command = {
+				title: 'Disable ninja rule',
+				command: 'dbt-anvil.ninja.disableRule',
+				arguments: [ruleId],
+			};
+			disable.diagnostics = [diag];
+			actions.push(disable);
+
+			const configure = new vscode.CodeAction(
+				`Configure ${ruleId}...`,
+				vscode.CodeActionKind.QuickFix,
+			);
+			configure.command = {
+				title: 'Configure ninja rule',
+				command: 'dbt-anvil.ninja.configureRule',
+				arguments: [ruleId],
+			};
+			configure.diagnostics = [diag];
+			actions.push(configure);
 		}
 
 		return actions;

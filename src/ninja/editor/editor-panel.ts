@@ -103,9 +103,19 @@ export class NinjaEditorPanel implements vscode.Disposable {
 		}
 	}
 
-	async open(): Promise<void> {
+	/**
+	 * Reveal the panel. `focusRuleId` filters the list down to that one rule —
+	 * how the "Configure <rule>..." code action lands the user on it.
+	 */
+	async open(focusRuleId?: string): Promise<void> {
+		if (focusRuleId) {
+			this._model.setCategory('all');
+			this._model.setSearch(focusRuleId);
+		}
+
 		if (this._panel) {
 			this._panel.reveal();
+			if (focusRuleId) this._pushSnapshot();
 			return;
 		}
 

@@ -560,6 +560,16 @@ export class WorkspaceEdit {
 		this._edits.push({ uri, range, newText });
 	}
 
+	insert(uri: Uri, position: Position, newText: string): void {
+		this._edits.push({ uri, range: new Range(position, position), newText });
+	}
+
+	set(uri: Uri, edits: Array<{ range: Range; newText: string }>): void {
+		for (const edit of edits) {
+			this._edits.push({ uri, range: edit.range, newText: edit.newText });
+		}
+	}
+
 	renameFile(oldUri: Uri, newUri: Uri): void {
 		this._fileOps.push({ type: 'rename', oldUri, newUri });
 	}

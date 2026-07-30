@@ -65,6 +65,7 @@ import { SymbolSqlProvider } from './providers/symbol-sql-provider';
 import { WorkspaceDiagnosticsScanner } from './ninja/diagnostics/scanner';
 import { WorkspaceDiagnosticsPersistence } from './ninja/diagnostics/persistence';
 import { NinjaEditorPanel } from './ninja/editor';
+import { disableRule } from './ninja/config-loader';
 import * as path from 'node:path';
 import { migrateLegacySettings, warnIfLegacyExtensionInstalled } from './migration';
 
@@ -913,6 +914,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			const panel = NinjaEditorPanel.getInstance();
 			panel.setScanner(workspaceScanner);
 			void panel.open();
+		}),
+		// Both invoked from the code actions on a ninja diagnostic, never from the palette.
+		vscode.commands.registerCommand('dbt-anvil.ninja.configureRule', (ruleId: string) => {
+			const panel = NinjaEditorPanel.getInstance();
+			panel.setScanner(workspaceScanner);
+			void panel.open(ruleId);
+		}),
+		vscode.commands.registerCommand('dbt-anvil.ninja.disableRule', async (ruleId: string) => {
+			await disableRule(ruleId, 'workspace');
 		}),
 		vscode.commands.registerCommand('dbt-anvil.ninja.statusBarMenu', async () => {
 			const items: vscode.QuickPickItem[] = [

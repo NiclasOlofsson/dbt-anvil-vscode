@@ -884,4 +884,74 @@ describe('SqlCodeActionProvider', () => {
 	it('has QuickFix as provided code action kind', () => {
 		expect(SqlCodeActionProvider.providedCodeActionKinds).toContain(vscode.CodeActionKind.QuickFix);
 	});
+
+	// Rule-engine actions: a ninja diagnostic must always be configurable, even
+	// when the rule has no fix to offer.
+	function ninjaDiagnostic(ruleId: string, line = 0): vscode.Diagnostic {
+		const diag = new vscode.Diagnostic(new vscode.Range(line, 0, line, 5), 'nope');
+		diag.source = 'ninja';
+		diag.code = ruleId;
+		return diag;
+	}
+
+	it('offers suppress / disable / configure for a ninja diagnostic with no fix', () => {
+		const doc = createMockDocument('select * from customers');
+		const range = new vscode.Range(0, 0, 0, 5);
+		const ctx = {
+			diagnostics: [ninjaDiagnostic('ninja.aliasing.require-table-alias')],
+		} as unknown as vscode.CodeActionContext;
+
+		const actions = provider.provideCodeActions(doc, range, ctx, mockToken);
+		const titles = actions.map(a => a.title);
+		expect(titles).toEqual([
+			'Suppress ninja.aliasing.require-table-alias on this line',
+			'Disable ninja.aliasing.require-table-alias in this workspace',
+			'Configure ninja.aliasing.require-table-alias...',
+		]);
+
+		const suppress = actions[0];
+		expect(suppress.edit!.entries()[0][1][0]).toMatchObject({
+			newText: ' -- noqa: ninja.aliasing.require-table-alias',
+		});
+		expect(actions[1].command?.command).toBe('dbt-anvil.ninja.disableRule');
+		expect(actions[1].command?.arguments).toEqual(['ninja.aliasing.require-table-alias']);
+		expect(actions[2].command?.command).toBe('dbt-anvil.ninja.configureRule');
+	});
+
+	it('offers the rule actions once per rule, not once per diagnostic', () => {
+		const doc = createMockDocument('select a, b from customers');
+		const range = new vscode.Range(0, 0, 0, 26);
+		const ctx = {
+			diagnostics: [ninjaDiagnostic('ninja.cap.keywords'), ninjaDiagnostic('ninja.cap.keywords')],
+		} as unknown as vscode.CodeActionContext;
+
+		const actions = provider.provideCodeActions(doc, range, ctx, mockToken);
+		expect(actions.filter(a => a.title.startsWith('Disable '))).toHaveLength(1);
+	});
+
+	it('ignores diagnostics from other sources', () => {
+		const doc = createMockDocument('select * from customers');
+		const range = new vscode.Range(0, 0, 0, 5);
+		const other = new vscode.Diagnostic(new vscode.Range(0, 0, 0, 5), 'unknown ref');
+		other.source = 'dbt';
+		other.code = 'unknown-ref';
+		const ctx = { diagnostics: [other] } as unknown as vscode.CodeActionContext;
+
+		const actions = provider.provideCodeActions(doc, range, ctx, mockToken);
+		expect(actions.filter(a => a.title.startsWith('Disable '))).toHaveLength(0);
+	});
+
+	it('omits the suppress action when the line already suppresses the rule', () => {
+		const doc = createMockDocument('select * from customers -- noqa: ninja.cap.keywords');
+		const range = new vscode.Range(0, 0, 0, 5);
+		const ctx = {
+			diagnostics: [ninjaDiagnostic('ninja.cap.keywords')],
+		} as unknown as vscode.CodeActionContext;
+
+		const actions = provider.provideCodeActions(doc, range, ctx, mockToken);
+		expect(actions.map(a => a.title)).toEqual([
+			'Disable ninja.cap.keywords in this workspace',
+			'Configure ninja.cap.keywords...',
+		]);
+	});
 });
