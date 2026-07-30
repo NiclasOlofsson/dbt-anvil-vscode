@@ -86,9 +86,21 @@ Releases are built and published by the **Release** GitHub Actions workflow, not
 
    A failed publish leaves the repository untouched. Fix the problem and re-run.
 
-> **Note:** Publishing requires the `VSCE_PAT` repository secret: an Azure DevOps personal access token with the *Marketplace: Manage* scope for the `nickeolofsson` publisher. Only the maintainer holds this; external contributors open a PR and the maintainer releases.
+   A `minor` bump skips a version: 1.2.0 goes to 1.4.0, not 1.3.0. Odd minors belong to the pre-release channel (below), and the Marketplace rejects a version that has already gone out on the other channel. `patch` and `major` land on an even minor anyway.
+
+> **Note:** Publishing requires the `VSCE_PAT` repository secret: an Azure DevOps personal access token with the *Marketplace: Manage* scope for the `nickeolofsson` publisher. Only the maintainer holds this; external contributors open a PR and the maintainer releases. Both workflows use it.
 
 > **Note:** Publishing passes `--allow-proposed-apis contribLanguageModelToolSets` because the toolset feature is still a proposed VS Code API. The toolset grouping only works in VS Code Insiders; core features (syntax highlighting, model explorer, individual tools) work in stable VS Code.
+
+### Pre-releases
+
+The **Pre-release** workflow publishes a pre-release build of `main` to the Marketplace every day at 04:00 UTC. Users get it by clicking *Switch to Pre-Release Version* on the extension page.
+
+It skips the run when `main` has not moved since the last successful pre-release, so a quiet week publishes nothing. You can also run it by hand from GitHub → Actions → Pre-release → Run workflow; the same skip check applies unless you tick **force**.
+
+Versions follow the Marketplace convention of even minors for the stable channel and odd minors for pre-release. `main` always sits on an even minor, so a pre-release is `major.(minor+1).<run number>`: at 1.2.0 the daily builds go out as 1.3.1, 1.3.2, and so on. The version is set inside the workflow and never committed, so `main` stays on whatever the last release left there.
+
+Pre-releases get no tag, no GitHub release, and no `CHANGELOG.md` section. The packaged `.vsix` carries the changelog as it stands on `main`, so the Marketplace shows notes through the last stable release. Write changelog entries when you cut a release, not per build.
 
 ### Local packaging (testing only)
 
