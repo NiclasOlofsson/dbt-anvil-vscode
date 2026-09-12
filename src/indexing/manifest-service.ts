@@ -62,6 +62,11 @@ export class ManifestService implements vscode.Disposable, IManifestSuppressor {
 		this.watcher.triggerRebuild();
 	}
 
+	/** Queue a parse if project sources moved while nothing was watching (see ManifestWatcher.reconcileSources). */
+	reconcileSources(): void {
+		this.watcher.reconcileSources();
+	}
+
 	restoreHashes(persisted: { hashes: Record<string, string>; nonWsHashes: Record<string, string> }): void {
 		this.watcher.restoreHashes(persisted);
 	}

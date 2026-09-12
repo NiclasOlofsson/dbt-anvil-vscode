@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { ILogger } from '../types/logger';
 import { ManifestLoader } from '../dbt/manifest-loader';
+import { resolveMacroPaths, resolveModelPaths } from '../dbt/project-config';
 import { ManifestIndexer } from './manifest-indexer';
 
 /**
@@ -74,43 +75,146 @@ export class ManifestWatcher {
 		if (this._isExcludedPath(absPath)) return;
 		if (!absPath.endsWith('.sql') && !absPath.endsWith('.yml') && !absPath.endsWith('.yaml')) return;
 
-		// Skip if content hasn't changed since last invocation
-		const prevHash = this._contentHashes.get(absPath);
-		let currentHash: string;
+		const uniqueId = this.indexer.findModelByFilePath(absPath);
+		if (uniqueId?.startsWith('analysis.')) return;
+		const isMacroFile = this.indexer.hasMacroFile(absPath);
+		// A model or macro file the manifest has never seen needs a parse whatever the
+		// hashes say: there is nothing to dedup against until dbt has read it once.
+		const unseen = !uniqueId && !isMacroFile && this._isProjectSqlFile(absPath);
+		if (!uniqueId && !isMacroFile && !unseen) return; // not a project model or macro — skip parse
+
 		let content: string;
 		try {
 			content = fs.readFileSync(absPath, 'utf8');
-			currentHash = this._simpleHash(content);
 		} catch {
 			return; // unreadable — bail rather than queue work on partial state
 		}
-		if (prevHash === currentHash) {
+		if (!unseen && !this._recordChange(absPath, content)) return;
+
+		if (uniqueId) {
+			this._pendingPivots.add(uri);
+			const evicted = this.indexer.invalidateModel(uniqueId);
+			this._onCompileInvalidated.fire(uniqueId);
+			if (evicted.size > 0) {
+				this.logger.info(`Source changed: ${uniqueId} — evicted ${evicted.size} column store entries`);
+				this._onEnrichmentInvalidated.fire(evicted);
+			}
+		} else if (unseen) {
+			this.logger.info(`New project file, queuing parse: ${absPath}`);
+		}
+		this._debouncedParse();
+	}
+
+	/**
+	 * Dedup a file's content against its last recorded hashes and record the new ones.
+	 * Returns false when nothing changed, or only whitespace did (dbt parse is expensive
+	 * and neither case moves the manifest). Records the new hashes either way.
+	 */
+	private _recordChange(absPath: string, content: string): boolean {
+		const currentHash = this._simpleHash(content);
+		if (this._contentHashes.get(absPath) === currentHash) {
 			this.logger.trace(`Source unchanged, skipping parse: ${absPath}`);
-			return;
+			return false;
 		}
 		this._contentHashes.set(absPath, currentHash);
 
-		// Skip parse if only whitespace changed — dbt parse is expensive
-		const prevNonWsHash = this._nonWsHashes.get(absPath);
 		const currentNonWsHash = this._simpleHash(content.replace(/\s+/g, ''));
+		const prevNonWsHash = this._nonWsHashes.get(absPath);
 		this._nonWsHashes.set(absPath, currentNonWsHash);
 		if (prevNonWsHash === currentNonWsHash) {
 			this.logger.trace(`Whitespace-only source change, skipping parse: ${absPath}`);
-			return;
+			return false;
 		}
+		return true;
+	}
 
-		const uniqueId = this.indexer.findModelByFilePath(absPath);
-		if (!uniqueId || uniqueId.startsWith('analysis.')) return; // not a project model — skip parse
+	/** A `.sql` file under one of the project's model or macro paths. */
+	private _isProjectSqlFile(absPath: string): boolean {
+		if (!absPath.endsWith('.sql')) return false;
+		const norm = absPath.replace(/\\/g, '/').toLowerCase();
+		return this._sourceRoots().some(root => norm.startsWith(`${root.replace(/\\/g, '/').toLowerCase()}/`));
+	}
 
-		this._pendingPivots.add(uri);
+	private _sourceRoots(): string[] {
+		const projectDir = this.loader.projectDir;
+		const config = this.loader.projectConfig;
+		return [...resolveModelPaths(config, projectDir), ...resolveMacroPaths(config, projectDir)];
+	}
 
-		const evicted = this.indexer.invalidateModel(uniqueId);
-		this._onCompileInvalidated.fire(uniqueId);
-		if (evicted.size > 0) {
-			this.logger.info(`Source changed: ${uniqueId} — evicted ${evicted.size} column store entries`);
-			this._onEnrichmentInvalidated.fire(evicted);
+	/**
+	 * Catch up with whatever changed on disk while no extension was watching: model and
+	 * macro files the manifest has never seen, files whose content moved since the
+	 * persisted hashes were taken, and manifest models whose file is gone. One debounced
+	 * parse covers all of it. Runs once after the index is built from a stored manifest;
+	 * the file watcher owns everything after that.
+	 */
+	reconcileSources(): void {
+		const projectName = this.indexer.index?.projectName;
+		const known = new Set<string>(this.indexer.projectMacroFiles());
+		for (const model of this.indexer.index?.models.values() ?? []) {
+			if (model.packageName === projectName) known.add(model.path);
 		}
-		this._debouncedParse();
+		// dbt stamps generated_at (whole milliseconds) when it writes the manifest, after
+		// reading every file; a second of slack keeps sub-millisecond mtime fractions and
+		// coarse filesystem timestamps from reading as "newer".
+		const generatedAt = Date.parse(this.loader.load().manifest.metadata.generated_at) + 1000;
+
+		let reason: string | undefined;
+		for (const absPath of this._walkSql(this._sourceRoots())) {
+			const uniqueId = this.indexer.findModelByFilePath(absPath);
+			if (uniqueId?.startsWith('analysis.')) continue;
+			const seen = !!uniqueId || this.indexer.hasMacroFile(absPath);
+			let content: string;
+			let mtimeMs: number;
+			try {
+				content = fs.readFileSync(absPath, 'utf8');
+				mtimeMs = fs.statSync(absPath).mtimeMs;
+			} catch {
+				continue;
+			}
+			if (!seen) {
+				reason ??= `new file ${absPath}`;
+				continue;
+			}
+			// With a persisted baseline the hashes decide. Without one (first activation
+			// on this machine) only a file written after the manifest counts as changed;
+			// either way the hashes are recorded so the next save dedups normally.
+			const hadBaseline = this._contentHashes.has(absPath);
+			const hashMoved = this._recordChange(absPath, content);
+			const changed = hadBaseline ? hashMoved : mtimeMs > generatedAt;
+			if (changed) {
+				reason ??= `changed file ${absPath}`;
+				if (uniqueId) this.indexer.invalidateModel(uniqueId);
+			}
+		}
+		for (const absPath of known) {
+			if (absPath.endsWith('.sql') && !fs.existsSync(absPath)) {
+				reason ??= `deleted file ${absPath}`;
+				break;
+			}
+		}
+		if (reason) {
+			this.logger.info(`Sources changed since the manifest was written (${reason}); queuing parse`);
+			this._debouncedParse();
+		}
+	}
+
+	private *_walkSql(roots: string[]): Generator<string> {
+		const stack = [...roots];
+		while (stack.length > 0) {
+			const dir = stack.pop()!;
+			let entries: fs.Dirent[];
+			try {
+				entries = fs.readdirSync(dir, { withFileTypes: true });
+			} catch {
+				continue;
+			}
+			for (const entry of entries) {
+				const full = path.join(dir, entry.name);
+				if (entry.isDirectory()) stack.push(full);
+				else if (entry.isFile() && entry.name.endsWith('.sql')) yield full;
+			}
+		}
 	}
 
 	private _isExcludedPath(absPath: string): boolean {

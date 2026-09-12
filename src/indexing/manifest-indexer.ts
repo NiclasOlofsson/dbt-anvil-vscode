@@ -72,6 +72,8 @@ export interface ManifestIndex {
 	childMap: Map<string, string[]>;
 	dbtVersion: string;
 	adapterType?: string;
+	/** The project's own package name (`metadata.project_name`); package macros carry another. */
+	projectName?: string;
 	buildTime: Date;
 }
 
@@ -298,6 +300,7 @@ export class ManifestIndexer {
 			childMap,
 			dbtVersion: manifest.metadata.dbt_version,
 			adapterType: manifest.metadata.adapter_type?.toLowerCase(),
+			projectName: manifest.metadata.project_name,
 			buildTime: new Date(),
 		};
 	}
@@ -610,6 +613,27 @@ export class ManifestIndexer {
 			}
 		}
 		return undefined;
+	}
+
+	/**
+	 * Whether the project's own manifest macros include one declared in this file.
+	 * Package macros are excluded: their `original_file_path` is relative to the package,
+	 * so joined onto the project dir it names a file that does not exist there.
+	 */
+	hasMacroFile(filePath: string): boolean {
+		const normalised = filePath.replace(/\\/g, '/').toLowerCase();
+		return this.projectMacroFiles().some(p => p.replace(/\\/g, '/').toLowerCase() === normalised);
+	}
+
+	/** Absolute paths of the files the project's own macros live in (deduped). */
+	projectMacroFiles(): string[] {
+		const index = this._index;
+		if (!index) return [];
+		const files = new Set<string>();
+		for (const macro of index.macros.values()) {
+			if (macro.filePath && macro.packageName === index.projectName) files.add(macro.filePath);
+		}
+		return [...files];
 	}
 
 	private _evictDownstream(uniqueId: string, visited: Set<string>, evicted: Set<string>): void {

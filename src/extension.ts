@@ -396,6 +396,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 	);
 
+	// The stored manifest may predate edits made while no extension was watching (files
+	// added by hand, a branch switch, an agent). Catch up now that the parse listener is
+	// wired; the parse itself waits in the queue until the bridge is up.
+	if (manifestIndexer.index) manifestService.reconcileSources();
+
 	// deps check and startup parse are triggered from _envInitDone.then() below.
 	let startupBootstrapTriggered = false;
 	let runStartupBootstrapParse: (() => Promise<void>) | undefined;
