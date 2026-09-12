@@ -60,6 +60,13 @@ const SET_OPERATOR = new Set(['UNION', 'INTERSECT', 'EXCEPT']);
 const NO_SPACE_BEFORE = new Set(['COMMA', 'R_PAREN', 'R_BRACKET', 'DOT', 'SEMICOLON', 'DCOLON']);
 
 /**
+ * Tokens that can end a complete clause, after which a `{{ }}` tag on its own
+ * source line is a predicate-tail macro and keeps its line (see the jinja branch
+ * of the walk). `JINJA` covers one tail tag following another.
+ */
+const TAIL_TAG_PREV_TYPES = new Set(['VAR', 'IDENTIFIER', 'STRING', 'NUMBER', 'R_PAREN', 'JINJA']);
+
+/**
  * SQL builtins that the token stream tokenises as keyword-typed tokens (not VAR /
  * IDENTIFIER) but which still function syntactically as function calls.
  * The dialect-symbol path catches most builtins, but these ones are
@@ -513,7 +520,18 @@ export function printDocument(input: PrinterInput): string {
 			// onto the previous line with a leading space. The deferred
 			// pendingBlankLines survive; they fire on the next emitNewline,
 			// landing the blank lines before the next CTE name as intended.
-			if (pendingNewline) {
+			// A predicate-tail tag keeps the line the author gave it. The printer
+			// cannot see what `{{ only_completed('x') }}` expands to; after a
+			// complete clause (`from t`, `... = c.id`, `= 'done'`, `)`, or an
+			// earlier tail tag) a tag on its own source line is the author saying
+			// it is a clause, and gluing it onto the previous line hides that and
+			// overruns the line limit. A tag right after a keyword, comma, operator
+			// or `(` is that token's operand and joins it as before.
+			const tailTag = tok.type === 'jinja_expression_open' && prev !== undefined
+				&& TAIL_TAG_PREV_TYPES.has(prev.category === 'jinja' ? 'JINJA' : prev.type.toUpperCase())
+				&& lineOfOffset(prev.category === 'jinja' ? (prev.tagEnd ?? prev.end) : prev.end) < lineOfOffset(tok.start)
+				&& source.slice(source.lastIndexOf('\n', tok.start - 1) + 1, tok.start).trim() === '';
+			if (pendingNewline || (tailTag && !atLineStart)) {
 				const blanksWerePending = pendingBlankLines;
 				pendingBlankLines = 0;
 				emitNewline();
