@@ -1,15 +1,17 @@
 import * as vscode from 'vscode';
 import type { ILogger } from '../../types/logger';
 import type { DbtExecutionService } from '../../dbt/execution-service';
-import type { ProfileConnection, DatabricksConnection, DuckdbConnection } from '../../dbt/dbt-project-service';
+import type { ProfileConnection, DatabricksConnection, DuckdbConnection, FabricConnection } from '../../dbt/dbt-project-service';
 import type { DatabaseProvider } from './database-provider';
 import { DatabricksProvider } from './databricks-provider';
 import { DbtDatabaseProvider } from './dbt-database-provider';
+import { FabricProvider } from './fabric-provider';
 
 /**
  * Create the appropriate DatabaseProvider for the given connection config.
  *
  * - `connection.type === 'databricks'` → DatabricksProvider (direct REST API, parallel-capable)
+ * - `connection.type === 'fabric'` → FabricProvider (direct TDS via tedious, VS Code Microsoft account)
  * - `connection.type === 'duckdb'` on Windows → DuckdbProvider (native node-api)
  * - everything else → DbtDatabaseProvider (routes through dbt show / bridge)
  *
@@ -37,6 +39,15 @@ export async function createDatabaseProvider(
 		logger.info('DatabaseProviderFactory: using DatabricksProvider');
 		return new DatabricksProvider(
 			connection as DatabricksConnection,
+			executionService,
+			logger,
+		);
+	}
+
+	if (preferNative && adapterType === 'fabric') {
+		logger.info('DatabaseProviderFactory: using FabricProvider');
+		return new FabricProvider(
+			connection as FabricConnection,
 			executionService,
 			logger,
 		);

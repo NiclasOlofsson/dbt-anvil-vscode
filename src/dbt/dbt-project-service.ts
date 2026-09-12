@@ -43,6 +43,27 @@ export interface DuckdbConnection extends ProfileConnection {
 	schema?: string;
 }
 
+/**
+ * Microsoft Fabric warehouse connection fields from profiles.yml (dbt-fabric).
+ * dbt-fabric accepts `server` as an alias for `host`; the provider resolves it.
+ */
+export interface FabricConnection extends ProfileConnection {
+	type: 'fabric';
+	host?: string;
+	server?: string;
+	port?: number;
+	database: string;
+	schema?: string;
+	authentication?: string;
+	tenant_id?: string;
+	client_id?: string;
+	client_secret?: string;
+	encrypt?: boolean;
+	trust_cert?: boolean;
+	login_timeout?: number;
+	query_timeout?: number;
+}
+
 // ---------------------------------------------------------------------------
 // DbtProjectService
 // ---------------------------------------------------------------------------

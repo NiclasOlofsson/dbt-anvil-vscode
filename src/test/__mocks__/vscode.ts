@@ -298,6 +298,11 @@ export class EventEmitter<T = void> {
 	dispose = vi.fn();
 }
 
+export const authentication = {
+	getSession: vi.fn(async (): Promise<{ accessToken: string } | undefined> => undefined),
+	onDidChangeSessions: vi.fn(),
+};
+
 export const workspace = {
 	openTextDocument: vi.fn(),
 	createFileSystemWatcher: vi.fn(() => ({

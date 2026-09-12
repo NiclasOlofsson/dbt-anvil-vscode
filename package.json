@@ -1557,7 +1557,7 @@
 					"dbt-anvil.database.preferNativeAdapter": {
 						"type": "boolean",
 						"default": true,
-						"markdownDescription": "**Enabled**: Use a native database adapter (e.g. Databricks REST API) for faster parallel queries when available. Disable to force all queries through `dbt show` instead — useful as a fallback if the native adapter has issues."
+						"markdownDescription": "**Enabled**: Use a native database adapter (Databricks REST API, Fabric warehouse over TDS with your VS Code Microsoft account, local DuckDB) for faster parallel queries when available. Disable to force all queries through `dbt show` instead — useful as a fallback if the native adapter has issues."
 					}
 				}
 			},
@@ -2348,6 +2348,7 @@
 		"js-yaml": "^4.1.1",
 		"jsonc-parser": "^3.2.0",
 		"sqllens": "^1.9.1",
+		"tedious": "^20.0.0",
 		"yaml": "^2.8.3"
 	}
 }
