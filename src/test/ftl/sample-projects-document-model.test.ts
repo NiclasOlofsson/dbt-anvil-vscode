@@ -18,6 +18,7 @@ import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { SqllensDocumentParser } from '../../ftl/sqllens/document-parser';
 import { makeTemplateProvider } from '../../ftl/sqllens/template-shape';
+import { macroShapeLookup } from '../helpers';
 
 const SAMPLES_ROOT = path.join(__dirname, '..', '..', '..', 'samples');
 
@@ -75,10 +76,10 @@ const RESULTS: FileResult[] = [];
 // duckdb dialect, matching the legacy test's DUCKDB_CONTEXT. shapeOf is sourced from the
 // sample manifests exactly as production sources it from ManifestIndexer.shapeOf — so the
 // statement-position macros (playoff_sim/…) parse natively (C4) instead of falling back.
-const templateProvider = makeTemplateProvider(macroSqlLookup([
+const templateProvider = makeTemplateProvider(macroShapeLookup(macroSqlLookup([
 	path.join(SAMPLES_ROOT, 'nba-monte-carlo', 'target', 'manifest.json'),
 	path.join(SAMPLES_ROOT, 'jaffle_shop', 'target', 'manifest.json'),
-]));
+]), 'duckdb'));
 const parser = new SqllensDocumentParser({ adapterType: 'duckdb', templateProvider });
 
 describe('sample project DocumentModel (sqllens — live engine)', () => {

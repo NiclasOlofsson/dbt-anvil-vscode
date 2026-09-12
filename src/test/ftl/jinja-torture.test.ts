@@ -24,6 +24,7 @@ import { makeTemplateProvider } from '../../ftl/sqllens/template-shape';
 import { reflowDocument } from '../../ninja/reflow/engine';
 import { runNinja } from '../../ninja/engine';
 import { cfg, mockDocument } from '../ninja/helpers';
+import { macroShapeLookup } from '../helpers';
 import { isRelationSym } from '../../providers/sql/sym-spans';
 import type { DocumentModel } from '../../services/parse-service';
 
@@ -100,7 +101,7 @@ function macroCatalog(): Map<string, string> {
 const catalog = macroCatalog();
 const parser = new SqllensDocumentParser({
 	adapterType: 'databricks',
-	templateProvider: makeTemplateProvider(n => catalog.get(n)),
+	templateProvider: makeTemplateProvider(macroShapeLookup(n => catalog.get(n), 'databricks')),
 });
 
 const modelFiles = fs.readdirSync(path.join(PROJECT, 'models')).filter(f => f.endsWith('.sql'));

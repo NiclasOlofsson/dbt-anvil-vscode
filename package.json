@@ -2347,7 +2347,7 @@
 		"@duckdb/node-api": "^1.5.1-r.1",
 		"js-yaml": "^4.1.1",
 		"jsonc-parser": "^3.2.0",
-		"sqllens": "^1.8.1",
+		"sqllens": "^1.9.1",
 		"yaml": "^2.8.3"
 	}
 }

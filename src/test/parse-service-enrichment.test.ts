@@ -62,6 +62,7 @@ function createMockIndexer(overrides?: Partial<ManifestIndexer>): ManifestIndexe
 		getColumns: vi.fn().mockReturnValue(null),
 		setColumns: vi.fn(),
 		findMacroByName: vi.fn().mockReturnValue(undefined),
+		macroShape: vi.fn().mockReturnValue(undefined),
 		...overrides,
 	} as unknown as ManifestIndexer;
 }

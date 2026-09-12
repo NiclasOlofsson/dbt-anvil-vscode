@@ -1,14 +1,15 @@
 /**
- * classifyMacroShape: the manifest-sourced expansion-shape classifier behind
- * AnvilTemplateProvider. The shape answer decides what parseTemplated fills
- * into a macro tag, so a wrong answer surfaces as a SQL syntax error (or a
- * silently mis-shaped parse) on a real model.
+ * AnvilTemplateProvider: the manifest-sourced half of sqllens's template contract.
+ * The shape answer decides what parseTemplated fills into a macro tag, so a wrong
+ * answer surfaces as a SQL syntax error (or a silently mis-shaped parse) on a real
+ * model; the catalog answers decide what completion offers in a jinja call slot.
  */
 import { describe, expect, it } from 'vitest';
-import { classifyMacroShape, makeTemplateProvider } from '../../../ftl/sqllens/template-shape';
+import { makeTemplateProvider } from '../../../ftl/sqllens/template-shape';
 import type { SchemaProvider, TemplateCall } from '../../../ftl/sqllens/api';
 import type { ManifestIndexer } from '../../../indexing/manifest-indexer';
 import type { DescribeCache } from '../../../dbt/describe-cache';
+import { macroShapeLookup } from '../../helpers';
 
 const call = (name: string, args: (string | null)[]): TemplateCall => ({ name, args });
 
@@ -146,53 +147,62 @@ describe('AnvilTemplateProvider — tables() and childrenOf() (the SQL catalog s
 	});
 });
 
-describe('classifyMacroShape — body-leading keyword (no call context)', () => {
-	it('classifies a query-bodied macro as statement', () => {
-		expect(classifyMacroShape('{% macro m() %} with a as (select 1) select * from a {% endmacro %}')).toBe('statement');
-		expect(classifyMacroShape('{% macro m() %}select 1{% endmacro %}')).toBe('statement');
+
+describe('AnvilTemplateProvider — shapeOf (macro shapes read by sqllens from the definition)', () => {
+	/** A provider over one macro definition, the way ManifestIndexer.macroShape feeds it. */
+	const over = (macroSql: string) =>
+		makeTemplateProvider(macroShapeLookup(name => (name === 'm' || name === 'generic_is_deleted' ? macroSql : undefined), 'databricks'));
+	const shapesOf = (macroSql: string, c: TemplateCall) => {
+		const s = over(macroSql).shapeOf(c);
+		return s === undefined || typeof s === 'string' ? s : [...s];
+	};
+
+	it('a query-bodied macro answers statement', () => {
+		expect(shapesOf('{% macro m() %} with a as (select 1) select * from a {% endmacro %}', call('m', []))).toContain('statement');
+		expect(shapesOf('{% macro m() %}select 1{% endmacro %}', call('m', []))).toContain('statement');
 	});
 
-	it('classifies a trailing-conjunct macro as conjunct', () => {
-		expect(classifyMacroShape('{% macro m(c) %}and {{ c }} = false{% endmacro %}')).toBe('conjunct');
+	it('a trailing-conjunct macro answers conjunct', () => {
+		expect(shapesOf('{% macro m(c) %}and {{ c }} = false{% endmacro %}', call('m', ['x']))).toContain('conjunct');
 	});
 
-	it('answers nothing for an unknown-shaped body (identifier fill)', () => {
-		expect(classifyMacroShape('{% macro m() %}{{ x }}::int{% endmacro %}')).toBeUndefined();
-		expect(classifyMacroShape(undefined)).toBeUndefined();
+	it('a WHERE-leading macro body answers where-clause', () => {
+		expect(shapesOf('{% macro m(c) %}where {{ c }} = false{% endmacro %}', call('m', ['x']))).toContain('where-clause');
 	});
-});
 
-describe('classifyMacroShape — literal call args bound to parameters', () => {
+	it('an unknown macro, or one the manifest has no source for, answers nothing', () => {
+		expect(shapesOf('{% macro m() %}select 1{% endmacro %}', call('other', []))).toBeUndefined();
+		expect(makeTemplateProvider(() => undefined).shapeOf(call('m', []))).toBeUndefined();
+	});
+
+	it('an empty sqllens answer is undefined, never an empty list', () => {
+		// An empty body: nothing can be established about it.
+		expect(shapesOf('{% macro m() %}{% endmacro %}', call('m', []))).toBeUndefined();
+	});
+
 	// A production soft-delete macro family: the MODE is an argument —
-	// `{{ stat }} {{ column_name }}=false` — so the body alone classifies as
-	// nothing. The call site carries the literal mode word; binding it lets the
-	// and-mode call classify as a conjunct.
+	// `{{ stat }} {{ column_name }}=false` — so the body alone establishes
+	// nothing. The call site carries the literal mode word; sqllens resolves
+	// the keyword hole per call.
 	const MACRO = '{% macro generic_is_deleted(column_name,stat) %}\n    {{ stat }} {{ column_name }}=false\n{% endmacro %}';
 
-	it('classifies the and-mode call as conjunct via the bound \'stat\' literal', () => {
-		expect(classifyMacroShape(MACRO, call('generic_is_deleted', ['ve.is_deleted', 'and']))).toBe('conjunct');
+	it('the and-mode call answers conjunct via the literal \'stat\' argument', () => {
+		expect(shapesOf(MACRO, call('generic_is_deleted', ['ve.is_deleted', 'and']))).toContain('conjunct');
 	});
 
 	it('keeps the identifier fill when the mode arg is not a literal', () => {
-		// literalOf answers null for computed/non-string args — nothing to bind.
-		expect(classifyMacroShape(MACRO, call('generic_is_deleted', [null, null]))).toBeUndefined();
+		expect(shapesOf(MACRO, call('generic_is_deleted', [null, null]))).toBeUndefined();
 	});
 
 	it('binds kwargs the same way', () => {
-		expect(classifyMacroShape(MACRO, {
+		expect(shapesOf(MACRO, {
 			name: 'generic_is_deleted',
 			args: [],
 			kwargs: [{ name: 'stat', value: 'and' }, { name: 'column_name', value: 'x' }],
-		})).toBe('conjunct');
+		})).toContain('conjunct');
 	});
 
-	it('classifies the where-mode call as where-clause via the bound \'stat\' literal', () => {
-		// sqllens a269062 shipped the where-clause shape (fills WHERE 1=1),
-		// valid in both where-mode slots (`from t <tag>` and `on (...) <tag>`).
-		expect(classifyMacroShape(MACRO, call('generic_is_deleted', ['ve.is_deleted', 'where']))).toBe('where-clause');
-	});
-
-	it('classifies a WHERE-leading macro body as where-clause without call context', () => {
-		expect(classifyMacroShape('{% macro m(c) %}where {{ c }} = false{% endmacro %}')).toBe('where-clause');
+	it('the where-mode call answers where-clause via the literal \'stat\' argument', () => {
+		expect(shapesOf(MACRO, call('generic_is_deleted', ['ve.is_deleted', 'where']))).toContain('where-clause');
 	});
 });

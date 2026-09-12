@@ -4,7 +4,8 @@ import { ManifestLoader } from '../dbt/manifest-loader';
 import type { ILogger } from '../types/logger';
 import { classifyLayer, type LayerConfig, type LayerInfo } from './layer-classifier';
 import { makeTemplateProvider } from '../ftl/sqllens/template-shape';
-import type { TemplateProvider } from '../ftl/sqllens/api';
+import { parseTemplated, toSqllensDialect } from '../ftl/sqllens/api';
+import type { MacroShape, TemplateProvider } from '../ftl/sqllens/api';
 
 export interface LineageNode {
 	uniqueId: string;
@@ -86,6 +87,8 @@ interface ColumnCacheEntry {
  */
 export class ManifestIndexer {
 	private _index: ManifestIndex | null = null;
+	/** Macro unique_id -> its sqllens shape, `null` when the definition declares no macro of that name. */
+	private _macroShapes = new Map<string, MacroShape | null>();
 
 	/**
 	 * Global column store. Keyed by unique node ID (e.g. "model.jaffle_shop.stg_customers").
@@ -136,14 +139,31 @@ export class ManifestIndexer {
 
 	/**
 	 * C4 template-catalog seam consumed by `SqllensDocumentParser` (via `AdapterContext`):
-	 * a `parseTemplated` `shapeOf` that classifies a macro-call's expansion shape by name,
-	 * lazily, from the indexed macros' `macroSql`. Only macros that actually appear as
-	 * `{{ }}` tags are classified, and the classifier answers `statement` (or nothing), so a
-	 * macro-generated query body parses natively instead of hitting the blank cascade. Reads
-	 * the current index each call, so it stays fresh across re-indexes.
+	 * a `parseTemplated` `shapeOf` answering a macro call's expansion shapes by name,
+	 * lazily, from the indexed macros' definitions (`macroShape`). Only macros that actually
+	 * appear as `{{ }}` tags are read, so a macro-generated query body parses natively
+	 * instead of hitting the blank cascade. Reads the current index each call, so it stays
+	 * fresh across re-indexes.
 	 */
 	get templateProvider(): TemplateProvider {
-		return makeTemplateProvider(name => this.findMacroByName(name)?.macroSql);
+		return makeTemplateProvider(name => this.macroShape(name));
+	}
+
+	/**
+	 * The expansion shapes of a manifest macro, read by sqllens from its `macro_sql`
+	 * (sqllens 1.9.0: every `{% macro %}` body is read as a fragment; `shapes` is empty
+	 * when nothing can be established). Parsed once per macro per index build.
+	 */
+	macroShape(name: string): MacroShape | undefined {
+		const macro = this.findMacroByName(name);
+		if (!macro?.macroSql) return undefined;
+		let shape = this._macroShapes.get(macro.uniqueId);
+		if (shape === undefined) {
+			const dialect = toSqllensDialect(this.adapterType);
+			shape = parseTemplated(macro.macroSql, dialect).macros.find(m => m.name === name) ?? null;
+			this._macroShapes.set(macro.uniqueId, shape);
+		}
+		return shape ?? undefined;
 	}
 
 	/**
@@ -165,6 +185,7 @@ export class ManifestIndexer {
 
 		this._lastLoadResult = loadResult;
 		this._index = this._buildIndex(loadResult.manifest);
+		this._macroShapes.clear();
 		this._diffAndInvalidate(loadResult.manifest);
 		this.logger.info(
 			`Manifest index built: ${this._index.models.size} models, ${this._index.sources.size} sources`,

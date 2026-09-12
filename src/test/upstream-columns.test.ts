@@ -61,6 +61,7 @@ function makeHarness(describeAnswers: Record<string, string[] | undefined>) {
 		setColumns: (uid: string, cols: string[]) => { columnStore.set(uid, cols); },
 		buildSchemaMapping: () => ({}),
 		findMacroByName: () => undefined,
+		macroShape: () => undefined,
 		get templateProvider() { return makeTemplateProvider(() => undefined); },
 	} as unknown as ManifestIndexer;
 

@@ -6,6 +6,7 @@ import { traceColumnLineage } from '../../../ftl/sqllens/lineage';
 import { buildStarExpander } from '../../../ftl/sqllens/extract/star-expand';
 import { Schema, type ScopeTree, type Sym } from '../../../ftl/sqllens/api';
 import { isRelationSym, nameRangeOf, qualifierRangeOf, rangeOfSpan } from '../../../providers/sql/sym-spans';
+import { macroShapeLookup } from '../../helpers';
 
 function parser(adapterType = 'databricks') {
 	return new SqllensDocumentParser({ adapterType });
@@ -367,14 +368,14 @@ describe('SqllensDocumentParser — parse-failure paths', () => {
 	it('parses a trailing-conjunct macro cleanly when the provider classifies it (conjunct shape)', async () => {
 		// A production soft-delete macro family: an `and …` conjunct appended after
 		// a complete ON expression, before UNION ALL. With the macro's source bound
-		// via the provider, classifyMacroShape answers 'conjunct' and sqllens fills
+		// via the provider, sqllens reads the body as a conjunct and fills
 		// `AND 1=1` — restoring the full-parse assertions the cascade's comment-
 		// blank rescue used to provide (and better: the query structure survives).
-		const templateProvider = makeTemplateProvider(name =>
+		const templateProvider = makeTemplateProvider(macroShapeLookup(name =>
 			name === 'generic_is_deleted'
 				? '{% macro generic_is_deleted(column) %}and {{ column }} = false{% endmacro %}'
 				: undefined,
-		);
+		'databricks'));
 		const sql = [
 			'with warehouse as (',                                   // 0
 			'    select',                                            // 1
@@ -406,14 +407,15 @@ describe('SqllensDocumentParser — parse-failure paths', () => {
 	});
 
 	// The real generic_is_deleted signature takes the mode as a PARAMETER —
-	// `{{ stat }} {{ column_name }}=false` — so the body alone classifies as
+	// `{{ stat }} {{ column_name }}=false` — so the body alone establishes
 	// nothing and the tag gets the identifier fill, which is a syntax error
 	// after a complete ON predicate (gold__vendor.sql, F5 smoke finding).
-	const MODE_ARG_PROVIDER = makeTemplateProvider(name =>
+	// sqllens resolves the keyword hole per call (`shapesForCall`).
+	const MODE_ARG_PROVIDER = makeTemplateProvider(macroShapeLookup(name =>
 		name === 'generic_is_deleted'
 			? '{% macro generic_is_deleted(column_name,stat) %}\n    {{ stat }} {{ column_name }}=false\n{% endmacro %}'
 			: undefined,
-	);
+	'databricks'));
 
 	it('parses an and-mode macro whose mode arrives as a call argument', async () => {
 		const sql = [

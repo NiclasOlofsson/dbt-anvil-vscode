@@ -48,11 +48,13 @@ export {
 	parseTemplated,
 	tokenizeTemplated,
 	templateVariants,
+	shapesForCall,
 } from 'sqllens/minijinja';
 
 export type {
 	TagNode,
 	MacroCall,
+	MacroShape,
 	TemplateVariant,
 } from 'sqllens/minijinja';
 

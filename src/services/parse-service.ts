@@ -323,7 +323,7 @@ export class ParseService {
 	private _makeProvider(skipEnrichment = false): TemplateProvider | undefined {
 		const enrichment = skipEnrichment ? undefined : this._enrichment;
 		return enrichment
-			? makeTemplateProvider(name => enrichment.indexer.findMacroByName(name)?.macroSql, enrichment)
+			? makeTemplateProvider(name => enrichment.indexer.macroShape(name), enrichment)
 			: undefined;
 	}
 
