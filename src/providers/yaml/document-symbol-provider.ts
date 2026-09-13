@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import type { ILogger } from '../../types/logger';
+import { DbtSymbolKind } from '../common/icons';
 
 /**
  * Document symbols for the Outline panel in YAML schema files.
@@ -25,18 +26,26 @@ export class YamlDocumentSymbolProvider implements vscode.DocumentSymbolProvider
 
 		let currentModel: vscode.DocumentSymbol | undefined;
 		let inColumnsBlock = false;
+		let currentTopLevelKey: string | undefined;
 
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
 
-			// Model: `  - name: model_name`
+			// Track the current top-level key (`models:`, `sources:`, `functions:`, ...)
+			const topLevelMatch = /^(\w+):\s*$/.exec(line);
+			if (topLevelMatch) {
+				currentTopLevelKey = topLevelMatch[1];
+			}
+
+			// Model / function: `  - name: resource_name`
 			const modelMatch = /^(\s{2,4})-\s+name:\s+(\S+)/.exec(line);
 			if (modelMatch && !inColumnsBlock) {
+				const isFunction = currentTopLevelKey === 'functions';
 				const range = new vscode.Range(i, 0, i, line.length);
 				currentModel = new vscode.DocumentSymbol(
 					modelMatch[2],
-					'model',
-					vscode.SymbolKind.Class,
+					isFunction ? 'function' : 'model',
+					isFunction ? DbtSymbolKind.function : vscode.SymbolKind.Class,
 					range,
 					range,
 				);

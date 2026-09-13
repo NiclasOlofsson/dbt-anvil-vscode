@@ -320,7 +320,32 @@ export class EditorDiagnosticsProvider implements vscode.Disposable {
 		const diagnostics: vscode.Diagnostic[] = [];
 		this._validateRefs(document, model, commentRanges, diagnostics);
 		this._validateSources(document, model, commentRanges, diagnostics);
+		this._validateFunctions(document, model, commentRanges, diagnostics);
 		return diagnostics;
+	}
+
+	private _validateFunctions(
+		document: vscode.TextDocument,
+		model: DocumentModel,
+		commentRanges: CommentRange[],
+		diagnostics: vscode.Diagnostic[],
+	): void {
+		for (const fn of model.functions ?? []) {
+			const fnOffset = document.offsetAt(new vscode.Position(fn.line, fn.col));
+			if (isOffsetInComment(fnOffset, commentRanges)) continue;
+			if (this.indexer.findFunctionsByName(fn.name).length > 0) continue;
+			const range = fn.nameCol !== undefined && fn.nameEndCol !== undefined
+				? new vscode.Range(fn.line, fn.nameCol, fn.line, fn.nameEndCol)
+				: new vscode.Range(fn.line, fn.col, fn.line, fn.col + 8);
+			const diag = new vscode.Diagnostic(
+				range,
+				`Function '${fn.name}' not found in dbt manifest`,
+				vscode.DiagnosticSeverity.Error,
+			);
+			diag.source = 'dbt';
+			diag.code = 'unknown-function';
+			diagnostics.push(diag);
+		}
 	}
 
 	private _validateRefs(

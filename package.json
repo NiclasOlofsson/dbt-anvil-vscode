@@ -619,7 +619,7 @@
 				},
 				{
 					"command": "dbt-anvil.showLineage",
-					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-anvil.fileCategory =~ /model|seed|snapshot/",
+					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-anvil.fileCategory =~ /model|seed|snapshot|function/",
 					"group": "navigation@1"
 				},
 				{
@@ -634,7 +634,7 @@
 				},
 				{
 					"command": "dbt-anvil.compileModel",
-					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-anvil.fileCategory =~ /model|seed|snapshot/",
+					"when": "resourceLangId == jinja-sql && workspaceHasDBT && dbt-anvil.fileCategory =~ /model|seed|snapshot|function/",
 					"group": "navigation@4"
 				},
 				{
@@ -1886,7 +1886,8 @@
 								"snapshot",
 								"seed",
 								"exposure",
-								"metric"
+								"metric",
+								"function"
 							],
 							"description": "Filter by resource type (optional)"
 						}

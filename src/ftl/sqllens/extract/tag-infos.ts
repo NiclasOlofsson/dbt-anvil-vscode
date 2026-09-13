@@ -55,15 +55,15 @@
  * (see tag-infos.test.ts for the parity cases).
  */
 import type { MacroCall, PartSpan, TagNode } from '../api';
-import type { MacroCallArgInfo, MacroCallInfo, RefInfo, SourceInfo } from '../../../services/parse-service';
+import type { FunctionInfo, MacroCallArgInfo, MacroCallInfo, RefInfo, SourceInfo } from '../../../services/parse-service';
 
 /**
  * Jinja keywords and dbt globals that may appear as `identifier(` but are NOT
- * user-defined macro calls. `ref` and `source` have dedicated consumer shapes;
- * the rest are control flow, statement keywords, or jinja built-ins.
+ * user-defined macro calls. `ref`, `source` and `function` have dedicated consumer
+ * shapes; the rest are control flow, statement keywords, or jinja built-ins.
  */
 export const NOT_MACRO_CALLS = new Set([
-	'ref', 'source',
+	'ref', 'source', 'function',
 	'if', 'elif', 'else', 'endif',
 	'for', 'endfor', 'in',
 	'block', 'endblock',
@@ -83,6 +83,7 @@ export interface TagInfos {
 	refs: RefInfo[];
 	sources: SourceInfo[];
 	macroCalls: MacroCallInfo[];
+	functions: FunctionInfo[];
 }
 
 /**
@@ -94,11 +95,17 @@ export interface TagInfos {
  * `tagInfos` (emission) and `backfillSymAliases` (index alignment) share, so they never
  * disagree on the count or order.
  */
-export function emittedTagKind(tag: TagNode): 'ref' | 'source' | undefined {
+export function emittedTagKind(tag: TagNode): 'ref' | 'source' | 'function' | undefined {
 	if (tag.kind !== 'call' || tag.incomplete) return undefined;
 	if (tag.name === 'ref') {
 		const arg = tag.args[tag.args.length - 1];
 		return arg && arg.value !== null && arg.valueSpan !== undefined ? 'ref' : undefined;
+	}
+	if (tag.name === 'function') {
+		// dbt: `function('name')` / `function('pkg', 'name')`, positional only; the name is the last arg.
+		if (tag.args.length !== 1 && tag.args.length !== 2) return undefined;
+		const arg = tag.args[tag.args.length - 1];
+		return arg && arg.value !== null && arg.valueSpan !== undefined ? 'function' : undefined;
 	}
 	if (tag.name === 'source') {
 		const src = tag.args[0];
@@ -119,6 +126,7 @@ export function tagInfos(tags: TagNode[]): TagInfos {
 	const refs: RefInfo[] = [];
 	const sources: SourceInfo[] = [];
 	const macroCalls: MacroCallInfo[] = [];
+	const functions: FunctionInfo[] = [];
 
 	for (const tag of tags) {
 		if (tag.kind === 'call') {
@@ -153,7 +161,20 @@ export function tagInfos(tags: TagNode[]): TagInfos {
 					jinjaCol: tag.tagSpan.column,
 					jinjaEndCol: tag.tagSpan.endColumn,
 				});
-			} else if (!tag.incomplete && tag.name !== 'ref' && tag.name !== 'source') {
+			} else if (emitted === 'function') {
+				const arg = tag.args[tag.args.length - 1]!;
+				const pkg = tag.args.length === 2 ? tag.args[0] : undefined;
+				functions.push({
+					name: arg.value!,
+					...(pkg && pkg.value !== null ? { packageName: pkg.value } : {}),
+					line: tag.callSpan.line - 1,
+					col: tag.callSpan.column,
+					nameCol: arg.valueSpan!.column,
+					nameEndCol: arg.valueSpan!.endColumn,
+					jinjaCol: tag.tagSpan.column,
+					jinjaEndCol: tag.tagSpan.endColumn,
+				});
+			} else if (!tag.incomplete && !NOT_MACRO_CALLS.has(tag.name)) {
 				// A macro expression tag. `calls` is the top-level call (`calls[0]`) plus every
 				// nested call in source order, so `{{ outer(inner()) }}` surfaces both. Filtered
 				// by NOT_MACRO_CALLS (`ref`/`source`/`config`/`var`/`env_var`/keywords never surface).
@@ -180,7 +201,7 @@ export function tagInfos(tags: TagNode[]): TagInfos {
 		// kind 'other': not a ref/source/macro-call site.
 	}
 
-	return { refs, sources, macroCalls };
+	return { refs, sources, macroCalls, functions };
 }
 
 /**

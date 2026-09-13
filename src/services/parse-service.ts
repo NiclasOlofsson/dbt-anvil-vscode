@@ -77,6 +77,24 @@ export interface SourceInfo {
 	jinjaEndCol?: number;
 }
 
+/** A `{{ function('name') }}` / `{{ function('pkg', 'name') }}` call site (dbt 1.11+ user-defined function). */
+export interface FunctionInfo {
+	name: string;
+	packageName?: string;
+	/** 0-based line */
+	line: number;
+	/** 0-based column of the start of the function() call */
+	col: number;
+	/** 0-based column start of the function name string content (quotes excluded) */
+	nameCol?: number;
+	/** 0-based exclusive column end of the function name string content */
+	nameEndCol?: number;
+	/** 0-based column start of the full {{ function(...) }} jinja tag */
+	jinjaCol?: number;
+	/** 0-based exclusive column end of the full {{ function(...) }} jinja tag */
+	jinjaEndCol?: number;
+}
+
 export interface MacroCallArgInfo {
 	/** 0-based line of the argument */
 	line: number;
@@ -195,6 +213,8 @@ export interface DocumentModel {
 	 * on synthetic / test fixture models. Real parser output always sets it.
 	 */
 	macroCalls?: MacroCallInfo[];
+	/** `{{ function(...) }}` call sites. Absent only on synthetic / test fixture models. */
+	functions?: FunctionInfo[];
 	finalColumns: ColumnInfo[];
 	/** Rich positional data for the final SELECT (replaces finalColumns over time). */
 	finalSelect?: FinalSelectInfo;

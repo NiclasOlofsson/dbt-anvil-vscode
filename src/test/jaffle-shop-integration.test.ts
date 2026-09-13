@@ -13,7 +13,7 @@ describe('jaffle_shop integration', () => {
 		expect(loader.manifestExists()).toBe(true);
 
 		const result = loader.load();
-		expect(result.manifest.metadata.dbt_version).toBe('1.10.13');
+		expect(result.manifest.metadata.dbt_version).toBe('1.12.4');
 		expect(result.manifest.metadata.project_name).toBe('jaffle_shop');
 	});
 
@@ -25,7 +25,7 @@ describe('jaffle_shop integration', () => {
 		// 3 models + 2 seeds + 1 snapshot = 6 indexable nodes (tests are not indexed)
 		expect(index.models.size).toBeGreaterThanOrEqual(6);
 		expect(index.sources.size).toBe(2);
-		expect(index.dbtVersion).toBe('1.10.13');
+		expect(index.dbtVersion).toBe('1.12.4');
 	});
 
 	it('should find the customers model by name', () => {
@@ -88,7 +88,7 @@ describe('jaffle_shop integration', () => {
 
 	it('should return dbt version from the manifest', () => {
 		const loader = new ManifestLoader(JAFFLE_SHOP);
-		expect(loader.getDbtVersion()).toBe('1.10.13');
+		expect(loader.getDbtVersion()).toBe('1.12.4');
 	});
 
 	it('should index sources correctly', () => {
@@ -100,6 +100,32 @@ describe('jaffle_shop integration', () => {
 		expect(source).toBeDefined();
 		expect(source?.name).toBe('orders');
 		expect(source?.sourceName).toBe('jaffle_shop');
+	});
+
+	it('should index the real dbt 1.11+ user-defined function from manifest.functions', () => {
+		const loader = new ManifestLoader(JAFFLE_SHOP);
+		const indexer = new ManifestIndexer(loader, mockLogger);
+		const index = indexer.build();
+
+		const fn = index.functions.get('function.jaffle_shop.is_positive_int');
+		expect(fn).toBeDefined();
+		expect(fn?.name).toBe('is_positive_int');
+		expect(fn?.packageName).toBe('jaffle_shop');
+		expect(fn?.arguments).toEqual([{ name: 'a_string', dataType: 'varchar', description: 'The string to test.' }]);
+		expect(fn?.returns).toBe('boolean');
+		expect(fn?.functionType).toBe('scalar');
+	});
+
+	it('should include the function by name in customer_flags\' upstream lineage', () => {
+		const loader = new ManifestLoader(JAFFLE_SHOP);
+		const indexer = new ManifestIndexer(loader, mockLogger);
+		indexer.build();
+
+		const lineage = indexer.getLineage('model.jaffle_shop.customer_flags', 1);
+		const fnNode = lineage.upstream.find(n => n.uniqueId === 'function.jaffle_shop.is_positive_int');
+		expect(fnNode).toBeDefined();
+		expect(fnNode?.name).toBe('is_positive_int');
+		expect(fnNode?.type).toBe('function');
 	});
 
 });

@@ -37,6 +37,7 @@ function makeIndex(models: IndexedModel[]): ManifestIndex {
 		models: new Map(models.map(m => [m.uniqueId, m])),
 		sources: new Map(),
 		macros: new Map(),
+		functions: new Map(),
 		nodesByName,
 		parentMap: new Map(),
 		// No downstream for anyone — 4A ("unused model") fires for every model here,

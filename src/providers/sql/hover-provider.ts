@@ -51,6 +51,16 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 		if (ctx?.kind === 'macro') {
 			return this._hoverMacro(ctx.name);
 		}
+		if (ctx?.kind === 'function') {
+			const hover = this._hoverFunction(ctx.fn.name);
+			this.logger.trace(`Hover: function('${ctx.fn.name}') → ${hover ? 'found' : 'not found'}`);
+			return hover;
+		}
+		if (ctx?.kind === 'sym' && ctx.sym.kind === 'function') {
+			// A direct call by warehouse name (`schema.fn(...)`) that matches an indexed dbt function.
+			const direct = this._hoverFunction(ctx.sym.name.split('.').pop()!);
+			if (direct) return direct;
+		}
 		if (ctx?.kind === 'sym') {
 			// null = AST recognised the symbol but has nothing to show; suppress fallback
 			const hover = this._hoverResolvedToken(model, ctx.sym, ctx.partIndex, token, document.uri);
@@ -205,6 +215,39 @@ export class DbtHoverProvider implements vscode.HoverProvider {
 				const type = arg.type ? ` _${arg.type}_` : '';
 				const desc = arg.description ? ` — ${arg.description}` : '';
 				md.appendMarkdown(`$(${SqlIcons.macroArg}) \`${arg.name}\`${type}${desc}  \n`);
+			}
+		}
+
+		return new vscode.Hover(md);
+	}
+
+	private _hoverFunction(name: string): vscode.Hover | undefined {
+		const fns = this.indexer.findFunctionsByName(name);
+		if (fns.length === 0) return undefined;
+		const fn = fns[0];
+
+		const md = this._md();
+		const sig = `(${fn.arguments.map(a => `${a.name} ${a.dataType}`).join(', ')})`;
+		md.appendMarkdown(`$(${SqlIcons.function}) **\`${fn.name}${sig}\`** — function · _${fn.functionType}_ · returns _${fn.returns}_`);
+		if (fn.description) {
+			md.appendMarkdown(`\n\n${fn.description}`);
+		}
+
+		const metaLines: string[] = [
+			`$(${SqlIcons.package}) \`${fn.packageName}\``,
+			`$(${SqlIcons.file}) \`${fn.path}\``,
+		];
+		if (fn.schema) metaLines.push(`$(${SqlIcons.schema}) \`${fn.schema}\``);
+		if (fn.tags.length > 0) {
+			metaLines.push(`$(${SqlIcons.tag}) ${fn.tags.map(t => `\`${t}\``).join(' ')}`);
+		}
+		md.appendMarkdown('\n\n---\n\n' + metaLines.join('  \n'));
+
+		if (fn.arguments.length > 0) {
+			md.appendMarkdown('\n\n---\n\n**Arguments**  \n');
+			for (const arg of fn.arguments) {
+				const desc = arg.description ? ` — ${arg.description}` : '';
+				md.appendMarkdown(`$(${SqlIcons.macroArg}) \`${arg.name}\` _${arg.dataType}_${desc}  \n`);
 			}
 		}
 

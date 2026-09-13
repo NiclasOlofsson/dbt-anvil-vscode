@@ -154,6 +154,7 @@ class AnvilTemplateProvider extends DbtTemplateProvider {
 			if (packageName === undefined) {
 				out.push({ label: 'ref', detail: 'dbt model reference' });
 				out.push({ label: 'source', detail: 'dbt source reference' });
+				out.push({ label: 'function', detail: 'dbt function reference' });
 			}
 			for (const macro of index.macros.values()) {
 				if (packageName !== undefined && macro.packageName !== packageName) continue;
@@ -197,6 +198,18 @@ class AnvilTemplateProvider extends DbtTemplateProvider {
 				}
 				return [...bySource].map(([label, owners]) => ({ label, detail: owners.join(', ') }));
 			}
+		}
+
+		if (call.name === 'function') {
+			// dbt: the function is the LAST arg — `function('name')` / `function('pkg','name')`.
+			if (call.args.length >= 2 && argIndex === 0) {
+				const packages = new Set([...index.functions.values()].map(f => f.packageName));
+				return [...packages].sort().map(label => ({ label, detail: 'dbt package' }));
+			}
+			return [...index.functions.values()].map(f => ({
+				label: f.name,
+				detail: `${f.functionType} function — ${f.packageName}`,
+			}));
 		}
 
 		// A user macro's arguments: we know its parameter names, not their legal values.

@@ -470,6 +470,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	logger.info(`  analysisPaths: ${projectService.analysisPaths.join(', ')}`);
 	logger.info(`  snapshotPaths: ${projectService.snapshotPaths.join(', ')}`);
 	logger.info(`  testPaths: ${projectService.testPaths.join(', ')}`);
+	logger.info(`  functionPaths: ${projectService.functionPaths.join(', ')}`);
 	const databaseProvider = await createDatabaseProvider(projectService.activeConnection, projectDir, executionService, logger);
 	container.setDatabaseProvider(databaseProvider);
 	describeCache.setProvider(databaseProvider);

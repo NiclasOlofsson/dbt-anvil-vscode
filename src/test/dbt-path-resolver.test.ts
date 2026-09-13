@@ -1,5 +1,6 @@
 import * as path from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
+import type * as vscode from 'vscode';
 import { DbtPathResolver } from '../dbt/dbt-path-resolver';
 import type { DbtProjectConfig } from '../dbt/manifest-types';
 
@@ -16,6 +17,7 @@ describe('DbtPathResolver', () => {
 		expect(resolver.paths.snapshot).toEqual([path.join(projectDir, 'snapshots')]);
 		expect(resolver.paths.test).toEqual([path.join(projectDir, 'tests')]);
 		expect(resolver.paths.macro).toEqual([path.join(projectDir, 'macros')]);
+		expect(resolver.paths.function).toEqual([path.join(projectDir, 'functions')]);
 	});
 
 	it('resolves custom paths from config', () => {
@@ -27,6 +29,7 @@ describe('DbtPathResolver', () => {
 			'test-paths': ['src/tests'],
 			'macro-paths': ['src/macros'],
 			'seed-paths': ['src/seeds'],
+			'function-paths': ['src/functions'],
 		};
 		const resolver = new DbtPathResolver(projectDir);
 		resolver.refresh(config);
@@ -37,6 +40,7 @@ describe('DbtPathResolver', () => {
 		expect(resolver.paths.test).toEqual([path.join(projectDir, 'src/tests')]);
 		expect(resolver.paths.macro).toEqual([path.join(projectDir, 'src/macros')]);
 		expect(resolver.paths.seed).toEqual([path.join(projectDir, 'src/seeds')]);
+		expect(resolver.paths.function).toEqual([path.join(projectDir, 'src/functions')]);
 	});
 
 	describe('classifyFile', () => {
@@ -83,6 +87,14 @@ describe('DbtPathResolver', () => {
 			expect(resolver.classifyFile(path.join(projectDir, 'seeds', 'raw_data.csv'))).toBe('seed');
 		});
 
+		it('classifies function files, and still classifies model files (function is checked before model)', () => {
+			const resolver = new DbtPathResolver(projectDir);
+			resolver.refresh(undefined);
+
+			expect(resolver.classifyFile(path.join(projectDir, 'functions', 'is_positive_int.sql'))).toBe('function');
+			expect(resolver.classifyFile(path.join(projectDir, 'models', 'customers.sql'))).toBe('model');
+		});
+
 		it('returns unknown for files outside dbt paths', () => {
 			const resolver = new DbtPathResolver(projectDir);
 			resolver.refresh(undefined);
@@ -118,14 +130,25 @@ describe('DbtPathResolver', () => {
 	});
 
 	describe('selector builders', () => {
-		it('buildSqlSelector returns filters for all dbt paths', () => {
+		it('buildSqlSelector returns filters for all dbt paths, including functions', () => {
 			const resolver = new DbtPathResolver(projectDir);
 			resolver.refresh(undefined);
 
 			const filters = resolver.buildSqlSelector();
-			// 6 default dirs: models, seeds, analyses, snapshots, tests, macros
-			expect(filters).toHaveLength(6);
+			// 7 default dirs: models, seeds, analyses, snapshots, tests, macros, functions
+			expect(filters).toHaveLength(7);
 			expect(filters.every(f => f.language === 'jinja-sql')).toBe(true);
+			expect(filters.some(f => 'pattern' in f && (f.pattern as vscode.RelativePattern).base === path.join(projectDir, 'functions'))).toBe(true);
+		});
+
+		it('buildFunctionSelector returns filters scoped to the function dir', () => {
+			const resolver = new DbtPathResolver(projectDir);
+			resolver.refresh(undefined);
+
+			const filters = resolver.buildFunctionSelector();
+			expect(filters).toHaveLength(1);
+			expect(filters[0].language).toBe('jinja-sql');
+			expect((filters[0].pattern as vscode.RelativePattern).base).toBe(path.join(projectDir, 'functions'));
 		});
 
 		it('buildModelSelector returns model + snapshot + seed paths', () => {
@@ -142,8 +165,8 @@ describe('DbtPathResolver', () => {
 			resolver.refresh(undefined);
 
 			const filters = resolver.buildYamlSelector();
-			// 6 dirs * 2 languages (yaml + jinja-yaml) + 2 for dbt_project.yml = 14
-			expect(filters).toHaveLength(14);
+			// 7 dirs (incl. functions) * 2 languages (yaml + jinja-yaml) + 2 for dbt_project.yml = 16
+			expect(filters).toHaveLength(16);
 		});
 	});
 });

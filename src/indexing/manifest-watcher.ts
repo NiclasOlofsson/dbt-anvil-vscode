@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { ILogger } from '../types/logger';
 import { ManifestLoader } from '../dbt/manifest-loader';
-import { resolveMacroPaths, resolveModelPaths } from '../dbt/project-config';
+import { resolveFunctionPaths, resolveMacroPaths, resolveModelPaths } from '../dbt/project-config';
 import { ManifestIndexer } from './manifest-indexer';
 
 /**
@@ -138,7 +138,11 @@ export class ManifestWatcher {
 	private _sourceRoots(): string[] {
 		const projectDir = this.loader.projectDir;
 		const config = this.loader.projectConfig;
-		return [...resolveModelPaths(config, projectDir), ...resolveMacroPaths(config, projectDir)];
+		return [
+			...resolveModelPaths(config, projectDir),
+			...resolveMacroPaths(config, projectDir),
+			...resolveFunctionPaths(config, projectDir),
+		];
 	}
 
 	/**

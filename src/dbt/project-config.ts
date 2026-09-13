@@ -54,3 +54,8 @@ export function resolveTestPaths(config: DbtProjectConfig | undefined, projectDi
 	const dirs = config?.['test-paths'] ?? ['tests'];
 	return dirs.map(p => path.join(projectDir, p));
 }
+
+export function resolveFunctionPaths(config: DbtProjectConfig | undefined, projectDir: string): string[] {
+	const dirs = config?.['function-paths'] ?? ['functions'];
+	return dirs.map(p => path.join(projectDir, p));
+}

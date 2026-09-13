@@ -66,6 +66,7 @@ function createMockIndexer(): ManifestIndexer {
 	return {
 		index: { adapterType: 'duckdb', models: new Map(), sources: new Map(), macros: new Map(), nodesByName: new Map() },
 		findModelsByName: () => [],
+		findFunctionsByName: () => [],
 		getRawNode: () => null,
 		getColumns: () => null,
 		setColumns: vi.fn(),
@@ -293,6 +294,74 @@ describe('DbtHoverProvider — wildcard column list (*)', () => {
 		expect(content).toContain('street');
 		expect(content).toContain('— column');
 		expect(content).toContain('addr_cte'); // lineage chain shows CTE name
+	});
+});
+
+// ─── function() hover (dbt 1.11+ user-defined functions) ────────────────────
+
+describe('DbtHoverProvider — function()', () => {
+	// select {{ function('is_positive_int') }}(x)
+	//        ^7 {{  ^10 function  ^20 name content  ^35 close-quote  ^40 after }}
+	const sql = 'select {{ function(\'is_positive_int\') }}(x)';
+	const model: DocumentModel = {
+		ctes: [],
+		refs: [],
+		sources: [],
+		finalColumns: [],
+		functions: [{ name: 'is_positive_int', line: 0, col: 10, nameCol: 20, nameEndCol: 35, jinjaCol: 7, jinjaEndCol: 40 }],
+		timing: { parseMs: 1, totalMs: 2 },
+	};
+
+	function createMockIndexerWithFunction(): ManifestIndexer {
+		return {
+			index: { adapterType: 'duckdb', models: new Map(), sources: new Map(), macros: new Map(), nodesByName: new Map() },
+			findModelsByName: () => [],
+			findFunctionsByName: (name: string) => name === 'is_positive_int' ? [{
+				uniqueId: 'function.jaffle_shop.is_positive_int',
+				name: 'is_positive_int',
+				packageName: 'jaffle_shop',
+				path: '/project/functions/is_positive_int.sql',
+				schema: 'main',
+				description: 'True when the string holds a positive integer.',
+				tags: [],
+				arguments: [{ name: 'a_string', dataType: 'varchar' }],
+				returns: 'boolean',
+				functionType: 'scalar',
+			}] : [],
+			getRawNode: () => null,
+			getColumns: () => null,
+			setColumns: vi.fn(),
+			buildSchemaMapping: () => ({}),
+		} as unknown as ManifestIndexer;
+	}
+
+	it('hovering {{ function(\'is_positive_int\') }} shows the signature and return type', async () => {
+		const parseService = createMockParseService(model);
+		const provider = new DbtHoverProvider(createMockIndexerWithFunction(), createMockLogger(), parseService);
+		const doc = createMockDocument(sql);
+		const pos = new vscode.Position(0, 15); // inside the jinja tag
+
+		const result = await provider.provideHover(doc, pos, mockToken);
+
+		expect(result).toBeDefined();
+		const content = (result!.contents as unknown as vscode.MarkdownString).value;
+		expect(content).toContain('is_positive_int(a_string varchar)');
+		expect(content).toContain('boolean');
+	});
+
+	it('hovering an unknown function name yields no hover', async () => {
+		const unknownModel: DocumentModel = {
+			...model,
+			functions: [{ ...model.functions![0], name: 'nope' }],
+		};
+		const parseService = createMockParseService(unknownModel);
+		const provider = new DbtHoverProvider(createMockIndexerWithFunction(), createMockLogger(), parseService);
+		const doc = createMockDocument(sql);
+		const pos = new vscode.Position(0, 15);
+
+		const result = await provider.provideHover(doc, pos, mockToken);
+
+		expect(result).toBeUndefined();
 	});
 });
 

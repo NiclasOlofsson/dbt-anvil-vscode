@@ -60,6 +60,7 @@ function createTestIndex(): ManifestIndex {
 		models,
 		sources,
 		macros: new Map(),
+		functions: new Map(),
 		nodesByName: new Map([
 			['customers', ['model.p.customers']],
 			['orders', ['model.p.orders']],
@@ -337,6 +338,7 @@ describe('GetColumnLineageTool relation disambiguation', () => {
 			models,
 			sources,
 			macros: new Map(),
+			functions: new Map(),
 			nodesByName: new Map([
 				['customers', ['model.p.customers']],
 				['transfer', ['model.p.transfer']],

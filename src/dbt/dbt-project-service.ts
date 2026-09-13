@@ -7,6 +7,7 @@ import type { ILogger } from '../types/logger';
 import {
 	loadProjectConfig,
 	resolveAnalysisPaths,
+	resolveFunctionPaths,
 	resolveMacroPaths,
 	resolveModelPaths,
 	resolveSeedPaths,
@@ -132,6 +133,10 @@ export class DbtProjectService {
 
 	get testPaths(): string[] {
 		return resolveTestPaths(this._projectConfig, this.projectDir);
+	}
+
+	get functionPaths(): string[] {
+		return resolveFunctionPaths(this._projectConfig, this.projectDir);
 	}
 
 	// ---- Profile ---------------------------------------------------

@@ -1,0 +1,11 @@
+version: 2
+
+functions:
+  - name: is_positive_int
+    description: True when the string holds a positive integer such as '10'.
+    arguments:
+      - name: a_string
+        data_type: varchar
+        description: The string to test.
+    returns:
+      data_type: boolean

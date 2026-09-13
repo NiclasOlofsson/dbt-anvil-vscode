@@ -712,6 +712,88 @@ describe('definition-provider integration (FTL)', () => {
 	});
 });
 
+// ---- function() go-to-definition (dbt 1.11+ user-defined functions) ----
+//
+// A separate, minimal parse from the main SQL fixture above (which has no
+// function() call): {{ function('name') }} is a jinja tag like ref()/source(),
+// so it gets the same real-parser + real-provider treatment.
+
+describe('definition-provider integration (FTL) — function()', () => {
+	const FN_SQL = 'select {{ function(\'is_positive_int\') }}(cast(customer_id as varchar)) as flag\nfrom t';
+	let fnModel: DocumentModel;
+
+	beforeAll(async () => {
+		const parser = new SqllensDocumentParser({ adapterType: 'ansi' } as AdapterContext);
+		fnModel = await parser.parse(FN_SQL);
+	});
+
+	function makeFunctionProvider(functionPaths: Record<string, string> = {}) {
+		const indexer = {
+			index: { adapterType: 'duckdb', models: new Map(), sources: new Map(), macros: new Map(), nodesByName: new Map() },
+			findModelsByName: () => [],
+			findFunctionsByName: (name: string) => {
+				const p = functionPaths[name];
+				return p ? [{ path: p }] : [];
+			},
+			getRawNode: () => null,
+			getColumns: () => null,
+			setColumns: vi.fn(),
+			buildSchemaMapping: () => ({}),
+		};
+		const parseService = { getDocumentModel: vi.fn().mockResolvedValue(fnModel), evict: vi.fn() };
+		const loader = { projectDir: '/project' };
+		return new DbtDefinitionProvider(indexer as never, loader as never, createMockLogger(), parseService as never);
+	}
+
+	function makeFnDoc() {
+		const lines = FN_SQL.split('\n');
+		return {
+			languageId: 'jinja-sql',
+			fileName: '/project/models/customer_flags.sql',
+			getText: () => FN_SQL,
+			lineAt: (n: number) => ({ text: lines[n] ?? '', range: new vscode.Range(n, 0, n, (lines[n] ?? '').length) }),
+			positionAt: () => new vscode.Position(0, 0),
+			offsetAt: (p: vscode.Position) => offsetOf(FN_SQL, p),
+			getWordRangeAtPosition: () => undefined,
+			lineCount: lines.length,
+			uri: vscode.Uri.file('/project/models/customer_flags.sql'),
+			version: 1,
+		} as unknown as vscode.TextDocument;
+	}
+
+	const cancelToken: vscode.CancellationToken = { isCancellationRequested: false, onCancellationRequested: vi.fn() };
+
+	it('parses one FunctionInfo for the function() tag', () => {
+		expect(fnModel.functions).toHaveLength(1);
+		expect(fnModel.functions![0].name).toBe('is_positive_int');
+	});
+
+	it('clicking inside {{ function(\'is_positive_int\') }} resolves to the function\'s file', async () => {
+		const doc = makeFnDoc();
+		const fn = fnModel.functions![0];
+		const clickCol = fn.jinjaCol! + 2; // anywhere inside the jinja tag span
+
+		const result = await makeFunctionProvider({ is_positive_int: '/project/functions/is_positive_int.sql' })
+			.provideDefinition(doc, new vscode.Position(fn.line, clickCol), cancelToken);
+
+		expect(result).toBeDefined();
+		const loc = (Array.isArray(result) ? result[0] : result) as vscode.Location;
+		expect(loc.uri.fsPath).toContain('is_positive_int');
+		expect(loc.range.start.line).toBe(0);
+	});
+
+	it('an unresolvable function name resolves to nothing', async () => {
+		const doc = makeFnDoc();
+		const fn = fnModel.functions![0];
+		const clickCol = fn.jinjaCol! + 2;
+
+		const result = await makeFunctionProvider({}) // no function paths known
+			.provideDefinition(doc, new vscode.Position(fn.line, clickCol), cancelToken);
+
+		expect(result).toBeUndefined();
+	});
+});
+
 /** { line, character } (0-based) → absolute char offset into `text`. */
 function offsetOf(text: string, pos: { line: number; character: number }): number {
 	let offset = 0;

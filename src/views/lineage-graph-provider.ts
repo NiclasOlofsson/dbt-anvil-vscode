@@ -539,6 +539,7 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 
 			const model = index.models.get(id);
 			const source = index.sources.get(id);
+			const fn = index.functions.get(id);
 			if (model) {
 				const height = computeNodeHeight(id, 'model', columns.length);
 				nodes.push({
@@ -563,6 +564,21 @@ export class LineageGraphProvider implements vscode.WebviewViewProvider {
 					type: 'source',
 					isFocus: id === focusId,
 					columns,
+					x: 0, y: 0,
+					width: this._layoutConfig.node.width,
+					height,
+					depthLevel: 0,
+					subColumnIndex: 0,
+				});
+			} else if (fn) {
+				const height = computeNodeHeight(id, 'function', columns.length);
+				nodes.push({
+					id,
+					label: fn.name,
+					type: 'function',
+					filePath: fn.path,
+					isFocus: id === focusId,
+					columns: [],
 					x: 0, y: 0,
 					width: this._layoutConfig.node.width,
 					height,
@@ -1373,6 +1389,7 @@ body.layout-panel-open .layout-panel {
 		metric:    'var(--vscode-charts-orange, #E8963E)',
 		seed:      '#D4A516',
 		snapshot:  'var(--vscode-descriptionForeground, #888)',
+		function:  'var(--vscode-charts-red, #D65F5F)',
 	};
 
 	let panX = 0, panY = 0, scale = 1;
@@ -1693,7 +1710,7 @@ body.layout-panel-open .layout-panel {
 			const color = TYPE_COLORS[effectiveType] || 'var(--vscode-descriptionForeground)';
 			const subtitle = mat ? mat : node.type;
 			const colCount = node.columns ? node.columns.length : 0;
-			const typeBadge = effectiveType === 'model' ? 'M' : effectiveType === 'source' ? 'S' : effectiveType === 'seed' ? 'Sd' : effectiveType === 'test' ? 'T' : effectiveType === 'unit_test' ? 'U' : effectiveType.slice(0, 2).toUpperCase();
+			const typeBadge = effectiveType === 'model' ? 'M' : effectiveType === 'source' ? 'S' : effectiveType === 'seed' ? 'Sd' : effectiveType === 'test' ? 'T' : effectiveType === 'unit_test' ? 'U' : effectiveType === 'function' ? 'Fn' : effectiveType.slice(0, 2).toUpperCase();
 
 			card.innerHTML =
 				'<div class="card-header" data-file="' + escHtml(node.filePath || '') + '">' +

@@ -29,7 +29,11 @@ function providerWithCatalog() {
 		['macro.p.my_macro', { name: 'my_macro', packageName: 'p' }],
 		['macro.dbt_utils.star', { name: 'star', packageName: 'dbt_utils' }],
 	]);
-	const indexer = { index: { models, sources, macros } } as unknown as ManifestIndexer;
+	const functions = new Map<string, unknown>([
+		['function.p.is_positive_int', { name: 'is_positive_int', packageName: 'p', functionType: 'scalar' }],
+		['function.other_pkg.total_amount', { name: 'total_amount', packageName: 'other_pkg', functionType: 'aggregate' }],
+	]);
+	const indexer = { index: { models, sources, macros, functions } } as unknown as ManifestIndexer;
 	const describeCache = { columns: () => Promise.resolve(undefined) } as unknown as DescribeCache;
 	return makeTemplateProvider(() => undefined, { indexer, describeCache });
 }
@@ -45,6 +49,25 @@ describe('AnvilTemplateProvider — templateCandidates (the dbt catalog seam)', 
 		expect(labels).toContain('ref');
 		expect(labels).toContain('source');
 		expect(labels).toContain('my_macro');
+	});
+
+	it('callee slot also offers `function` (dbt 1.11+ user-defined functions), alongside ref/source', () => {
+		const labels = providerWithCatalog().templateCandidates(call('fun', []), -1).map(c => c.label);
+		expect(labels).toContain('function');
+	});
+
+	it('function(...) slot offers function names, with the package in the detail', () => {
+		const c = providerWithCatalog().templateCandidates(call('function', ['is_pos']), 0);
+		expect(c.map(x => x.label).sort()).toEqual(['is_positive_int', 'total_amount']);
+		const found = c.find(x => x.label === 'is_positive_int')!;
+		expect(found.detail).toContain('p');
+		expect(found.detail).toContain('scalar');
+	});
+
+	it('function 2-arg form: slot 0 is the PACKAGE, not a function name (arity comes from the whole call)', () => {
+		const c = providerWithCatalog().templateCandidates(call('function', ['p', 'is_pos']), 0);
+		expect(c.map(x => x.label)).toEqual(['other_pkg', 'p']);
+		expect(c[0].detail).toBe('dbt package');
 	});
 
 	it('callee slot under a package offers only that package, no builtins', () => {

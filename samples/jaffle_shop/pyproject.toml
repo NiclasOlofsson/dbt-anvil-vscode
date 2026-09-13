@@ -2,9 +2,9 @@
 name = "jaffle-shop"
 version = "0.1.0"
 description = "Example DBT project for testing dbt-core-mcp"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
-    "dbt-core>=1.9.0",
-    "dbt-duckdb>=1.9.0",
+    "dbt-core>=1.12.0",
+    "dbt-duckdb>=1.11.0",
 ]
 

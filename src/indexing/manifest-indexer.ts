@@ -63,10 +63,29 @@ export interface IndexedMacro {
 	macroSql?: string;
 }
 
+/** A dbt 1.11+ user-defined function (`functions/`), built by `dbt build`. */
+export interface IndexedFunction {
+	uniqueId: string;
+	name: string;
+	packageName: string;
+	path: string;
+	schema?: string;
+	database?: string;
+	alias?: string;
+	description?: string;
+	tags: string[];
+	arguments: Array<{ name: string; dataType: string; description?: string }>;
+	/** Declared return data type (`returns.data_type`). */
+	returns: string;
+	/** `config.type`: `scalar` (the only kind dbt ships today) or `aggregate`. */
+	functionType: string;
+}
+
 export interface ManifestIndex {
 	models: Map<string, IndexedModel>;
 	sources: Map<string, IndexedSource>;
 	macros: Map<string, IndexedMacro>;
+	functions: Map<string, IndexedFunction>;
 	nodesByName: Map<string, string[]>; // name → unique_ids (can have duplicates across packages)
 	parentMap: Map<string, string[]>;
 	childMap: Map<string, string[]>;
@@ -280,6 +299,29 @@ export class ManifestIndexer {
 			});
 		}
 
+		// Index user-defined functions (dbt 1.11+, top-level `functions` dict)
+		const functions = new Map<string, IndexedFunction>();
+		for (const [uid, fn] of Object.entries(manifest.functions ?? {})) {
+			functions.set(uid, {
+				uniqueId: uid,
+				name: fn.name,
+				packageName: fn.package_name,
+				path: path.join(projectDir, fn.original_file_path),
+				schema: fn.schema,
+				database: fn.database,
+				alias: fn.alias,
+				description: fn.description,
+				tags: fn.tags ?? [],
+				arguments: (fn.arguments ?? []).map(a => ({ name: a.name, dataType: a.data_type, description: a.description })),
+				returns: fn.returns?.data_type ?? 'unknown',
+				functionType: typeof fn.config?.['type'] === 'string' ? fn.config['type'] : 'scalar',
+			});
+			if (!nodesByName.has(fn.name)) {
+				nodesByName.set(fn.name, []);
+			}
+			nodesByName.get(fn.name)!.push(uid);
+		}
+
 		// Build parent/child maps
 		const parentMap = new Map<string, string[]>();
 		const childMap = new Map<string, string[]>();
@@ -295,6 +337,7 @@ export class ManifestIndexer {
 			models,
 			sources,
 			macros,
+			functions,
 			nodesByName,
 			parentMap,
 			childMap,
@@ -315,6 +358,19 @@ export class ManifestIndexer {
 		return uids.flatMap(uid => {
 			const m = index.models.get(uid);
 			return m ? [m] : [];
+		});
+	}
+
+	/**
+	 * Look up a user-defined function by name. Returns all matches (may be multiple across packages).
+	 */
+	findFunctionsByName(name: string): IndexedFunction[] {
+		const index = this._index;
+		if (!index) return [];
+		const uids = index.nodesByName.get(name) ?? [];
+		return uids.flatMap(uid => {
+			const f = index.functions.get(uid);
+			return f ? [f] : [];
 		});
 	}
 
@@ -341,6 +397,11 @@ export class ManifestIndexer {
 			const s = index.sources.get(uid);
 			if (s) {
 				results.push({ uniqueId: uid, name: s.name, type });
+				continue;
+			}
+			const f = index.functions.get(uid);
+			if (f) {
+				results.push({ uniqueId: uid, name: f.name, type });
 			}
 		}
 
@@ -412,7 +473,8 @@ export class ManifestIndexer {
 		return [...visited.entries()].map(([uid, distance]) => {
 			const m = index.models.get(uid);
 			const s = index.sources.get(uid);
-			const name = m?.name ?? s?.name ?? uid.split('.').pop() ?? uid;
+			const f = index.functions.get(uid);
+			const name = m?.name ?? s?.name ?? f?.name ?? uid.split('.').pop() ?? uid;
 			const type = uid.split('.')[0];
 			return { uniqueId: uid, name, type, distance };
 		});
@@ -438,7 +500,7 @@ export class ManifestIndexer {
 	 */
 	getRawNode(uniqueId: string): DbtNode | DbtSource | undefined {
 		const { manifest } = this.loader.load();
-		return manifest.nodes[uniqueId] ?? manifest.sources[uniqueId];
+		return manifest.nodes[uniqueId] ?? manifest.sources[uniqueId] ?? manifest.functions?.[uniqueId];
 	}
 
 	/**
@@ -610,6 +672,11 @@ export class ManifestIndexer {
 		for (const model of index.models.values()) {
 			if (model.path.replace(/\\/g, '/').toLowerCase() === normalised) {
 				return model.uniqueId;
+			}
+		}
+		for (const fn of index.functions.values()) {
+			if (fn.path.replace(/\\/g, '/').toLowerCase() === normalised) {
+				return fn.uniqueId;
 			}
 		}
 		return undefined;

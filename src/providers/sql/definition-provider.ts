@@ -52,11 +52,30 @@ export class DbtDefinitionProvider implements vscode.DefinitionProvider {
 			this.logger.trace(`Definition: macro '${ctx.name}' → ${def ? 'resolved' : 'not found'}`);
 			return def;
 		}
+		if (ctx?.kind === 'function') {
+			const def = this._resolveFunction(ctx.fn.name);
+			this.logger.trace(`Definition: function('${ctx.fn.name}') → ${def ? 'resolved' : 'not found'}`);
+			return def;
+		}
+		if (ctx?.kind === 'sym' && ctx.sym.kind === 'function') {
+			// A direct call by warehouse name (`schema.fn(...)`) that matches an indexed dbt function.
+			const def = this._resolveFunction(ctx.sym.name.split('.').pop()!);
+			if (def) return def;
+		}
 		if (ctx?.kind === 'sym') {
 			return this._resolveToken(document, position, token, model, ctx.sym, ctx.partIndex);
 		}
 
 		return undefined;
+	}
+
+	private _resolveFunction(name: string): vscode.Definition | undefined {
+		const fns = this.indexer.findFunctionsByName(name);
+		if (fns.length === 0) return undefined;
+		if (fns.length > 1) {
+			return fns.map(f => new vscode.Location(vscode.Uri.file(f.path), new vscode.Position(0, 0)));
+		}
+		return new vscode.Location(vscode.Uri.file(fns[0].path), new vscode.Position(0, 0));
 	}
 
 	private _resolveMacro(macroName: string): vscode.Location | undefined {

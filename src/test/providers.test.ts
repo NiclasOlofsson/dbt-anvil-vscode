@@ -97,6 +97,7 @@ function createMockIndexer(overrides?: Partial<ManifestIndex>): ManifestIndexer 
 		models: overrides?.models ?? models,
 		sources: overrides?.sources ?? sources,
 		macros: overrides?.macros ?? macros,
+		functions: overrides?.functions ?? new Map(),
 		nodesByName: overrides?.nodesByName ?? new Map([
 			['customers', ['model.project.customers']],
 			['orders', ['model.project.orders']],

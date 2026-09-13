@@ -64,6 +64,26 @@ export class ListResourcesTool implements vscode.LanguageModelTool<ListResources
 			}
 		}
 
+		if (!resource_type || resource_type === 'function') {
+			for (const fn of index.functions.values()) {
+				resources.push({
+					unique_id: fn.uniqueId,
+					name: fn.name,
+					resource_type: 'function',
+					package_name: fn.packageName,
+					path: fn.path,
+					database: fn.database,
+					schema: fn.schema,
+					alias: fn.alias,
+					arguments: fn.arguments,
+					returns: fn.returns,
+					function_type: fn.functionType,
+					tags: fn.tags,
+					description: fn.description,
+				});
+			}
+		}
+
 		return toolResult({
 			count: resources.length,
 			...(resource_type ? { resource_type } : {}),

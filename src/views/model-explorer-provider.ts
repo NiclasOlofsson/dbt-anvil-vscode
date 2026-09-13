@@ -1,11 +1,11 @@
 import * as vscode from 'vscode';
-import type { ManifestIndexer, IndexedModel, IndexedSource, ManifestIndex } from '../indexing/manifest-indexer';
+import type { ManifestIndexer, IndexedModel, IndexedSource, IndexedFunction, ManifestIndex } from '../indexing/manifest-indexer';
 import type { ILogger } from '../types/logger';
-import { materializationIcon } from '../providers/common/icons';
+import { materializationIcon, SqlIcons } from '../providers/common/icons';
 
 // ---- Tree item types ----
 
-export type ExplorerItem = GroupItem | ModelItem | SourceItem;
+export type ExplorerItem = GroupItem | ModelItem | SourceItem | FunctionItem;
 
 export class GroupItem extends vscode.TreeItem {
 	constructor(
@@ -47,6 +47,22 @@ export class SourceItem extends vscode.TreeItem {
 		this.tooltip = `${source.uniqueId}\n${source.description ?? ''}`.trim();
 		this.contextValue = 'sourceItem';
 		this.iconPath = new vscode.ThemeIcon('database');
+	}
+}
+
+export class FunctionItem extends vscode.TreeItem {
+	constructor(public readonly fn: IndexedFunction) {
+		super(fn.name, vscode.TreeItemCollapsibleState.None);
+		this.description = `${fn.functionType} → ${fn.returns}`;
+		this.tooltip = `${fn.uniqueId}\n${fn.description ?? ''}`.trim();
+		this.contextValue = 'functionItem';
+		this.iconPath = new vscode.ThemeIcon(SqlIcons.function);
+		this.command = {
+			command: 'vscode.open',
+			title: 'Open Function',
+			arguments: [vscode.Uri.file(fn.path)],
+		};
+		this.resourceUri = vscode.Uri.file(fn.path);
 	}
 }
 
@@ -166,6 +182,15 @@ export class ModelExplorerProvider implements vscode.TreeDataProvider<ExplorerIt
 				`Sources (${index.sources.size})`,
 				sourceChildren,
 				vscode.TreeItemCollapsibleState.Expanded,
+			));
+		}
+
+		if (index.functions.size > 0) {
+			const sortedFunctions = [...index.functions.values()].sort((a, b) => a.name.localeCompare(b.name));
+			roots.push(new GroupItem(
+				`Functions (${index.functions.size})`,
+				sortedFunctions.map(fn => new FunctionItem(fn)),
+				vscode.TreeItemCollapsibleState.Collapsed,
 			));
 		}
 

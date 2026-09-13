@@ -15,7 +15,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { parseTemplated } from '../../../ftl/sqllens/api';
-import { tagInfos } from '../../../ftl/sqllens/extract/tag-infos';
+import { emittedTagKind, tagInfos } from '../../../ftl/sqllens/extract/tag-infos';
 
 function fromTags(sql: string): ReturnType<typeof tagInfos> {
 	return tagInfos(parseTemplated(sql, 'databricks').tags);
@@ -273,5 +273,85 @@ describe('tagInfos.macroCalls — nested {{ }} expression calls surface via macr
 				args: [{ line: 0, col: 22, endCol: 23 }, { line: 0, col: 25, endCol: 26 }],
 			},
 		]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// functions — `{{ function('name') }}` / `{{ function('pkg', 'name') }}`
+// (dbt 1.11+ user-defined functions). Pinned field-for-field, same discipline
+// as refs/sources above: every column here is a real (line, col) in the raw
+// source, checked by hand against the string layout.
+// ---------------------------------------------------------------------------
+
+describe('tagInfos.functions — pinned fields (single-line)', () => {
+	it('canonical single-arg function() call', () => {
+		// select {{ function('is_positive_int') }}(x)
+		//        ^7 {{  ^10 function  ^20 name content  ^35 close-quote  ^40 after }}
+		expect(fromTags('select {{ function(\'is_positive_int\') }}(x)').functions).toEqual([{
+			name: 'is_positive_int', line: 0, col: 10, nameCol: 20, nameEndCol: 35, jinjaCol: 7, jinjaEndCol: 40,
+		}]);
+	});
+
+	it('2-arg function(\'pkg\', \'name\') sets packageName from arg 0 and name from the last arg', () => {
+		// select {{ function('mypkg', 'myfn') }}(x)
+		//        ^7 {{  ^10 function  ^20 pkg content  ^29 name content  ^38 after }}
+		expect(fromTags('select {{ function(\'mypkg\', \'myfn\') }}(x)').functions).toEqual([{
+			name: 'myfn', packageName: 'mypkg', line: 0, col: 10, nameCol: 29, nameEndCol: 33, jinjaCol: 7, jinjaEndCol: 38,
+		}]);
+	});
+});
+
+describe('tagInfos.functions — computed args and macro-call exclusion', () => {
+	it('a computed arg (function(var(\'x\'))) emits no FunctionInfo and no macro call', () => {
+		const result = fromTags('select {{ function(var(\'x\')) }}(y)');
+		expect(result.functions).toEqual([]);
+		expect(result.macroCalls).toEqual([]);
+	});
+
+	it('`function` never appears in macroCalls alongside a real macro call', () => {
+		const result = fromTags('select {{ my_macro(1) }} {{ function(\'is_positive_int\') }}(x)');
+		expect(result.macroCalls).toHaveLength(1);
+		expect(result.macroCalls[0].name).toBe('my_macro');
+		expect(result.functions).toHaveLength(1);
+		expect(result.functions[0].name).toBe('is_positive_int');
+	});
+});
+
+describe('tagInfos — ref/source extraction is unaffected by a function() tag in the same document', () => {
+	it('each tag on its own line keeps its own pinned fields', () => {
+		const sql = [
+			'select * from {{ ref(\'orders\') }}',
+			'select * from {{ source(\'jaffle_shop\', \'raw_orders\') }}',
+			'select {{ function(\'is_positive_int\') }}(x)',
+		].join('\n');
+		const result = fromTags(sql);
+
+		expect(result.refs).toEqual([{
+			model: 'orders', line: 0, col: 17, modelCol: 22, modelEndCol: 28, jinjaCol: 14, jinjaEndCol: 33,
+		}]);
+		expect(result.sources).toEqual([{
+			sourceName: 'jaffle_shop', tableName: 'raw_orders',
+			line: 1, col: 17,
+			sourceNameCol: 25, sourceNameEndCol: 36,
+			tableNameCol: 40, tableNameEndCol: 50,
+			jinjaCol: 14, jinjaEndCol: 55,
+		}]);
+		expect(result.functions).toEqual([{
+			name: 'is_positive_int', line: 2, col: 10, nameCol: 20, nameEndCol: 35, jinjaCol: 7, jinjaEndCol: 40,
+		}]);
+	});
+});
+
+describe('emittedTagKind — function', () => {
+	it('returns \'function\' for the closed literal 1-arg form', () => {
+		const tag = parseTemplated('select {{ function(\'is_positive_int\') }}(x)', 'databricks')
+			.tags.find(t => t.kind === 'call' && t.name === 'function')!;
+		expect(emittedTagKind(tag)).toBe('function');
+	});
+
+	it('returns undefined for a 3-arg call (function only accepts 1 or 2 positional args)', () => {
+		const tag = parseTemplated('select {{ function(\'a\', \'b\', \'c\') }}(x)', 'databricks')
+			.tags.find(t => t.kind === 'call' && t.name === 'function')!;
+		expect(emittedTagKind(tag)).toBeUndefined();
 	});
 });

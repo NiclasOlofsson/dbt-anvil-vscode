@@ -38,6 +38,11 @@ export class YamlCompletionProvider implements vscode.CompletionItemProvider {
 			return this._completeTestNames();
 		}
 
+		// "- name: <cursor>" at function level → suggest function names
+		if (/^\s+-\s+name:\s*\S*$/.test(linePrefix) && this._isInFunctionsBlock(document, position)) {
+			return this._completeFunctionNames();
+		}
+
 		return undefined;
 	}
 
@@ -45,7 +50,17 @@ export class YamlCompletionProvider implements vscode.CompletionItemProvider {
 		for (let i = position.line - 1; i >= 0; i--) {
 			const text = document.lineAt(i).text;
 			if (/^models:/.test(text)) return true;
-			if (/^sources:/.test(text)) return false;
+			if (/^sources:|^functions:/.test(text)) return false;
+			if (/^\S/.test(text)) return false;
+		}
+		return false;
+	}
+
+	private _isInFunctionsBlock(document: vscode.TextDocument, position: vscode.Position): boolean {
+		for (let i = position.line - 1; i >= 0; i--) {
+			const text = document.lineAt(i).text;
+			if (/^functions:/.test(text)) return true;
+			if (/^models:|^sources:/.test(text)) return false;
 			if (/^\S/.test(text)) return false;
 		}
 		return false;
@@ -59,7 +74,7 @@ export class YamlCompletionProvider implements vscode.CompletionItemProvider {
 				// We hit a "- name:" that is not followed by columns, so we're at model level
 				return false;
 			}
-			if (/^models:|^sources:|^\S/.test(text)) return false;
+			if (/^models:|^sources:|^functions:|^\S/.test(text)) return false;
 		}
 		return false;
 	}
@@ -68,7 +83,7 @@ export class YamlCompletionProvider implements vscode.CompletionItemProvider {
 		for (let i = position.line - 1; i >= 0; i--) {
 			const text = document.lineAt(i).text;
 			if (/^\s+tests:/.test(text)) return true;
-			if (/^\s+-\s+name:|^\s+columns:|^models:|^sources:|^\S/.test(text)) return false;
+			if (/^\s+-\s+name:|^\s+columns:|^models:|^sources:|^functions:|^\S/.test(text)) return false;
 		}
 		return false;
 	}
@@ -80,7 +95,7 @@ export class YamlCompletionProvider implements vscode.CompletionItemProvider {
 			if (match && !this._isInColumnsBlock(document, new vscode.Position(i, 0))) {
 				return match[1];
 			}
-			if (/^models:|^sources:|^\S/.test(text)) break;
+			if (/^models:|^sources:|^functions:|^\S/.test(text)) break;
 		}
 		return undefined;
 	}
@@ -98,6 +113,25 @@ export class YamlCompletionProvider implements vscode.CompletionItemProvider {
 			item.detail = `${model.materialisation} — ${model.packageName}`;
 			if (model.description) {
 				item.documentation = new vscode.MarkdownString(model.description);
+			}
+			items.push(item);
+		}
+		return items;
+	}
+
+	private _completeFunctionNames(): vscode.CompletionItem[] {
+		const index = this.indexer.index;
+		if (!index) return [];
+
+		const seen = new Set<string>();
+		const items: vscode.CompletionItem[] = [];
+		for (const fn of index.functions.values()) {
+			if (seen.has(fn.name)) continue;
+			seen.add(fn.name);
+			const item = new vscode.CompletionItem(fn.name, vscode.CompletionItemKind.Method);
+			item.detail = `${fn.functionType} → ${fn.returns} — ${fn.packageName}`;
+			if (fn.description) {
+				item.documentation = new vscode.MarkdownString(fn.description);
 			}
 			items.push(item);
 		}

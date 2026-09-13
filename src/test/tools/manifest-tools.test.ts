@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { ManifestIndexer, ManifestIndex, IndexedModel, IndexedSource } from '../../indexing/manifest-indexer';
+import type { ManifestIndexer, ManifestIndex, IndexedModel, IndexedSource, IndexedFunction } from '../../indexing/manifest-indexer';
 import { ListResourcesTool } from '../../tools/list-resources';
 import { AnalyzeImpactTool } from '../../tools/analyze-impact';
 import { GetLineageTool } from '../../tools/get-lineage';
@@ -51,10 +51,23 @@ function createTestIndex(): ManifestIndex {
 		tags: [],
 	});
 
+	const functions = new Map<string, IndexedFunction>();
+	functions.set('function.p.days_since', {
+		uniqueId: 'function.p.days_since',
+		name: 'days_since',
+		packageName: 'p',
+		path: '/project/functions/days_since.sql',
+		tags: [],
+		arguments: [{ name: 'date', dataType: 'date' }],
+		returns: 'integer',
+		functionType: 'scalar',
+	});
+
 	return {
 		models,
 		sources,
 		macros: new Map(),
+		functions,
 		nodesByName: new Map([
 			['orders', ['model.p.orders']],
 			['customers', ['model.p.customers']],
@@ -127,6 +140,44 @@ describe('ListResourcesTool', () => {
 			token as never,
 		);
 		expect(result).toBeDefined();
+	});
+
+	it('includes functions in the unfiltered listing', async () => {
+		const index = createTestIndex();
+		const indexer = createMockIndexer(index);
+		const tool = new ListResourcesTool(indexer, mockLogger);
+
+		const token = { isCancellationRequested: false, onCancellationRequested: vi.fn() };
+		const result = await tool.invoke(
+			{ input: {}, toolInvocationToken: undefined } as never,
+			token as never,
+		);
+
+		const parsed = JSON.parse((result.content[0] as { value: string }).value);
+		const fn = parsed.resources.find((r: { resource_type: string }) => r.resource_type === 'function');
+		expect(fn).toBeDefined();
+		expect(fn.name).toBe('days_since');
+		expect(fn.unique_id).toBe('function.p.days_since');
+		expect(fn.function_type).toBe('scalar');
+		expect(fn.returns).toBe('integer');
+	});
+
+	it('filters to functions only when resource_type is "function"', async () => {
+		const index = createTestIndex();
+		const indexer = createMockIndexer(index);
+		const tool = new ListResourcesTool(indexer, mockLogger);
+
+		const token = { isCancellationRequested: false, onCancellationRequested: vi.fn() };
+		const result = await tool.invoke(
+			{ input: { resource_type: 'function' }, toolInvocationToken: undefined } as never,
+			token as never,
+		);
+
+		const parsed = JSON.parse((result.content[0] as { value: string }).value);
+		expect(parsed.count).toBe(1);
+		expect(parsed.resources).toHaveLength(1);
+		expect(parsed.resources[0].name).toBe('days_since');
+		expect(parsed.resources[0].resource_type).toBe('function');
 	});
 });
 

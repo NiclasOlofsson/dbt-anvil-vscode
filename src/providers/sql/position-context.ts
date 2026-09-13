@@ -1,10 +1,11 @@
 import { ParseService } from '../../services/parse-service';
-import type { DocumentModel, MacroCallInfo, RefInfo, SourceInfo } from '../../services/parse-service';
+import type { DocumentModel, FunctionInfo, MacroCallInfo, RefInfo, SourceInfo } from '../../services/parse-service';
 import type { Sym } from '../../ftl/sqllens/api';
 
 export type PositionContext =
 	| { kind: 'ref'; ref: RefInfo }
 	| { kind: 'source'; source: SourceInfo }
+	| { kind: 'function'; fn: FunctionInfo }
 	| { kind: 'macro'; name: string; packageName?: string; call: MacroCallInfo }
 	/**
 	 * `sym` is the smallest-span symbol covering the cursor. `partIndex` is set
@@ -49,6 +50,14 @@ export function resolvePositionContext(
 		position.character >= s.jinjaCol && position.character < s.jinjaEndCol,
 	);
 	if (source) return { kind: 'source', source };
+
+	// function — full {{ function('...') }} jinja span
+	const fn = (model.functions ?? []).find(f =>
+		f.line === position.line &&
+		f.jinjaCol !== undefined && f.jinjaEndCol !== undefined &&
+		position.character >= f.jinjaCol && position.character < f.jinjaEndCol,
+	);
+	if (fn) return { kind: 'function', fn };
 
 	// macro call — match cursor against the bare identifier span, or the
 	// `package.` qualifier when present. Multi-line tags work because

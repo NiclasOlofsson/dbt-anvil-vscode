@@ -8,9 +8,10 @@ import {
 	resolveAnalysisPaths,
 	resolveSnapshotPaths,
 	resolveTestPaths,
+	resolveFunctionPaths,
 } from './project-config';
 
-export type DbtFileCategory = 'model' | 'seed' | 'analysis' | 'snapshot' | 'test' | 'macro' | 'unknown';
+export type DbtFileCategory = 'model' | 'seed' | 'analysis' | 'snapshot' | 'test' | 'macro' | 'function' | 'unknown';
 
 export interface ResolvedPaths {
 	model: string[];
@@ -19,10 +20,11 @@ export interface ResolvedPaths {
 	snapshot: string[];
 	test: string[];
 	macro: string[];
+	function: string[];
 }
 
 export class DbtPathResolver {
-	private _paths: ResolvedPaths = { model: [], seed: [], analysis: [], snapshot: [], test: [], macro: [] };
+	private _paths: ResolvedPaths = { model: [], seed: [], analysis: [], snapshot: [], test: [], macro: [], function: [] };
 	private readonly _onPathsChanged = new vscode.EventEmitter<ResolvedPaths>();
 	readonly onPathsChanged = this._onPathsChanged.event;
 
@@ -42,6 +44,7 @@ export class DbtPathResolver {
 			snapshot: resolveSnapshotPaths(config, this._projectDir),
 			test: resolveTestPaths(config, this._projectDir),
 			macro: resolveMacroPaths(config, this._projectDir),
+			function: resolveFunctionPaths(config, this._projectDir),
 		};
 
 		const changed = (Object.keys(next) as (keyof ResolvedPaths)[]).some(
@@ -63,6 +66,7 @@ export class DbtPathResolver {
 			['snapshot', this._paths.snapshot],
 			['test', this._paths.test],
 			['macro', this._paths.macro],
+			['function', this._paths.function],
 			['seed', this._paths.seed],
 			['model', this._paths.model],
 		];
@@ -85,8 +89,16 @@ export class DbtPathResolver {
 			...this._paths.snapshot,
 			...this._paths.test,
 			...this._paths.macro,
+			...this._paths.function,
 		];
 		return allDirs.map(dir => ({
+			language: 'jinja-sql' as const,
+			pattern: new vscode.RelativePattern(dir, '**/*.sql'),
+		}));
+	}
+
+	buildFunctionSelector(): vscode.DocumentFilter[] {
+		return this._paths.function.map(dir => ({
 			language: 'jinja-sql' as const,
 			pattern: new vscode.RelativePattern(dir, '**/*.sql'),
 		}));
@@ -128,6 +140,7 @@ export class DbtPathResolver {
 			...this._paths.snapshot,
 			...this._paths.test,
 			...this._paths.macro,
+			...this._paths.function,
 		];
 		const filters: vscode.DocumentFilter[] = [];
 		for (const dir of allDirs) {

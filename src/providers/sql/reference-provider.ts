@@ -53,6 +53,14 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 				);
 				if (src) return this._findSourceUsages(src.sourceName, src.tableName, token);
 
+				// Check functions: full {{ function(...) }} jinja span is clickable
+				const fn = model.functions?.find(f =>
+					f.line === position.line &&
+					f.jinjaCol !== undefined && f.jinjaEndCol !== undefined &&
+					position.character >= f.jinjaCol && position.character < f.jinjaEndCol,
+				);
+				if (fn) return this._findFunctionUsages(fn.name, token);
+
 				// Sym-based dispatch using resolved position
 				const offset = document.offsetAt(position);
 				const sym = ParseService.symAtPosition(model, offset);
@@ -146,6 +154,38 @@ export class DbtReferenceProvider implements vscode.ReferenceProvider {
 		}
 
 		this.logger.debug(`ReferenceProvider: found ${locations.length} references for ref('${modelName}')`);
+		return locations;
+	}
+
+	private async _findFunctionUsages(name: string, token: vscode.CancellationToken): Promise<vscode.Location[]> {
+		const index = this.indexer.index;
+		if (!index) return [];
+
+		const functions = this.indexer.findFunctionsByName(name);
+		if (functions.length === 0) return [];
+
+		const locations: vscode.Location[] = [];
+		const pattern = new RegExp(
+			`function\\(\\s*(['"][^'"]+['"]\\s*,\\s*)?['"]${this._escapeRegex(name)}['"]\\s*\\)`,
+			'g',
+		);
+
+		for (const fn of functions) {
+			// Include the function's own definition file
+			locations.push(new vscode.Location(vscode.Uri.file(fn.path), new vscode.Position(0, 0)));
+
+			// Use childMap to find downstream dependents
+			const childIds = index.childMap.get(fn.uniqueId) ?? [];
+			const filePaths = this._resolveFilePaths(childIds, index);
+
+			for (const filePath of filePaths) {
+				if (token.isCancellationRequested) break;
+				const found = await this._findPatternInFile(vscode.Uri.file(filePath), pattern);
+				locations.push(...found);
+			}
+		}
+
+		this.logger.debug(`ReferenceProvider: found ${locations.length} references for function('${name}')`);
 		return locations;
 	}
 

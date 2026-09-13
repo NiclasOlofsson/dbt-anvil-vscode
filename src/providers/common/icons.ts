@@ -32,9 +32,10 @@ export function materializationIcon(mat: string): vscode.ThemeIcon {
 
 /** SymbolKind for workspace/document symbols per dbt resource type. */
 export const DbtSymbolKind = {
-	model:   vscode.SymbolKind.Class,
-	source:  vscode.SymbolKind.Module,
-	macro:   vscode.SymbolKind.Function,
+	model:    vscode.SymbolKind.Class,
+	source:   vscode.SymbolKind.Module,
+	macro:    vscode.SymbolKind.Function,
+	function: vscode.SymbolKind.Method,
 } as const;
 
 // ─── Layer 2: SQL / Jinja constructs ─────────────────────────────────────────
@@ -53,6 +54,8 @@ export const SqlIcons = {
 	lineage:     'arrow-right',
 	source:      'symbol-module',
 	macro:       'symbol-function',
+	/** dbt user-defined function (`functions/`), distinct from a jinja macro. */
+	function:    'symbol-method',
 } as const;
 
 /** CompletionItemKind for each SQL/dbt completion context. */

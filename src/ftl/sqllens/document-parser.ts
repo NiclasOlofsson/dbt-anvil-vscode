@@ -302,6 +302,7 @@ export class SqllensDocumentParser implements DocumentParser {
 			refs: cells.flatMap(c => c.refs),
 			sources: cells.flatMap(c => c.sources),
 			macroCalls: cells.flatMap(c => c.macroCalls ?? []),
+			functions: cells.flatMap(c => c.functions ?? []),
 			ctes: cells.flatMap(c => c.ctes),
 			finalColumns: final?.finalColumns ?? [],
 			finalSelect: final?.finalSelect,
@@ -435,7 +436,7 @@ export class SqllensDocumentParser implements DocumentParser {
 		// needed. The tag-AST sees jinja tags but never SQL aliases; back-fill
 		// them from each ARM's own guaranteed nodeOf ↔ Sym.node identity joins
 		// (the primary's joins are best-effort under conflicting arms).
-		const { refs, sources, macroCalls } = tagInfos(doc.templated!.tags);
+		const { refs, sources, macroCalls, functions } = tagInfos(doc.templated!.tags);
 		backfillSymAliases(refs, sources, doc.templated!.tags, arms.map(a => ({
 			symbols: armSymbolsOf(a.doc, schemaProvider, dialect),
 			tags: a.doc.templated!.tags,
@@ -451,6 +452,7 @@ export class SqllensDocumentParser implements DocumentParser {
 			refs,
 			sources,
 			macroCalls,
+			functions,
 			ctes,
 			finalColumns,
 			finalSelect,

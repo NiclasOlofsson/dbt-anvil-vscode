@@ -11,7 +11,8 @@ export type ResourceType =
 	| 'metric'
 	| 'semantic_model'
 	| 'saved_query'
-	| 'unit_test';
+	| 'unit_test'
+	| 'function';
 
 export interface DbtColumnInfo {
 	name: string;
@@ -165,6 +166,24 @@ export interface DbtMacroArgument {
 	description?: string;
 }
 
+export interface DbtFunctionArgument {
+	name: string;
+	data_type: string;
+	description?: string;
+	default_value?: unknown;
+}
+
+/**
+ * A dbt user-defined function (dbt Core 1.11+): a `functions/` resource built by
+ * `dbt build` and called from models as `{{ function('name') }}(args)`. Lives under
+ * the manifest's top-level `functions` dict, not `nodes`.
+ */
+export interface DbtFunctionNode extends DbtNode {
+	resource_type: 'function';
+	arguments: DbtFunctionArgument[];
+	returns: { data_type: string; description?: string };
+}
+
 export interface DbtManifestMetadata {
 	dbt_schema_version: string;
 	dbt_version: string;
@@ -186,6 +205,7 @@ export interface DbtProjectConfig {
 	'analysis-paths'?: string[];
 	'macro-paths'?: string[];
 	'snapshot-paths'?: string[];
+	'function-paths'?: string[];
 	'docs-paths'?: string[];
 	'target-path'?: string;
 	'log-path'?: string;
@@ -222,6 +242,8 @@ export interface DbtManifest {
 	exposures: Record<string, DbtExposure>;
 	metrics: Record<string, DbtMetric>;
 	macros: Record<string, DbtMacro>;
+	/** dbt 1.11+ user-defined functions, keyed `function.<package>.<name>`. */
+	functions?: Record<string, DbtFunctionNode>;
 	docs: Record<string, unknown>;
 	semantic_models?: Record<string, unknown>;
 	saved_queries?: Record<string, unknown>;

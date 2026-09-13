@@ -44,6 +44,7 @@ function createTestManifest() {
 				description: 'Downstream model',
 				tags: [],
 				columns: {},
+				depends_on: { macros: [], nodes: ['function.project.is_positive_int'] },
 			},
 			'seed.project.my_seed': {
 				unique_id: 'seed.project.my_seed',
@@ -72,6 +73,21 @@ function createTestManifest() {
 		},
 		exposures: {},
 		metrics: {},
+		functions: {
+			'function.project.is_positive_int': {
+				unique_id: 'function.project.is_positive_int',
+				name: 'is_positive_int',
+				resource_type: 'function',
+				package_name: 'project',
+				original_file_path: 'functions/is_positive_int.sql',
+				schema: 'main',
+				arguments: [{ name: 'a_string', data_type: 'varchar' }],
+				returns: { data_type: 'boolean' },
+				config: { materialized: 'function', type: 'scalar' },
+				tags: [],
+				description: 'x',
+			},
+		},
 		macros: {
 			'macro.project.my_custom_macro': {
 				unique_id: 'macro.project.my_custom_macro',
@@ -107,9 +123,10 @@ function createTestManifest() {
 		},
 		child_map: {
 			'model.project.my_model': ['model.project.downstream'],
+			'function.project.is_positive_int': ['model.project.downstream'],
 		},
 		parent_map: {
-			'model.project.downstream': ['model.project.my_model'],
+			'model.project.downstream': ['model.project.my_model', 'function.project.is_positive_int'],
 		},
 	};
 }
@@ -310,6 +327,98 @@ describe('ManifestIndexer', () => {
 		const modelPath = path.join(TEST_DIR, 'models', 'my_model.sql');
 		expect(indexer.findModelByFilePath(modelPath)).toBe('model.project.my_model');
 		expect(indexer.findModelByFilePath('/nonexistent/file.sql')).toBeUndefined();
+	});
+
+	// -----------------------------------------------------------------------
+	// dbt 1.11+ user-defined functions (top-level `manifest.functions`)
+	// -----------------------------------------------------------------------
+
+	describe('functions', () => {
+		it('should index a top-level function with its mapped fields', () => {
+			const loader = new ManifestLoader(TEST_DIR);
+			const indexer = new ManifestIndexer(loader, mockLogger);
+			const index = indexer.build();
+
+			const fn = index.functions.get('function.project.is_positive_int');
+			expect(fn).toBeDefined();
+			expect(fn?.name).toBe('is_positive_int');
+			expect(fn?.packageName).toBe('project');
+			expect(fn?.path).toBe(path.join(TEST_DIR, 'functions', 'is_positive_int.sql'));
+			expect(fn?.schema).toBe('main');
+			expect(fn?.arguments).toEqual([{ name: 'a_string', dataType: 'varchar', description: undefined }]);
+			expect(fn?.returns).toBe('boolean');
+			expect(fn?.functionType).toBe('scalar');
+			expect(fn?.description).toBe('x');
+		});
+
+		it('should find a function by name and return empty for an unknown name', () => {
+			const loader = new ManifestLoader(TEST_DIR);
+			const indexer = new ManifestIndexer(loader, mockLogger);
+			indexer.build();
+
+			const found = indexer.findFunctionsByName('is_positive_int');
+			expect(found).toHaveLength(1);
+			expect(found[0].uniqueId).toBe('function.project.is_positive_int');
+
+			expect(indexer.findFunctionsByName('nonexistent')).toHaveLength(0);
+		});
+
+		it('findResource should locate a function by name with type "function", and filter by resourceType', () => {
+			const loader = new ManifestLoader(TEST_DIR);
+			const indexer = new ManifestIndexer(loader, mockLogger);
+			indexer.build();
+
+			const found = indexer.findResource('is_positive_int');
+			expect(found).toHaveLength(1);
+			expect(found[0]).toMatchObject({ uniqueId: 'function.project.is_positive_int', name: 'is_positive_int', type: 'function' });
+
+			expect(indexer.findResource('is_positive_int', 'function')).toHaveLength(1);
+			expect(indexer.findResource('is_positive_int', 'model')).toHaveLength(0);
+		});
+
+		it('getLineage on a downstream model names the function node by its name, not the raw uid suffix', () => {
+			const loader = new ManifestLoader(TEST_DIR);
+			const indexer = new ManifestIndexer(loader, mockLogger);
+			indexer.build();
+
+			const lineage = indexer.getLineage('model.project.downstream', 2);
+			const fnNode = lineage.upstream.find(n => n.uniqueId === 'function.project.is_positive_int');
+			expect(fnNode).toBeDefined();
+			expect(fnNode?.name).toBe('is_positive_int');
+			expect(fnNode?.type).toBe('function');
+		});
+
+		it('findModelByFilePath resolves a function file to its unique id', () => {
+			const loader = new ManifestLoader(TEST_DIR);
+			const indexer = new ManifestIndexer(loader, mockLogger);
+			indexer.build();
+
+			const fnPath = path.join(TEST_DIR, 'functions', 'is_positive_int.sql');
+			expect(indexer.findModelByFilePath(fnPath)).toBe('function.project.is_positive_int');
+		});
+
+		it('getRawNode returns the raw function node from manifest.functions', () => {
+			const loader = new ManifestLoader(TEST_DIR);
+			const indexer = new ManifestIndexer(loader, mockLogger);
+			indexer.build();
+
+			const raw = indexer.getRawNode('function.project.is_positive_int');
+			expect(raw).toBeDefined();
+			expect(raw?.name).toBe('is_positive_int');
+			expect(raw?.resource_type).toBe('function');
+		});
+
+		it('should still index a manifest with no `functions` key (backward compatible with pre-1.11 manifests)', () => {
+			const manifest = createTestManifest() as Record<string, unknown>;
+			delete manifest.functions;
+			writeManifest(manifest);
+			const loader = new ManifestLoader(TEST_DIR);
+			const indexer = new ManifestIndexer(loader, mockLogger);
+
+			const index = indexer.build();
+			expect(index.functions.size).toBe(0);
+			expect(indexer.findFunctionsByName('is_positive_int')).toHaveLength(0);
+		});
 	});
 
 	describe('checksum-based invalidation', () => {
