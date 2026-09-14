@@ -555,7 +555,7 @@ export class SqlDebugAdapter implements vscode.DebugAdapter {
 			} else {
 				const fullText = editor.document.getText();
 				const offset = editor.document.offsetAt(editor.selection.active);
-				const stmts = splitStatements(fullText);
+				const stmts = splitStatements(fullText, this._manifestIndexer.adapterType);
 				const stmt = findStatementAtOffset(stmts, offset);
 				if (!stmt) {
 					this._output('No SQL statement found at cursor.\n');

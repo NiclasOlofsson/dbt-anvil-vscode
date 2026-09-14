@@ -124,7 +124,7 @@ export class DbtCodeLensProvider implements vscode.CodeLensProvider {
 
 	private _adHocLenses(document: vscode.TextDocument): vscode.CodeLens[] {
 		const text = document.getText();
-		const statements = splitStatements(text);
+		const statements = splitStatements(text, this.indexer.adapterType);
 		if (statements.length === 0) return [];
 
 		const lenses: vscode.CodeLens[] = [];

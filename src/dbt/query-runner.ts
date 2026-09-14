@@ -60,7 +60,7 @@ export class QueryRunner {
 		} else {
 			const fullText = doc.getText();
 			const offset = doc.offsetAt(selection.active);
-			const statements = splitStatements(fullText);
+			const statements = splitStatements(fullText, this._databaseProvider.adapterType);
 
 			if (statements.length === 0) return;
 
@@ -102,7 +102,7 @@ export class QueryRunner {
 		} else {
 			const fullText = doc.getText();
 			const offset = doc.offsetAt(selection.active);
-			const statements = splitStatements(fullText);
+			const statements = splitStatements(fullText, this._databaseProvider.adapterType);
 			if (statements.length === 0) return;
 			const stmt = findStatementAtOffset(statements, offset);
 			if (!stmt) return;
@@ -114,7 +114,7 @@ export class QueryRunner {
 	}
 
 	private async _executeStatements(sql: string, limit: number, resultLocation?: string, runningUri?: string, lineOffset = 0): Promise<void> {
-		const statements = splitStatements(sql);
+		const statements = splitStatements(sql, this._databaseProvider.adapterType);
 		if (statements.length === 0) return;
 
 		const stopOnError = vscode.workspace.getConfiguration('dbt-anvil').get<boolean>('queryEditor.stopOnError', false);

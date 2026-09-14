@@ -22,7 +22,7 @@ import { tagInfos } from './extract/tag-infos';
 import { jinjaTokensFromStream } from './extract/jinja-stream';
 import { compositeAstIndex, createSqllensAstIndex } from './ast-index';
 import type { AstIndex } from '../../ninja/reflow/ast-index';
-import { splitStatementsFromTemplated, type StatementRange } from '../../dbt/statement-splitter';
+import { rangesFromCells, type StatementRange } from '../../dbt/statement-splitter';
 import { decompose } from './decompose';
 import { traceColumnLineage, type LineageResult } from './lineage';
 import { extractCtes } from './extract/ctes';
@@ -234,17 +234,16 @@ export class SqllensDocumentParser implements DocumentParser {
 		const doc = SqlDocument.create(rawSql, dialect, { templating: MINIJINJA, provider: provider ?? DBT_PROVIDER });
 		const parseMs = performance.now() - tp0;
 
-		// A `;`-separated batch lowers to a flagged compound STUB, so whole-doc
-		// extraction over it sees nothing. Split into statement cells with the
-		// query editor's own jinja-aware splitter (ONE statement notion
-		// extension-wide) and run the same pipeline per cell (`_parseCells`) —
-		// this remains OUR path because templated multi-statement cell-splitting
-		// is sqllens's ledgered follow-up, not yet theirs. The `errors > 0` arm
-		// exists because a broken statement collapses the batch in ANTLR
-		// recovery; with a split, each cell is error-tolerant on its own. A
-		// clean single statement (every dbt model) never enters.
+		// A `;`-separated batch lowers to a compound facade, so whole-doc
+		// extraction over it sees nothing. sqllens (1.10+) cuts the templated
+		// document into statement cells itself, depth-aware (a BEGIN ... END or
+		// TRY/CATCH block stays one cell, T-SQL GO cuts); run the same pipeline
+		// per cell (`_parseCells`). The `errors > 0` arm exists because a broken
+		// statement collapses the batch in ANTLR recovery; with a split, each
+		// cell is error-tolerant on its own. A clean single statement (every
+		// dbt model) never enters.
 		if (doc.ast.statement === 'compound' || doc.errors > 0) {
-			const ranges = splitStatementsFromTemplated(rawSql, doc.templated!);
+			const ranges = rangesFromCells(rawSql, doc.statements.map(c => c.span));
 			if (ranges.length > 1) return this._parseCells(rawSql, ranges, dialect, provider, schemaProvider, t0, parseMs);
 		}
 

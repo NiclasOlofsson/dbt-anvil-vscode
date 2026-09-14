@@ -1,9 +1,9 @@
-import { parseTemplated, toSqllensDialect } from '../ftl/sqllens/api';
-import type { TemplatedParseResult } from '../ftl/sqllens/api';
+import { minijinja, statementSpans, toSqllensDialect, type StatementCellSpan } from '../ftl/sqllens/api';
+import { DBT_PROVIDER } from '../ftl/sqllens/template-shape';
 
 /**
  * A single SQL statement extracted from a multi-statement document.
- * Offsets refer to the original (un-blanked) source text.
+ * Offsets refer to the original source text.
  */
 export interface StatementRange {
 	/** The original SQL text of this statement (trimmed, no trailing `;`). */
@@ -18,126 +18,42 @@ export interface StatementRange {
 	endOffset: number;
 }
 
+const MINIJINJA = minijinja();
+
 /**
- * Split a Jinja-SQL document into individual statements separated by `;`.
- *
- * Strategy:
- * 1. Use sqllens's placeholder fill to neutralise all Jinja tags — length- and
- *    newline-preserving, so every offset maps 1:1 to the original source.
- * 2. Walk the filled text, tracking string literals (`'...'`) and comments
- *    (`--` line, `/ * … * /` block) so we only split on `;` that is actually
- *    statement-terminating.
- * 3. Map split points back to the original source via the preserved offsets.
- *
- * Empty statements (e.g. `;;` or trailing `;`) are discarded.
+ * Split a jinja-SQL document into statements the way sqllens cuts its statement
+ * cells: at `;` outside strings, comments and jinja tags, at compound depth zero
+ * (a `BEGIN ... END`, `CASE ... END` or `BEGIN TRY ... END CATCH` block is one
+ * statement), plus a T-SQL `GO` alone on its line. `adapterType` is the dbt
+ * adapter (or dialect) name; absent, the default dialect applies.
  */
-export function splitStatements(sql: string): StatementRange[] {
-	// Jinja segmentation is dialect-independent — the default dialect suffices.
-	return splitStatementsFromTemplated(sql, parseTemplated(sql, toSqllensDialect(undefined)));
+export function splitStatements(sql: string, adapterType?: string): StatementRange[] {
+	const spans = statementSpans(sql, toSqllensDialect(adapterType), { templating: MINIJINJA, provider: DBT_PROVIDER });
+	return rangesFromCells(sql, spans);
 }
 
 /**
- * Same split, over an already-computed `parseTemplated` result for `sql` — the
- * document parser holds one when it reaches its multi-statement path, and
- * re-parsing just to split would double the work. The split only reads the
- * placeholder and tag spans, both dialect-independent for this purpose.
+ * Project sqllens statement cell spans onto `StatementRange`s over `sql`. A cell
+ * span tiles the document (leading trivia and the trailing separator included);
+ * the range is the trimmed statement text ending before the cell's separator.
+ * Empty cells (`;;`, trailing whitespace) yield nothing.
  */
-export function splitStatementsFromTemplated(sql: string, templated: TemplatedParseResult): StatementRange[] {
-	const blanked = templated.placeholder;
-	const len = blanked.length;
-	const splitPoints: number[] = [];
-
-	// Positions inside Jinja tags (exact spans from the tag-AST): a fill char
-	// must never be treated as a statement terminator.
-	const insideJinja = new Uint8Array(len);
-	for (const tag of templated.tags) {
-		for (let j = tag.tagSpan.start; j < tag.tagSpan.end; j++) insideJinja[j] = 1;
-	}
-
-	let i = 0;
-	while (i < len) {
-		const ch = blanked[i];
-
-		// Single-quoted string literal — skip to closing quote
-		if (ch === '\'') {
-			i++;
-			while (i < len) {
-				if (blanked[i] === '\'') {
-					if (i + 1 < len && blanked[i + 1] === '\'') {
-						i += 2; // escaped ''
-					} else {
-						i++;
-						break;
-					}
-				} else {
-					i++;
-				}
-			}
-			continue;
-		}
-
-		// Line comment -- skip to end of line
-		if (ch === '-' && i + 1 < len && blanked[i + 1] === '-') {
-			i += 2;
-			while (i < len && blanked[i] !== '\n') i++;
-			continue;
-		}
-
-		// Block comment /* ... */ — skip to closing */
-		if (ch === '/' && i + 1 < len && blanked[i + 1] === '*') {
-			i += 2;
-			while (i < len) {
-				if (blanked[i] === '*' && i + 1 < len && blanked[i + 1] === '/') {
-					i += 2;
-					break;
-				}
-				i++;
-			}
-			continue;
-		}
-
-		// Statement terminator (only if not inside a Jinja tag region)
-		if (ch === ';' && !insideJinja[i]) {
-			splitPoints.push(i);
-			i++;
-			continue;
-		}
-
-		i++;
-	}
-
-	// Build ranges from split points.
-	// Segments are: [0..split[0]), [split[0]+1..split[1]), ..., [lastSplit+1..end)
-	const segments: Array<[number, number]> = [];
-	let start = 0;
-	for (const sp of splitPoints) {
-		segments.push([start, sp]);
-		start = sp + 1;
-	}
-	// Remainder after last `;` (or entire text if no `;`)
-	segments.push([start, len]);
-
+export function rangesFromCells(sql: string, cells: readonly StatementCellSpan[]): StatementRange[] {
 	const results: StatementRange[] = [];
-	for (const [segStart, segEnd] of segments) {
-		const raw = sql.slice(segStart, segEnd);
-		const trimmed = raw.trim();
-		if (trimmed.length === 0) continue;
-
-		// Find the first and last non-whitespace character offsets in the original
-		let firstNonWs = segStart;
-		while (firstNonWs < segEnd && /\s/.test(sql[firstNonWs])) firstNonWs++;
-		let lastNonWs = segEnd - 1;
-		while (lastNonWs > firstNonWs && /\s/.test(sql[lastNonWs])) lastNonWs--;
-
+	for (const cell of cells) {
+		let start = cell.start;
+		let end = cell.separator?.start ?? cell.end;
+		while (start < end && /\s/.test(sql[start])) start++;
+		while (end > start && /\s/.test(sql[end - 1])) end--;
+		if (end <= start) continue;
 		results.push({
-			sql: trimmed,
-			startLine: lineAt(sql, firstNonWs),
-			endLine: lineAt(sql, lastNonWs),
-			startOffset: firstNonWs,
-			endOffset: lastNonWs + 1,
+			sql: sql.slice(start, end),
+			startLine: lineAt(sql, start),
+			endLine: lineAt(sql, end - 1),
+			startOffset: start,
+			endOffset: end,
 		});
 	}
-
 	return results;
 }
 

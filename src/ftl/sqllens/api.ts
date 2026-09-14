@@ -40,6 +40,7 @@ export {
 	Schema,
 	CallbackSchema,
 	SqlDocument,
+	statementSpans,
 	MAIN_FRAME,
 } from 'sqllens';
 

@@ -168,6 +168,95 @@ describe('splitStatements', () => {
 	});
 });
 
+describe('splitStatements — compound blocks (sqllens 1.10 cells)', () => {
+	// A block's inner semicolons must not cut it: parsing `end try begin catch ...`
+	// as its own statement is what produced "expecting CONVERSATION" on T-SQL.
+	it('keeps a BEGIN TRY ... END CATCH batch as one statement', () => {
+		const sql = [
+			'begin try',
+			'  begin transaction;',
+			'  insert into t (a) select a from s;',
+			'  commit transaction;',
+			'end try',
+			'begin catch',
+			'  if @@trancount > 0 rollback transaction;',
+			'  throw;',
+			'end catch;',
+			'select 1 as x;',
+		].join('\n');
+		const stmts = splitStatements(sql, 'fabric');
+		expect(stmts).toHaveLength(2);
+		expect(stmts[0].sql.startsWith('begin try')).toBe(true);
+		expect(stmts[0].sql.endsWith('end catch')).toBe(true);
+		expect(stmts[1].sql).toBe('select 1 as x');
+	});
+
+	it('keeps the block whole inside a jinja call/if wrapper (the materialization shape)', () => {
+		const sql = [
+			'{% if true %}',
+			'{% call statement(\'swap\') -%}',
+			'begin try',
+			'  begin transaction;',
+			'  exec sp_rename \'a\', \'b\';',
+			'  commit transaction;',
+			'end try',
+			'begin catch',
+			'  throw;',
+			'end catch',
+			'{%- endcall %}',
+			'{% endif %}',
+		].join('\n');
+		const stmts = splitStatements(sql, 'fabric');
+		expect(stmts).toHaveLength(1);
+	});
+
+	it('still splits after a bare BEGIN TRANSACTION, which opens no block', () => {
+		const sql = 'begin transaction;\nselect 1;\ncommit;';
+		const stmts = splitStatements(sql, 'fabric');
+		expect(stmts.map(s => s.sql)).toEqual(['begin transaction', 'select 1', 'commit']);
+	});
+
+	it('cuts on a T-SQL GO alone on its line and drops the separator from the text', () => {
+		const sql = 'select 1 as a\nGO\nselect 2 as b\nGO';
+		const stmts = splitStatements(sql, 'fabric');
+		expect(stmts.map(s => s.sql)).toEqual(['select 1 as a', 'select 2 as b']);
+		expect(stmts[1].startLine).toBe(2);
+	});
+
+	it('cuts a GO line that carries a trailing comment', () => {
+		const sql = 'select 1 as a\nGO -- run it\nselect 2 as b';
+		const stmts = splitStatements(sql, 'fabric');
+		expect(stmts.map(s => s.sql)).toEqual(['select 1 as a', 'select 2 as b']);
+	});
+
+	it('cuts a GO line followed only by a trailing comment, with nothing after it', () => {
+		const sql = 'select 1 as a\nGO\n-- end of file';
+		const stmts = splitStatements(sql, 'fabric');
+		expect(stmts.map(s => s.sql)).toEqual(['select 1 as a']);
+	});
+
+	it('does not strip a trailing "go" outside T-SQL dialects', () => {
+		const sql = 'select *\nfrom orders\ngo';
+		const stmts = splitStatements(sql, 'duckdb');
+		expect(stmts).toHaveLength(1);
+		expect(stmts[0].sql.endsWith('go')).toBe(true);
+	});
+
+	it('does not mistake an identifier containing "go" for the GO separator', () => {
+		const sql = 'select 1 as go_flag\nGO\nselect 2';
+		const stmts = splitStatements(sql, 'fabric');
+		expect(stmts.map(s => s.sql)).toEqual(['select 1 as go_flag', 'select 2']);
+	});
+
+	// An unclosed opener must not swallow the rest of the file into one cell:
+	// the statements below a half-typed CASE would otherwise run as its tail.
+	it('still cuts at separators after an unclosed CASE', () => {
+		const sql = 'select case when a = 1 then 2 from t;\ndelete from staging.orders;';
+		const stmts = splitStatements(sql, 'fabric');
+		expect(stmts.map(s => s.sql)).toEqual(['select case when a = 1 then 2 from t', 'delete from staging.orders']);
+	});
+});
+
 describe('findStatementAtOffset', () => {
 	const sql = 'SELECT 1;\n\nSELECT 2;\n\nSELECT 3';
 	const stmts = splitStatements(sql);
