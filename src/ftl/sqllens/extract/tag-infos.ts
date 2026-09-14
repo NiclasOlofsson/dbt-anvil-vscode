@@ -174,7 +174,10 @@ export function tagInfos(tags: TagNode[]): TagInfos {
 					jinjaCol: tag.tagSpan.column,
 					jinjaEndCol: tag.tagSpan.endColumn,
 				});
-			} else if (!tag.incomplete && !NOT_MACRO_CALLS.has(tag.name)) {
+			} else if (!tag.incomplete) {
+				// Every other closed expression tag, INCLUDING a ref/source/function with computed
+				// args or a `config(...)`/`var(...)` tag: the per-call filter below drops the
+				// builtin callee itself, while a macro nested in its arguments still surfaces.
 				// A macro expression tag. `calls` is the top-level call (`calls[0]`) plus every
 				// nested call in source order, so `{{ outer(inner()) }}` surfaces both. Filtered
 				// by NOT_MACRO_CALLS (`ref`/`source`/`config`/`var`/`env_var`/keywords never surface).

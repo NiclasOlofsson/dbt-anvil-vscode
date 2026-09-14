@@ -413,6 +413,32 @@ describe('FabricProvider query() - cancel by caller', () => {
 		await expect(provider.query('select 1', -1, signal)).rejects.toThrow(/cancelled by caller/);
 		expect(Connection.instances.at(-1).cancel).toHaveBeenCalledTimes(1);
 	});
+
+	it('keeps the pooled connection healthy after a caller-abort cancellation, so it is reused next time', async () => {
+		mockSignedIn();
+		let abortListener: (() => void) | undefined;
+		const signal: CancelSignal = {
+			aborted: false,
+			addEventListener: (_type, listener) => { abortListener = listener; },
+			removeEventListener: () => { abortListener = undefined; },
+		};
+		Connection.execSqlImpl = (request: any) => {
+			request.emit('columnMetadata', [col('n', 'IntN', { dataLength: 4 })]);
+			abortListener?.();
+			request.callback(new RequestError('Operation cancelled', 'ECANCEL'));
+		};
+		const provider = makeProvider();
+
+		await expect(provider.query('select 1', -1, signal)).rejects.toThrow(/cancelled by caller/);
+
+		Connection.execSqlImpl = (request: any) => {
+			request.emit('columnMetadata', [col('n', 'IntN', { dataLength: 4 })]);
+			request.callback();
+		};
+		await provider.query('select 2', -1);
+
+		expect(Connection.instances).toHaveLength(1);
+	});
 });
 
 describe('FabricProvider query() - errors', () => {
@@ -425,6 +451,46 @@ describe('FabricProvider query() - errors', () => {
 		const provider = makeProvider();
 
 		await expect(provider.query('select 1', -1)).rejects.toThrow('FabricProvider: deadlock victim');
+	});
+
+	it('rejects with the server text on a RequestError, and the pooled connection is reused by the next query', async () => {
+		mockSignedIn();
+		Connection.execSqlImpl = (request: any) => {
+			request.emit('columnMetadata', [col('n', 'IntN', { dataLength: 4 })]);
+			request.callback(new RequestError('Invalid column name \'x\'.', 'EREQUEST'));
+		};
+		const provider = makeProvider();
+
+		await expect(provider.query('select x', -1)).rejects.toThrow(/Invalid column name/);
+
+		Connection.execSqlImpl = (request: any) => {
+			request.emit('columnMetadata', [col('n', 'IntN', { dataLength: 4 })]);
+			request.callback();
+		};
+		await provider.query('select 1', -1);
+
+		expect(Connection.instances).toHaveLength(1);
+	});
+
+	it('closes the connection after a plain Error (transport failure) and opens a new one for the next query', async () => {
+		mockSignedIn();
+		Connection.execSqlImpl = (request: any) => {
+			request.emit('columnMetadata', [col('n', 'IntN', { dataLength: 4 })]);
+			request.callback(new Error('deadlock victim'));
+		};
+		const provider = makeProvider();
+
+		await expect(provider.query('select 1', -1)).rejects.toThrow('FabricProvider: deadlock victim');
+		expect(Connection.instances).toHaveLength(1);
+		expect(Connection.instances[0].close).toHaveBeenCalledTimes(1);
+
+		Connection.execSqlImpl = (request: any) => {
+			request.emit('columnMetadata', [col('n', 'IntN', { dataLength: 4 })]);
+			request.callback();
+		};
+		await provider.query('select 2', -1);
+
+		expect(Connection.instances).toHaveLength(2);
 	});
 });
 
@@ -478,6 +544,44 @@ describe('FabricProvider describe()', () => {
 		expect(capturedSql).toContain('[hopper].INFORMATION_SCHEMA.COLUMNS');
 		expect(capturedParams).toEqual([
 			{ name: 'schema', type: expect.anything(), value: 'raw' },
+			{ name: 'table', type: expect.anything(), value: 't' },
+		]);
+	});
+
+	it('binds schema \'dbo\' and table \'tbl\' from a fully bracketed three-part qualifiedName, targeting [my.db].INFORMATION_SCHEMA.COLUMNS', async () => {
+		mockSignedIn();
+		let capturedSql = '';
+		let capturedParams: any[] = [];
+		Connection.execSqlImpl = describeHandler(
+			[{ COLUMN_NAME: 'id', DATA_TYPE: 'int' }],
+			request => { capturedSql = request.sql; capturedParams = request.parameters; },
+		);
+		const provider = makeProvider();
+
+		await provider.describe('customers', { qualifiedName: '[my.db].[dbo].[tbl]' });
+
+		expect(capturedSql).toContain('[my.db].INFORMATION_SCHEMA.COLUMNS');
+		expect(capturedParams).toEqual([
+			{ name: 'schema', type: expect.anything(), value: 'dbo' },
+			{ name: 'table', type: expect.anything(), value: 'tbl' },
+		]);
+	});
+
+	it('unescapes a doubled ] inside a bracketed database name (]] -> ])', async () => {
+		mockSignedIn();
+		let capturedSql = '';
+		let capturedParams: any[] = [];
+		Connection.execSqlImpl = describeHandler(
+			[{ COLUMN_NAME: 'id', DATA_TYPE: 'int' }],
+			request => { capturedSql = request.sql; capturedParams = request.parameters; },
+		);
+		const provider = makeProvider();
+
+		await provider.describe('customers', { qualifiedName: '[a]]b].[s].[t]' });
+
+		expect(capturedSql).toContain('[a]]b].INFORMATION_SCHEMA.COLUMNS');
+		expect(capturedParams).toEqual([
+			{ name: 'schema', type: expect.anything(), value: 's' },
 			{ name: 'table', type: expect.anything(), value: 't' },
 		]);
 	});
@@ -681,5 +785,37 @@ describe('FabricProvider connection pool', () => {
 		for (const conn of Connection.instances as any[]) {
 			expect(conn.close).toHaveBeenCalledTimes(1);
 		}
+	});
+
+	it('resolves a queued waiter on dispose, so the 5th of 5 concurrent queries settles instead of hanging', async () => {
+		mockSignedIn();
+		const pending: Array<{ request: any }> = [];
+		Connection.execSqlImpl = (request: any, conn: any) => {
+			if (Connection.instances.indexOf(conn) === 4) {
+				// The 5th connection only opens once dispose() frees the queued waiter: answer it immediately.
+				request.emit('columnMetadata', [col('n', 'IntN', { dataLength: 4 })]);
+				request.callback();
+				return;
+			}
+			request.emit('columnMetadata', [col('n', 'IntN', { dataLength: 4 })]);
+			pending.push({ request });
+			// callback deliberately withheld — these 4 connections stay busy until drained below
+		};
+		const provider = makeProvider();
+
+		const results = Array.from({ length: 5 }, () => provider.query('select 1', -1));
+		await waitFor(() => pending.length === 4);
+		expect(Connection.instances).toHaveLength(4);
+
+		provider.dispose();
+
+		const settled = await Promise.race([
+			results[4].then(() => 'settled', () => 'settled'),
+			new Promise(resolve => setTimeout(() => resolve('timeout'), 200)),
+		]);
+		expect(settled).toBe('settled');
+
+		for (const p of pending.splice(0)) p.request.callback();
+		await Promise.allSettled(results);
 	});
 });

@@ -312,9 +312,9 @@ export class ManifestIndexer {
 				alias: fn.alias,
 				description: fn.description,
 				tags: fn.tags ?? [],
-				arguments: (fn.arguments ?? []).map(a => ({ name: a.name, dataType: a.data_type, description: a.description })),
-				returns: fn.returns?.data_type ?? 'unknown',
-				functionType: typeof fn.config?.['type'] === 'string' ? fn.config['type'] : 'scalar',
+				arguments: fn.arguments.map(a => ({ name: a.name, dataType: a.data_type, description: a.description })),
+				returns: fn.returns.data_type,
+				functionType: fn.config.type,
 			});
 			if (!nodesByName.has(fn.name)) {
 				nodesByName.set(fn.name, []);

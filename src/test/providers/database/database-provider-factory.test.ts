@@ -53,4 +53,11 @@ describe('createDatabaseProvider', () => {
 		expect(provider).toBeInstanceOf(DbtDatabaseProvider);
 		expect(provider.adapterType).toBe('snowflake');
 	});
+
+	it('falls back to DbtDatabaseProvider and warns when a fabric connection has no host or server', async () => {
+		const provider = await createDatabaseProvider({ type: 'fabric', database: 'd' }, '/proj', executionService, logger);
+
+		expect(provider).toBeInstanceOf(DbtDatabaseProvider);
+		expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('FabricProvider unavailable'));
+	});
 });

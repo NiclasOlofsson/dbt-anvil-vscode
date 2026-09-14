@@ -169,6 +169,7 @@ export class FabricProvider implements DatabaseProvider {
 		this._idle.length = 0;
 		for (const conn of this._all) conn.close();
 		this._all.clear();
+		for (const wake of this._waiters.splice(0)) wake();
 	}
 
 	// -------------------------------------------------------------------------
@@ -176,7 +177,7 @@ export class FabricProvider implements DatabaseProvider {
 	// -------------------------------------------------------------------------
 
 	private _resolveRelation(qualifiedName: string, sourceName: string | undefined): Relation {
-		const parts = qualifiedName.split('.').map(unquoteIdent);
+		const parts = splitQualifiedName(qualifiedName);
 		if (parts.length >= 3) {
 			return { database: parts[parts.length - 3], schema: parts[parts.length - 2], table: parts[parts.length - 1] };
 		}
@@ -203,7 +204,7 @@ export class FabricProvider implements DatabaseProvider {
 		try {
 			return await this._execute(conn, sql, opts);
 		} catch (err) {
-			healthy = err instanceof RequestError;
+			healthy = err instanceof FabricQueryError && err.connectionHealthy;
 			throw err;
 		} finally {
 			this._release(conn, healthy);
@@ -234,10 +235,12 @@ export class FabricProvider implements DatabaseProvider {
 						return;
 					}
 					if (code === 'ECANCEL' && cancelledByCaller) {
-						reject(new Error('FabricProvider: query cancelled by caller'));
+						reject(new FabricQueryError('FabricProvider: query cancelled by caller', true));
 						return;
 					}
-					reject(new Error(`FabricProvider: ${err.message}`));
+					// A RequestError is the server rejecting this statement; the connection is
+					// still logged in and reusable. Anything else is transport-level: drop it.
+					reject(new FabricQueryError(`FabricProvider: ${err.message}`, err instanceof RequestError));
 					return;
 				}
 				resolve({ columns, columnTypes, rows, rowCount: rows.length, executionTimeMs: 0 });
@@ -269,7 +272,7 @@ export class FabricProvider implements DatabaseProvider {
 
 			if (opts.signal?.aborted) {
 				opts.signal.removeEventListener('abort', onAbort);
-				reject(new Error('FabricProvider: query cancelled by caller'));
+				reject(new FabricQueryError('FabricProvider: query cancelled by caller', true));
 				return;
 			}
 			conn.execSql(request);
@@ -312,7 +315,11 @@ export class FabricProvider implements DatabaseProvider {
 	}
 
 	private _release(conn: Connection, healthy: boolean): void {
-		if (!this._all.has(conn)) return;
+		if (!this._all.has(conn)) {
+			// Already evicted by its 'end' handler; the slot it held is free either way.
+			this._wake();
+			return;
+		}
 		if (!healthy) {
 			this._all.delete(conn);
 			conn.close();
@@ -399,6 +406,44 @@ interface Relation {
 	table: string;
 }
 
+/** A failed statement, tagged with whether the pooled connection survived it. */
+class FabricQueryError extends Error {
+	constructor(message: string, readonly connectionHealthy: boolean) {
+		super(message);
+	}
+}
+
+/** Split `a.b.c` on dots outside `[...]`, unquoting each part (`]]` is an escaped `]`). */
+function splitQualifiedName(name: string): string[] {
+	const parts: string[] = [];
+	let current = '';
+	let inBrackets = false;
+	for (let i = 0; i < name.length; i++) {
+		const ch = name[i];
+		if (inBrackets) {
+			if (ch === ']') {
+				if (name[i + 1] === ']') {
+					current += ']';
+					i++;
+				} else {
+					inBrackets = false;
+				}
+			} else {
+				current += ch;
+			}
+		} else if (ch === '[') {
+			inBrackets = true;
+		} else if (ch === '.') {
+			parts.push(current.trim());
+			current = '';
+		} else {
+			current += ch;
+		}
+	}
+	parts.push(current.trim());
+	return parts;
+}
+
 /** Accepts `host`, `tcp:host`, `host,port` and `tcp:host,port`. */
 function parseHost(raw: string): { server: string; port?: number } {
 	let s = raw.trim().replace(/^tcp:/i, '');
@@ -413,11 +458,6 @@ function parseHost(raw: string): { server: string; port?: number } {
 
 function quoteIdent(name: string): string {
 	return `[${name.replace(/]/g, ']]')}]`;
-}
-
-function unquoteIdent(part: string): string {
-	const p = part.trim();
-	return p.startsWith('[') && p.endsWith(']') ? p.slice(1, -1).replace(/]]/g, ']') : p;
 }
 
 function formatRelation(r: Relation): string {

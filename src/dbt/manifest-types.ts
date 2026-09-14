@@ -180,6 +180,8 @@ export interface DbtFunctionArgument {
  */
 export interface DbtFunctionNode extends DbtNode {
 	resource_type: 'function';
+	/** dbt always writes `materialized: function` and `type` (`scalar` today, `aggregate` reserved). */
+	config: DbtNodeConfig & { type: string };
 	arguments: DbtFunctionArgument[];
 	returns: { data_type: string; description?: string };
 }

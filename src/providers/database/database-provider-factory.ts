@@ -45,12 +45,14 @@ export async function createDatabaseProvider(
 	}
 
 	if (preferNative && adapterType === 'fabric') {
-		logger.info('DatabaseProviderFactory: using FabricProvider');
-		return new FabricProvider(
-			connection as FabricConnection,
-			executionService,
-			logger,
-		);
+		try {
+			const provider = new FabricProvider(connection as FabricConnection, executionService, logger);
+			logger.info('DatabaseProviderFactory: using FabricProvider');
+			return provider;
+		} catch (err) {
+			// A malformed profile must not take activation down; the bridge path still works.
+			logger.warn(`DatabaseProviderFactory: FabricProvider unavailable (${err instanceof Error ? err.message : String(err)}), using DbtDatabaseProvider`);
+		}
 	}
 
 	if (preferNative && adapterType === 'duckdb' && process.platform === 'win32') {

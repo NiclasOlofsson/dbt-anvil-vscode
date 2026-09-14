@@ -257,6 +257,27 @@ describe('tagInfos.macroCalls — {% … %} block tags surface via control.calls
 	});
 });
 
+describe('tagInfos.macroCalls — a macro nested inside a builtin tag\'s arguments still surfaces', () => {
+	it('surfaces generate_alias nested inside config(...) — F12/hover on the macro, not config', () => {
+		const result = fromTags('{{ config(materialized=\'table\', alias=generate_alias(\'x\')) }}');
+		expect(result.macroCalls).toHaveLength(1);
+		expect(result.macroCalls[0].name).toBe('generate_alias');
+		expect(result.macroCalls.some(c => c.name === 'config')).toBe(false);
+	});
+
+	it('surfaces my_default nested inside var(...)\'s default-value argument', () => {
+		const result = fromTags('{{ var(\'x\', my_default()) }}');
+		expect(result.macroCalls).toHaveLength(1);
+		expect(result.macroCalls[0].name).toBe('my_default');
+	});
+
+	it('emits no ref and no macro call for ref(var(...)) — both callees are builtins', () => {
+		const result = fromTags('{{ ref(var(\'m\')) }}');
+		expect(result.refs).toEqual([]);
+		expect(result.macroCalls).toEqual([]);
+	});
+});
+
 describe('tagInfos.macroCalls — nested {{ }} expression calls surface via macro.calls', () => {
 	it('emits BOTH outer and inner, source order, with full spans', () => {
 		expect(fromTags('select {{ outer(inner(1, 2), 3) }} from t').macroCalls).toEqual([
