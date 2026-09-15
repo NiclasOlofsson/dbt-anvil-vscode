@@ -77,6 +77,7 @@ jobs:
         run: |
           VERSION=$(node -p "const v=require('./package.json').version.split('.'); v[0]+'.'+(v[1]%2?+v[1]:+v[1]+1)+'.${{ github.run_number }}'")
           echo "Publishing pre-release $VERSION"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           npm version "$VERSION" --no-git-tag-version
 
       # The .vsix has to be packaged as pre-release; vsce refuses to publish a
@@ -84,7 +85,31 @@ jobs:
       - name: Package
         run: npx vsce package --pre-release
 
+      # The gallery endpoint hangs intermittently and vsce gives up after a
+      # 3 minute socket timeout with no retry of its own, so retry here. A
+      # timed-out request can still have landed server-side, so check the
+      # Marketplace for the version before trying again.
       - name: Publish to Marketplace
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: npx vsce publish --pre-release --packagePath ./*.vsix --allow-proposed-apis contribLanguageModelToolSets
+        run: |
+          published() {
+            curl -sf -X POST "https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery" \
+              -H "Content-Type: application/json" -H "Accept: application/json;api-version=3.0-preview.1" \
+              -d '{"filters":[{"criteria":[{"filterType":7,"value":"nickeolofsson.dbt-anvil-vscode"}]}],"flags":17}' \
+              | grep -q "\"version\":\"$VERSION\""
+          }
+          for attempt in 1 2 3 4; do
+            if npx vsce publish --pre-release --packagePath ./*.vsix --allow-proposed-apis contribLanguageModelToolSets 2>&1 | tee publish.log \
+              && [ "${PIPESTATUS[0]}" -eq 0 ]; then
+              exit 0
+            fi
+            grep -q "Request timeout" publish.log || exit 1
+            sleep 60
+            if published; then
+              echo "Attempt $attempt timed out but $VERSION is on the Marketplace."
+              exit 0
+            fi
+            echo "Attempt $attempt timed out, retrying."
+          done
+          exit 1
